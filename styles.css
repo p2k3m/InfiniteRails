@@ -46,6 +46,36 @@ body.game-active {
   min-height: 100vh;
 }
 
+.manu-logo {
+  position: fixed;
+  inset: auto 1.5rem 1.5rem auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.6rem 0.75rem;
+  border-radius: 18px;
+  background: linear-gradient(145deg, rgba(6, 14, 28, 0.88), rgba(6, 14, 28, 0.6));
+  border: 1px solid rgba(73, 242, 255, 0.35);
+  box-shadow: 0 30px 60px rgba(0, 0, 0, 0.4), 0 0 18px rgba(73, 242, 255, 0.35);
+  backdrop-filter: blur(10px);
+  z-index: 120;
+  opacity: 0.92;
+  transition: transform 0.35s ease, opacity 0.3s ease;
+}
+
+.manu-logo:hover,
+.manu-logo:focus-visible {
+  transform: translateY(-4px) scale(1.04);
+  opacity: 1;
+  outline: none;
+}
+
+.manu-logo__image {
+  display: block;
+  width: clamp(160px, 22vw, 220px);
+  height: auto;
+}
+
 .background-sheen {
   position: fixed;
   inset: 0;
@@ -929,13 +959,6 @@ body.sidebar-open .player-hint {
   gap: 2rem;
 }
 
-.signature {
-  text-transform: uppercase;
-  letter-spacing: 0.4em;
-  color: var(--accent-strong);
-  font-weight: 700;
-}
-
 button {
   background: rgba(73, 242, 255, 0.1);
   border: 1px solid rgba(73, 242, 255, 0.3);
@@ -1230,6 +1253,16 @@ input[type='search'] {
     font-size: 15px;
   }
 
+  .manu-logo {
+    inset: auto 1rem 1rem auto;
+    border-radius: 16px;
+    padding: 0.5rem 0.6rem;
+  }
+
+  .manu-logo__image {
+    width: clamp(140px, 40vw, 190px);
+  }
+
   .main-layout {
     grid-template-columns: 1fr;
     padding: clamp(0.75rem, 5vw, 1.5rem);
@@ -1331,6 +1364,16 @@ input[type='search'] {
 @media (max-width: 640px) {
   :root {
     font-size: 14px;
+  }
+
+  .manu-logo {
+    inset: auto 0.75rem calc(0.75rem + env(safe-area-inset-bottom, 0px)) auto;
+    padding: 0.45rem 0.5rem;
+    border-radius: 14px;
+  }
+
+  .manu-logo__image {
+    width: clamp(120px, 56vw, 160px);
   }
 
   .main-layout {
