@@ -8,6 +8,7 @@ Infinite Rails is a browser-based voxel survival-puzzle prototype built entirely
 - **Order-based crafting** – drag items into a sequence to unlock equipment, igniters, and keys.
 - **Tactical survival** – manage hearts, oxygen, and day/night zombie assaults while guarding your rails.
 - **Dynamic UI** – responsive codex, animated progress indicators, and adaptive theming that reflects the active realm.
+- **Built-in guide** – open the in-game "Game Guide" for the full design document and survival walkthrough.
 - **Victory chase** – capture the Eternal Ingot in the collapsing Netherite dimension and return to the origin island.
 
 ## Controls
@@ -46,14 +47,17 @@ This repository ships with a GitHub Actions workflow that deploys the static sit
 | `AWS_SECRET_ACCESS_KEY` | Matching secret key |
 | `AWS_REGION` | AWS region that hosts the target bucket |
 | `AWS_S3_BUCKET` | Name of the S3 bucket that serves the site |
-| `CLOUDFRONT_DISTRIBUTION_ID` | Distribution to invalidate after uploading |
-| `CLOUDFRONT_URL` | CloudFront URL that players can use to access the deployed build |
+
+> The workflow fails fast when any secret is missing and writes detailed remediation steps (including the exact secret
+> name) to the job summary and log output.
 
 ### Deployment flow
 
-1. Workflow validates that all secrets are present and emits actionable errors when any are missing.
+1. Workflow validates that all required AWS secrets exist. Missing secrets trigger an actionable failure with setup steps.
 2. AWS credentials are configured via `aws-actions/configure-aws-credentials`.
-3. The repository contents (excluding `.git` and `.github`) are synchronised to the S3 bucket.
-4. CloudFront cache is invalidated and the public URL is published in the workflow summary.
+3. Repository contents (excluding version control and workflow files) are synchronised to the target S3 bucket.
+4. The workflow automatically discovers the CloudFront distribution attached to the S3 origin, invalidates its cache,
+   and exposes both the distribution ID and URL as job outputs. The URL is also written to the run summary for quick access.
 
-After a successful run, open the printed CloudFront URL to play the latest build.
+If no CloudFront distribution matches the S3 bucket, the workflow fails with instructions to create or tag one before
+redeploying.

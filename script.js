@@ -2,6 +2,7 @@ const canvas = document.getElementById('gameCanvas');
 const ctx = canvas.getContext('2d');
 const startButton = document.getElementById('startButton');
 const introModal = document.getElementById('introModal');
+const guideModal = document.getElementById('guideModal');
 const mobileControls = document.getElementById('mobileControls');
 const heartsEl = document.getElementById('hearts');
 const bubblesEl = document.getElementById('bubbles');
@@ -20,6 +21,7 @@ const recipeListEl = document.getElementById('recipeList');
 const recipeSearchEl = document.getElementById('recipeSearch');
 const eventLogEl = document.getElementById('eventLog');
 const codexListEl = document.getElementById('dimensionCodex');
+const openGuideButton = document.getElementById('openGuide');
 const portalProgressLabel = portalProgressEl.querySelector('.label');
 const portalProgressBar = portalProgressEl.querySelector('.bar');
 const rootElement = document.documentElement;
@@ -1683,10 +1685,52 @@ function initEventListeners() {
   mobileControls.querySelectorAll('button').forEach((button) => {
     button.addEventListener('click', () => updateFromMobile(button.dataset.action));
   });
+  openGuideButton?.addEventListener('click', openGuideModal);
 }
 
 startButton.addEventListener('click', startGame);
 initEventListeners();
+
+setupGuideModal();
+
+function openGuideModal() {
+  if (!guideModal) return;
+  guideModal.hidden = false;
+  guideModal.setAttribute('data-open', 'true');
+  guideModal.setAttribute('aria-hidden', 'false');
+  const scrollHost = guideModal.querySelector('[data-guide-scroll]');
+  if (scrollHost) {
+    scrollHost.scrollTop = 0;
+  }
+  const closeButton = guideModal.querySelector('[data-close-guide]');
+  closeButton?.focus();
+}
+
+function closeGuideModal() {
+  if (!guideModal) return;
+  guideModal.hidden = true;
+  guideModal.setAttribute('data-open', 'false');
+  guideModal.setAttribute('aria-hidden', 'true');
+}
+
+function setupGuideModal() {
+  if (!guideModal) return;
+  guideModal.setAttribute('data-open', 'false');
+  guideModal.setAttribute('aria-hidden', 'true');
+  guideModal.addEventListener('click', (event) => {
+    if (event.target === guideModal) {
+      closeGuideModal();
+    }
+  });
+  guideModal.querySelectorAll('[data-close-guide]').forEach((button) => {
+    button.addEventListener('click', closeGuideModal);
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && !guideModal.hidden) {
+      closeGuideModal();
+    }
+  });
+}
 
 function drawGridOverlay() {
   ctx.strokeStyle = 'rgba(73,242,255,0.05)';
