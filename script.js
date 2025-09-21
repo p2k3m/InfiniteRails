@@ -356,15 +356,11 @@
       const pointer = {
         active: false,
         id: null,
-        lastX: 0,
-        lastY: 0,
-        totalDeltaX: 0,
-        totalDeltaY: 0,
         pointerType: null,
         button: 0,
       };
-      const CLICK_THRESHOLD_PX = 6;
-      canvas.style.cursor = 'grab';
+      let suppressNextClick = false;
+      canvas.style.cursor = 'pointer';
 
       const computeFacingFromDelta = (dx, dy) => {
         const absX = Math.abs(dx);
@@ -435,26 +431,8 @@
       const resetPointerState = () => {
         pointer.active = false;
         pointer.id = null;
-        pointer.totalDeltaX = 0;
-        pointer.totalDeltaY = 0;
         pointer.pointerType = null;
         pointer.button = 0;
-        canvas.style.cursor = 'grab';
-      };
-
-      const releasePointerCapture = () => {
-        if (pointer.id !== null) {
-          try {
-            canvas.releasePointerCapture(pointer.id);
-          } catch (error) {
-            console.warn('Unable to release pointer capture', error);
-          }
-        }
-      };
-
-      const endPointerInteraction = () => {
-        releasePointerCapture();
-        resetPointerState();
       };
 
       canvas.addEventListener('pointerdown', (event) => {
@@ -463,61 +441,48 @@
         }
         pointer.active = true;
         pointer.id = event.pointerId;
-        pointer.lastX = event.clientX;
-        pointer.lastY = event.clientY;
-        pointer.totalDeltaX = 0;
-        pointer.totalDeltaY = 0;
         pointer.pointerType = event.pointerType;
         pointer.button = event.button;
-        canvas.setPointerCapture(event.pointerId);
-        canvas.style.cursor = 'grabbing';
       });
 
       canvas.addEventListener('pointermove', (event) => {
         if (!pointer.active) return;
-        const dx = event.clientX - pointer.lastX;
-        const dy = event.clientY - pointer.lastY;
-        pointer.totalDeltaX += dx;
-        pointer.totalDeltaY += dy;
-        pointer.lastX = event.clientX;
-        pointer.lastY = event.clientY;
-        orbitState.azimuth -= dx * 0.005;
-        orbitState.polar = clamp(orbitState.polar - dy * 0.005, 0.35, Math.PI / 2.05);
-        updateCameraOrbit();
+        // Pointer move is retained only to keep the listener symmetrical.
+        // No camera orbit updates are performed so the view remains fixed.
       });
 
       canvas.addEventListener('pointerup', (event) => {
         if (!pointer.active) return;
-        const distanceSq = pointer.totalDeltaX * pointer.totalDeltaX + pointer.totalDeltaY * pointer.totalDeltaY;
-        const withinClickThreshold = distanceSq <= CLICK_THRESHOLD_PX * CLICK_THRESHOLD_PX;
         const isPrimaryPointer =
           pointer.pointerType === 'touch' ||
           pointer.pointerType === 'pen' ||
           pointer.button === 0 ||
           event.button === 0;
-        if (withinClickThreshold && isPrimaryPointer && state.isRunning) {
-          handlePointerClick(event);
+        if (isPrimaryPointer && state.isRunning) {
+          if (pointer.pointerType === 'touch' || pointer.pointerType === 'pen') {
+            suppressNextClick = true;
+            handlePointerClick(event);
+          }
         }
-        endPointerInteraction();
+        resetPointerState();
       });
 
       const cancelPointer = () => {
         if (!pointer.active) return;
-        endPointerInteraction();
+        suppressNextClick = false;
+        resetPointerState();
       };
 
       canvas.addEventListener('pointerleave', cancelPointer);
       canvas.addEventListener('pointercancel', cancelPointer);
-
-      canvas.addEventListener(
-        'wheel',
-        (event) => {
-          event.preventDefault();
-          orbitState.radius = clamp(orbitState.radius + event.deltaY * 0.01, 6, 45);
-          updateCameraOrbit();
-        },
-        { passive: false }
-      );
+      canvas.addEventListener('click', (event) => {
+        if (suppressNextClick) {
+          suppressNextClick = false;
+          return;
+        }
+        if (!state.isRunning) return;
+        handlePointerClick(event);
+      });
     }
 
     function initRenderer() {
@@ -569,13 +534,15 @@
       const offsetZ = ((state.height - 1) * TILE_UNIT) / 2;
       const surface = tileSurfaceHeight(state.player.x, state.player.y) || 0;
       orbitState.target.set(offsetX, surface + 0.75, offsetZ);
+      orbitState.azimuth = -Math.PI / 4;
+      orbitState.polar = Math.PI / 3;
 
       const diagonal = Math.max(1, Math.hypot(state.width, state.height));
       const minRadius = Math.max(6.5, diagonal * 0.6);
       const maxRadius = Math.max(minRadius, diagonal * 1.05);
       const idealRadius = clamp(diagonal * 0.72, minRadius, maxRadius);
       orbitState.radius = idealRadius;
-      orbitState.polar = clamp(orbitState.polar ?? Math.PI / 3, 0.9, 1.2);
+      orbitState.polar = clamp(orbitState.polar, 0.9, 1.2);
       updateCameraOrbit();
     }
 
@@ -2305,6 +2272,7 @@
         startButton.blur();
       }
       canvas?.focus();
+      document.body?.classList.add('game-active');
       updateLayoutMetrics();
       state.isRunning = true;
       state.player.effects = {};
@@ -2333,7 +2301,7 @@
       window.setTimeout(() => {
         if (state.isRunning) {
           showPlayerHint(
-            'You are the luminous explorer at the heart of the island. Drag or swipe to look around and gather nearby resources.',
+            'You are the luminous explorer at the heart of the island. Click or tap tiles around you to gather nearby resources.',
             { duration: 7200 }
           );
         }
