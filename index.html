@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Infinite Rails: Portals of Dimension</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;500;600;700&family=Exo+2:wght@400;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="background-sheen"></div>
+    <header class="top-bar">
+      <div class="logo-area">
+        <h1>Infinite Rails</h1>
+        <span class="subtitle">Portals of Dimension</span>
+      </div>
+      <div class="status-area">
+        <div class="status-item hearts" id="hearts"></div>
+        <div class="status-item bubbles" id="bubbles"></div>
+        <div class="status-item time" id="timeOfDay"></div>
+      </div>
+    </header>
+    <main class="main-layout">
+      <section class="primary-panel">
+        <canvas id="gameCanvas" width="960" height="600" aria-label="Game world"></canvas>
+        <div class="overlay-panel" id="dimensionInfo"></div>
+        <div class="portal-progress" id="portalProgress"></div>
+      </section>
+      <aside class="side-panel">
+        <section class="inventory-panel">
+          <h2>Inventory</h2>
+          <div class="hotbar" id="hotbar"></div>
+          <button class="toggle-extended" id="toggleExtended">Open Satchel</button>
+          <div class="extended" id="extendedInventory"></div>
+        </section>
+        <section class="crafting-panel">
+          <header>
+            <h2>Crafting</h2>
+            <div class="craft-search">
+              <input type="search" id="recipeSearch" placeholder="Search recipes" />
+            </div>
+          </header>
+          <div class="craft-queue" id="craftQueue" aria-live="polite"></div>
+          <div class="craft-controls">
+            <div class="craft-target" id="craftTarget"></div>
+            <button id="craftButton" class="primary">Craft</button>
+            <button id="clearCraft" class="ghost">Clear</button>
+          </div>
+          <div class="recipe-list" id="recipeList"></div>
+        </section>
+        <section class="log-panel" aria-live="polite">
+          <header>
+            <h2>Event Log</h2>
+          </header>
+          <ul id="eventLog"></ul>
+        </section>
+      </aside>
+    </main>
+    <footer class="footer">
+      <div class="controls">
+        <div>
+          <h3>Desktop Controls</h3>
+          <p>WASD/Arrows move · Space interact · Q place block · E inventory · R build portal · F use · Shift sprint</p>
+        </div>
+        <div>
+          <h3>Mobile Controls</h3>
+          <p>Swipe to move · Tap hold to interact · Tap buttons for craft/build</p>
+        </div>
+      </div>
+      <div class="signature">made by manu</div>
+    </footer>
+
+    <div class="modal" id="introModal" role="dialog" aria-modal="true" aria-labelledby="introTitle">
+      <div class="modal-content">
+        <h2 id="introTitle">Welcome to Infinite Rails</h2>
+        <p>
+          Survive, craft, and weave portals across dimensions. Gather resources from each world, solve rail puzzles,
+          and bring home the Eternal Ingot.
+        </p>
+        <ul class="modal-highlights">
+          <li>Build 4×3 portals with unique materials to unlock new rules.</li>
+          <li>Craft using ordered sequences and uncover hidden recipes.</li>
+          <li>Survive nightly assaults while protecting villagers and rails.</li>
+        </ul>
+        <button id="startButton" class="primary">Enter the Rails</button>
+      </div>
+    </div>
+
+    <div class="mobile-controls" id="mobileControls">
+      <button data-action="left">◀</button>
+      <button data-action="up">▲</button>
+      <button data-action="down">▼</button>
+      <button data-action="right">▶</button>
+      <button data-action="action" class="accent">✦</button>
+      <button data-action="portal" class="accent">⧉</button>
+    </div>
+
+    <script src="script.js" type="module"></script>
+  </body>
+</html>

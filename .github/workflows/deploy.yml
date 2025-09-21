@@ -1,0 +1,48 @@
+name: Deploy to AWS CloudFront
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Prepare static bundle
+        run: |
+          mkdir -p dist
+          cp index.html styles.css script.js dist/
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Sync site to S3
+        run: |
+          aws s3 sync dist s3://${{ secrets.S3_BUCKET }} --delete
+
+      - name: Invalidate CloudFront cache
+        if: ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID }}
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID }} \
+            --paths "/*"
+
+      - name: Publish deployment link
+        run: |
+          echo "### 🌐 Deployment" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          if [ -n "${{ secrets.CLOUDFRONT_URL }}" ]; then
+            echo "${{ secrets.CLOUDFRONT_URL }}" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "CloudFront URL secret not provided." >> "$GITHUB_STEP_SUMMARY"
+          fi
