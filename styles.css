@@ -90,6 +90,23 @@ body::after {
   z-index: 10;
 }
 
+.logo-area {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+}
+
+.brand-logo {
+  width: clamp(140px, 18vw, 200px);
+  height: auto;
+  filter: drop-shadow(0 12px 30px rgba(73, 242, 255, 0.25));
+}
+
+.brand-copy {
+  display: grid;
+  gap: 0.2rem;
+}
+
 .logo-area h1 {
   font-family: 'Chakra Petch', sans-serif;
   font-weight: 700;
@@ -106,6 +123,26 @@ body::after {
   letter-spacing: 0.25rem;
 }
 
+.user-identity {
+  display: grid;
+  gap: 0.1rem;
+  text-align: right;
+  min-width: 160px;
+}
+
+.user-identity .user-name {
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.user-identity .user-location {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  letter-spacing: 0.08em;
+}
+
 .status-area {
   display: flex;
   gap: 1.25rem;
@@ -115,7 +152,7 @@ body::after {
 .top-actions {
   display: flex;
   align-items: center;
-  gap: 1.5rem;
+  gap: clamp(1rem, 3vw, 1.75rem);
 }
 
 .status-item {
@@ -470,6 +507,127 @@ body::after {
   margin-bottom: 0.75rem;
 }
 
+.player-panel {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.player-panel__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+}
+
+.player-panel__content {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.identity-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.65rem 1.1rem;
+  border-radius: 999px;
+  background: linear-gradient(135deg, rgba(73, 242, 255, 0.15), rgba(73, 242, 255, 0.05));
+  border: 1px solid rgba(73, 242, 255, 0.25);
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.identity-meta {
+  display: grid;
+  gap: 0.4rem;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  letter-spacing: 0.08em;
+}
+
+.gsi-container {
+  display: flex;
+  justify-content: center;
+}
+
+.player-panel__hint {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.scoreboard-panel {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.scoreboard-panel header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.scoreboard-status {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  letter-spacing: 0.08em;
+}
+
+.scoreboard-list {
+  list-style: none;
+  display: grid;
+  gap: 0.65rem;
+  margin: 0;
+  padding: 0;
+}
+
+.score-entry {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 0.85rem;
+  align-items: center;
+  padding: 0.75rem 1rem;
+  border-radius: 18px;
+  background: linear-gradient(135deg, rgba(10, 18, 35, 0.9), rgba(10, 18, 35, 0.55));
+  border: 1px solid rgba(73, 242, 255, 0.18);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.2);
+}
+
+.score-entry .rank {
+  font-family: 'Chakra Petch', sans-serif;
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--accent-strong);
+  letter-spacing: 0.12em;
+}
+
+.score-entry__body {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.score-entry__body strong {
+  font-size: 0.95rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.score-entry__body span {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  letter-spacing: 0.06em;
+}
+
+.score-entry__meta {
+  display: grid;
+  justify-items: end;
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+  letter-spacing: 0.08em;
+  text-align: right;
+}
+
 .hotbar {
   display: grid;
   grid-template-columns: repeat(5, minmax(48px, 1fr));
@@ -704,6 +862,12 @@ button.ghost:hover {
   background: rgba(73, 242, 255, 0.15);
 }
 
+button.small {
+  font-size: 0.7rem;
+  padding: 0.45rem 0.7rem;
+  letter-spacing: 0.1em;
+}
+
 input[type='search'] {
   background: rgba(6, 14, 28, 0.85);
   border: 1px solid rgba(73, 242, 255, 0.25);
@@ -913,6 +1077,17 @@ input[type='search'] {
     gap: 0.75rem;
   }
 
+  .top-actions {
+    flex-wrap: wrap;
+    justify-content: space-between;
+    width: 100%;
+    gap: 0.75rem;
+  }
+
+  .user-identity {
+    text-align: left;
+  }
+
   .footer {
     flex-direction: column;
     gap: 1rem;
@@ -945,6 +1120,16 @@ input[type='search'] {
 
   .top-bar {
     padding: 1rem;
+  }
+
+  .score-entry {
+    grid-template-columns: 1fr;
+    justify-items: flex-start;
+  }
+
+  .score-entry__meta {
+    justify-items: flex-start;
+    text-align: left;
   }
 
   .footer {

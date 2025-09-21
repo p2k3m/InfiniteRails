@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Infinite Rails: Portals of Dimension</title>
+    <title>Infinite Dimension · Portals Reimagined</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -16,8 +16,11 @@
     <div class="background-sheen"></div>
     <header class="top-bar">
       <div class="logo-area">
-        <h1>Infinite Rails</h1>
-        <span class="subtitle">Portals of Dimension</span>
+        <img src="assets/infinite-dimension-logo.svg" alt="Infinite Dimension logo" class="brand-logo" />
+        <div class="brand-copy">
+          <h1>Infinite Dimension</h1>
+          <span class="subtitle">Portals Reimagined</span>
+        </div>
       </div>
       <div class="top-actions">
         <button type="button" id="openGuide" class="ghost">Game Guide</button>
@@ -25,6 +28,10 @@
           <div class="status-item hearts" id="hearts"></div>
           <div class="status-item bubbles" id="bubbles"></div>
           <div class="status-item time" id="timeOfDay"></div>
+        </div>
+        <div class="user-identity" aria-live="polite">
+          <span class="user-name" id="headerUserName">Guest Explorer</span>
+          <span class="user-location" id="headerUserLocation">Location unavailable</span>
         </div>
       </div>
     </header>
@@ -46,6 +53,32 @@
         <div class="victory-banner" id="victoryBanner" role="status" aria-live="assertive"></div>
       </section>
       <aside class="side-panel">
+        <section class="player-panel" aria-label="Player profile">
+          <header class="player-panel__header">
+            <h2>Player Hub</h2>
+            <button type="button" id="googleSignOut" class="ghost small" hidden>Sign out</button>
+          </header>
+          <div class="player-panel__content">
+            <div class="identity-pill" id="userNameDisplay">Guest Explorer</div>
+            <div class="identity-meta">
+              <span id="userLocationDisplay">Location unavailable</span>
+              <span id="userDeviceDisplay">Device details pending</span>
+            </div>
+            <div id="googleButtonContainer" class="gsi-container" hidden></div>
+            <button type="button" id="googleFallbackSignIn" class="primary">Sign in with Google</button>
+            <p class="player-panel__hint">
+              Sign in to capture your location badge, sync your device fingerprint, and compete on the Infinite Dimension scorecard.
+            </p>
+          </div>
+        </section>
+        <section class="scoreboard-panel" id="scoreboardSection" aria-label="Multiverse scoreboard" hidden>
+          <header>
+            <h2>Multiverse Scoreboard</h2>
+            <button type="button" id="refreshScores" class="ghost small">Refresh</button>
+          </header>
+          <p class="scoreboard-status" id="scoreboardStatus" aria-live="polite">Sign in to view the multiverse scorecard.</p>
+          <ol class="scoreboard-list" id="scoreboardList" aria-live="polite"></ol>
+        </section>
         <section class="inventory-panel">
           <h2>Inventory</h2>
           <div class="hotbar" id="hotbar"></div>
@@ -95,12 +128,12 @@
           <p>Swipe to move · Tap hold to interact · Tap buttons for craft/build</p>
         </div>
       </div>
-      <div class="signature">made by manu</div>
+      <div class="signature">Created by Manu</div>
     </footer>
 
     <div class="modal" id="introModal" role="dialog" aria-modal="true" aria-labelledby="introTitle">
       <div class="modal-content">
-        <h2 id="introTitle">Welcome to Infinite Rails</h2>
+        <h2 id="introTitle">Welcome to Infinite Dimension</h2>
         <p>
           Survive, craft, and weave portals across dimensions. Gather resources from each world, solve rail puzzles,
           and bring home the Eternal Ingot.
@@ -126,14 +159,14 @@
         <header class="guide-header">
           <div>
             <p class="guide-eyebrow">Game Design Document &amp; User Manual</p>
-            <h2 id="guideTitle">Infinite Rails: Portals of Dimension</h2>
+            <h2 id="guideTitle">Infinite Dimension: Portals Reimagined</h2>
           </div>
           <button type="button" class="ghost" data-close-guide>Close</button>
         </header>
         <section class="guide-section">
           <h3>Game Overview</h3>
           <p>
-            Infinite Rails is a browser-based voxel survival puzzle. Gather resources, craft ordered recipes, and build
+            Infinite Dimension is a browser-based voxel survival puzzle. Gather resources, craft ordered recipes, and build
             precise 4×3 portals to leap between realms. Each portal material rewrites the physics and threats of the
             destination dimension.
           </p>
@@ -239,6 +272,7 @@
       <button data-action="portal" class="accent">⧉</button>
     </div>
 
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
     <script src="script.js" type="module"></script>
   </body>
 </html>
