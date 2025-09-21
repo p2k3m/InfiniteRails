@@ -1,5 +1,6 @@
+import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.161.0/build/three.module.js';
+
 const canvas = document.getElementById('gameCanvas');
-const ctx = canvas.getContext('2d');
 const startButton = document.getElementById('startButton');
 const introModal = document.getElementById('introModal');
 const guideModal = document.getElementById('guideModal');
@@ -44,6 +45,600 @@ const BASE_THEME = {
     ),
   dimensionGlow: readVar('--dimension-glow', 'rgba(73, 242, 255, 0.45)'),
 };
+
+const TILE_UNIT = 1;
+const BASE_GEOMETRY = new THREE.BoxGeometry(TILE_UNIT, TILE_UNIT, TILE_UNIT);
+const PLANE_GEOMETRY = new THREE.PlaneGeometry(TILE_UNIT, TILE_UNIT);
+const PORTAL_PLANE_GEOMETRY = new THREE.PlaneGeometry(TILE_UNIT * 0.92, TILE_UNIT * 1.5);
+const CRYSTAL_GEOMETRY = new THREE.OctahedronGeometry(TILE_UNIT * 0.22);
+
+let renderer;
+let scene;
+let camera;
+let worldGroup;
+let entityGroup;
+let playerMesh;
+let tileRenderState = [];
+const zombieMeshes = [];
+
+const orbitState = {
+  azimuth: -Math.PI / 4,
+  polar: Math.PI / 3,
+  radius: 18,
+  target: new THREE.Vector3(),
+};
+
+const baseMaterialCache = new Map();
+const accentMaterialCache = new Map();
+
+function getBaseMaterial(color) {
+  if (!baseMaterialCache.has(color)) {
+    baseMaterialCache.set(
+      color,
+      new THREE.MeshStandardMaterial({
+        color: new THREE.Color(color),
+        roughness: 0.85,
+        metalness: 0.05,
+      })
+    );
+  }
+  return baseMaterialCache.get(color);
+}
+
+function getAccentMaterial(color, opacity = 0.75) {
+  const key = `${color}-${opacity}`;
+  if (!accentMaterialCache.has(key)) {
+    accentMaterialCache.set(
+      key,
+      new THREE.MeshStandardMaterial({
+        color: new THREE.Color(color),
+        roughness: 0.6,
+        metalness: 0.15,
+        transparent: true,
+        opacity,
+        emissive: new THREE.Color(color).multiplyScalar(0.2),
+        emissiveIntensity: 0.3,
+        side: THREE.DoubleSide,
+      })
+    );
+  }
+  return accentMaterialCache.get(key);
+}
+
+function worldToScene(x, y) {
+  return {
+    x: (x - state.width / 2) * TILE_UNIT + TILE_UNIT / 2,
+    z: (y - state.height / 2) * TILE_UNIT + TILE_UNIT / 2,
+  };
+}
+
+function handleResize() {
+  if (!renderer || !camera) return;
+  const width = canvas.clientWidth || canvas.width;
+  const height = canvas.clientHeight || canvas.height;
+  renderer.setSize(width, height, false);
+  camera.aspect = width / height;
+  camera.updateProjectionMatrix();
+}
+
+function updateCameraOrbit() {
+  const { azimuth, polar, radius, target } = orbitState;
+  const sinPolar = Math.sin(polar);
+  camera.position.x = target.x + radius * sinPolar * Math.cos(azimuth);
+  camera.position.y = target.y + radius * Math.cos(polar);
+  camera.position.z = target.z + radius * sinPolar * Math.sin(azimuth);
+  camera.lookAt(target);
+}
+
+function initPointerControls() {
+  const pointer = { active: false, id: null, lastX: 0, lastY: 0 };
+  canvas.style.cursor = 'grab';
+
+  canvas.addEventListener('pointerdown', (event) => {
+    pointer.active = true;
+    pointer.id = event.pointerId;
+    pointer.lastX = event.clientX;
+    pointer.lastY = event.clientY;
+    canvas.setPointerCapture(event.pointerId);
+    canvas.style.cursor = 'grabbing';
+  });
+
+  canvas.addEventListener('pointermove', (event) => {
+    if (!pointer.active) return;
+    const dx = event.clientX - pointer.lastX;
+    const dy = event.clientY - pointer.lastY;
+    pointer.lastX = event.clientX;
+    pointer.lastY = event.clientY;
+    orbitState.azimuth -= dx * 0.005;
+    orbitState.polar = clamp(orbitState.polar - dy * 0.005, 0.35, Math.PI / 2.05);
+    updateCameraOrbit();
+  });
+
+  const stopPointer = (event) => {
+    if (pointer.id !== null) {
+      canvas.releasePointerCapture(pointer.id);
+    }
+    pointer.active = false;
+    pointer.id = null;
+    canvas.style.cursor = 'grab';
+  };
+
+  canvas.addEventListener('pointerup', stopPointer);
+  canvas.addEventListener('pointerleave', stopPointer);
+
+  canvas.addEventListener(
+    'wheel',
+    (event) => {
+      event.preventDefault();
+      orbitState.radius = clamp(orbitState.radius + event.deltaY * 0.01, 6, 45);
+      updateCameraOrbit();
+    },
+    { passive: false }
+  );
+}
+
+function initRenderer() {
+  if (renderer) return;
+  renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+  renderer.setPixelRatio(window.devicePixelRatio ?? 1);
+  handleResize();
+
+  scene = new THREE.Scene();
+  scene.fog = new THREE.FogExp2('#0b1324', 0.055);
+
+  camera = new THREE.PerspectiveCamera(55, (canvas.clientWidth || canvas.width) / (canvas.clientHeight || canvas.height), 0.1, 1000);
+
+  worldGroup = new THREE.Group();
+  entityGroup = new THREE.Group();
+  scene.add(worldGroup);
+  scene.add(entityGroup);
+
+  const hemiLight = new THREE.HemisphereLight(0xbcd7ff, 0x0b1324, 1.05);
+  scene.add(hemiLight);
+
+  const dirLight = new THREE.DirectionalLight(0xffffff, 0.9);
+  dirLight.position.set(6, 14, 10);
+  scene.add(dirLight);
+
+  initPointerControls();
+  window.addEventListener('resize', handleResize);
+  updateWorldTarget();
+  createPlayerMesh();
+}
+
+function updateWorldTarget() {
+  orbitState.target.set(0, 0.6, 0);
+  const offsetX = ((state.width - 1) * TILE_UNIT) / 2;
+  const offsetZ = ((state.height - 1) * TILE_UNIT) / 2;
+  orbitState.target.x = offsetX;
+  orbitState.target.z = offsetZ;
+  updateCameraOrbit();
+}
+
+function resetWorldMeshes() {
+  tileRenderState = [];
+  if (!worldGroup) return;
+  while (worldGroup.children.length) {
+    worldGroup.remove(worldGroup.children[0]);
+  }
+}
+
+function ensureTileGroups() {
+  if (!worldGroup) return;
+  if (tileRenderState.length === state.height && tileRenderState[0]?.length === state.width) return;
+  resetWorldMeshes();
+  for (let y = 0; y < state.height; y++) {
+    tileRenderState[y] = [];
+    for (let x = 0; x < state.width; x++) {
+      const group = new THREE.Group();
+      const { x: sx, z: sz } = worldToScene(x, y);
+      group.position.set(sx, 0, sz);
+      worldGroup.add(group);
+      tileRenderState[y][x] = {
+        group,
+        signature: null,
+        animations: {},
+      };
+    }
+  }
+}
+
+function addBlock(group, options) {
+  const {
+    color = '#ffffff',
+    height = 1,
+    width = 1,
+    depth = 1,
+    y = height / 2,
+    geometry = BASE_GEOMETRY,
+    material = null,
+    transparent = false,
+    opacity = 1,
+    emissive,
+    emissiveIntensity = 0,
+    roughness = 0.85,
+    metalness = 0.05,
+    doubleSide = false,
+  } = options;
+  const mat =
+    material ??
+    new THREE.MeshStandardMaterial({
+      color: new THREE.Color(color),
+      roughness,
+      metalness,
+      transparent,
+      opacity,
+      side: doubleSide ? THREE.DoubleSide : THREE.FrontSide,
+      emissive: emissive ? new THREE.Color(emissive) : undefined,
+      emissiveIntensity,
+    });
+  const mesh = new THREE.Mesh(geometry, mat);
+  mesh.scale.set(width, height, depth);
+  mesh.position.y = y;
+  group.add(mesh);
+  return mesh;
+}
+
+function addTopPlate(group, color, height, opacity = 0.72) {
+  const plate = new THREE.Mesh(PLANE_GEOMETRY, getAccentMaterial(color, opacity));
+  plate.rotation.x = -Math.PI / 2;
+  plate.position.y = height + 0.01;
+  group.add(plate);
+  return plate;
+}
+
+function getTileSignature(tile) {
+  if (!tile) return 'void';
+  const entries = tile.data
+    ? Object.entries(tile.data)
+        .map(([key, value]) => `${key}:${typeof value === 'object' ? JSON.stringify(value) : value}`)
+        .sort()
+        .join('|')
+    : '';
+  return `${tile.type}|${tile.resource ?? ''}|${tile.hazard ? 1 : 0}|${entries}`;
+}
+
+function getTileHeight(tile) {
+  switch (tile?.type) {
+    case 'void':
+      return 0;
+    case 'water':
+    case 'lava':
+      return 0.28;
+    case 'tar':
+      return 0.55;
+    case 'rail':
+      return 0.35;
+    case 'railVoid':
+      return 0.12;
+    case 'portal':
+    case 'portalDormant':
+      return 0.2;
+    default:
+      return 1;
+  }
+}
+
+function rebuildTileGroup(renderInfo, tile) {
+  const { group } = renderInfo;
+  while (group.children.length) {
+    group.remove(group.children[0]);
+  }
+  renderInfo.animations = {};
+
+  if (!tile || tile.type === 'void') {
+    group.visible = false;
+    return;
+  }
+
+  group.visible = true;
+  const def = TILE_TYPES[tile.type] ?? TILE_TYPES.grass;
+  const baseColor = def.base ?? '#1c1f2d';
+  const accentColor = def.accent ?? '#49f2ff';
+  const height = getTileHeight(tile);
+
+  switch (tile.type) {
+    case 'water': {
+      addBlock(group, {
+        color: new THREE.Color(baseColor).lerp(new THREE.Color(accentColor), 0.5),
+        height,
+        transparent: true,
+        opacity: 0.82,
+        emissive: accentColor,
+        emissiveIntensity: 0.08,
+      });
+      addTopPlate(group, accentColor, height, 0.35);
+      break;
+    }
+    case 'lava': {
+      const mat = new THREE.MeshStandardMaterial({
+        color: new THREE.Color(baseColor).lerp(new THREE.Color(accentColor), 0.35),
+        roughness: 0.35,
+        metalness: 0.25,
+        emissive: new THREE.Color(accentColor),
+        emissiveIntensity: 1.1,
+        transparent: true,
+        opacity: 0.88,
+      });
+      addBlock(group, { height, material: mat });
+      break;
+    }
+    case 'tar': {
+      const mat = new THREE.MeshStandardMaterial({
+        color: new THREE.Color(baseColor),
+        roughness: 0.2,
+        metalness: 0.5,
+        emissive: new THREE.Color(accentColor).multiplyScalar(0.15),
+        emissiveIntensity: 0.2,
+      });
+      addBlock(group, { height, material: mat });
+      addTopPlate(group, accentColor, height, 0.45);
+      break;
+    }
+    case 'rail': {
+      const base = addBlock(group, {
+        height,
+        material: getBaseMaterial(baseColor),
+      });
+      base.receiveShadow = true;
+      const railMaterial = new THREE.MeshStandardMaterial({
+        color: new THREE.Color(accentColor),
+        emissive: new THREE.Color(accentColor),
+        emissiveIntensity: 0.12,
+        transparent: true,
+        opacity: 0.35,
+        side: THREE.DoubleSide,
+      });
+      const railPlate = new THREE.Mesh(PLANE_GEOMETRY, railMaterial);
+      railPlate.rotation.x = -Math.PI / 2;
+      railPlate.position.y = height + 0.02;
+      group.add(railPlate);
+      renderInfo.animations.railGlow = railMaterial;
+      break;
+    }
+    case 'railVoid': {
+      addBlock(group, {
+        height,
+        material: getBaseMaterial('#050912'),
+      });
+      break;
+    }
+    case 'tree': {
+      addBlock(group, { material: getBaseMaterial(TILE_TYPES.grass.base), height: 0.9 });
+      addTopPlate(group, TILE_TYPES.grass.accent, 0.9, 0.5);
+      addBlock(group, {
+        color: '#4f3418',
+        width: 0.28,
+        depth: 0.28,
+        height: 1.4,
+        y: 0.9 + 0.7,
+      });
+      addBlock(group, {
+        color: accentColor,
+        width: 1.1,
+        depth: 1.1,
+        height: 1.1,
+        y: 0.9 + 1.4,
+      });
+      break;
+    }
+    case 'chest': {
+      addBlock(group, { material: getBaseMaterial(baseColor), height: 0.8 });
+      const lid = addBlock(group, {
+        color: new THREE.Color(accentColor).lerp(new THREE.Color(baseColor), 0.4),
+        height: 0.3,
+        y: 0.8 + 0.15,
+      });
+      lid.material.metalness = 0.35;
+      break;
+    }
+    case 'portalFrame': {
+      const column = addBlock(group, {
+        color: baseColor,
+        height: 1.4,
+        width: 0.9,
+        depth: 0.9,
+        y: 0.7,
+        roughness: 0.4,
+        metalness: 0.4,
+      });
+      column.material.emissive = new THREE.Color(accentColor);
+      column.material.emissiveIntensity = 0.3;
+      addTopPlate(group, accentColor, 1.4, 0.4);
+      break;
+    }
+    case 'portal':
+    case 'portalDormant': {
+      addBlock(group, {
+        color: new THREE.Color(baseColor).lerp(new THREE.Color('#1a1f39'), 0.4),
+        height,
+        roughness: 0.45,
+        metalness: 0.35,
+      });
+      const intensity = tile.type === 'portal' ? 0.9 : 0.35;
+      const opacity = tile.type === 'portal' ? 0.8 : 0.5;
+      const planeMaterial = new THREE.MeshStandardMaterial({
+        color: new THREE.Color(accentColor),
+        emissive: new THREE.Color(accentColor),
+        emissiveIntensity: intensity,
+        transparent: true,
+        opacity,
+        side: THREE.DoubleSide,
+      });
+      const plane = new THREE.Mesh(PORTAL_PLANE_GEOMETRY, planeMaterial);
+      plane.position.y = height + 0.85;
+      group.add(plane);
+      const planeB = new THREE.Mesh(PORTAL_PLANE_GEOMETRY, planeMaterial.clone());
+      planeB.position.y = height + 0.85;
+      planeB.rotation.y = Math.PI / 2;
+      group.add(planeB);
+      renderInfo.animations.portalMaterials = [plane.material, planeB.material];
+      break;
+    }
+    case 'crystal': {
+      addBlock(group, { color: baseColor, height: 0.9 });
+      addTopPlate(group, accentColor, 0.9, 0.35);
+      const crystal = addBlock(group, {
+        geometry: CRYSTAL_GEOMETRY,
+        color: accentColor,
+        height: 1,
+        width: 1,
+        depth: 1,
+        y: 1.2,
+        emissive: accentColor,
+        emissiveIntensity: 0.4,
+        roughness: 0.3,
+        metalness: 0.6,
+      });
+      crystal.rotation.y = Math.PI / 4;
+      break;
+    }
+    default: {
+      const baseBlock = addBlock(group, { height, material: getBaseMaterial(baseColor) });
+      baseBlock.receiveShadow = true;
+      if (tile.type !== 'marbleEcho' && tile.type !== 'marble') {
+        addTopPlate(group, accentColor, height);
+      } else {
+        addTopPlate(group, accentColor, height, tile.type === 'marble' ? 0.6 : 0.45);
+      }
+      break;
+    }
+  }
+
+  if (tile.resource && tile.type !== 'tree') {
+    const resourceGem = addBlock(group, {
+      geometry: CRYSTAL_GEOMETRY,
+      color: accentColor,
+      height: 1,
+      width: 1,
+      depth: 1,
+      y: getTileHeight(tile) + 0.75,
+      emissive: accentColor,
+      emissiveIntensity: 0.4,
+      roughness: 0.25,
+      metalness: 0.5,
+    });
+    resourceGem.rotation.y = Math.PI / 4;
+    renderInfo.animations.resourceGem = resourceGem;
+  }
+}
+
+function updateTileVisual(tile, renderInfo) {
+  if (!tile || tile.type === 'void') return;
+  if (renderInfo.animations.portalMaterials) {
+    renderInfo.animations.portalMaterials.forEach((material) => {
+      material.emissiveIntensity = tile.type === 'portal' ? 0.9 + 0.25 * Math.sin(state.elapsed * 3) : 0.35 + 0.2 * Math.sin(state.elapsed * 2);
+      material.opacity = tile.type === 'portal' ? 0.75 : 0.5;
+    });
+  }
+  if (renderInfo.animations.railGlow) {
+    const active = state.railPhase === (tile.data?.phase ?? 0);
+    renderInfo.animations.railGlow.emissiveIntensity = active ? 0.65 : 0.1;
+    renderInfo.animations.railGlow.opacity = active ? 0.68 : 0.25;
+  }
+  if (renderInfo.animations.resourceGem) {
+    renderInfo.animations.resourceGem.rotation.y += 0.01;
+  }
+}
+
+function updateWorldMeshes() {
+  ensureTileGroups();
+  for (let y = 0; y < state.height; y++) {
+    for (let x = 0; x < state.width; x++) {
+      const tile = state.world?.[y]?.[x];
+      const renderInfo = tileRenderState?.[y]?.[x];
+      if (!renderInfo) continue;
+      const signature = getTileSignature(tile);
+      if (renderInfo.signature !== signature) {
+        rebuildTileGroup(renderInfo, tile);
+        renderInfo.signature = signature;
+      }
+      if (tile) {
+        updateTileVisual(tile, renderInfo);
+      }
+    }
+  }
+}
+
+function createPlayerMesh() {
+  if (!entityGroup) return;
+  const group = new THREE.Group();
+  const body = addBlock(group, {
+    color: '#f7b733',
+    width: 0.6,
+    depth: 0.6,
+    height: 1.2,
+    y: 0.6,
+  });
+  const head = addBlock(group, {
+    color: '#ffe3a1',
+    width: 0.5,
+    depth: 0.5,
+    height: 0.45,
+    y: 1.2 + 0.225,
+  });
+  head.material.roughness = 0.6;
+  entityGroup.add(group);
+  playerMesh = group;
+}
+
+function ensureZombieMeshCount(count) {
+  while (zombieMeshes.length < count) {
+    const zombie = new THREE.Group();
+    addBlock(zombie, {
+      color: '#234d2f',
+      width: 0.55,
+      depth: 0.55,
+      height: 1,
+      y: 0.5,
+    });
+    const head = addBlock(zombie, {
+      color: '#6cff9d',
+      width: 0.5,
+      depth: 0.5,
+      height: 0.4,
+      y: 1 + 0.2,
+    });
+    head.material.emissive = new THREE.Color('#6cff9d');
+    head.material.emissiveIntensity = 0.3;
+    entityGroup.add(zombie);
+    zombieMeshes.push(zombie);
+  }
+  while (zombieMeshes.length > count) {
+    const zombie = zombieMeshes.pop();
+    entityGroup.remove(zombie);
+  }
+}
+
+function tileSurfaceHeight(x, y) {
+  const tile = getTile(x, y);
+  if (!tile) return 0;
+  return getTileHeight(tile) + 0.01;
+}
+
+function updateEntities() {
+  if (playerMesh) {
+    const { x, z } = worldToScene(state.player.x, state.player.y);
+    const height = tileSurfaceHeight(state.player.x, state.player.y);
+    playerMesh.position.set(x, height, z);
+  }
+  ensureZombieMeshCount(state.zombies.length);
+  state.zombies.forEach((zombie, index) => {
+    const mesh = zombieMeshes[index];
+    if (!mesh) return;
+    const { x, z } = worldToScene(zombie.x, zombie.y);
+    const h = tileSurfaceHeight(zombie.x, zombie.y);
+    mesh.position.set(x, h, z);
+  });
+}
+
+function renderScene() {
+  updateWorldMeshes();
+  updateEntities();
+  if (renderer && scene && camera) {
+    renderer.render(scene, camera);
+  }
+}
 
 const TILE_TYPES = {
   grass: { base: '#1d934d', accent: '#91ffb7', walkable: true },
@@ -396,6 +991,8 @@ const state = {
   isRunning: false,
   victory: false,
 };
+
+initRenderer();
 
 function generateOriginIsland(state) {
   const grid = [];
@@ -892,6 +1489,8 @@ function loadDimension(id, fromId = null) {
   applyDimensionTheme(dim);
   document.title = `Infinite Rails · ${dim.name}`;
   state.world = dim.generator(state);
+  resetWorldMeshes();
+  updateWorldTarget();
   state.player.x = Math.floor(state.width / 2);
   state.player.y = Math.floor(state.height / 2);
   state.player.facing = { x: 0, y: 1 };
@@ -1432,110 +2031,7 @@ function openChest(tile) {
 }
 
 function draw() {
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  for (let y = 0; y < state.height; y++) {
-    for (let x = 0; x < state.width; x++) {
-      drawTile(x, y, state.world[y][x]);
-    }
-  }
-  drawPortals();
-  drawZombies();
-  drawPlayer();
-}
-
-function drawTile(x, y, tile) {
-  const tx = x * state.tileWidth;
-  const ty = y * state.tileHeight;
-  const type = TILE_TYPES[tile?.type] ?? TILE_TYPES.grass;
-  const base = type.base ?? '#1c1f2d';
-  const accent = type.accent ?? '#49f2ff';
-  const gradient = ctx.createLinearGradient(tx, ty, tx + state.tileWidth, ty + state.tileHeight);
-  gradient.addColorStop(0, shadeColor(base, -12));
-  gradient.addColorStop(1, shadeColor(base, 12));
-  ctx.fillStyle = gradient;
-  ctx.fillRect(tx, ty, state.tileWidth, state.tileHeight);
-  if (tile?.type === 'rail') {
-    ctx.strokeStyle = state.railPhase === (tile.data?.phase ?? 0) ? accent : 'rgba(73,242,255,0.15)';
-    ctx.lineWidth = 3;
-    ctx.strokeRect(tx + 8, ty + 8, state.tileWidth - 16, state.tileHeight - 16);
-    ctx.lineWidth = 1;
-  }
-  if (tile?.type === 'portalFrame') {
-    ctx.strokeStyle = accent;
-    ctx.lineWidth = 3;
-    ctx.strokeRect(tx + 6, ty + 6, state.tileWidth - 12, state.tileHeight - 12);
-  }
-  if (tile?.type === 'portalDormant' || tile?.type === 'portal') {
-    const radial = ctx.createRadialGradient(
-      tx + state.tileWidth / 2,
-      ty + state.tileHeight / 2,
-      4,
-      tx + state.tileWidth / 2,
-      ty + state.tileHeight / 2,
-      state.tileWidth / 2
-    );
-    const alphaInner = tile.type === 'portal' ? 1 : 0.55;
-    const alphaOuter = tile.type === 'portal' ? 0.25 : 0.08;
-    radial.addColorStop(0, `rgba(73,242,255,${alphaInner})`);
-    radial.addColorStop(1, `rgba(73,242,255,${alphaOuter})`);
-    ctx.fillStyle = radial;
-    ctx.fillRect(tx + 4, ty + 4, state.tileWidth - 8, state.tileHeight - 8);
-  }
-  if (tile?.resource && tile.type !== 'portal') {
-    ctx.fillStyle = accent;
-    ctx.globalAlpha = 0.45;
-    ctx.fillRect(tx + 10, ty + 10, state.tileWidth - 20, state.tileHeight - 20);
-    ctx.globalAlpha = 1;
-  }
-  if (tile?.type === 'lava') {
-    ctx.fillStyle = accent;
-    ctx.globalAlpha = 0.25;
-    ctx.fillRect(tx, ty, state.tileWidth, state.tileHeight);
-    ctx.globalAlpha = 1;
-  }
-}
-
-function shadeColor(hex, percent) {
-  const f = parseInt(hex.slice(1), 16);
-  const t = percent < 0 ? 0 : 255;
-  const p = Math.abs(percent) / 100;
-  const R = f >> 16;
-  const G = (f >> 8) & 0x00ff;
-  const B = f & 0x0000ff;
-  const newR = Math.round((t - R) * p) + R;
-  const newG = Math.round((t - G) * p) + G;
-  const newB = Math.round((t - B) * p) + B;
-  return `rgb(${newR}, ${newG}, ${newB})`;
-}
-
-function drawPlayer() {
-  const px = state.player.x * state.tileWidth;
-  const py = state.player.y * state.tileHeight;
-  ctx.fillStyle = '#f7b733';
-  ctx.fillRect(px + 12, py + 8, state.tileWidth - 24, state.tileHeight - 16);
-  ctx.fillStyle = '#0b1324';
-  ctx.fillRect(px + 22, py + 16, 6, 6);
-}
-
-function drawZombies() {
-  ctx.fillStyle = '#6cff9d';
-  state.zombies.forEach((z) => {
-    const zx = z.x * state.tileWidth;
-    const zy = z.y * state.tileHeight;
-    ctx.fillRect(zx + 14, zy + 14, state.tileWidth - 28, state.tileHeight - 28);
-  });
-}
-
-function drawPortals() {
-  state.portals.forEach((portal) => {
-    portal.tiles.forEach(({ x, y }, index) => {
-      const tx = x * state.tileWidth;
-      const ty = y * state.tileHeight;
-      const pulse = portal.active ? 0.4 + 0.2 * Math.sin(state.elapsed * 2 + index) : 0.15;
-      ctx.strokeStyle = `rgba(73,242,255,${pulse})`;
-      ctx.strokeRect(tx + 6, ty + 6, state.tileWidth - 12, state.tileHeight - 12);
-    });
-  });
+  renderScene();
 }
 
 function handleKeyDown(event) {
@@ -1732,22 +2228,3 @@ function setupGuideModal() {
   });
 }
 
-function drawGridOverlay() {
-  ctx.strokeStyle = 'rgba(73,242,255,0.05)';
-  for (let x = 0; x <= state.width; x++) {
-    ctx.beginPath();
-    ctx.moveTo(x * state.tileWidth, 0);
-    ctx.lineTo(x * state.tileWidth, canvas.height);
-    ctx.stroke();
-  }
-  for (let y = 0; y <= state.height; y++) {
-    ctx.beginPath();
-    ctx.moveTo(0, y * state.tileHeight);
-    ctx.lineTo(canvas.width, y * state.tileHeight);
-    ctx.stroke();
-  }
-}
-
-setTimeout(() => {
-  drawGridOverlay();
-}, 100);
