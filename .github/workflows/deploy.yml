@@ -111,21 +111,27 @@ jobs:
           ORIGIN_WEBSITE="${DEPLOY_BUCKET}.s3-website-${AWS_REGION}.amazonaws.com"
           MATCH=$(aws cloudfront list-distributions --query "DistributionList.Items[?Origins.Items[?DomainName=='${ORIGIN_CLASSIC}' || DomainName=='${ORIGIN_REGIONAL}' || DomainName=='${ORIGIN_WEBSITE}']]|[0]")
           if [ -z "$MATCH" ] || [ "$MATCH" = "null" ]; then
-            echo '::error::No CloudFront distribution is configured for the provided S3 bucket.'
+            echo '::warning::No CloudFront distribution is configured for the provided S3 bucket. Skipping distribution discovery.'
             {
-              echo '### ❌ CloudFront distribution not found'
+              echo '### ⚠️ CloudFront distribution not found'
               echo ''
               echo "No CloudFront distribution could be matched to bucket \`${DEPLOY_BUCKET}\` in region \`${AWS_REGION}\`."
               echo ''
-              echo '#### How to fix'
+              echo '#### What happens next'
+              echo '- The site has been synced to S3 successfully.'
+              echo '- CloudFront cache invalidation will be skipped.'
+              echo ''
+              echo '#### How to add CloudFront (optional)'
               echo '1. Create a CloudFront distribution with the S3 bucket as an origin (Origin Access Control recommended).'
               echo '2. Alternatively, ensure an existing distribution origin domain exactly matches one of:'
               echo "   - ${ORIGIN_CLASSIC}"
               echo "   - ${ORIGIN_REGIONAL}"
               echo "   - ${ORIGIN_WEBSITE}"
-              echo '3. Re-run this workflow to publish the site once the distribution exists.'
+              echo '3. Re-run this workflow once the distribution exists to enable automatic cache invalidation and deployment URL reporting.'
             } >> "$GITHUB_STEP_SUMMARY"
-            exit 1
+            echo 'distribution-id=' >> "$GITHUB_OUTPUT"
+            echo 'distribution-domain=' >> "$GITHUB_OUTPUT"
+            exit 0
           fi
           CF_ID=$(echo "$MATCH" | jq -r '.Id // empty')
           CF_DOMAIN=$(echo "$MATCH" | jq -r '.DomainName // empty')
@@ -143,6 +149,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Invalidate CloudFront cache
+        if: steps.discover.outputs['distribution-id'] != ''
         env:
           DISTRIBUTION_ID: ${{ steps.discover.outputs.distribution-id }}
         run: |
@@ -154,12 +161,31 @@ jobs:
           aws cloudfront create-invalidation --distribution-id "$DISTRIBUTION_ID" --paths '/*'
 
       - name: Announce deployment URL
+        env:
+          DISTRIBUTION_DOMAIN: ${{ steps.discover.outputs.distribution-domain }}
+          DISTRIBUTION_ID: ${{ steps.discover.outputs.distribution-id }}
+          DEPLOY_BUCKET: ${{ secrets.AWS_S3_BUCKET }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
         run: |
           set -euo pipefail
-          echo "::notice::Deployment available at ${{ steps.discover.outputs.distribution-domain }}"
-          {
-            echo '### 🌐 Play the latest build'
-            echo ''
-            echo "- CloudFront URL: ${{ steps.discover.outputs.distribution-domain }}"
-            echo "- Distribution ID: \`${{ steps.discover.outputs.distribution-id }}\`"
-          } >> "$GITHUB_STEP_SUMMARY"
+          if [ -n "${DISTRIBUTION_DOMAIN:-}" ]; then
+            echo "::notice::Deployment available at ${DISTRIBUTION_DOMAIN}"
+            {
+              echo '### 🌐 Play the latest build'
+              echo ''
+              echo "- CloudFront URL: ${DISTRIBUTION_DOMAIN}"
+              echo "- Distribution ID: \`${DISTRIBUTION_ID}\`"
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            S3_CONSOLE_URL="https://s3.console.aws.amazon.com/s3/buckets/${DEPLOY_BUCKET}?region=${AWS_REGION}&tab=objects"
+            echo "::notice::Deployment synced to s3://${DEPLOY_BUCKET}. Configure CloudFront for a CDN URL."
+            {
+              echo '### 📦 Site uploaded to S3'
+              echo ''
+              echo "- Bucket: \`${DEPLOY_BUCKET}\`"
+              echo "- Region: \`${AWS_REGION}\`"
+              echo "- AWS Console: ${S3_CONSOLE_URL}"
+              echo ''
+              echo 'Add a CloudFront distribution to get a global CDN URL and automatic cache invalidations.'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
