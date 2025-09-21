@@ -98,6 +98,10 @@
     const scoreboardListEl = document.getElementById('scoreboardList');
     const scoreboardStatusEl = document.getElementById('scoreboardStatus');
     const refreshScoresButton = document.getElementById('refreshScores');
+    const scorePanelEl = document.getElementById('scorePanel');
+    const scoreTotalEl = document.getElementById('scoreTotal');
+    const scoreRecipesEl = document.getElementById('scoreRecipes');
+    const scoreDimensionsEl = document.getElementById('scoreDimensions');
     const playerHintEl = document.getElementById('playerHint');
     const mainLayoutEl = document.querySelector('.main-layout');
     const primaryPanelEl = document.querySelector('.primary-panel');
@@ -138,6 +142,11 @@
     const PORTAL_PLANE_GEOMETRY = new THREE.PlaneGeometry(TILE_UNIT * 0.92, TILE_UNIT * 1.5);
     const CRYSTAL_GEOMETRY = new THREE.OctahedronGeometry(TILE_UNIT * 0.22);
     const raycaster = new THREE.Raycaster();
+
+    const SCORE_POINTS = {
+      recipe: 2,
+      dimension: 5,
+    };
 
     let renderer;
     let scene;
@@ -1803,10 +1812,13 @@
       pressedKeys: new Set(),
       isRunning: false,
       victory: false,
+      score: 0,
+      scoreBreakdown: createScoreBreakdown(),
       scoreSubmitted: false,
     };
 
     initRenderer();
+    updateScoreOverlay();
 
     function generateOriginIsland(state) {
       const grid = [];
@@ -2017,6 +2029,19 @@
       return Math.max(min, Math.min(max, val));
     }
 
+    function createScoreBreakdown() {
+      return {
+        recipes: new Set(),
+        dimensions: new Set(),
+      };
+    }
+
+    function resetScoreTracking(options = {}) {
+      state.scoreBreakdown = createScoreBreakdown();
+      state.score = 0;
+      updateScoreOverlay(options);
+    }
+
     function addItemToInventory(itemId, quantity = 1) {
       const def = ITEM_DEFS[itemId];
       if (!def) return false;
@@ -2167,6 +2192,28 @@
       timeEl.appendChild(track);
     }
 
+    function updateScoreOverlay(options = {}) {
+      if (!scoreTotalEl || !scoreRecipesEl || !scoreDimensionsEl) return;
+      const recipeCount = state.scoreBreakdown?.recipes?.size ?? 0;
+      const dimensionCount = state.scoreBreakdown?.dimensions?.size ?? 0;
+      const recipePoints = recipeCount * SCORE_POINTS.recipe;
+      const dimensionPoints = dimensionCount * SCORE_POINTS.dimension;
+      state.score = recipePoints + dimensionPoints;
+      scoreTotalEl.textContent = state.score.toString();
+      scoreRecipesEl.textContent = `${recipeCount} (+${recipePoints} pts)`;
+      scoreDimensionsEl.textContent = `${dimensionCount} (+${dimensionPoints} pts)`;
+      if (scorePanelEl) {
+        scorePanelEl.setAttribute('data-score', state.score.toString());
+        if (options.flash) {
+          scorePanelEl.classList.remove('score-overlay--flash');
+          void scorePanelEl.offsetWidth;
+          scorePanelEl.classList.add('score-overlay--flash');
+        } else {
+          scorePanelEl.classList.remove('score-overlay--flash');
+        }
+      }
+    }
+
     function updateDimensionOverlay() {
       const info = state.dimension;
       if (!info || !dimensionInfoEl) return null;
@@ -2307,6 +2354,7 @@
       state.dimensionHistory = ['origin'];
       state.unlockedDimensions = new Set(['origin']);
       state.knownRecipes = new Set(['stick', 'stone-pickaxe']);
+      resetScoreTracking();
       state.player.inventory = Array.from({ length: 10 }, () => null);
       state.player.satchel = [];
       state.player.selectedSlot = 0;
@@ -2341,6 +2389,17 @@
       state.unlockedDimensions.add(id);
       if (!state.dimensionHistory.includes(id)) {
         state.dimensionHistory.push(id);
+      }
+      if (id !== 'origin') {
+        if (!state.scoreBreakdown.dimensions.has(id)) {
+          state.scoreBreakdown.dimensions.add(id);
+          logEvent(`${dim.name} documented as explored (+${SCORE_POINTS.dimension} pts).`);
+          updateScoreOverlay({ flash: true });
+        } else {
+          updateScoreOverlay();
+        }
+      } else {
+        updateScoreOverlay();
       }
       applyDimensionTheme(dim);
       document.title = `Infinite Dimension · ${dim.name}`;
@@ -2984,8 +3043,16 @@
       }
       recipe.sequence.forEach((itemId) => removeItem(itemId, 1));
       addItemToInventory(recipe.output.item, recipe.output.quantity);
+      const recipePreviouslyKnown = state.knownRecipes.has(recipe.id);
       state.knownRecipes.add(recipe.id);
       logEvent(`${recipe.name} crafted.`);
+      if (!recipePreviouslyKnown && !state.scoreBreakdown.recipes.has(recipe.id)) {
+        state.scoreBreakdown.recipes.add(recipe.id);
+        logEvent(`Recipe mastery recorded (+${SCORE_POINTS.recipe} pts).`);
+        updateScoreOverlay({ flash: true });
+      } else {
+        updateScoreOverlay();
+      }
       if (recipe.output.item === 'portal-igniter') {
         state.player.hasIgniter = true;
       }
@@ -3690,15 +3757,16 @@
     }
 
     function computeScoreSnapshot() {
-      const uniqueDimensions = new Set(state.dimensionHistory ?? []).size;
+      const dimensionCount = state.scoreBreakdown?.dimensions?.size ?? new Set(state.dimensionHistory ?? []).size;
+      const recipeCount = state.scoreBreakdown?.recipes?.size ?? 0;
       const inventoryBundles = mergeInventory();
       const satchelCount = state.player.satchel?.reduce((sum, bundle) => sum + (bundle?.quantity ?? 0), 0) ?? 0;
       const inventoryCount = inventoryBundles.reduce((sum, bundle) => sum + bundle.quantity, 0) + satchelCount;
-      const heartsScore = (state.player.hearts ?? 0) * 40;
-      const baseScore = uniqueDimensions * 500 + inventoryCount * 25 + heartsScore;
+      const totalScore =
+        state.score ?? recipeCount * SCORE_POINTS.recipe + dimensionCount * SCORE_POINTS.dimension;
       return {
-        score: Math.round(baseScore),
-        dimensionCount: uniqueDimensions,
+        score: Math.round(totalScore),
+        dimensionCount,
         runTimeSeconds: Math.round(state.elapsed ?? 0),
         inventoryCount,
       };

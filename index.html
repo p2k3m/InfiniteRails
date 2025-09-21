@@ -62,6 +62,20 @@
           <span class="label"></span>
           <span class="bar"></span>
         </div>
+        <div class="score-overlay" id="scorePanel" role="status" aria-live="polite">
+          <span class="score-overlay__label">Score</span>
+          <span class="score-overlay__value" id="scoreTotal">0</span>
+          <ul class="score-overlay__breakdown">
+            <li>
+              <span class="score-overlay__metric-label">Recipes</span>
+              <span class="score-overlay__metric-value" id="scoreRecipes">0 (+0 pts)</span>
+            </li>
+            <li>
+              <span class="score-overlay__metric-label">Dimensions</span>
+              <span class="score-overlay__metric-value" id="scoreDimensions">0 (+0 pts)</span>
+            </li>
+          </ul>
+        </div>
         <div class="victory-banner" id="victoryBanner" role="status" aria-live="assertive"></div>
         <div class="player-hint" id="playerHint" role="status" aria-live="assertive" tabindex="0"></div>
       </section>
