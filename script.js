@@ -15,6 +15,9 @@ if (!scoreboardUtils) {
 const { normalizeScoreEntries, upsertScoreEntry, formatScoreNumber, formatRunTime, formatLocationLabel } = scoreboardUtils;
 
 const canvas = document.getElementById('gameCanvas');
+if (canvas && !canvas.hasAttribute('tabindex')) {
+  canvas.setAttribute('tabindex', '0');
+}
 const startButton = document.getElementById('startButton');
 const introModal = document.getElementById('introModal');
 const guideModal = document.getElementById('guideModal');
@@ -2155,7 +2158,19 @@ function logEvent(message) {
 }
 
 function startGame() {
-  introModal.style.display = 'none';
+  if (state.isRunning) return;
+  if (introModal) {
+    introModal.hidden = true;
+    introModal.setAttribute('aria-hidden', 'true');
+    introModal.style.display = 'none';
+  }
+  if (startButton) {
+    startButton.disabled = true;
+    startButton.setAttribute('aria-hidden', 'true');
+    startButton.setAttribute('tabindex', '-1');
+    startButton.blur();
+  }
+  canvas?.focus();
   updateLayoutMetrics();
   state.isRunning = true;
   state.player.effects = {};
