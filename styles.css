@@ -688,6 +688,70 @@ body.game-active #gameCanvas {
   font-weight: 700;
   color: var(--accent);
   text-shadow: 0 8px 24px rgba(73, 242, 255, 0.35);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.score-overlay__value--ready {
+  display: inline-flex;
+  gap: 0.15em;
+}
+
+.score-digit-slot {
+  position: relative;
+  display: inline-block;
+  width: var(--score-digit-width, 0.72em);
+  height: 1.1em;
+  perspective: 700px;
+}
+
+.score-digit {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transform-style: preserve-3d;
+  backface-visibility: hidden;
+  will-change: transform, opacity;
+}
+
+.score-digit--enter {
+  transform-origin: center bottom;
+  animation: score-digit-flip-in 0.58s cubic-bezier(0.24, 0.74, 0.43, 1) forwards;
+  animation-delay: calc(var(--digit-index, 0) * 45ms);
+}
+
+.score-digit--exit {
+  transform-origin: center top;
+  animation: score-digit-flip-out 0.48s cubic-bezier(0.55, 0.09, 0.68, 0.53) forwards;
+  animation-delay: calc(var(--digit-index, 0) * 45ms);
+}
+
+@keyframes score-digit-flip-in {
+  0% {
+    transform: rotateX(-90deg);
+    opacity: 0;
+  }
+  55% {
+    transform: rotateX(12deg);
+    opacity: 1;
+  }
+  100% {
+    transform: rotateX(0deg);
+    opacity: 1;
+  }
+}
+
+@keyframes score-digit-flip-out {
+  0% {
+    transform: rotateX(0deg);
+    opacity: 1;
+  }
+  100% {
+    transform: rotateX(90deg);
+    opacity: 0;
+  }
 }
 
 .score-overlay__breakdown {
@@ -724,6 +788,8 @@ body.game-active #gameCanvas {
   font-weight: 600;
   color: rgba(242, 245, 250, 0.9);
   white-space: nowrap;
+  display: inline-block;
+  will-change: transform, opacity;
 }
 
 .score-overlay--flash {
