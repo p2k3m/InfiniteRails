@@ -40,6 +40,17 @@
           <div class="status-item hearts" id="hearts"></div>
           <div class="status-item bubbles" id="bubbles"></div>
           <div class="status-item time" id="timeOfDay"></div>
+          <button
+            type="button"
+            class="craft-launcher"
+            id="openCrafting"
+            aria-label="Open crafting interface"
+            aria-haspopup="dialog"
+            aria-controls="craftingModal"
+          >
+            <span aria-hidden="true" class="craft-launcher__icon"></span>
+            <span class="sr-only">Open crafting interface</span>
+          </button>
         </div>
         <div class="user-identity" aria-live="polite">
           <span class="user-name" id="headerUserName">Guest Explorer</span>
@@ -129,21 +140,6 @@
           <button class="toggle-extended" id="toggleExtended">Open Satchel</button>
           <div class="extended" id="extendedInventory"></div>
         </section>
-        <section class="crafting-panel">
-          <header>
-            <h2>Crafting</h2>
-            <div class="craft-search">
-              <input type="search" id="recipeSearch" placeholder="Search recipes" />
-            </div>
-          </header>
-          <div class="craft-queue" id="craftQueue" aria-live="polite"></div>
-          <div class="craft-controls">
-            <div class="craft-target" id="craftTarget"></div>
-            <button id="craftButton" class="primary">Craft</button>
-            <button id="clearCraft" class="ghost">Clear</button>
-          </div>
-          <div class="recipe-list" id="recipeList"></div>
-        </section>
         <section class="codex-panel" aria-label="Dimension codex">
           <header>
             <h2>Dimension Codex</h2>
@@ -188,6 +184,51 @@
           <li>Survive nightly assaults while protecting villagers and rails.</li>
         </ul>
         <button id="startButton" class="primary">Enter the Rails</button>
+      </div>
+    </div>
+
+    <div
+      class="modal crafting-modal"
+      id="craftingModal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="craftingTitle"
+      hidden
+    >
+      <div class="modal-content crafting-modal__content">
+        <button type="button" class="crafting-modal__close" id="closeCrafting" aria-label="Close crafting interface"></button>
+        <header class="crafting-modal__header">
+          <div>
+            <p class="crafting-modal__eyebrow">Assembly Sequence</p>
+            <h2 id="craftingTitle">Crafting Matrix</h2>
+            <p class="crafting-modal__intro">
+              Arrange resources across up to seven slots in the exact order. Known recipes can auto-fill from the library
+              or the search suggestions below.
+            </p>
+          </div>
+        </header>
+        <div class="crafting-modal__grid">
+          <section class="crafting-modal__sequence" aria-label="Crafting sequence">
+            <div class="crafting-sequence" id="craftSequence" data-slot-count="7"></div>
+            <div class="crafting-actions">
+              <button type="button" class="primary" id="craftButton" disabled>Craft Item</button>
+              <button type="button" class="ghost" id="clearCraft">Clear Sequence</button>
+            </div>
+            <p class="crafting-hint">
+              Tip: Click ingredients from your satchel to queue them. Slots collapse to the left as you remove steps.
+            </p>
+          </section>
+          <section class="crafting-modal__recipes" aria-label="Recipe library">
+            <label class="crafting-search" for="recipeSearch">
+              Search library
+              <span class="sr-only"> for recipes or ingredients</span>
+            </label>
+            <input type="search" id="recipeSearch" placeholder="Search recipes or ingredients" autocomplete="off" />
+            <ul class="crafting-suggestions" id="craftSuggestions" role="listbox" aria-live="polite"></ul>
+            <div class="recipe-list" id="recipeList" role="listbox" aria-live="polite"></div>
+          </section>
+        </div>
+        <div class="crafting-confetti" id="craftConfetti" aria-hidden="true"></div>
       </div>
     </div>
 

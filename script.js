@@ -75,12 +75,16 @@
     const hotbarEl = document.getElementById('hotbar');
     const extendedInventoryEl = document.getElementById('extendedInventory');
     const toggleExtendedBtn = document.getElementById('toggleExtended');
-    const craftQueueEl = document.getElementById('craftQueue');
-    const craftTargetEl = document.getElementById('craftTarget');
     const craftButton = document.getElementById('craftButton');
     const clearCraftButton = document.getElementById('clearCraft');
     const recipeListEl = document.getElementById('recipeList');
     const recipeSearchEl = document.getElementById('recipeSearch');
+    const craftSequenceEl = document.getElementById('craftSequence');
+    const craftSuggestionsEl = document.getElementById('craftSuggestions');
+    const craftConfettiEl = document.getElementById('craftConfetti');
+    const craftLauncherButton = document.getElementById('openCrafting');
+    const craftingModal = document.getElementById('craftingModal');
+    const closeCraftingButton = document.getElementById('closeCrafting');
     const eventLogEl = document.getElementById('eventLog');
     const codexListEl = document.getElementById('dimensionCodex');
     const openGuideButton = document.getElementById('openGuide');
@@ -156,6 +160,10 @@
     const audioState = {
       context: null,
     };
+
+    const MAX_CRAFT_SLOTS = 7;
+    const craftSlots = [];
+    let craftConfettiTimer = null;
 
     let renderer;
     let scene;
@@ -3149,7 +3157,8 @@
       resetStatusMeterMemory();
       updateInventoryUI();
       updateRecipesList();
-      updateCraftQueue();
+      updateCraftSequenceDisplay();
+      updateAutocompleteSuggestions();
       updateStatusBars();
       updateDimensionOverlay();
       requestAnimationFrame(loop);
@@ -3233,6 +3242,7 @@
       updateDimensionCodex();
       renderVictoryBanner();
       updateRecipesList();
+      updateAutocompleteSuggestions();
       updatePortalProgress();
       deployIronGolems();
       if (!state.ui.respawnActive) {
@@ -4006,23 +4016,70 @@
     }
 
     function addToCraftSequence(itemId) {
+      if (!craftSequenceEl) return;
+      if (state.craftSequence.length >= MAX_CRAFT_SLOTS) {
+        logEvent('Sequence is full. Craft or clear before adding more steps.');
+        craftSequenceEl.classList.add('full');
+        window.setTimeout(() => craftSequenceEl.classList.remove('full'), 800);
+        return;
+      }
       state.craftSequence.push(itemId);
-      updateCraftQueue();
+      updateCraftSequenceDisplay();
     }
 
-    function updateCraftQueue() {
-      craftTargetEl.innerHTML = '';
-      if (!state.craftSequence.length) {
-        craftTargetEl.classList.add('empty');
-      } else {
-        craftTargetEl.classList.remove('empty');
+    function initializeCraftSlots() {
+      if (!craftSequenceEl) return;
+      craftSequenceEl.innerHTML = '';
+      craftSlots.length = 0;
+      const slotCount = Number(craftSequenceEl.dataset.slotCount) || MAX_CRAFT_SLOTS;
+      for (let i = 0; i < Math.min(slotCount, MAX_CRAFT_SLOTS); i++) {
+        const slotButton = document.createElement('button');
+        slotButton.type = 'button';
+        slotButton.className = 'craft-slot empty';
+        slotButton.dataset.index = i.toString();
+        const indexLabel = document.createElement('span');
+        indexLabel.className = 'craft-slot__index';
+        indexLabel.textContent = String(i + 1);
+        const contentLabel = document.createElement('span');
+        contentLabel.className = 'craft-slot__label';
+        contentLabel.textContent = 'Empty';
+        slotButton.append(indexLabel, contentLabel);
+        slotButton.addEventListener('click', () => {
+          if (state.craftSequence.length <= i) return;
+          state.craftSequence.splice(i, 1);
+          updateCraftSequenceDisplay();
+        });
+        craftSequenceEl.appendChild(slotButton);
+        craftSlots.push({ button: slotButton, label: contentLabel });
       }
-      state.craftSequence.forEach((item) => {
-        const el = document.createElement('span');
-        el.className = 'queue-item';
-        el.textContent = ITEM_DEFS[item]?.name ?? item;
-        craftTargetEl.appendChild(el);
+      updateCraftSequenceDisplay();
+    }
+
+    function updateCraftSequenceDisplay() {
+      if (!craftSequenceEl || !craftSlots.length) return;
+      const sequenceLength = state.craftSequence.length;
+      craftSlots.forEach(({ button, label }, index) => {
+        const itemId = state.craftSequence[index];
+        if (itemId) {
+          const itemName = ITEM_DEFS[itemId]?.name ?? itemId;
+          button.classList.add('filled');
+          button.classList.remove('empty');
+          label.textContent = itemName;
+          button.setAttribute('aria-label', `${itemName} in slot ${index + 1}. Click to remove.`);
+        } else {
+          button.classList.remove('filled');
+          button.classList.add('empty');
+          label.textContent = 'Empty';
+          button.setAttribute('aria-label', `Empty slot ${index + 1}`);
+        }
       });
+      craftSequenceEl.classList.toggle('full', sequenceLength >= MAX_CRAFT_SLOTS);
+      if (craftButton) {
+        craftButton.disabled = sequenceLength === 0;
+      }
+      if (craftLauncherButton) {
+        craftLauncherButton.setAttribute('data-sequence', sequenceLength > 0 ? 'active' : 'idle');
+      }
     }
 
     function attemptCraft() {
@@ -4035,7 +4092,7 @@
       if (!recipe) {
         logEvent('Sequence fizzles. No recipe matched.');
         state.craftSequence = [];
-        updateCraftQueue();
+        updateCraftSequenceDisplay();
         return;
       }
       const canCraft = recipe.sequence.every((itemId) => hasItem(itemId));
@@ -4048,6 +4105,7 @@
       const recipePreviouslyKnown = state.knownRecipes.has(recipe.id);
       state.knownRecipes.add(recipe.id);
       logEvent(`${recipe.name} crafted.`);
+      triggerCraftConfetti();
       if (!recipePreviouslyKnown && !state.scoreBreakdown.recipes.has(recipe.id)) {
         state.scoreBreakdown.recipes.add(recipe.id);
         logEvent(`Recipe mastery recorded (+${SCORE_POINTS.recipe} pts).`);
@@ -4059,28 +4117,119 @@
         state.player.hasIgniter = true;
       }
       state.craftSequence = [];
-      updateCraftQueue();
+      updateCraftSequenceDisplay();
+      updateRecipesList();
+      updateAutocompleteSuggestions();
     }
 
     function updateRecipesList() {
+      if (!recipeListEl) return;
       recipeListEl.innerHTML = '';
-      const query = recipeSearchEl.value?.toLowerCase() ?? '';
-      RECIPES.forEach((recipe) => {
-        if (!state.unlockedDimensions.has(recipe.unlock)) return;
-        if (query && !recipe.name.toLowerCase().includes(query)) return;
-        const card = document.createElement('div');
-        card.className = 'recipe-card';
-        card.innerHTML = `
-          <strong>${recipe.name}</strong>
-          <span>${recipe.sequence.map((item) => ITEM_DEFS[item]?.name ?? item).join(' → ')}</span>
-          <span>Creates ${ITEM_DEFS[recipe.output.item]?.name ?? recipe.output.item} ×${recipe.output.quantity}</span>
-        `;
-        card.addEventListener('click', () => {
-          state.craftSequence = [...recipe.sequence];
-          updateCraftQueue();
-        });
-        recipeListEl.appendChild(card);
+      const query = recipeSearchEl?.value?.trim().toLowerCase() ?? '';
+      const unlockedRecipes = RECIPES.filter((recipe) => state.unlockedDimensions.has(recipe.unlock));
+      const filtered = unlockedRecipes.filter((recipe) => {
+        if (!query) return true;
+        const name = recipe.name.toLowerCase();
+        const outputName = (ITEM_DEFS[recipe.output.item]?.name ?? recipe.output.item).toLowerCase();
+        if (name.includes(query) || outputName.includes(query)) return true;
+        return recipe.sequence.some((itemId) => (ITEM_DEFS[itemId]?.name ?? itemId).toLowerCase().includes(query));
       });
+      if (!filtered.length) {
+        const empty = document.createElement('div');
+        empty.className = 'recipe-empty';
+        empty.textContent = query
+          ? 'No recipes match your search. Try another ingredient.'
+          : 'Unlock new dimensions to discover more recipes.';
+        recipeListEl.appendChild(empty);
+        return;
+      }
+      filtered.forEach((recipe) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'recipe-card';
+        if (state.knownRecipes.has(recipe.id)) {
+          button.classList.add('known');
+        }
+        button.innerHTML = `
+          <span class="recipe-card__name">${recipe.name}</span>
+          <span class="recipe-card__sequence">${recipe.sequence
+            .map((item) => ITEM_DEFS[item]?.name ?? item)
+            .join(' → ')}</span>
+          <span class="recipe-card__output">Creates ${
+            ITEM_DEFS[recipe.output.item]?.name ?? recipe.output.item
+          } ×${recipe.output.quantity}</span>
+        `;
+        button.addEventListener('click', () => {
+          state.craftSequence = [...recipe.sequence];
+          updateCraftSequenceDisplay();
+        });
+        recipeListEl.appendChild(button);
+      });
+    }
+
+    function updateAutocompleteSuggestions() {
+      if (!craftSuggestionsEl) return;
+      const query = recipeSearchEl?.value?.trim().toLowerCase() ?? '';
+      craftSuggestionsEl.innerHTML = '';
+      if (!query) {
+        craftSuggestionsEl.setAttribute('data-visible', 'false');
+        return;
+      }
+      const matches = RECIPES.filter((recipe) => {
+        if (!state.unlockedDimensions.has(recipe.unlock)) return false;
+        const name = recipe.name.toLowerCase();
+        if (name.includes(query)) return true;
+        const outputName = (ITEM_DEFS[recipe.output.item]?.name ?? recipe.output.item).toLowerCase();
+        if (outputName.includes(query)) return true;
+        return recipe.sequence.some((itemId) => (ITEM_DEFS[itemId]?.name ?? itemId).toLowerCase().includes(query));
+      }).slice(0, 6);
+      if (!matches.length) {
+        craftSuggestionsEl.setAttribute('data-visible', 'false');
+        return;
+      }
+      matches.forEach((recipe) => {
+        const entry = document.createElement('li');
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.textContent = recipe.name;
+        button.addEventListener('click', () => {
+          state.craftSequence = [...recipe.sequence];
+          recipeSearchEl.value = recipe.name;
+          updateCraftSequenceDisplay();
+          updateRecipesList();
+          updateAutocompleteSuggestions();
+        });
+        entry.appendChild(button);
+        craftSuggestionsEl.appendChild(entry);
+      });
+      craftSuggestionsEl.setAttribute('data-visible', 'true');
+    }
+
+    function triggerCraftConfetti() {
+      if (!craftConfettiEl) return;
+      craftConfettiEl.classList.remove('active');
+      craftConfettiEl.innerHTML = '';
+      const colors = ['#49f2ff', '#f7b733', '#2bc26b', '#ff4976'];
+      const pieces = 28;
+      for (let i = 0; i < pieces; i++) {
+        const piece = document.createElement('span');
+        piece.className = 'crafting-confetti__piece';
+        piece.style.background = colors[i % colors.length];
+        piece.style.left = `${Math.random() * 100}%`;
+        piece.style.setProperty('--offset-x', `${(Math.random() * 80 - 40).toFixed(1)}%`);
+        piece.style.setProperty('--spin', `${(Math.random() * 720 - 360).toFixed(0)}deg`);
+        piece.style.animationDelay = `${Math.random() * 0.25}s`;
+        craftConfettiEl.appendChild(piece);
+      }
+      void craftConfettiEl.offsetWidth;
+      craftConfettiEl.classList.add('active');
+      if (craftConfettiTimer) {
+        clearTimeout(craftConfettiTimer);
+      }
+      craftConfettiTimer = window.setTimeout(() => {
+        craftConfettiEl.classList.remove('active');
+        craftConfettiEl.innerHTML = '';
+      }, 1600);
     }
 
     function openChest(tile) {
@@ -4253,12 +4402,21 @@
 
     function initEventListeners() {
       document.addEventListener('keydown', handleKeyDown);
-      craftButton.addEventListener('click', attemptCraft);
-      clearCraftButton.addEventListener('click', () => {
+      craftButton?.addEventListener('click', attemptCraft);
+      clearCraftButton?.addEventListener('click', () => {
         state.craftSequence = [];
-        updateCraftQueue();
+        updateCraftSequenceDisplay();
+        updateAutocompleteSuggestions();
       });
-      recipeSearchEl.addEventListener('input', updateRecipesList);
+      recipeSearchEl?.addEventListener('focus', updateAutocompleteSuggestions);
+      recipeSearchEl?.addEventListener('input', () => {
+        updateAutocompleteSuggestions();
+        updateRecipesList();
+      });
+      recipeSearchEl?.addEventListener('blur', () => {
+        window.setTimeout(() => craftSuggestionsEl?.setAttribute('data-visible', 'false'), 140);
+      });
+      craftLauncherButton?.addEventListener('click', openCraftingModal);
       toggleExtendedBtn.addEventListener('click', toggleExtended);
       mobileControls.querySelectorAll('button').forEach((button) => {
         button.addEventListener('click', () => updateFromMobile(button.dataset.action));
@@ -4850,13 +5008,57 @@
       }
     }
 
+    initializeCraftSlots();
+    updateCraftSequenceDisplay();
+    updateRecipesList();
+    updateAutocompleteSuggestions();
+
     startButton.addEventListener('click', startGame);
     initEventListeners();
 
+    setupCraftingModal();
     setupGuideModal();
     initializeIdentityLayer();
     updateLayoutMetrics();
     syncSidebarForViewport();
+
+    function openCraftingModal() {
+      if (!craftingModal) return;
+      craftingModal.hidden = false;
+      craftingModal.setAttribute('aria-hidden', 'false');
+      craftLauncherButton?.setAttribute('aria-expanded', 'true');
+      updateCraftSequenceDisplay();
+      updateRecipesList();
+      updateAutocompleteSuggestions();
+      recipeSearchEl?.focus();
+    }
+
+    function closeCraftingModal() {
+      if (!craftingModal) return;
+      craftingModal.hidden = true;
+      craftingModal.setAttribute('aria-hidden', 'true');
+      craftSuggestionsEl?.setAttribute('data-visible', 'false');
+      craftLauncherButton?.setAttribute('aria-expanded', 'false');
+      craftLauncherButton?.focus();
+    }
+
+    function setupCraftingModal() {
+      if (!craftingModal) return;
+      craftingModal.hidden = true;
+      craftingModal.setAttribute('aria-hidden', 'true');
+      craftLauncherButton?.setAttribute('aria-expanded', 'false');
+      craftingModal.addEventListener('click', (event) => {
+        if (event.target === craftingModal) {
+          closeCraftingModal();
+        }
+      });
+      closeCraftingButton?.addEventListener('click', closeCraftingModal);
+      document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape' && !craftingModal.hidden) {
+          closeCraftingModal();
+        }
+      });
+    }
 
     function openGuideModal() {
       if (!guideModal) return;
