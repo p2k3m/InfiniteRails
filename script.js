@@ -1453,6 +1453,9 @@
       });
       fringe.position.z = faceZ - 0.18;
 
+      const hairBasePosition = hair.position.clone();
+      const fringeBasePosition = fringe.position.clone();
+
       const eyeMaterial = new THREE.MeshBasicMaterial({ color: colors.eye });
       const eyeGeometry = new THREE.PlaneGeometry(0.09, 0.12);
       const leftEye = new THREE.Mesh(eyeGeometry, eyeMaterial);
@@ -1500,6 +1503,10 @@
         leftLeg,
         rightLeg,
         head: headGroup,
+        hair,
+        fringe,
+        hairBasePosition,
+        fringeBasePosition,
       };
     }
 
@@ -1554,8 +1561,10 @@
           return leg;
         };
 
-        zombie.add(buildLeg(-0.18));
-        zombie.add(buildLeg(0.18));
+        const leftLeg = buildLeg(-0.18);
+        const rightLeg = buildLeg(0.18);
+        zombie.add(leftLeg);
+        zombie.add(rightLeg);
 
         addBlock(zombie, {
           color: colors.shirt,
@@ -1585,8 +1594,10 @@
           return arm;
         };
 
-        zombie.add(buildArm(-0.46));
-        zombie.add(buildArm(0.46));
+        const leftArm = buildArm(-0.46);
+        const rightArm = buildArm(0.46);
+        zombie.add(leftArm);
+        zombie.add(rightArm);
 
         const headGroup = new THREE.Group();
         headGroup.position.set(0, shoulderY + 0.05, 0);
@@ -1600,12 +1611,15 @@
         head.material.roughness = 0.5;
 
         const eyeMaterial = new THREE.MeshBasicMaterial({ color: colors.eye });
+        eyeMaterial.transparent = true;
+        eyeMaterial.opacity = 0.85;
+        eyeMaterial.depthWrite = false;
         const eyeGeometry = new THREE.PlaneGeometry(0.08, 0.1);
         const leftEye = new THREE.Mesh(eyeGeometry, eyeMaterial);
         leftEye.position.set(-0.12, headHeight * 0.65, 0.22);
         headGroup.add(leftEye);
-        const rightEye = leftEye.clone();
-        rightEye.position.x = 0.12;
+        const rightEye = new THREE.Mesh(eyeGeometry, eyeMaterial);
+        rightEye.position.set(0.12, headHeight * 0.65, 0.22);
         headGroup.add(rightEye);
 
         const brow = addBlock(headGroup, {
@@ -1619,11 +1633,33 @@
 
         zombie.add(headGroup);
         entityGroup.add(zombie);
-        zombieMeshes.push(zombie);
+        zombieMeshes.push({
+          group: zombie,
+          parts: {
+            leftLeg,
+            rightLeg,
+            leftArm,
+            rightArm,
+            head: headGroup,
+          },
+          eyes: [leftEye, rightEye],
+          eyeMaterial,
+          baseEyeColor: new THREE.Color(colors.eye),
+          aggressiveEyeColor: new THREE.Color('#ff9a9a'),
+          tempColor: new THREE.Color(colors.eye),
+          previousXZ: new THREE.Vector2(),
+          hasPrev: false,
+          lastUpdate: typeof performance !== 'undefined' ? performance.now() : Date.now(),
+          walkPhase: Math.random() * Math.PI * 2,
+          movement: 0,
+          aggression: 0,
+        });
       }
       while (zombieMeshes.length > count) {
-        const zombie = zombieMeshes.pop();
-        entityGroup.remove(zombie);
+        const zombieData = zombieMeshes.pop();
+        if (!zombieData) continue;
+        entityGroup.remove(zombieData.group);
+        zombieData.eyeMaterial?.dispose?.();
       }
     }
 
@@ -1664,8 +1700,10 @@
           return leg;
         };
 
-        golem.add(buildLeg(-0.26));
-        golem.add(buildLeg(0.26));
+        const leftLeg = buildLeg(-0.26);
+        const rightLeg = buildLeg(0.26);
+        golem.add(leftLeg);
+        golem.add(rightLeg);
 
         const torso = addBlock(golem, {
           color: colors.body,
@@ -1705,8 +1743,10 @@
           return arm;
         };
 
-        golem.add(buildArm(-0.78));
-        golem.add(buildArm(0.78));
+        const leftArm = buildArm(-0.78);
+        const rightArm = buildArm(0.78);
+        golem.add(leftArm);
+        golem.add(rightArm);
 
         const vineWrap = addBlock(golem, {
           color: colors.vines,
@@ -1738,21 +1778,46 @@
         brow.position.z = 0.2;
 
         const eyeMaterial = new THREE.MeshBasicMaterial({ color: colors.eye });
+        eyeMaterial.transparent = true;
+        eyeMaterial.opacity = 0.9;
+        eyeMaterial.depthWrite = false;
         const eyeGeometry = new THREE.PlaneGeometry(0.1, 0.1);
         const leftEye = new THREE.Mesh(eyeGeometry, eyeMaterial);
         leftEye.position.set(-0.12, headHeight * 0.58, 0.24);
         headGroup.add(leftEye);
-        const rightEye = leftEye.clone();
-        rightEye.position.x = 0.12;
+        const rightEye = new THREE.Mesh(eyeGeometry, eyeMaterial);
+        rightEye.position.set(0.12, headHeight * 0.58, 0.24);
         headGroup.add(rightEye);
 
         golem.add(headGroup);
         entityGroup.add(golem);
-        ironGolemMeshes.push(golem);
+        ironGolemMeshes.push({
+          group: golem,
+          parts: {
+            leftLeg,
+            rightLeg,
+            leftArm,
+            rightArm,
+            head: headGroup,
+          },
+          eyes: [leftEye, rightEye],
+          eyeMaterial,
+          baseEyeColor: new THREE.Color(colors.eye),
+          aggressiveEyeColor: new THREE.Color('#ffe2a8'),
+          tempColor: new THREE.Color(colors.eye),
+          previousXZ: new THREE.Vector2(),
+          hasPrev: false,
+          lastUpdate: typeof performance !== 'undefined' ? performance.now() : Date.now(),
+          walkPhase: Math.random() * Math.PI * 2,
+          movement: 0,
+          aggression: 0,
+        });
       }
       while (ironGolemMeshes.length > count) {
-        const golem = ironGolemMeshes.pop();
-        entityGroup.remove(golem);
+        const golemData = ironGolemMeshes.pop();
+        if (!golemData) continue;
+        entityGroup.remove(golemData.group);
+        golemData.eyeMaterial?.dispose?.();
       }
     }
 
@@ -1800,6 +1865,28 @@
             playerMeshParts.head.rotation.y = idleYaw + Math.sin(walkCycle * 0.7) * 0.08 * movementStrength;
             playerMeshParts.head.rotation.x = idlePitch + Math.cos(walkCycle * 0.5) * 0.04 * movementStrength;
           }
+          if (playerMeshParts.hair) {
+            const base = playerMeshParts.hairBasePosition;
+            const idleSway = Math.sin(now / 420) * 0.03;
+            const stepSway = Math.sin(walkCycle * 1.2) * 0.08 * movementStrength;
+            const backDrift = Math.max(0, Math.cos(walkCycle)) * 0.05 * movementStrength;
+            playerMeshParts.hair.rotation.x = -0.18 * movementStrength + (idleSway + stepSway) * 0.7;
+            playerMeshParts.hair.rotation.z = Math.sin(now / 960) * 0.05;
+            if (base) {
+              playerMeshParts.hair.position.x = base.x + Math.sin(walkCycle * 0.5) * 0.02 * movementStrength;
+              playerMeshParts.hair.position.z = base.z - 0.03 * movementStrength - backDrift;
+            }
+          }
+          if (playerMeshParts.fringe) {
+            const base = playerMeshParts.fringeBasePosition;
+            const idleLift = Math.sin(now / 360) * 0.02;
+            const forwardSwing = Math.sin(walkCycle * 1.1 + Math.PI / 3) * 0.05 * movementStrength;
+            playerMeshParts.fringe.rotation.x = 0.12 * movementStrength - (idleLift + forwardSwing);
+            if (base) {
+              playerMeshParts.fringe.position.x = base.x + Math.sin(walkCycle * 0.8 + Math.PI / 6) * 0.015 * movementStrength;
+              playerMeshParts.fringe.position.z = base.z + Math.max(0, Math.sin(walkCycle)) * 0.03 * movementStrength;
+            }
+          }
         }
 
         syncCameraToPlayer({
@@ -1824,18 +1911,120 @@
       ensureZombieMeshCount(state.zombies.length);
       ensureIronGolemMeshCount(state.ironGolems?.length ?? 0);
       state.zombies.forEach((zombie, index) => {
-        const mesh = zombieMeshes[index];
-        if (!mesh) return;
+        const actor = zombieMeshes[index];
+        if (!actor) return;
+        const { group, parts } = actor;
         const { x, z } = worldToScene(zombie.x, zombie.y);
         const h = tileSurfaceHeight(zombie.x, zombie.y);
-        mesh.position.set(x, h, z);
+        const deltaMs = actor.lastUpdate != null ? now - actor.lastUpdate : 16;
+        actor.lastUpdate = now;
+        const deltaSeconds = deltaMs / 1000;
+        const prevXZ = actor.previousXZ;
+        const distance = actor.hasPrev ? Math.hypot(x - prevXZ.x, z - prevXZ.y) : 0;
+        prevXZ.set(x, z);
+        actor.hasPrev = true;
+        const targetMovement = THREE.MathUtils.clamp(distance * 3, 0, 1);
+        const smoothing = Math.min(1, deltaSeconds * 6);
+        const previousMovement = actor.movement ?? targetMovement;
+        const movement = previousMovement + (targetMovement - previousMovement) * smoothing;
+        actor.movement = movement;
+        actor.walkPhase = (actor.walkPhase ?? Math.random() * Math.PI * 2) + deltaSeconds * (5 + movement * 6);
+        const stride = Math.sin(actor.walkPhase) * 0.65 * movement;
+        const lift = Math.cos(actor.walkPhase) * 0.45 * movement;
+        if (parts.leftLeg) {
+          parts.leftLeg.rotation.x = stride;
+          parts.leftLeg.rotation.z = 0;
+        }
+        if (parts.rightLeg) {
+          parts.rightLeg.rotation.x = -stride;
+          parts.rightLeg.rotation.z = 0;
+        }
+        const idleFlail = Math.sin(now / 260 + index) * 0.2;
+        if (parts.leftArm) {
+          parts.leftArm.rotation.x = -stride * 0.9 - movement * 0.4;
+          parts.leftArm.rotation.z = idleFlail * (1 - movement * 0.6);
+        }
+        if (parts.rightArm) {
+          parts.rightArm.rotation.x = stride * 0.9 - movement * 0.4;
+          parts.rightArm.rotation.z = -idleFlail * (1 - movement * 0.6);
+        }
+        if (parts.head) {
+          parts.head.rotation.y = Math.sin(now / 900 + index) * 0.12 + Math.sin(actor.walkPhase * 0.6) * 0.1 * movement;
+          parts.head.rotation.x = Math.cos(now / 780 + index) * 0.07 + Math.cos(actor.walkPhase * 0.4) * 0.05 * movement;
+        }
+        const bob = Math.abs(lift) * 0.15 + Math.sin(now / 520 + index) * 0.01 * (1 - movement);
+        group.position.set(x, h + bob, z);
+
+        const distToPlayer = Math.abs(zombie.x - state.player.x) + Math.abs(zombie.y - state.player.y);
+        const aggressionTarget = distToPlayer <= 1 ? 1 : Math.max(0, 1 - distToPlayer / 6);
+        const previousAggression = actor.aggression ?? 0;
+        const aggression = previousAggression + (aggressionTarget - previousAggression) * Math.min(1, deltaSeconds * 4);
+        actor.aggression = aggression;
+        const pulse = (Math.sin(now / 120 + index) + 1) * 0.25 * aggression;
+        const eyeColor = actor.tempColor;
+        eyeColor.copy(actor.baseEyeColor).lerp(actor.aggressiveEyeColor, THREE.MathUtils.clamp(aggression + pulse, 0, 1));
+        actor.eyeMaterial.color.copy(eyeColor);
+        actor.eyeMaterial.opacity = 0.75 + aggression * 0.25;
+        actor.eyeMaterial.needsUpdate = true;
       });
       state.ironGolems?.forEach((golem, index) => {
-        const mesh = ironGolemMeshes[index];
-        if (!mesh) return;
+        const actor = ironGolemMeshes[index];
+        if (!actor) return;
+        const { group, parts } = actor;
         const { x, z } = worldToScene(golem.x, golem.y);
         const h = tileSurfaceHeight(golem.x, golem.y);
-        mesh.position.set(x, h, z);
+        const deltaMs = actor.lastUpdate != null ? now - actor.lastUpdate : 16;
+        actor.lastUpdate = now;
+        const deltaSeconds = deltaMs / 1000;
+        const prevXZ = actor.previousXZ;
+        const distance = actor.hasPrev ? Math.hypot(x - prevXZ.x, z - prevXZ.y) : 0;
+        prevXZ.set(x, z);
+        actor.hasPrev = true;
+        const targetMovement = THREE.MathUtils.clamp(distance * 2.2, 0, 1);
+        const smoothing = Math.min(1, deltaSeconds * 4);
+        const previousMovement = actor.movement ?? targetMovement;
+        const movement = previousMovement + (targetMovement - previousMovement) * smoothing;
+        actor.movement = movement;
+        actor.walkPhase = (actor.walkPhase ?? Math.random() * Math.PI * 2) + deltaSeconds * (3.2 + movement * 4.2);
+        const swing = Math.sin(actor.walkPhase) * 0.38 * movement;
+        const stomp = Math.max(0, Math.sin(actor.walkPhase + Math.PI / 2)) * 0.3 * movement;
+        if (parts.leftLeg) {
+          parts.leftLeg.rotation.x = swing;
+          parts.leftLeg.rotation.z = 0;
+        }
+        if (parts.rightLeg) {
+          parts.rightLeg.rotation.x = -swing;
+          parts.rightLeg.rotation.z = 0;
+        }
+        if (parts.leftArm) {
+          parts.leftArm.rotation.x = -swing * 0.4 - movement * 0.18;
+          parts.leftArm.rotation.z = -0.05 * movement;
+        }
+        if (parts.rightArm) {
+          parts.rightArm.rotation.x = swing * 0.4 - movement * 0.18;
+          parts.rightArm.rotation.z = 0.05 * movement;
+        }
+        if (parts.head) {
+          parts.head.rotation.y = Math.sin(actor.walkPhase * 0.35) * 0.1 * movement;
+          parts.head.rotation.x = Math.cos(now / 1600 + index) * 0.03;
+        }
+        group.position.set(x, h + stomp, z);
+
+        let nearestZombie = Infinity;
+        state.zombies.forEach((z) => {
+          const d = Math.abs(z.x - golem.x) + Math.abs(z.y - golem.y);
+          if (d < nearestZombie) nearestZombie = d;
+        });
+        const aggressionTarget = nearestZombie === Infinity ? 0 : Math.max(0, 1 - nearestZombie / 6);
+        const previousAggression = actor.aggression ?? 0;
+        const aggression = previousAggression + (aggressionTarget - previousAggression) * Math.min(1, deltaSeconds * 3.5);
+        actor.aggression = aggression;
+        const glowPulse = (Math.sin(now / 180 + index) + 1) * 0.2 * aggression;
+        const eyeColor = actor.tempColor;
+        eyeColor.copy(actor.baseEyeColor).lerp(actor.aggressiveEyeColor, THREE.MathUtils.clamp(aggression + glowPulse, 0, 1));
+        actor.eyeMaterial.color.copy(eyeColor);
+        actor.eyeMaterial.opacity = 0.6 + aggression * 0.35;
+        actor.eyeMaterial.needsUpdate = true;
       });
     }
 
