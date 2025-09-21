@@ -24,6 +24,15 @@
       </div>
       <div class="top-actions">
         <button type="button" id="openGuide" class="ghost">Game Guide</button>
+        <button
+          type="button"
+          id="toggleSidebar"
+          class="ghost mobile-sidebar-toggle"
+          aria-expanded="false"
+          aria-controls="sidePanel"
+        >
+          Player Panels
+        </button>
         <div class="status-area">
           <div class="status-item hearts" id="hearts"></div>
           <div class="status-item bubbles" id="bubbles"></div>
@@ -51,11 +60,15 @@
           <span class="bar"></span>
         </div>
         <div class="victory-banner" id="victoryBanner" role="status" aria-live="assertive"></div>
+        <div class="player-hint" id="playerHint" role="status" aria-live="assertive" tabindex="0"></div>
       </section>
-      <aside class="side-panel">
+      <aside class="side-panel" id="sidePanel" tabindex="-1">
         <section class="player-panel" aria-label="Player profile">
           <header class="player-panel__header">
             <h2>Player Hub</h2>
+            <button type="button" class="ghost small side-panel-close" data-close-sidebar aria-label="Close player panels">
+              Close
+            </button>
             <button type="button" id="googleSignOut" class="ghost small" hidden>Sign out</button>
           </header>
           <div class="player-panel__content">
@@ -114,6 +127,7 @@
         </section>
       </aside>
     </main>
+    <div class="side-panel__scrim" id="sidePanelScrim" hidden></div>
     <footer class="footer">
       <div class="controls">
         <div>
