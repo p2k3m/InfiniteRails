@@ -83,6 +83,7 @@ let camera;
 let worldGroup;
 let entityGroup;
 let playerMesh;
+let playerMeshParts;
 let tileRenderState = [];
 const zombieMeshes = [];
 let playerLocator;
@@ -267,6 +268,7 @@ function handleResize() {
   renderer.setSize(width, height, false);
   camera.aspect = width / height;
   camera.updateProjectionMatrix();
+  updateCameraOrbit();
 }
 
 function updateCameraOrbit() {
@@ -356,11 +358,17 @@ function initRenderer() {
 }
 
 function updateWorldTarget() {
-  orbitState.target.set(0, 0.6, 0);
   const offsetX = ((state.width - 1) * TILE_UNIT) / 2;
   const offsetZ = ((state.height - 1) * TILE_UNIT) / 2;
-  orbitState.target.x = offsetX;
-  orbitState.target.z = offsetZ;
+  const surface = tileSurfaceHeight(state.player.x, state.player.y) || 0;
+  orbitState.target.set(offsetX, surface + 0.75, offsetZ);
+
+  const diagonal = Math.max(1, Math.hypot(state.width, state.height));
+  const minRadius = Math.max(6.5, diagonal * 0.6);
+  const maxRadius = Math.max(minRadius, diagonal * 1.05);
+  const idealRadius = clamp(diagonal * 0.72, minRadius, maxRadius);
+  orbitState.radius = idealRadius;
+  orbitState.polar = clamp(orbitState.polar ?? Math.PI / 3, 0.9, 1.2);
   updateCameraOrbit();
 }
 
@@ -711,24 +719,175 @@ function updateWorldMeshes() {
 
 function createPlayerMesh() {
   if (!entityGroup) return;
+  if (playerMesh) {
+    entityGroup.remove(playerMesh);
+  }
+  playerMeshParts = null;
+  const colors = {
+    skin: '#f5c39a',
+    shirt: '#4eb9f0',
+    pants: '#2753c6',
+    boots: '#1a213d',
+    hair: '#3b2a1c',
+    eye: '#1a2e4a',
+    eyeHighlight: '#c9f0ff',
+  };
   const group = new THREE.Group();
-  const body = addBlock(group, {
-    color: '#f7b733',
-    width: 0.6,
-    depth: 0.6,
-    height: 1.2,
-    y: 0.6,
+  group.name = 'player-avatar';
+
+  const legHeight = 0.58;
+  const torsoHeight = 0.72;
+  const headHeight = 0.5;
+  const faceZ = 0.26;
+
+  const hipsY = legHeight;
+  const shoulderY = legHeight + torsoHeight;
+
+  const buildLeg = (offsetX) => {
+    const leg = new THREE.Group();
+    leg.position.set(offsetX, hipsY, 0);
+    addBlock(leg, {
+      color: colors.pants,
+      width: 0.26,
+      depth: 0.34,
+      height: legHeight,
+      y: -legHeight / 2,
+    });
+    const boot = addBlock(leg, {
+      color: colors.boots,
+      width: 0.26,
+      depth: 0.34,
+      height: 0.16,
+      y: -legHeight + 0.08,
+    });
+    boot.material.roughness = 0.5;
+    return leg;
+  };
+
+  const leftLeg = buildLeg(-0.18);
+  const rightLeg = buildLeg(0.18);
+  group.add(leftLeg);
+  group.add(rightLeg);
+
+  const torso = addBlock(group, {
+    color: colors.shirt,
+    width: 0.7,
+    depth: 0.38,
+    height: torsoHeight,
+    y: hipsY + torsoHeight / 2,
   });
-  const head = addBlock(group, {
-    color: '#ffe3a1',
-    width: 0.5,
+  torso.material.roughness = 0.55;
+
+  const belt = addBlock(group, {
+    color: '#1f273a',
+    width: 0.72,
+    depth: 0.39,
+    height: 0.12,
+    y: hipsY + 0.06,
+  });
+  belt.material.metalness = 0.1;
+
+  const buildArm = (offsetX) => {
+    const arm = new THREE.Group();
+    arm.position.set(offsetX, shoulderY, 0);
+    addBlock(arm, {
+      color: colors.shirt,
+      width: 0.22,
+      depth: 0.28,
+      height: 0.52,
+      y: -0.26,
+    });
+    addBlock(arm, {
+      color: colors.skin,
+      width: 0.22,
+      depth: 0.28,
+      height: 0.22,
+      y: -0.62,
+    });
+    return arm;
+  };
+
+  const leftArm = buildArm(-0.46);
+  const rightArm = buildArm(0.46);
+  group.add(leftArm);
+  group.add(rightArm);
+
+  addBlock(group, {
+    color: colors.skin,
+    width: 0.24,
+    depth: 0.28,
+    height: 0.14,
+    y: shoulderY + 0.07,
+  });
+
+  const headGroup = new THREE.Group();
+  headGroup.position.set(0, shoulderY + 0.14, 0);
+  const head = addBlock(headGroup, {
+    color: colors.skin,
+    width: 0.52,
     depth: 0.5,
-    height: 0.45,
-    y: 1.2 + 0.225,
+    height: headHeight,
+    y: headHeight / 2,
   });
   head.material.roughness = 0.6;
+
+  const hair = addBlock(headGroup, {
+    color: colors.hair,
+    width: 0.54,
+    depth: 0.52,
+    height: 0.2,
+    y: headHeight + 0.1,
+  });
+  hair.position.z = -0.02;
+
+  const fringe = addBlock(headGroup, {
+    color: colors.hair,
+    width: 0.5,
+    depth: 0.08,
+    height: 0.22,
+    y: headHeight * 0.92,
+  });
+  fringe.position.z = faceZ - 0.18;
+
+  const eyeMaterial = new THREE.MeshBasicMaterial({ color: colors.eye });
+  const eyeGeometry = new THREE.PlaneGeometry(0.09, 0.12);
+  const leftEye = new THREE.Mesh(eyeGeometry, eyeMaterial);
+  leftEye.position.set(-0.12, headHeight * 0.65, faceZ);
+  headGroup.add(leftEye);
+
+  const rightEye = leftEye.clone();
+  rightEye.position.x = 0.12;
+  headGroup.add(rightEye);
+
+  const eyeShineMaterial = new THREE.MeshBasicMaterial({ color: colors.eyeHighlight });
+  const eyeShineGeometry = new THREE.PlaneGeometry(0.04, 0.05);
+  const leftShine = new THREE.Mesh(eyeShineGeometry, eyeShineMaterial);
+  leftShine.position.set(-0.14, headHeight * 0.72, faceZ + 0.002);
+  headGroup.add(leftShine);
+  const rightShine = leftShine.clone();
+  rightShine.position.x = 0.1;
+  headGroup.add(rightShine);
+
+  const nose = addBlock(headGroup, {
+    color: colors.skin,
+    width: 0.12,
+    depth: 0.12,
+    height: 0.16,
+    y: headHeight * 0.55,
+  });
+  nose.position.z = faceZ + 0.04;
+
+  group.add(headGroup);
+
   entityGroup.add(group);
   playerMesh = group;
+  playerMeshParts = {
+    leftArm,
+    rightArm,
+    leftLeg,
+    rightLeg,
+    head: headGroup,
+  };
 }
 
 function createPlayerLocator() {
@@ -787,16 +946,50 @@ function tileSurfaceHeight(x, y) {
 }
 
 function updateEntities() {
+  const now = performance.now();
   if (playerMesh) {
     const { x, z } = worldToScene(state.player.x, state.player.y);
     const height = tileSurfaceHeight(state.player.x, state.player.y);
-    playerMesh.position.set(x, height, z);
+    const facing = state.player?.facing ?? { x: 0, y: 1 };
+    playerMesh.rotation.y = Math.atan2(facing.x, facing.y);
+
+    const movementDelta = now - (state.lastMoveAt || 0);
+    const pressedStrength = state.pressedKeys?.size ? 0.75 : 0;
+    const recentMoveStrength = THREE.MathUtils.clamp(1 - movementDelta / 360, 0, 1);
+    const movementStrength = Math.min(1, Math.max(pressedStrength, recentMoveStrength));
+    const walkCycle = now / 240;
+    const idleBob = Math.sin(now / 1200) * 0.02;
+    const bob = Math.sin(walkCycle) * 0.08 * movementStrength;
+    playerMesh.position.set(x, height + idleBob + bob, z);
+
+    if (playerMeshParts) {
+      const swing = Math.sin(walkCycle) * 0.35 * movementStrength;
+      const stride = Math.sin(walkCycle) * 0.4 * movementStrength;
+      if (playerMeshParts.leftArm) {
+        playerMeshParts.leftArm.rotation.x = swing;
+      }
+      if (playerMeshParts.rightArm) {
+        playerMeshParts.rightArm.rotation.x = -swing;
+      }
+      if (playerMeshParts.leftLeg) {
+        playerMeshParts.leftLeg.rotation.x = -stride;
+      }
+      if (playerMeshParts.rightLeg) {
+        playerMeshParts.rightLeg.rotation.x = stride;
+      }
+      if (playerMeshParts.head) {
+        const idleYaw = Math.sin(now / 1800) * 0.03;
+        const idlePitch = Math.cos(now / 1700) * 0.02;
+        playerMeshParts.head.rotation.y = idleYaw + Math.sin(walkCycle * 0.7) * 0.08 * movementStrength;
+        playerMeshParts.head.rotation.x = idlePitch + Math.cos(walkCycle * 0.5) * 0.04 * movementStrength;
+      }
+    }
   }
   if (playerLocator) {
     const { x, z } = worldToScene(state.player.x, state.player.y);
     const height = tileSurfaceHeight(state.player.x, state.player.y) + 0.02;
     playerLocator.position.set(x, height, z);
-    const cycle = (performance.now() % 2400) / 2400;
+    const cycle = (now % 2400) / 2400;
     const pulse = 1 + Math.sin(cycle * Math.PI * 2) * 0.12;
     playerLocator.scale.set(pulse, pulse, 1);
     if (playerLocator.material) {
