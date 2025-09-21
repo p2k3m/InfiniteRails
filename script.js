@@ -153,11 +153,16 @@
     let camera;
     let worldGroup;
     let entityGroup;
+    let particleGroup;
     let playerMesh;
     let playerMeshParts;
     let tileRenderState = [];
     const zombieMeshes = [];
     const ironGolemMeshes = [];
+    let hemiLight;
+    let sunLight;
+    let moonLight;
+    let torchLight;
     let playerLocator;
     let playerHintTimer = null;
     let lastDimensionHintKey = null;
@@ -173,6 +178,8 @@
     const CAMERA_EYE_OFFSET = 0.76;
     const CAMERA_FORWARD_OFFSET = 0.22;
     const CAMERA_LOOK_DISTANCE = 6.5;
+    const CAMERA_FRUSTUM_HEIGHT = 9.2;
+    const CAMERA_BASE_ZOOM = 1.18;
     const WORLD_UP = new THREE.Vector3(0, 1, 0);
     const cameraState = {
       lastFacing: new THREE.Vector3(0, 0, 1),
@@ -180,9 +187,25 @@
     const tmpCameraForward = new THREE.Vector3();
     const tmpCameraTarget = new THREE.Vector3();
     const tmpCameraRight = new THREE.Vector3();
+    const tmpColorA = new THREE.Color();
+    const tmpColorB = new THREE.Color();
 
     const baseMaterialCache = new Map();
     const accentMaterialCache = new Map();
+    const textureVariantCache = new Map();
+    const spriteTextureCache = new Map();
+
+    const textureLoader = new THREE.TextureLoader();
+
+    const particleSystems = [];
+
+    const lightingState = {
+      daySky: new THREE.Color('#bcd7ff'),
+      nightSky: new THREE.Color('#0b1324'),
+      duskSky: new THREE.Color('#f7b07b'),
+      groundDay: new THREE.Color('#1c283f'),
+      groundNight: new THREE.Color('#050912'),
+    };
 
     const identityState = {
       googleProfile: null,
@@ -199,18 +222,23 @@
     const PROFILE_STORAGE_KEY = 'infinite-dimension-profile';
     const LOCAL_PROFILE_ID_KEY = 'infinite-dimension-local-id';
 
-    function getBaseMaterial(color) {
-      if (!baseMaterialCache.has(color)) {
-        baseMaterialCache.set(
-          color,
-          new THREE.MeshStandardMaterial({
-            color: new THREE.Color(color),
-            roughness: 0.85,
-            metalness: 0.05,
-          })
-        );
+    function getBaseMaterial(color, variant = 'default') {
+      const key = `${variant}|${color}`;
+      if (!baseMaterialCache.has(key)) {
+        const options = {
+          color: new THREE.Color(color),
+          roughness: 0.85,
+          metalness: 0.05,
+        };
+        const textures = getTextureSetForVariant(variant);
+        if (textures) {
+          options.map = textures.map;
+          options.normalMap = textures.normalMap;
+          options.roughnessMap = textures.roughnessMap;
+        }
+        baseMaterialCache.set(key, new THREE.MeshStandardMaterial(options));
       }
-      return baseMaterialCache.get(color);
+      return baseMaterialCache.get(key);
     }
 
     function getAccentMaterial(color, opacity = 0.75) {
@@ -231,6 +259,298 @@
         );
       }
       return accentMaterialCache.get(key);
+    }
+
+    function getTextureSetForVariant(variant) {
+      if (!variant || variant === 'default') {
+        return null;
+      }
+      if (textureVariantCache.has(variant)) {
+        return textureVariantCache.get(variant);
+      }
+      let generator = null;
+      switch (variant) {
+        case 'dew':
+          generator = createDewTextureSet;
+          break;
+        case 'grain':
+          generator = createGrainTextureSet;
+          break;
+        case 'bark':
+          generator = createBarkTextureSet;
+          break;
+        default:
+          generator = null;
+      }
+      const result = generator ? generator() : null;
+      textureVariantCache.set(variant, result);
+      return result;
+    }
+
+    function createProceduralTextureDataUrl(size, draw) {
+      const canvas = document.createElement('canvas');
+      canvas.width = size;
+      canvas.height = size;
+      const ctx = canvas.getContext('2d');
+      draw(ctx, size);
+      return canvas.toDataURL('image/png');
+    }
+
+    function applyTextureSettings(texture, options = {}) {
+      const repeat = options.repeat ?? { x: 2, y: 2 };
+      const anisotropy = renderer?.capabilities?.getMaxAnisotropy?.() ?? 4;
+      texture.wrapS = options.wrapS ?? THREE.RepeatWrapping;
+      texture.wrapT = options.wrapT ?? THREE.RepeatWrapping;
+      if (typeof repeat === 'number') {
+        texture.repeat.set(repeat, repeat);
+      } else if (repeat) {
+        texture.repeat.set(repeat.x ?? 1, repeat.y ?? 1);
+      }
+      texture.anisotropy = anisotropy;
+      texture.magFilter = options.magFilter ?? THREE.LinearFilter;
+      texture.minFilter = options.minFilter ?? THREE.LinearMipmapLinearFilter;
+      if (options.colorSpace) {
+        texture.colorSpace = options.colorSpace;
+      }
+      texture.needsUpdate = true;
+    }
+
+    function createTexture(url, options) {
+      const texture = textureLoader.load(url, (loaded) => applyTextureSettings(loaded, options));
+      applyTextureSettings(texture, options);
+      return texture;
+    }
+
+    function addNoise(ctx, size, variance = 0.15) {
+      const image = ctx.getImageData(0, 0, size, size);
+      for (let i = 0; i < image.data.length; i += 4) {
+        const offset = (Math.random() - 0.5) * variance * 255;
+        image.data[i] = clamp(image.data[i] + offset, 0, 255);
+        image.data[i + 1] = clamp(image.data[i + 1] + offset, 0, 255);
+        image.data[i + 2] = clamp(image.data[i + 2] + offset, 0, 255);
+      }
+      ctx.putImageData(image, 0, 0);
+    }
+
+    function createDewTextureSet() {
+      const size = 256;
+      const albedoUrl = createProceduralTextureDataUrl(size, (ctx, dimension) => {
+        const gradient = ctx.createLinearGradient(0, 0, dimension, dimension);
+        gradient.addColorStop(0, '#1d7a46');
+        gradient.addColorStop(1, '#2aa35a');
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, dimension, dimension);
+        for (let i = 0; i < 220; i++) {
+          const radius = Math.random() * 6 + 2;
+          const x = Math.random() * dimension;
+          const y = Math.random() * dimension;
+          const droplet = ctx.createRadialGradient(x, y, 0, x, y, radius);
+          droplet.addColorStop(0, 'rgba(255, 255, 255, 0.75)');
+          droplet.addColorStop(1, 'rgba(255, 255, 255, 0)');
+          ctx.fillStyle = droplet;
+          ctx.fillRect(x - radius, y - radius, radius * 2, radius * 2);
+        }
+        addNoise(ctx, dimension, 0.05);
+      });
+
+      const normalUrl = createProceduralTextureDataUrl(size, (ctx, dimension) => {
+        ctx.fillStyle = 'rgb(128,128,255)';
+        ctx.fillRect(0, 0, dimension, dimension);
+        for (let i = 0; i < 200; i++) {
+          const radius = Math.random() * 6 + 2;
+          const x = Math.random() * dimension;
+          const y = Math.random() * dimension;
+          const highlight = ctx.createRadialGradient(x, y, 0, x, y, radius);
+          highlight.addColorStop(0, 'rgb(170,200,255)');
+          highlight.addColorStop(1, 'rgb(120,120,250)');
+          ctx.fillStyle = highlight;
+          ctx.fillRect(x - radius, y - radius, radius * 2, radius * 2);
+        }
+      });
+
+      const roughnessUrl = createProceduralTextureDataUrl(size, (ctx, dimension) => {
+        ctx.fillStyle = 'rgb(180, 180, 180)';
+        ctx.fillRect(0, 0, dimension, dimension);
+        for (let i = 0; i < 220; i++) {
+          const radius = Math.random() * 6 + 2;
+          const x = Math.random() * dimension;
+          const y = Math.random() * dimension;
+          const droplet = ctx.createRadialGradient(x, y, 0, x, y, radius);
+          droplet.addColorStop(0, 'rgb(120, 120, 120)');
+          droplet.addColorStop(1, 'rgb(200, 200, 200)');
+          ctx.fillStyle = droplet;
+          ctx.fillRect(x - radius, y - radius, radius * 2, radius * 2);
+        }
+        addNoise(ctx, dimension, 0.08);
+      });
+
+      return {
+        map: createTexture(albedoUrl, { repeat: { x: 3, y: 3 }, colorSpace: THREE.SRGBColorSpace }),
+        normalMap: createTexture(normalUrl, { repeat: { x: 3, y: 3 }, colorSpace: THREE.NoColorSpace }),
+        roughnessMap: createTexture(roughnessUrl, { repeat: { x: 3, y: 3 }, colorSpace: THREE.NoColorSpace }),
+      };
+    }
+
+    function createGrainTextureSet() {
+      const size = 256;
+      const albedoUrl = createProceduralTextureDataUrl(size, (ctx, dimension) => {
+        const gradient = ctx.createLinearGradient(0, 0, dimension, dimension);
+        gradient.addColorStop(0, '#d4b179');
+        gradient.addColorStop(1, '#c59855');
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, dimension, dimension);
+        ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+        ctx.lineWidth = 1;
+        for (let i = 0; i < 28; i++) {
+          const y = (dimension / 28) * i + Math.random() * 4;
+          ctx.beginPath();
+          ctx.moveTo(0, y);
+          ctx.lineTo(dimension, y + Math.random() * 6 - 3);
+          ctx.stroke();
+        }
+        addNoise(ctx, dimension, 0.12);
+      });
+
+      const normalUrl = createProceduralTextureDataUrl(size, (ctx, dimension) => {
+        ctx.fillStyle = 'rgb(128,128,255)';
+        ctx.fillRect(0, 0, dimension, dimension);
+        ctx.strokeStyle = 'rgba(150, 130, 255, 0.35)';
+        ctx.lineWidth = 2;
+        for (let i = 0; i < 24; i++) {
+          const y = (dimension / 24) * i + Math.random() * 4;
+          ctx.beginPath();
+          ctx.moveTo(0, y);
+          ctx.lineTo(dimension, y + Math.random() * 4 - 2);
+          ctx.stroke();
+        }
+      });
+
+      const roughnessUrl = createProceduralTextureDataUrl(size, (ctx, dimension) => {
+        ctx.fillStyle = 'rgb(210,210,210)';
+        ctx.fillRect(0, 0, dimension, dimension);
+        ctx.strokeStyle = 'rgba(90,90,90,0.3)';
+        ctx.lineWidth = 1;
+        for (let i = 0; i < 36; i++) {
+          const y = (dimension / 36) * i + Math.random() * 3;
+          ctx.beginPath();
+          ctx.moveTo(0, y);
+          ctx.lineTo(dimension, y + Math.random() * 4 - 2);
+          ctx.stroke();
+        }
+        addNoise(ctx, dimension, 0.1);
+      });
+
+      return {
+        map: createTexture(albedoUrl, { repeat: { x: 2.2, y: 2.2 }, colorSpace: THREE.SRGBColorSpace }),
+        normalMap: createTexture(normalUrl, { repeat: { x: 2.2, y: 2.2 }, colorSpace: THREE.NoColorSpace }),
+        roughnessMap: createTexture(roughnessUrl, { repeat: { x: 2.2, y: 2.2 }, colorSpace: THREE.NoColorSpace }),
+      };
+    }
+
+    function createBarkTextureSet() {
+      const size = 256;
+      const albedoUrl = createProceduralTextureDataUrl(size, (ctx, dimension) => {
+        const gradient = ctx.createLinearGradient(0, 0, dimension, dimension);
+        gradient.addColorStop(0, '#4f3418');
+        gradient.addColorStop(1, '#3a2412');
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, dimension, dimension);
+        ctx.strokeStyle = 'rgba(255, 210, 150, 0.22)';
+        ctx.lineWidth = 4;
+        for (let i = 0; i < 12; i++) {
+          const x = (dimension / 12) * i + Math.random() * 6;
+          ctx.beginPath();
+          ctx.moveTo(x, 0);
+          ctx.bezierCurveTo(
+            x + Math.random() * 10 - 5,
+            dimension * 0.25,
+            x + Math.random() * 10 - 5,
+            dimension * 0.75,
+            x + Math.random() * 8 - 4,
+            dimension
+          );
+          ctx.stroke();
+        }
+        addNoise(ctx, dimension, 0.18);
+      });
+
+      const normalUrl = createProceduralTextureDataUrl(size, (ctx, dimension) => {
+        ctx.fillStyle = 'rgb(128,128,255)';
+        ctx.fillRect(0, 0, dimension, dimension);
+        ctx.strokeStyle = 'rgba(90,70,230,0.6)';
+        ctx.lineWidth = 3;
+        for (let i = 0; i < 14; i++) {
+          const x = (dimension / 14) * i + Math.random() * 8;
+          ctx.beginPath();
+          ctx.moveTo(x, 0);
+          ctx.bezierCurveTo(
+            x + Math.random() * 12 - 6,
+            dimension * 0.3,
+            x + Math.random() * 12 - 6,
+            dimension * 0.7,
+            x + Math.random() * 8 - 4,
+            dimension
+          );
+          ctx.stroke();
+        }
+      });
+
+      const roughnessUrl = createProceduralTextureDataUrl(size, (ctx, dimension) => {
+        ctx.fillStyle = 'rgb(140,140,140)';
+        ctx.fillRect(0, 0, dimension, dimension);
+        ctx.strokeStyle = 'rgba(60,60,60,0.4)';
+        ctx.lineWidth = 2;
+        for (let i = 0; i < 18; i++) {
+          const x = (dimension / 18) * i + Math.random() * 6;
+          ctx.beginPath();
+          ctx.moveTo(x, 0);
+          ctx.lineTo(x + Math.random() * 6 - 3, dimension);
+          ctx.stroke();
+        }
+        addNoise(ctx, dimension, 0.14);
+      });
+
+      return {
+        map: createTexture(albedoUrl, { repeat: { x: 1.4, y: 1.4 }, colorSpace: THREE.SRGBColorSpace }),
+        normalMap: createTexture(normalUrl, { repeat: { x: 1.4, y: 1.4 }, colorSpace: THREE.NoColorSpace }),
+        roughnessMap: createTexture(roughnessUrl, { repeat: { x: 1.4, y: 1.4 }, colorSpace: THREE.NoColorSpace }),
+      };
+    }
+
+    function getParticleTexture() {
+      const key = 'harvestSpark';
+      if (spriteTextureCache.has(key)) {
+        return spriteTextureCache.get(key);
+      }
+      const size = 128;
+      const dataUrl = createProceduralTextureDataUrl(size, (ctx, dimension) => {
+        ctx.clearRect(0, 0, dimension, dimension);
+        const gradient = ctx.createRadialGradient(
+          dimension / 2,
+          dimension / 2,
+          0,
+          dimension / 2,
+          dimension / 2,
+          dimension / 2
+        );
+        gradient.addColorStop(0, 'rgba(255,255,255,1)');
+        gradient.addColorStop(0.45, 'rgba(255,255,255,0.45)');
+        gradient.addColorStop(1, 'rgba(255,255,255,0)');
+        ctx.fillStyle = gradient;
+        ctx.beginPath();
+        ctx.arc(dimension / 2, dimension / 2, dimension / 2, 0, Math.PI * 2);
+        ctx.fill();
+      });
+      const texture = createTexture(dataUrl, {
+        repeat: { x: 1, y: 1 },
+        wrapS: THREE.ClampToEdgeWrapping,
+        wrapT: THREE.ClampToEdgeWrapping,
+        magFilter: THREE.LinearFilter,
+        minFilter: THREE.LinearFilter,
+        colorSpace: THREE.SRGBColorSpace,
+      });
+      spriteTextureCache.set(key, texture);
+      return texture;
     }
 
     function worldToScene(x, y) {
@@ -351,7 +671,17 @@
       const width = canvas.clientWidth || canvas.width || 1;
       const height = canvas.clientHeight || canvas.height || 1;
       renderer.setSize(width, height, false);
-      camera.aspect = width / height;
+      const aspect = width / height;
+      if (camera.isPerspectiveCamera) {
+        camera.aspect = aspect;
+      } else if (camera.isOrthographicCamera) {
+        const halfHeight = CAMERA_FRUSTUM_HEIGHT / 2;
+        const halfWidth = halfHeight * aspect;
+        camera.left = -halfWidth;
+        camera.right = halfWidth;
+        camera.top = halfHeight;
+        camera.bottom = -halfHeight;
+      }
       camera.updateProjectionMatrix();
       syncCameraToPlayer({ idleBob: 0, walkBob: 0, movementStrength: 0 });
     }
@@ -547,30 +877,57 @@
         return false;
       }
       renderer.setPixelRatio(window.devicePixelRatio ?? 1);
-      handleResize();
+      renderer.outputColorSpace = THREE.SRGBColorSpace;
+      renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      renderer.toneMappingExposure = 1;
 
       scene = new THREE.Scene();
-      scene.fog = new THREE.FogExp2('#0b1324', 0.055);
+      scene.fog = new THREE.FogExp2(lightingState.nightSky.clone(), 0.055);
 
-      camera = new THREE.PerspectiveCamera(55, (canvas.clientWidth || canvas.width) / (canvas.clientHeight || canvas.height), 0.1, 1000);
+      const width = canvas.clientWidth || canvas.width || 1;
+      const height = canvas.clientHeight || canvas.height || 1;
+      const aspect = width / height;
+      const halfHeight = CAMERA_FRUSTUM_HEIGHT / 2;
+      const halfWidth = halfHeight * aspect;
+
+      camera = new THREE.OrthographicCamera(-halfWidth, halfWidth, halfHeight, -halfHeight, 0.1, 80);
+      camera.zoom = CAMERA_BASE_ZOOM;
+      camera.updateProjectionMatrix();
 
       worldGroup = new THREE.Group();
       entityGroup = new THREE.Group();
+      particleGroup = new THREE.Group();
       scene.add(worldGroup);
       scene.add(entityGroup);
+      scene.add(particleGroup);
 
-      const hemiLight = new THREE.HemisphereLight(0xbcd7ff, 0x0b1324, 1.05);
+      hemiLight = new THREE.HemisphereLight(0xbcd7ff, 0x0b1324, 1.05);
       scene.add(hemiLight);
 
-      const dirLight = new THREE.DirectionalLight(0xffffff, 0.9);
-      dirLight.position.set(6, 14, 10);
-      scene.add(dirLight);
+      sunLight = new THREE.DirectionalLight(0xfff2d8, 1.4);
+      sunLight.position.set(12, 16, 6);
+      sunLight.target.position.set(0, 0, 0);
+      scene.add(sunLight);
+      scene.add(sunLight.target);
+
+      moonLight = new THREE.DirectionalLight(0x88aaff, 0.45);
+      moonLight.position.set(-10, 10, -8);
+      moonLight.target.position.set(0, 0, 0);
+      scene.add(moonLight);
+      scene.add(moonLight.target);
+
+      torchLight = new THREE.PointLight(0xffd27f, 0, 8, 2.4);
+      torchLight.castShadow = false;
+      torchLight.visible = false;
+      scene.add(torchLight);
 
       initPointerControls();
       window.addEventListener('resize', handleResize);
+      handleResize();
       createPlayerMesh();
       createPlayerLocator();
       syncCameraToPlayer({ idleBob: 0, walkBob: 0, movementStrength: 0 });
+      updateLighting(0);
       return true;
     }
 
@@ -580,6 +937,15 @@
       while (worldGroup.children.length) {
         worldGroup.remove(worldGroup.children[0]);
       }
+      if (particleGroup) {
+        while (particleGroup.children.length) {
+          const child = particleGroup.children[0];
+          if (child.geometry) child.geometry.dispose();
+          if (child.material) child.material.dispose();
+          particleGroup.remove(child);
+        }
+      }
+      particleSystems.length = 0;
     }
 
     function ensureTileGroups() {
@@ -682,6 +1048,26 @@
       }
     }
 
+    function getSurfaceVariantForTile(type) {
+      switch (type) {
+        case 'grass':
+        case 'tree':
+        case 'village':
+          return 'dew';
+        case 'sand':
+        case 'canyon':
+        case 'stone':
+        case 'rock':
+        case 'ore':
+        case 'marble':
+        case 'marbleEcho':
+        case 'netherite':
+          return 'grain';
+        default:
+          return 'default';
+      }
+    }
+
     function rebuildTileGroup(renderInfo, tile) {
       const { group } = renderInfo;
       while (group.children.length) {
@@ -741,7 +1127,7 @@
         case 'rail': {
           const base = addBlock(group, {
             height,
-            material: getBaseMaterial(baseColor),
+            material: getBaseMaterial(baseColor, getSurfaceVariantForTile(tile.type)),
           });
           base.receiveShadow = true;
           const railMaterial = new THREE.MeshStandardMaterial({
@@ -767,10 +1153,10 @@
           break;
         }
         case 'tree': {
-          addBlock(group, { material: getBaseMaterial(TILE_TYPES.grass.base), height: 0.9 });
+          addBlock(group, { material: getBaseMaterial(TILE_TYPES.grass.base, 'dew'), height: 0.9 });
           addTopPlate(group, TILE_TYPES.grass.accent, 0.9, 0.5);
           addBlock(group, {
-            color: '#4f3418',
+            material: getBaseMaterial('#4f3418', 'bark'),
             width: 0.28,
             depth: 0.28,
             height: 1.4,
@@ -786,7 +1172,7 @@
           break;
         }
         case 'chest': {
-          addBlock(group, { material: getBaseMaterial(baseColor), height: 0.8 });
+          addBlock(group, { material: getBaseMaterial(baseColor, 'grain'), height: 0.8 });
           const lid = addBlock(group, {
             color: new THREE.Color(accentColor).lerp(new THREE.Color(baseColor), 0.4),
             height: 0.3,
@@ -857,7 +1243,8 @@
           break;
         }
         default: {
-          const baseBlock = addBlock(group, { height, material: getBaseMaterial(baseColor) });
+          const variant = getSurfaceVariantForTile(tile.type);
+          const baseBlock = addBlock(group, { height, material: getBaseMaterial(baseColor, variant) });
           baseBlock.receiveShadow = true;
           if (tile.type !== 'marbleEcho' && tile.type !== 'marble') {
             addTopPlate(group, accentColor, height);
@@ -1450,6 +1837,147 @@
         const h = tileSurfaceHeight(golem.x, golem.y);
         mesh.position.set(x, h, z);
       });
+    }
+
+    function spawnHarvestParticles(x, y, accentColor) {
+      if (!particleGroup) return;
+      const count = 42;
+      const positions = new Float32Array(count * 3);
+      const velocities = new Float32Array(count * 3);
+      for (let i = 0; i < count; i++) {
+        const baseIndex = i * 3;
+        positions[baseIndex] = (Math.random() - 0.5) * 0.4;
+        positions[baseIndex + 1] = Math.random() * 0.4;
+        positions[baseIndex + 2] = (Math.random() - 0.5) * 0.4;
+        const angle = Math.random() * Math.PI * 2;
+        const speed = 0.6 + Math.random() * 0.8;
+        velocities[baseIndex] = Math.cos(angle) * speed;
+        velocities[baseIndex + 1] = Math.random() * 1.2 + 0.6;
+        velocities[baseIndex + 2] = Math.sin(angle) * speed;
+      }
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      const pointsMaterial = new THREE.PointsMaterial({
+        size: 0.18,
+        transparent: true,
+        depthWrite: false,
+        opacity: 0.95,
+        blending: THREE.AdditiveBlending,
+        map: getParticleTexture(),
+        color: new THREE.Color(accentColor ?? '#ffffff'),
+        sizeAttenuation: true,
+      });
+      const points = new THREE.Points(geometry, pointsMaterial);
+      const { x: sx, z: sz } = worldToScene(x, y);
+      points.position.set(sx, tileSurfaceHeight(x, y) + 0.35, sz);
+      particleGroup.add(points);
+      particleSystems.push({
+        points,
+        positions,
+        velocities,
+        life: 0,
+        maxLife: 1.35,
+        count,
+      });
+    }
+
+    function advanceParticles(delta) {
+      if (!particleSystems.length) return;
+      for (let i = particleSystems.length - 1; i >= 0; i--) {
+        const system = particleSystems[i];
+        system.life += delta;
+        const ratio = system.life / system.maxLife;
+        const { positions, velocities, points, count } = system;
+        for (let j = 0; j < count; j++) {
+          const baseIndex = j * 3;
+          velocities[baseIndex + 1] -= 9.81 * delta * 0.35;
+          const swirl = Math.sin((system.life + j) * 9) * 0.25 * delta;
+          velocities[baseIndex] += swirl;
+          velocities[baseIndex + 2] -= swirl;
+          positions[baseIndex] += velocities[baseIndex] * delta;
+          positions[baseIndex + 1] += velocities[baseIndex + 1] * delta;
+          positions[baseIndex + 2] += velocities[baseIndex + 2] * delta;
+        }
+        points.geometry.attributes.position.needsUpdate = true;
+        points.geometry.computeBoundingSphere();
+        if (points.material) {
+          const fade = Math.max(0, 1 - ratio * ratio);
+          points.material.opacity = fade;
+          points.material.needsUpdate = true;
+        }
+        if (ratio >= 1) {
+          particleGroup.remove(points);
+          points.geometry.dispose();
+          points.material.dispose();
+          particleSystems.splice(i, 1);
+        }
+      }
+    }
+
+    function updateLighting(delta) {
+      if (!scene || !state || !hemiLight || !sunLight || !moonLight) return;
+      const ratio = state.dayLength > 0 ? (state.elapsed % state.dayLength) / state.dayLength : 0;
+      const playerFacing = state.player?.facing ?? { x: 0, y: 1 };
+      const playerScene = worldToScene(state.player?.x ?? 0, state.player?.y ?? 0);
+      const playerHeight = tileSurfaceHeight(state.player?.x ?? 0, state.player?.y ?? 0) + 0.6;
+
+      const sunAngle = ratio * Math.PI * 2;
+      const sunElevation = Math.sin(sunAngle);
+      const dayStrength = THREE.MathUtils.clamp((sunElevation + 1) / 2, 0, 1);
+      const sunRadius = 24;
+      sunLight.position.set(
+        playerScene.x + Math.cos(sunAngle) * sunRadius,
+        playerHeight + 8 + Math.max(0, sunElevation * 14),
+        playerScene.z + Math.sin(sunAngle) * sunRadius
+      );
+      sunLight.target.position.set(playerScene.x, playerHeight - 0.6, playerScene.z);
+      sunLight.target.updateMatrixWorld();
+      sunLight.intensity = 0.25 + dayStrength * 1.55;
+
+      const moonAngle = sunAngle + Math.PI;
+      const moonElevation = Math.sin(moonAngle);
+      const nightStrength = THREE.MathUtils.clamp((moonElevation + 1) / 2, 0, 1);
+      const moonRadius = 22;
+      moonLight.position.set(
+        playerScene.x + Math.cos(moonAngle) * moonRadius,
+        playerHeight + 6 + Math.max(0, moonElevation * 10),
+        playerScene.z + Math.sin(moonAngle) * moonRadius
+      );
+      moonLight.target.position.copy(sunLight.target.position);
+      moonLight.target.updateMatrixWorld();
+      moonLight.intensity = 0.18 + nightStrength * 0.7;
+
+      hemiLight.intensity = 0.45 + dayStrength * 0.6;
+      hemiLight.color.lerpColors(lightingState.nightSky, lightingState.daySky, dayStrength);
+      hemiLight.groundColor.lerpColors(lightingState.groundNight, lightingState.groundDay, dayStrength);
+
+      const dawnDistance = Math.min(Math.abs(ratio), Math.abs(ratio - 1));
+      const duskDistance = Math.abs(ratio - 0.5);
+      const duskMix = Math.max(0, 0.22 - Math.min(dawnDistance, duskDistance)) / 0.22;
+      tmpColorA.copy(lightingState.nightSky).lerp(lightingState.daySky, dayStrength);
+      if (duskMix > 0) {
+        tmpColorB.copy(lightingState.duskSky);
+        tmpColorA.lerp(tmpColorB, duskMix * 0.6);
+      }
+      scene.fog.color.copy(tmpColorA);
+
+      if (torchLight) {
+        const selectedSlot = state.player?.inventory?.[state.player?.selectedSlot ?? 0];
+        const holdingTorch = selectedSlot?.item === 'torch';
+        const target = holdingTorch ? 3.4 : 0;
+        const lerpAlpha = Math.min(1, delta * 6 + 0.12);
+        const baseIntensity = THREE.MathUtils.lerp(torchLight.intensity ?? 0, target, lerpAlpha);
+        const flicker = holdingTorch ? (Math.sin(state.elapsed * 22) + Math.sin(state.elapsed * 13.7)) * 0.18 : 0;
+        torchLight.intensity = Math.max(0, baseIntensity + flicker);
+        torchLight.distance = holdingTorch ? 7.5 : 4;
+        torchLight.decay = 1.8;
+        torchLight.visible = torchLight.intensity > 0.05;
+        torchLight.position.set(
+          playerScene.x + playerFacing.x * 0.45,
+          playerHeight + 0.65,
+          playerScene.z + playerFacing.y * 0.45
+        );
+      }
     }
 
     function renderScene() {
@@ -2433,6 +2961,7 @@
       state.player.isSliding = false;
       state.player.zombieHits = 0;
       syncCameraToPlayer({ idleBob: 0, walkBob: 0, movementStrength: 0, facing: state.player.facing });
+      updateLighting(0);
       if (fromId && id !== 'origin' && id !== 'netherite') {
         spawnReturnPortal(fromId, id);
       }
@@ -2487,6 +3016,8 @@
       processEchoQueue();
       updateStatusBars();
       updatePortalProgress();
+      updateLighting(delta);
+      advanceParticles(delta);
     }
 
     function processEchoQueue() {
@@ -2796,6 +3327,7 @@
         logEvent('Resource depleted.');
         return;
       }
+      const originalType = tile.type;
       const itemId = tile.resource;
       if (itemId === 'chest') {
         openChest(tile);
@@ -2808,6 +3340,8 @@
       tile.data.yield -= 1;
       addItemToInventory(itemId, 1);
       logEvent(`Gathered ${ITEM_DEFS[itemId]?.name ?? itemId}.`);
+      const accentColor = TILE_TYPES[originalType]?.accent ?? '#ffffff';
+      spawnHarvestParticles(x, y, accentColor);
       if (tile.data.yield <= 0 && tile.type !== 'tar') {
         tile.type = 'grass';
         tile.resource = null;
