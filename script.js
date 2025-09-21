@@ -2435,7 +2435,7 @@ function applyDamage(amount) {
 
 function getTile(x, y) {
   if (x < 0 || y < 0 || x >= state.width || y >= state.height) return null;
-  return state.world[y][x];
+  return state.world?.[y]?.[x] ?? null;
 }
 
 function isWalkable(x, y) {
