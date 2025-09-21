@@ -275,11 +275,16 @@ body::after {
   box-shadow: var(--card-shadow);
   background: rgba(4, 9, 22, 0.75);
   border: 1px solid rgba(73, 242, 255, 0.18);
+  display: grid;
+  grid-template-areas: 'viewport';
+  min-height: clamp(420px, 58vh, 680px);
+  aspect-ratio: 16 / 10;
 }
 
 #gameCanvas {
+  grid-area: viewport;
   width: 100%;
-  height: auto;
+  height: 100%;
   display: block;
   background: linear-gradient(180deg, rgba(10, 24, 48, 0.9), rgba(6, 14, 28, 0.9));
 }

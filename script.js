@@ -101,6 +101,7 @@ const identityState = {
 
 const SCOREBOARD_STORAGE_KEY = 'infinite-dimension-scoreboard';
 const PROFILE_STORAGE_KEY = 'infinite-dimension-profile';
+const LOCAL_PROFILE_ID_KEY = 'infinite-dimension-local-id';
 
 function getBaseMaterial(color) {
   if (!baseMaterialCache.has(color)) {
@@ -2304,14 +2305,25 @@ function updateIdentityUI() {
   const signedIn = Boolean(identityState.googleProfile);
   if (googleSignOutButton) googleSignOutButton.hidden = !signedIn;
   if (scoreboardSection) scoreboardSection.hidden = !signedIn;
-  if (googleButtonContainer) googleButtonContainer.hidden = signedIn || !identityState.googleInitialized;
+  if (googleButtonContainer) {
+    const shouldHideGoogleButton =
+      signedIn || !identityState.googleInitialized || !appConfig.googleClientId;
+    googleButtonContainer.hidden = shouldHideGoogleButton;
+  }
   if (googleFallbackSignIn) {
-    const showFallback = !signedIn && !identityState.googleInitialized;
+    const showFallback = !signedIn;
     googleFallbackSignIn.hidden = !showFallback;
-    googleFallbackSignIn.disabled = !appConfig.googleClientId;
-    if (!appConfig.googleClientId) {
-      googleFallbackSignIn.textContent = 'Google SSO unavailable';
-      googleFallbackSignIn.title = 'Provide APP_CONFIG.googleClientId to enable Google sign-in.';
+    if (appConfig.googleClientId) {
+      const ready = identityState.googleInitialized;
+      googleFallbackSignIn.disabled = !ready;
+      googleFallbackSignIn.textContent = ready ? 'Sign in with Google' : 'Preparing Google Sign-In…';
+      googleFallbackSignIn.title = ready
+        ? 'Open the Google Sign-In prompt.'
+        : 'Google services are still initialising. This will become clickable momentarily.';
+    } else {
+      googleFallbackSignIn.disabled = false;
+      googleFallbackSignIn.textContent = 'Create local explorer profile';
+      googleFallbackSignIn.title = 'Skip Google Sign-In and save your progress locally on this device.';
     }
   }
 
@@ -2325,6 +2337,8 @@ function updateIdentityUI() {
       statusText = 'No scores recorded yet.';
     } else if (identityState.scoreboardSource === 'sample') {
       statusText = 'Showing sample data. Connect the API to DynamoDB for live scores.';
+    } else if (identityState.scoreboardSource === 'local') {
+      statusText = 'Scores are saved locally on this device.';
     }
     scoreboardStatusEl.textContent = statusText;
     scoreboardStatusEl.hidden = statusText === '';
@@ -2399,6 +2413,27 @@ function decodeJwt(token) {
   }
 }
 
+function ensureLocalProfileId() {
+  let identifier = null;
+  try {
+    identifier = localStorage.getItem(LOCAL_PROFILE_ID_KEY);
+  } catch (error) {
+    console.warn('Unable to read cached local profile identifier.', error);
+  }
+  if (!identifier) {
+    const randomId =
+      (window.crypto?.randomUUID?.() && `local-${window.crypto.randomUUID()}`) ||
+      `local-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    identifier = randomId;
+    try {
+      localStorage.setItem(LOCAL_PROFILE_ID_KEY, identifier);
+    } catch (error) {
+      console.warn('Unable to persist local profile identifier.', error);
+    }
+  }
+  return identifier;
+}
+
 function promptDisplayName(defaultName) {
   const base = defaultName ?? 'Explorer';
   const response = window.prompt('How should we address you inside Infinite Dimension?', base);
@@ -2415,6 +2450,26 @@ async function handleGoogleCredentialResponse({ credential }) {
   const defaultName = decoded.name ?? decoded.given_name ?? (decoded.email ? decoded.email.split('@')[0] : 'Explorer');
   const preferredName = promptDisplayName(defaultName);
   await finalizeSignIn({ ...decoded, credential }, preferredName);
+}
+
+async function handleLocalProfileSignIn() {
+  const preferredName = promptDisplayName(identityState.displayName ?? 'Explorer');
+  const localId = ensureLocalProfileId();
+  identityState.googleProfile = {
+    sub: localId,
+    email: null,
+    picture: null,
+    local: true,
+  };
+  identityState.displayName = preferredName;
+  identityState.device = collectDeviceSnapshot();
+  updateIdentityUI();
+  if (!identityState.location) {
+    identityState.location = await captureLocation();
+    updateIdentityUI();
+  }
+  await syncUserMetadata();
+  await loadScoreboard();
 }
 
 async function finalizeSignIn(profile, preferredName) {
@@ -2494,7 +2549,7 @@ function attemptGoogleSignInFlow() {
   }
 }
 
-function handleGoogleSignOut() {
+async function handleGoogleSignOut() {
   identityState.googleProfile = null;
   identityState.displayName = null;
   identityState.location = null;
@@ -2505,6 +2560,8 @@ function handleGoogleSignOut() {
   if (window.google?.accounts?.id) {
     google.accounts.id.disableAutoSelect();
   }
+  updateIdentityUI();
+  identityState.location = await captureLocation();
   updateIdentityUI();
 }
 
@@ -2539,18 +2596,23 @@ async function syncUserMetadata() {
 }
 
 function loadLocalScores() {
+  let storedEntries = null;
   try {
     const stored = localStorage.getItem(SCOREBOARD_STORAGE_KEY);
     if (stored) {
       const parsed = JSON.parse(stored);
-      if (Array.isArray(parsed)) {
-        return parsed;
+      if (Array.isArray(parsed) && parsed.length) {
+        storedEntries = parsed;
       }
     }
   } catch (error) {
     console.warn('Unable to load cached scores.', error);
   }
-  return [
+  if (storedEntries) {
+    return { entries: storedEntries, source: 'local' };
+  }
+  return {
+    entries: [
     {
       id: 'sample-aurora',
       name: 'Aurora',
@@ -2581,7 +2643,9 @@ function loadLocalScores() {
       locationLabel: 'Synthwave Reef',
       updatedAt: new Date(Date.now() - 259200000).toISOString(),
     },
-  ];
+    ],
+    source: 'sample',
+  };
 }
 
 function saveLocalScores(entries) {
@@ -2650,8 +2714,9 @@ async function loadScoreboard() {
     }
   }
   if (!entries.length) {
-    entries = loadLocalScores();
-    identityState.scoreboardSource = 'sample';
+    const localResult = loadLocalScores();
+    entries = localResult.entries;
+    identityState.scoreboardSource = localResult.source;
   }
   identityState.scoreboard = normalizeScoreEntries(entries);
   identityState.loadingScores = false;
@@ -2673,7 +2738,7 @@ async function recordScore(snapshot) {
   };
   identityState.scoreboard = upsertScoreEntry(identityState.scoreboard, entry);
   if (!appConfig.apiBaseUrl) {
-    identityState.scoreboardSource = 'sample';
+    identityState.scoreboardSource = 'local';
   }
   saveLocalScores(identityState.scoreboard);
   updateIdentityUI();
@@ -2747,7 +2812,7 @@ async function captureLocation() {
   });
 }
 
-function initializeIdentityLayer() {
+async function initializeIdentityLayer() {
   identityState.device = collectDeviceSnapshot();
   try {
     const cachedProfile = localStorage.getItem(PROFILE_STORAGE_KEY);
@@ -2765,7 +2830,13 @@ function initializeIdentityLayer() {
   }
   updateIdentityUI();
   attemptGoogleInit();
-  googleFallbackSignIn?.addEventListener('click', attemptGoogleSignInFlow);
+  googleFallbackSignIn?.addEventListener('click', () => {
+    if (appConfig.googleClientId) {
+      attemptGoogleSignInFlow();
+    } else {
+      handleLocalProfileSignIn();
+    }
+  });
   googleSignOutButton?.addEventListener('click', handleGoogleSignOut);
   refreshScoresButton?.addEventListener('click', () => {
     if (!identityState.googleProfile) {
@@ -2774,6 +2845,10 @@ function initializeIdentityLayer() {
     }
     loadScoreboard();
   });
+  if (!identityState.location) {
+    identityState.location = await captureLocation();
+    updateIdentityUI();
+  }
 }
 
 startButton.addEventListener('click', startGame);
