@@ -137,6 +137,7 @@
     const PLANE_GEOMETRY = new THREE.PlaneGeometry(TILE_UNIT, TILE_UNIT);
     const PORTAL_PLANE_GEOMETRY = new THREE.PlaneGeometry(TILE_UNIT * 0.92, TILE_UNIT * 1.5);
     const CRYSTAL_GEOMETRY = new THREE.OctahedronGeometry(TILE_UNIT * 0.22);
+    const raycaster = new THREE.Raycaster();
 
     let renderer;
     let scene;
@@ -223,6 +224,15 @@
       return {
         x: (x - state.width / 2) * TILE_UNIT + TILE_UNIT / 2,
         z: (y - state.height / 2) * TILE_UNIT + TILE_UNIT / 2,
+      };
+    }
+
+    function sceneToWorld(sceneX, sceneZ) {
+      const gridX = (sceneX - TILE_UNIT / 2) / TILE_UNIT + state.width / 2;
+      const gridY = (sceneZ - TILE_UNIT / 2) / TILE_UNIT + state.height / 2;
+      return {
+        x: Math.round(gridX),
+        y: Math.round(gridY),
       };
     }
 
@@ -356,6 +366,72 @@
       const CLICK_THRESHOLD_PX = 6;
       canvas.style.cursor = 'grab';
 
+      const computeFacingFromDelta = (dx, dy) => {
+        const absX = Math.abs(dx);
+        const absY = Math.abs(dy);
+        if (absX === 0 && absY === 0) {
+          return { ...state.player.facing };
+        }
+        if (absX > absY) {
+          return { x: Math.sign(dx), y: 0 };
+        }
+        if (absY > absX) {
+          return { x: 0, y: Math.sign(dy) };
+        }
+        if (state.player.facing.x !== 0 && Math.sign(dx) !== 0) {
+          return { x: Math.sign(dx), y: 0 };
+        }
+        if (state.player.facing.y !== 0 && Math.sign(dy) !== 0) {
+          return { x: 0, y: Math.sign(dy) };
+        }
+        return {
+          x: Math.sign(dx) || 0,
+          y: Math.sign(dy) || 0,
+        };
+      };
+
+      const handlePointerClick = (event) => {
+        if (!state.isRunning) {
+          return;
+        }
+        if (!camera || !worldGroup) {
+          interact();
+          return;
+        }
+        const rect = canvas.getBoundingClientRect();
+        const ndcX = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+        const ndcY = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+        raycaster.setFromCamera({ x: ndcX, y: ndcY }, camera);
+        const intersections = raycaster.intersectObjects(worldGroup.children, true);
+        if (!intersections.length) {
+          interact();
+          return;
+        }
+        let target = intersections[0].object;
+        while (target.parent && target.parent !== worldGroup) {
+          target = target.parent;
+        }
+        if (!target || target.parent !== worldGroup) {
+          interact();
+          return;
+        }
+        const { x: tileX, y: tileY } = sceneToWorld(target.position.x, target.position.z);
+        if (!isWithinBounds(tileX, tileY)) {
+          interact();
+          return;
+        }
+        const diffX = tileX - state.player.x;
+        const diffY = tileY - state.player.y;
+        const adjacent = Math.abs(diffX) <= 1 && Math.abs(diffY) <= 1;
+        const nextFacing = computeFacingFromDelta(diffX, diffY);
+        state.player.facing = nextFacing;
+        if (adjacent) {
+          interact(false);
+          return;
+        }
+        logEvent('Move closer to interact with that block.');
+      };
+
       const resetPointerState = () => {
         pointer.active = false;
         pointer.id = null;
@@ -420,7 +496,7 @@
           pointer.button === 0 ||
           event.button === 0;
         if (withinClickThreshold && isPrimaryPointer && state.isRunning) {
-          interact();
+          handlePointerClick(event);
         }
         endPointerInteraction();
       });
