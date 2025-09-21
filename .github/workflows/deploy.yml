@@ -118,18 +118,18 @@ jobs:
 
           POLICY_FILE=$(mktemp)
           cat >"${POLICY_FILE}" <<POLICY
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Sid": "AllowPublicRead",
-      "Effect": "Allow",
-      "Principal": "*",
-      "Action": "s3:GetObject",
-      "Resource": "arn:aws:s3:::${DEPLOY_BUCKET}/*"
-    }
-  ]
-}
+          {
+            "Version": "2012-10-17",
+            "Statement": [
+              {
+                "Sid": "AllowPublicRead",
+                "Effect": "Allow",
+                "Principal": "*",
+                "Action": "s3:GetObject",
+                "Resource": "arn:aws:s3:::${DEPLOY_BUCKET}/*"
+              }
+            ]
+          }
 POLICY
 
           aws s3api put-bucket-policy --bucket "${DEPLOY_BUCKET}" --policy "file://${POLICY_FILE}"
@@ -175,45 +175,45 @@ POLICY
           CALLER_REFERENCE="infinite-rails-${DEPLOY_BUCKET}-$(date +%s)"
           CONFIG_FILE=$(mktemp)
           cat >"${CONFIG_FILE}" <<JSON
-{
-  "CallerReference": "${CALLER_REFERENCE}",
-  "Comment": "Infinite Rails static site for bucket ${DEPLOY_BUCKET}",
-  "Enabled": true,
-  "PriceClass": "PriceClass_All",
-  "Origins": {
-    "Quantity": 1,
-    "Items": [
-      {
-        "Id": "S3-${DEPLOY_BUCKET}-website",
-        "DomainName": "${ORIGIN_WEBSITE}",
-        "CustomOriginConfig": {
-          "HTTPPort": 80,
-          "HTTPSPort": 443,
-          "OriginProtocolPolicy": "http-only",
-          "OriginSslProtocols": {
-            "Quantity": 3,
-            "Items": ["TLSv1", "TLSv1.1", "TLSv1.2"]
+          {
+            "CallerReference": "${CALLER_REFERENCE}",
+            "Comment": "Infinite Rails static site for bucket ${DEPLOY_BUCKET}",
+            "Enabled": true,
+            "PriceClass": "PriceClass_All",
+            "Origins": {
+              "Quantity": 1,
+              "Items": [
+                {
+                  "Id": "S3-${DEPLOY_BUCKET}-website",
+                  "DomainName": "${ORIGIN_WEBSITE}",
+                  "CustomOriginConfig": {
+                    "HTTPPort": 80,
+                    "HTTPSPort": 443,
+                    "OriginProtocolPolicy": "http-only",
+                    "OriginSslProtocols": {
+                      "Quantity": 3,
+                      "Items": ["TLSv1", "TLSv1.1", "TLSv1.2"]
+                    }
+                  }
+                }
+              ]
+            },
+            "DefaultRootObject": "index.html",
+            "DefaultCacheBehavior": {
+              "TargetOriginId": "S3-${DEPLOY_BUCKET}-website",
+              "ViewerProtocolPolicy": "redirect-to-https",
+              "AllowedMethods": {
+                "Quantity": 2,
+                "Items": ["GET", "HEAD"],
+                "CachedMethods": {
+                  "Quantity": 2,
+                  "Items": ["GET", "HEAD"]
+                }
+              },
+              "Compress": true,
+              "CachePolicyId": "658327ea-f89d-4fab-a63d-7e88639e58f6"
+            }
           }
-        }
-      }
-    ]
-  },
-  "DefaultRootObject": "index.html",
-  "DefaultCacheBehavior": {
-    "TargetOriginId": "S3-${DEPLOY_BUCKET}-website",
-    "ViewerProtocolPolicy": "redirect-to-https",
-    "AllowedMethods": {
-      "Quantity": 2,
-      "Items": ["GET", "HEAD"],
-      "CachedMethods": {
-        "Quantity": 2,
-        "Items": ["GET", "HEAD"]
-      }
-    },
-    "Compress": true,
-    "CachePolicyId": "658327ea-f89d-4fab-a63d-7e88639e58f6"
-  }
-}
 JSON
 
           CREATE_OUTPUT=$(aws cloudfront create-distribution --distribution-config "file://${CONFIG_FILE}")
