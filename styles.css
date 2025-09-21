@@ -995,6 +995,13 @@ input[type='search'] {
   line-height: 1.6;
 }
 
+.modal-error {
+  color: var(--accent-strong);
+  font-weight: 600;
+  margin-top: 1.25rem;
+  line-height: 1.6;
+}
+
 .modal-highlights {
   list-style: none;
   display: grid;
