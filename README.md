@@ -20,6 +20,10 @@ Infinite Dimension is a browser-based voxel survival-puzzle prototype built enti
 - **Built-in guide** – open the in-game "Game Guide" for the full design document and survival walkthrough.
 - **Victory chase** – capture the Eternal Ingot in the collapsing Netherite dimension and return to the origin island.
 
+## Validation & test matrix
+
+Refer to [`docs/validation-matrix.md`](docs/validation-matrix.md) for the complete mapping between requirements, validation methods, success criteria, and hands-on test scenarios used during regression.
+
 ## Controls
 
 | Platform | Input |
