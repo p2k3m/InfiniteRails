@@ -1,0 +1,29 @@
+<svg width="220" height="80" viewBox="0 0 220 80" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="manuGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#5EE7FF" />
+      <stop offset="50%" stop-color="#49B5FF" />
+      <stop offset="100%" stop-color="#F7B733" />
+    </linearGradient>
+    <linearGradient id="plateGradient" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="rgba(12, 26, 48, 0.95)" />
+      <stop offset="100%" stop-color="rgba(7, 16, 32, 0.9)" />
+    </linearGradient>
+    <filter id="glow" x="-20%" y="-50%" width="140%" height="200%" filterUnits="objectBoundingBox">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="6" result="blur" />
+      <feMerge>
+        <feMergeNode in="blur" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+  </defs>
+  <g filter="url(#glow)">
+    <rect x="6" y="10" width="208" height="60" rx="18" fill="url(#plateGradient)" stroke="rgba(94, 231, 255, 0.45)" stroke-width="2" />
+    <rect x="14" y="18" width="64" height="44" rx="12" fill="rgba(73, 242, 255, 0.14)" stroke="rgba(94, 231, 255, 0.4)" stroke-width="1.5" />
+    <path d="M30 56L30 32L40 44L50 32L50 56" stroke="url(#manuGradient)" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" />
+    <path d="M72 24L90 56" stroke="rgba(247, 183, 51, 0.85)" stroke-width="3" stroke-linecap="round" />
+    <path d="M90 24L108 56" stroke="rgba(73, 242, 255, 0.9)" stroke-width="3" stroke-linecap="round" />
+    <text x="116" y="42" fill="url(#manuGradient)" font-family="'Chakra Petch', 'Exo 2', sans-serif" font-weight="600" font-size="20" letter-spacing="0.12em">Created by</text>
+    <text x="116" y="60" fill="#F2F5FA" font-family="'Exo 2', sans-serif" font-weight="700" font-size="24" letter-spacing="0.2em">MANU</text>
+  </g>
+</svg>
