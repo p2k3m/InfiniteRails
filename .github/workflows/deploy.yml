@@ -30,8 +30,7 @@ jobs:
             fi
           done
           if [ ${#missing[@]} -gt 0 ]; then
-            printf '::error::Missing required GitHub secret(s): %s
-' "${missing[*]}"
+            printf '::error::Missing required GitHub secret(s): %s' "${missing[*]}"
             {
               echo '### ❌ Deployment blocked'
               echo ''
