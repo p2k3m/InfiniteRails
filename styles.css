@@ -41,6 +41,11 @@ body {
   overflow-x: hidden;
 }
 
+body.game-active {
+  grid-template-rows: 1fr;
+  min-height: 100vh;
+}
+
 .background-sheen {
   position: fixed;
   inset: 0;
@@ -289,6 +294,31 @@ body::after {
   height: 100%;
   align-items: stretch;
   position: relative;
+}
+
+body.game-active .top-bar,
+body.game-active .footer,
+body.game-active .side-panel {
+  display: none;
+}
+
+body.game-active .main-layout {
+  grid-template-columns: 1fr;
+  padding: 0;
+  height: 100vh;
+}
+
+body.game-active .primary-panel {
+  border-radius: 0;
+  box-shadow: none;
+  border: none;
+  min-height: 100vh;
+  height: 100vh;
+}
+
+body.game-active #gameCanvas {
+  width: 100vw;
+  height: 100vh;
 }
 
 .primary-panel {
