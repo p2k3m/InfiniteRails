@@ -37,6 +37,14 @@ const scoreboardSection = document.getElementById('scoreboardSection');
 const scoreboardListEl = document.getElementById('scoreboardList');
 const scoreboardStatusEl = document.getElementById('scoreboardStatus');
 const refreshScoresButton = document.getElementById('refreshScores');
+const playerHintEl = document.getElementById('playerHint');
+const mainLayoutEl = document.querySelector('.main-layout');
+const primaryPanelEl = document.querySelector('.primary-panel');
+const topBarEl = document.querySelector('.top-bar');
+const footerEl = document.querySelector('.footer');
+const toggleSidebarButton = document.getElementById('toggleSidebar');
+const sidePanelEl = document.getElementById('sidePanel');
+const sidePanelScrim = document.getElementById('sidePanelScrim');
 const rootElement = document.documentElement;
 const computedVars = getComputedStyle(rootElement);
 const readVar = (name, fallback) => {
@@ -77,6 +85,17 @@ let entityGroup;
 let playerMesh;
 let tileRenderState = [];
 const zombieMeshes = [];
+let playerLocator;
+let playerHintTimer = null;
+let lastDimensionHintKey = null;
+
+playerHintEl?.addEventListener('click', hidePlayerHint);
+playerHintEl?.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter' || event.key === ' ') {
+    event.preventDefault();
+    hidePlayerHint();
+  }
+});
 
 const orbitState = {
   azimuth: -Math.PI / 4,
@@ -144,10 +163,107 @@ function worldToScene(x, y) {
   };
 }
 
+function updateLayoutMetrics() {
+  if (!primaryPanelEl || !mainLayoutEl) return;
+  const mainStyles = getComputedStyle(mainLayoutEl);
+  const paddingTop = parseFloat(mainStyles.paddingTop) || 0;
+  const paddingBottom = parseFloat(mainStyles.paddingBottom) || 0;
+  const headerHeight = topBarEl?.offsetHeight ?? 0;
+  const footerHeight = footerEl?.offsetHeight ?? 0;
+  const availableHeight = window.innerHeight - headerHeight - footerHeight - paddingTop - paddingBottom;
+  if (availableHeight > 320) {
+    primaryPanelEl.style.setProperty('--primary-panel-min-height', `${availableHeight}px`);
+  } else {
+    primaryPanelEl.style.removeProperty('--primary-panel-min-height');
+  }
+}
+
+function syncSidebarForViewport() {
+  if (!sidePanelEl) return;
+  const isMobile = window.innerWidth <= 860;
+  if (!isMobile) {
+    sidePanelEl.classList.remove('open');
+    sidePanelEl.removeAttribute('aria-hidden');
+    document.body.classList.remove('sidebar-open');
+    toggleSidebarButton?.setAttribute('aria-expanded', 'false');
+    if (sidePanelScrim) sidePanelScrim.hidden = true;
+    return;
+  }
+  if (sidePanelEl.classList.contains('open')) {
+    sidePanelEl.setAttribute('aria-hidden', 'false');
+    if (sidePanelScrim) sidePanelScrim.hidden = false;
+  } else {
+    sidePanelEl.setAttribute('aria-hidden', 'true');
+    if (sidePanelScrim) sidePanelScrim.hidden = true;
+  }
+}
+
+function openSidebar() {
+  if (!sidePanelEl) return;
+  sidePanelEl.classList.add('open');
+  sidePanelEl.setAttribute('aria-hidden', 'false');
+  document.body.classList.add('sidebar-open');
+  toggleSidebarButton?.setAttribute('aria-expanded', 'true');
+  if (sidePanelScrim) sidePanelScrim.hidden = false;
+  if (typeof sidePanelEl.focus === 'function') {
+    sidePanelEl.focus();
+  }
+}
+
+function closeSidebar(shouldFocusToggle = false) {
+  if (!sidePanelEl) return;
+  sidePanelEl.classList.remove('open');
+  if (window.innerWidth <= 860) {
+    sidePanelEl.setAttribute('aria-hidden', 'true');
+  } else {
+    sidePanelEl.removeAttribute('aria-hidden');
+  }
+  document.body.classList.remove('sidebar-open');
+  toggleSidebarButton?.setAttribute('aria-expanded', 'false');
+  if (sidePanelScrim) sidePanelScrim.hidden = true;
+  if (shouldFocusToggle) toggleSidebarButton?.focus();
+}
+
+function toggleSidebar() {
+  if (!sidePanelEl) return;
+  if (sidePanelEl.classList.contains('open')) {
+    closeSidebar(true);
+  } else {
+    openSidebar();
+  }
+}
+
+function hidePlayerHint() {
+  if (!playerHintEl) return;
+  if (playerHintTimer) {
+    clearTimeout(playerHintTimer);
+    playerHintTimer = null;
+  }
+  playerHintEl.classList.remove('visible');
+}
+
+function showPlayerHint(message, options = {}) {
+  if (!playerHintEl || !message) return;
+  if (playerHintTimer) {
+    clearTimeout(playerHintTimer);
+    playerHintTimer = null;
+  }
+  playerHintEl.textContent = message;
+  playerHintEl.classList.add('visible');
+  const duration = Number.isFinite(options.duration) ? Number(options.duration) : 5600;
+  if (!options.persist) {
+    playerHintTimer = window.setTimeout(() => {
+      hidePlayerHint();
+    }, Math.max(1000, duration));
+  }
+}
+
 function handleResize() {
+  updateLayoutMetrics();
+  syncSidebarForViewport();
   if (!renderer || !camera) return;
-  const width = canvas.clientWidth || canvas.width;
-  const height = canvas.clientHeight || canvas.height;
+  const width = canvas.clientWidth || canvas.width || 1;
+  const height = canvas.clientHeight || canvas.height || 1;
   renderer.setSize(width, height, false);
   camera.aspect = width / height;
   camera.updateProjectionMatrix();
@@ -236,6 +352,7 @@ function initRenderer() {
   window.addEventListener('resize', handleResize);
   updateWorldTarget();
   createPlayerMesh();
+  createPlayerLocator();
 }
 
 function updateWorldTarget() {
@@ -614,6 +731,27 @@ function createPlayerMesh() {
   playerMesh = group;
 }
 
+function createPlayerLocator() {
+  if (!entityGroup) return;
+  if (playerLocator) {
+    entityGroup.remove(playerLocator);
+    playerLocator.geometry?.dispose?.();
+    playerLocator.material?.dispose?.();
+  }
+  const geometry = new THREE.RingGeometry(0.55, 0.82, 48);
+  const material = new THREE.MeshBasicMaterial({
+    color: new THREE.Color(BASE_THEME.accent),
+    transparent: true,
+    opacity: 0.6,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+  });
+  playerLocator = new THREE.Mesh(geometry, material);
+  playerLocator.rotation.x = -Math.PI / 2;
+  playerLocator.renderOrder = 2;
+  entityGroup.add(playerLocator);
+}
+
 function ensureZombieMeshCount(count) {
   while (zombieMeshes.length < count) {
     const zombie = new THREE.Group();
@@ -653,6 +791,18 @@ function updateEntities() {
     const { x, z } = worldToScene(state.player.x, state.player.y);
     const height = tileSurfaceHeight(state.player.x, state.player.y);
     playerMesh.position.set(x, height, z);
+  }
+  if (playerLocator) {
+    const { x, z } = worldToScene(state.player.x, state.player.y);
+    const height = tileSurfaceHeight(state.player.x, state.player.y) + 0.02;
+    playerLocator.position.set(x, height, z);
+    const cycle = (performance.now() % 2400) / 2400;
+    const pulse = 1 + Math.sin(cycle * Math.PI * 2) * 0.12;
+    playerLocator.scale.set(pulse, pulse, 1);
+    if (playerLocator.material) {
+      const opacity = 0.35 + Math.sin(cycle * Math.PI * 2) * 0.25;
+      playerLocator.material.opacity = THREE.MathUtils.clamp(opacity, 0.2, 0.85);
+    }
   }
   ensureZombieMeshCount(state.zombies.length);
   state.zombies.forEach((zombie, index) => {
@@ -1388,13 +1538,14 @@ function updateStatusBars() {
 
 function updateDimensionOverlay() {
   const info = state.dimension;
+  if (!info || !dimensionInfoEl) return null;
   const tasks = [];
   if (!state.unlockedDimensions.has('rock')) {
     tasks.push('Craft a Stone Pickaxe and harvest dense rock.');
   } else if (!state.unlockedDimensions.has('stone')) {
     tasks.push('Assemble a Rock portal frame and ignite it.');
   }
-  switch (state.dimension.id) {
+  switch (info.id) {
     case 'stone':
       tasks.push('Move with the rhythm – only lit rails are safe.');
       break;
@@ -1410,7 +1561,7 @@ function updateDimensionOverlay() {
     default:
       break;
   }
-  if (state.dimension.id === 'netherite' && !state.victory) {
+  if (info.id === 'netherite' && !state.victory) {
     tasks.push('Keep moving! Rails collapse moments after contact.');
   }
   if (state.player.effects.hasEternalIngot) {
@@ -1421,6 +1572,24 @@ function updateDimensionOverlay() {
     <span>${info.description}</span>
     ${tasks.length ? `<span>Objectives:</span><ul>${tasks.map((t) => `<li>${t}</li>`).join('')}</ul>` : ''}
   `;
+  dimensionInfoEl.classList.add('visible');
+  dimensionInfoEl.classList.remove('pop');
+  void dimensionInfoEl.offsetWidth;
+  dimensionInfoEl.classList.add('pop');
+  dimensionInfoEl.addEventListener(
+    'animationend',
+    () => {
+      dimensionInfoEl.classList.remove('pop');
+    },
+    { once: true }
+  );
+  const hintKey = `${info.id}:${tasks.join('|')}`;
+  if (hintKey !== lastDimensionHintKey) {
+    const summary = tasks[0] ?? info.description;
+    showPlayerHint(`Now entering ${info.name}. ${summary}`);
+    lastDimensionHintKey = hintKey;
+  }
+  return { info, tasks };
 }
 
 function getCodexStatus(dimId) {
@@ -1486,6 +1655,7 @@ function logEvent(message) {
 
 function startGame() {
   introModal.style.display = 'none';
+  updateLayoutMetrics();
   state.isRunning = true;
   state.player.effects = {};
   state.victory = false;
@@ -1510,6 +1680,14 @@ function startGame() {
   addItemToInventory('stone', 1);
   updateInventoryUI();
   updateDimensionOverlay();
+  window.setTimeout(() => {
+    if (state.isRunning) {
+      showPlayerHint(
+        'You are the luminous explorer at the heart of the island. Drag or swipe to look around and gather nearby resources.',
+        { duration: 7200 }
+      );
+    }
+  }, 900);
 }
 
 function loadDimension(id, fromId = null) {
@@ -1558,6 +1736,7 @@ function loadDimension(id, fromId = null) {
     logEvent('Victory! You returned with the Eternal Ingot.');
     handleVictoryAchieved();
   }
+  lastDimensionHintKey = null;
   updateDimensionOverlay();
   updateDimensionCodex();
   renderVictoryBanner();
@@ -2217,6 +2396,22 @@ function initEventListeners() {
     button.addEventListener('click', () => updateFromMobile(button.dataset.action));
   });
   openGuideButton?.addEventListener('click', openGuideModal);
+  toggleSidebarButton?.addEventListener('click', toggleSidebar);
+  sidePanelScrim?.addEventListener('click', () => closeSidebar(true));
+  document.querySelectorAll('[data-close-sidebar]').forEach((button) => {
+    button.addEventListener('click', () => closeSidebar(true));
+  });
+  window.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape') return;
+    if (sidePanelEl?.classList.contains('open')) {
+      closeSidebar(true);
+      event.preventDefault();
+      return;
+    }
+    if (playerHintEl?.classList.contains('visible')) {
+      hidePlayerHint();
+    }
+  });
 }
 
 function collectDeviceSnapshot() {
@@ -2856,6 +3051,8 @@ initEventListeners();
 
 setupGuideModal();
 initializeIdentityLayer();
+updateLayoutMetrics();
+syncSidebarForViewport();
 
 function openGuideModal() {
   if (!guideModal) return;
