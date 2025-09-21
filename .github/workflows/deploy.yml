@@ -130,7 +130,7 @@ jobs:
               }
             ]
           }
-POLICY
+          POLICY
 
           aws s3api put-bucket-policy --bucket "${DEPLOY_BUCKET}" --policy "file://${POLICY_FILE}"
           rm -f "${POLICY_FILE}"
@@ -214,7 +214,7 @@ POLICY
               "CachePolicyId": "658327ea-f89d-4fab-a63d-7e88639e58f6"
             }
           }
-JSON
+          JSON
 
           CREATE_OUTPUT=$(aws cloudfront create-distribution --distribution-config "file://${CONFIG_FILE}")
           rm -f "${CONFIG_FILE}"
