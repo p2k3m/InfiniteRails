@@ -103,6 +103,11 @@
     const scoreRecipesEl = document.getElementById('scoreRecipes');
     const scoreDimensionsEl = document.getElementById('scoreDimensions');
     const playerHintEl = document.getElementById('playerHint');
+    const drowningVignetteEl = document.getElementById('drowningVignette');
+    const defeatOverlayEl = document.getElementById('defeatOverlay');
+    const defeatMessageEl = document.getElementById('defeatMessage');
+    const defeatInventoryEl = document.getElementById('defeatInventory');
+    const defeatCountdownEl = document.getElementById('defeatCountdown');
     const mainLayoutEl = document.querySelector('.main-layout');
     const primaryPanelEl = document.querySelector('.primary-panel');
     const topBarEl = document.querySelector('.top-bar');
@@ -146,6 +151,10 @@
     const SCORE_POINTS = {
       recipe: 2,
       dimension: 5,
+    };
+
+    const audioState = {
+      context: null,
     };
 
     let renderer;
@@ -2532,8 +2541,19 @@
       score: 0,
       scoreBreakdown: createScoreBreakdown(),
       scoreSubmitted: false,
+      ui: {
+        heartsValue: null,
+        airValue: null,
+        lastAirUnits: null,
+        drowningFadeTimeout: null,
+        lastDrowningCueAt: -Infinity,
+        lastBubblePopAt: -Infinity,
+        respawnActive: false,
+        respawnCountdownTimeout: null,
+      },
     };
 
+    resetStatusMeterMemory();
     initRenderer();
     updateScoreOverlay();
 
@@ -2867,15 +2887,40 @@
       return Array.from(map.entries()).map(([item, quantity]) => ({ item, quantity }));
     }
 
+    function resetStatusMeterMemory() {
+      state.ui.heartsValue = state.player.hearts;
+      state.ui.airValue = state.player.air;
+      state.ui.lastAirUnits = Math.ceil(state.player.air);
+    }
+
     function updateStatusBars() {
+      if (!heartsEl || !bubblesEl || !timeEl) return;
+
+      const previousHearts = state.ui.heartsValue ?? state.player.maxHearts;
+      const previousAir = state.ui.airValue ?? state.player.maxAir;
+
       heartsEl.innerHTML = '';
       const hearts = document.createElement('div');
-      hearts.className = 'meter';
+      hearts.className = 'meter meter--stacked';
+      const heartDelta = state.player.hearts - previousHearts;
+      if (heartDelta < -0.01) {
+        hearts.classList.add('meter--damage');
+      } else if (heartDelta > 0.01) {
+        hearts.classList.add('meter--regen');
+      }
+      const heartCriticalThreshold = Math.max(2, state.player.maxHearts * 0.2);
+      if (state.player.hearts <= heartCriticalThreshold) {
+        hearts.classList.add('meter--critical');
+      }
       for (let i = 0; i < state.player.maxHearts; i++) {
         const el = document.createElement('span');
         el.className = 'heart';
-        if (i >= state.player.hearts) {
+        const fill = clamp(state.player.hearts - i, 0, 1);
+        el.style.setProperty('--fill', fill.toFixed(2));
+        if (fill <= 0) {
           el.classList.add('empty');
+        } else if (fill < 1) {
+          el.classList.add('partial');
         }
         hearts.appendChild(el);
       }
@@ -2883,12 +2928,29 @@
 
       bubblesEl.innerHTML = '';
       const bubbles = document.createElement('div');
-      bubbles.className = 'meter';
+      bubbles.className = 'meter meter--stacked';
+      const airDelta = state.player.air - previousAir;
+      if (airDelta < -0.05) {
+        bubbles.classList.add('meter--damage');
+      } else if (airDelta > 0.05) {
+        bubbles.classList.add('meter--regen');
+      }
+      const airLowThreshold = Math.max(2, state.player.maxAir * 0.2);
+      if (state.player.air <= airLowThreshold) {
+        bubbles.classList.add('meter--low');
+      }
+      if (state.player.air <= 0) {
+        bubbles.classList.add('meter--drowning');
+      }
       for (let i = 0; i < state.player.maxAir; i++) {
         const el = document.createElement('span');
         el.className = 'bubble';
-        if (i >= state.player.air) {
+        const fill = clamp(state.player.air - i, 0, 1);
+        el.style.setProperty('--fill', fill.toFixed(2));
+        if (fill <= 0) {
           el.classList.add('empty');
+        } else if (fill < 1) {
+          el.classList.add('partial');
         }
         bubbles.appendChild(el);
       }
@@ -2907,6 +2969,10 @@
       track.append(label, bar);
       timeEl.innerHTML = '';
       timeEl.appendChild(track);
+
+      state.ui.heartsValue = state.player.hearts;
+      state.ui.airValue = state.player.air;
+      state.ui.lastAirUnits = Math.ceil(state.player.air);
     }
 
     function updateScoreOverlay(options = {}) {
@@ -3050,6 +3116,8 @@
 
     function startGame() {
       if (state.isRunning) return;
+      const context = ensureAudioContext();
+      context?.resume?.().catch(() => {});
       if (introModal) {
         introModal.hidden = true;
         introModal.setAttribute('aria-hidden', 'true');
@@ -3078,6 +3146,7 @@
       state.craftSequence = [];
       renderVictoryBanner();
       loadDimension('origin');
+      resetStatusMeterMemory();
       updateInventoryUI();
       updateRecipesList();
       updateCraftQueue();
@@ -3166,6 +3235,10 @@
       updateRecipesList();
       updatePortalProgress();
       deployIronGolems();
+      if (!state.ui.respawnActive) {
+        resetStatusMeterMemory();
+      }
+      updateStatusBars();
       logEvent(`Entered ${dim.name}.`);
     }
 
@@ -3221,12 +3294,88 @@
     function handleAir(delta) {
       const tile = getTile(state.player.x, state.player.y);
       if (tile?.type === 'water') {
+        const previousAir = state.player.air;
+        const previousUnits = Math.ceil(previousAir);
         state.player.air = Math.max(0, state.player.air - delta * 2);
+        const currentUnits = Math.ceil(state.player.air);
+        if (currentUnits < previousUnits) {
+          triggerDrowningCue();
+        }
         if (state.player.air === 0) {
+          if (state.elapsed - state.ui.lastDrowningCueAt > 0.9) {
+            triggerDrowningCue();
+          }
           applyDamage(0.5 * delta * 5);
         }
       } else {
+        const previousAir = state.player.air;
         state.player.air = clamp(state.player.air + delta * 3, 0, state.player.maxAir);
+        if (state.player.air > previousAir && drowningVignetteEl) {
+          drowningVignetteEl.setAttribute('data-active', 'false');
+          drowningVignetteEl.classList.remove('drowning-vignette--flash');
+        }
+      }
+      state.ui.lastAirUnits = Math.ceil(state.player.air);
+    }
+
+    function triggerDrowningCue() {
+      state.ui.lastDrowningCueAt = state.elapsed;
+      flashDrowningVignette();
+      playBubblePop();
+    }
+
+    function flashDrowningVignette() {
+      if (!drowningVignetteEl) return;
+      drowningVignetteEl.setAttribute('data-active', 'true');
+      drowningVignetteEl.classList.remove('drowning-vignette--flash');
+      void drowningVignetteEl.offsetWidth;
+      drowningVignetteEl.classList.add('drowning-vignette--flash');
+      if (state.ui.drowningFadeTimeout) {
+        window.clearTimeout(state.ui.drowningFadeTimeout);
+      }
+      state.ui.drowningFadeTimeout = window.setTimeout(() => {
+        drowningVignetteEl?.setAttribute('data-active', 'false');
+        drowningVignetteEl?.classList.remove('drowning-vignette--flash');
+      }, 800);
+    }
+
+    function ensureAudioContext() {
+      if (audioState.context) return audioState.context;
+      const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContextCtor) return null;
+      try {
+        audioState.context = new AudioContextCtor();
+      } catch (error) {
+        console.warn('Unable to initialise audio context.', error);
+        audioState.context = null;
+      }
+      return audioState.context;
+    }
+
+    function playBubblePop() {
+      if (state.elapsed - state.ui.lastBubblePopAt < 0.45) return;
+      const context = ensureAudioContext();
+      if (!context) return;
+      if (context.state === 'suspended') {
+        context.resume().catch(() => {});
+      }
+      const now = context.currentTime;
+      try {
+        const oscillator = context.createOscillator();
+        const gain = context.createGain();
+        oscillator.type = 'triangle';
+        oscillator.frequency.setValueAtTime(720, now);
+        oscillator.frequency.exponentialRampToValueAtTime(240, now + 0.28);
+        gain.gain.setValueAtTime(0.0001, now);
+        gain.gain.exponentialRampToValueAtTime(0.22, now + 0.04);
+        gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.45);
+        oscillator.connect(gain);
+        gain.connect(context.destination);
+        oscillator.start(now);
+        oscillator.stop(now + 0.46);
+        state.ui.lastBubblePopAt = state.elapsed;
+      } catch (error) {
+        console.warn('Unable to play drowning cue.', error);
       }
     }
 
@@ -3411,14 +3560,142 @@
       updateStatusBars();
     }
 
-    function handlePlayerDefeat(message) {
-      if (state.victory) return;
+    function handlePlayerDefeat(message, options = {}) {
+      if (state.victory || state.ui.respawnActive) return;
       logEvent(message);
-      loadDimension('origin');
+      state.isRunning = false;
+      state.ui.respawnActive = true;
+      const snapshot = captureInventorySnapshot();
+      showDefeatOverlay({
+        message,
+        items: snapshot,
+        countdown: options.countdown ?? 4,
+      });
+    }
+
+    function captureInventorySnapshot(limit = 8) {
+      try {
+        const bundles = mergeInventory().filter((entry) => entry && entry.quantity > 0);
+        bundles.sort((a, b) => b.quantity - a.quantity);
+        return bundles.slice(0, limit);
+      } catch (error) {
+        console.warn('Unable to capture inventory snapshot.', error);
+        return [];
+      }
+    }
+
+    function getItemDisplayName(itemId) {
+      return ITEM_DEFS[itemId]?.name ?? itemId.replace(/-/g, ' ');
+    }
+
+    function showDefeatOverlay({ message, items, countdown }) {
+      const duration = Math.max(3, Math.floor(Number.isFinite(countdown) ? countdown : 4));
+      if (!defeatOverlayEl) {
+        state.ui.respawnCountdownTimeout = window.setTimeout(() => completeRespawn(), duration * 1000);
+        return;
+      }
+      defeatOverlayEl.setAttribute('data-visible', 'true');
+      defeatOverlayEl.setAttribute('aria-hidden', 'false');
+      if (defeatMessageEl) {
+        defeatMessageEl.textContent = message;
+      }
+      renderDefeatInventory(items);
+      if (defeatCountdownEl) {
+        defeatCountdownEl.textContent = '';
+      }
+      window.clearTimeout(state.ui.respawnCountdownTimeout);
+      window.requestAnimationFrame(() => {
+        defeatOverlayEl?.focus({ preventScroll: true });
+      });
+      startRespawnCountdown(duration);
+    }
+
+    function renderDefeatInventory(items = []) {
+      if (!defeatInventoryEl) return;
+      defeatInventoryEl.innerHTML = '';
+      if (!items.length) {
+        defeatInventoryEl.dataset.empty = 'true';
+        defeatInventoryEl.textContent = 'You drop nothing as the realm resets.';
+        return;
+      }
+      delete defeatInventoryEl.dataset.empty;
+      const label = document.createElement('p');
+      label.className = 'defeat-overlay__inventory-label';
+      label.textContent = 'Inventory Snapshot';
+      const list = document.createElement('ul');
+      list.className = 'defeat-overlay__inventory-list';
+      items.forEach((entry) => {
+        const li = document.createElement('li');
+        li.className = 'defeat-overlay__inventory-item';
+        const name = document.createElement('span');
+        name.textContent = getItemDisplayName(entry.item);
+        const qty = document.createElement('span');
+        qty.textContent = `×${entry.quantity}`;
+        li.append(name, qty);
+        list.appendChild(li);
+      });
+      defeatInventoryEl.append(label, list);
+    }
+
+    function startRespawnCountdown(seconds) {
+      const duration = Math.max(0, Math.floor(seconds));
+      if (!defeatCountdownEl) {
+        state.ui.respawnCountdownTimeout = window.setTimeout(() => completeRespawn(), duration * 1000);
+        return;
+      }
+      let remaining = duration;
+      const tick = () => {
+        if (remaining > 0) {
+          defeatCountdownEl.textContent = `Respawning in ${remaining}s`;
+        } else {
+          defeatCountdownEl.textContent = 'Respawning...';
+        }
+        if (remaining <= 0) {
+          completeRespawn();
+          return;
+        }
+        remaining -= 1;
+        state.ui.respawnCountdownTimeout = window.setTimeout(tick, 1000);
+      };
+      tick();
+    }
+
+    function completeRespawn() {
+      if (!state.ui.respawnActive) return;
+      if (state.ui.respawnCountdownTimeout) {
+        window.clearTimeout(state.ui.respawnCountdownTimeout);
+        state.ui.respawnCountdownTimeout = null;
+      }
       state.player.hearts = state.player.maxHearts;
       state.player.air = state.player.maxAir;
       state.player.zombieHits = 0;
+      loadDimension('origin');
       updateStatusBars();
+      if (drowningVignetteEl) {
+        drowningVignetteEl.setAttribute('data-active', 'false');
+        drowningVignetteEl.classList.remove('drowning-vignette--flash');
+      }
+      if (state.ui.drowningFadeTimeout) {
+        window.clearTimeout(state.ui.drowningFadeTimeout);
+        state.ui.drowningFadeTimeout = null;
+      }
+      state.isRunning = true;
+      state.ui.respawnActive = false;
+      logEvent('You rematerialise at the Grassland Threshold.');
+      window.setTimeout(() => hideDefeatOverlay(), 420);
+    }
+
+    function hideDefeatOverlay() {
+      if (!defeatOverlayEl) return;
+      defeatOverlayEl.setAttribute('data-visible', 'false');
+      defeatOverlayEl.setAttribute('aria-hidden', 'true');
+      defeatOverlayEl.blur();
+      if (defeatMessageEl) defeatMessageEl.textContent = '';
+      if (defeatCountdownEl) defeatCountdownEl.textContent = '';
+      if (defeatInventoryEl) {
+        defeatInventoryEl.innerHTML = '';
+        delete defeatInventoryEl.dataset.empty;
+      }
     }
 
     function applyDamage(amount) {
@@ -3450,6 +3727,7 @@
     }
 
     function attemptMove(dx, dy, ignoreCooldown = false) {
+      if (state.ui.respawnActive) return;
       const now = performance.now();
       const delay = (state.baseMoveDelay ?? 0.18) + (state.player.tarStacks || 0) * 0.04;
       if (!ignoreCooldown && now - state.lastMoveAt < delay * 1000) return;
@@ -3475,6 +3753,7 @@
     }
 
     function interact(useAlt = false, echoed = false) {
+      if (state.ui.respawnActive) return;
       const facingX = state.player.x + state.player.facing.x;
       const facingY = state.player.y + state.player.facing.y;
       const frontTile = getTile(facingX, facingY);
