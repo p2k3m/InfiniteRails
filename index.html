@@ -28,8 +28,19 @@
     <main class="main-layout">
       <section class="primary-panel">
         <canvas id="gameCanvas" width="960" height="600" aria-label="Game world"></canvas>
-        <div class="overlay-panel" id="dimensionInfo"></div>
-        <div class="portal-progress" id="portalProgress"></div>
+        <div class="overlay-panel" id="dimensionInfo" aria-live="polite"></div>
+        <div
+          class="portal-progress"
+          id="portalProgress"
+          role="progressbar"
+          aria-valuemin="0"
+          aria-valuemax="100"
+          aria-valuenow="0"
+        >
+          <span class="label"></span>
+          <span class="bar"></span>
+        </div>
+        <div class="victory-banner" id="victoryBanner" role="status" aria-live="assertive"></div>
       </section>
       <aside class="side-panel">
         <section class="inventory-panel">
@@ -52,6 +63,12 @@
             <button id="clearCraft" class="ghost">Clear</button>
           </div>
           <div class="recipe-list" id="recipeList"></div>
+        </section>
+        <section class="codex-panel" aria-label="Dimension codex">
+          <header>
+            <h2>Dimension Codex</h2>
+          </header>
+          <ul id="dimensionCodex"></ul>
         </section>
         <section class="log-panel" aria-live="polite">
           <header>
