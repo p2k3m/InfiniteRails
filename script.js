@@ -255,6 +255,7 @@
     }
     const playerHintEl = document.getElementById('playerHint');
     const drowningVignetteEl = document.getElementById('drowningVignette');
+    const dimensionTransitionEl = document.getElementById('dimensionTransition');
     const defeatOverlayEl = document.getElementById('defeatOverlay');
     const defeatMessageEl = document.getElementById('defeatMessage');
     const defeatInventoryEl = document.getElementById('defeatInventory');
@@ -297,7 +298,69 @@
     const PLANE_GEOMETRY = new THREE.PlaneGeometry(TILE_UNIT, TILE_UNIT);
     const PORTAL_PLANE_GEOMETRY = new THREE.PlaneGeometry(TILE_UNIT * 0.92, TILE_UNIT * 1.5);
     const CRYSTAL_GEOMETRY = new THREE.OctahedronGeometry(TILE_UNIT * 0.22);
+    const PORTAL_ACTIVATION_DURATION = 2;
+    const PORTAL_TRANSITION_BUILDUP = 2;
+    const PORTAL_TRANSITION_FADE = 0.65;
     const raycaster = new THREE.Raycaster();
+
+    const PORTAL_VERTEX_SHADER = `
+      varying vec2 vUv;
+
+      void main() {
+        vUv = uv;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `;
+
+    const PORTAL_FRAGMENT_SHADER = `
+      varying vec2 vUv;
+
+      uniform float uTime;
+      uniform float uActivation;
+      uniform vec3 uColor;
+      uniform float uOpacity;
+
+      void main() {
+        vec2 uv = vUv - 0.5;
+        float radius = length(uv);
+        float activation = clamp(uActivation, 0.0, 2.0);
+        float time = uTime * (0.7 + activation * 0.35);
+        float swirl = activation * 2.4;
+        float theta = swirl * (1.0 - radius);
+        float s = sin(theta + time);
+        float c = cos(theta + time);
+        vec2 rotated = mat2(c, -s, s, c) * uv;
+        rotated += 0.05 * vec2(
+          sin(time * 1.7 + radius * 12.0),
+          cos(time * 1.3 + radius * 9.0)
+        );
+
+        float angle = atan(rotated.y, rotated.x);
+        float bands = sin(angle * 6.0 - time * 2.2);
+        float ripples = sin(radius * 18.0 - time * 4.5);
+        float spokes = sin(angle * 12.0 + time * 3.5);
+
+        float core = smoothstep(0.55, 0.0, radius);
+        float edge = smoothstep(0.6, 0.4, radius);
+        float intensity = core * (0.6 + 0.4 * sin(time * 2.0 + radius * 10.0));
+        intensity += edge * (0.2 + 0.3 * bands);
+        intensity += (0.2 + 0.25 * activation) * max(0.0, spokes);
+
+        float alpha = clamp(intensity * (0.6 + 0.5 * activation), 0.0, 1.2);
+        alpha *= (0.8 + 0.2 * sin(time * 5.0 + radius * 12.0));
+        if (radius > 0.52) {
+          alpha *= smoothstep(0.58, 0.52, radius);
+        }
+
+        vec3 base = mix(vec3(0.04, 0.07, 0.13), uColor, 0.55 + 0.25 * activation);
+        base += uColor * (0.3 + 0.25 * ripples) * (0.4 + 0.6 * activation);
+        base += uColor * 0.2 * max(0.0, bands);
+
+        gl_FragColor = vec4(base, alpha * uOpacity);
+      }
+    `;
+
+    const marbleGhosts = [];
 
     const SCORE_POINTS = {
       recipe: 2,
@@ -363,12 +426,22 @@
 
     const particleSystems = [];
 
+    const BASE_ATMOSPHERE = {
+      daySky: '#bcd7ff',
+      nightSky: '#0b1324',
+      duskSky: '#f7b07b',
+      groundDay: '#1c283f',
+      groundNight: '#050912',
+      fogColor: '#0b1324',
+      fogDensity: 0.055,
+    };
+
     const lightingState = {
-      daySky: new THREE.Color('#bcd7ff'),
-      nightSky: new THREE.Color('#0b1324'),
-      duskSky: new THREE.Color('#f7b07b'),
-      groundDay: new THREE.Color('#1c283f'),
-      groundNight: new THREE.Color('#050912'),
+      daySky: new THREE.Color(BASE_ATMOSPHERE.daySky),
+      nightSky: new THREE.Color(BASE_ATMOSPHERE.nightSky),
+      duskSky: new THREE.Color(BASE_ATMOSPHERE.duskSky),
+      groundDay: new THREE.Color(BASE_ATMOSPHERE.groundDay),
+      groundNight: new THREE.Color(BASE_ATMOSPHERE.groundNight),
     };
 
     const identityState = {
@@ -1046,7 +1119,7 @@
       renderer.toneMappingExposure = 1;
 
       scene = new THREE.Scene();
-      scene.fog = new THREE.FogExp2(lightingState.nightSky.clone(), 0.055);
+      scene.fog = new THREE.FogExp2(new THREE.Color(BASE_ATMOSPHERE.fogColor), BASE_ATMOSPHERE.fogDensity);
 
       const width = canvas.clientWidth || canvas.width || 1;
       const height = canvas.clientHeight || canvas.height || 1;
@@ -1178,6 +1251,26 @@
       plate.position.y = height + 0.01;
       group.add(plate);
       return plate;
+    }
+
+    function createPortalSurfaceMaterial(accentColor, active = false) {
+      const uniforms = {
+        uTime: { value: 0 },
+        uActivation: { value: active ? 1 : 0.18 },
+        uColor: { value: new THREE.Color(accentColor) },
+        uOpacity: { value: active ? 0.85 : 0.55 },
+      };
+      const material = new THREE.ShaderMaterial({
+        uniforms,
+        vertexShader: PORTAL_VERTEX_SHADER,
+        fragmentShader: PORTAL_FRAGMENT_SHADER,
+        transparent: true,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+        blending: THREE.AdditiveBlending,
+      });
+      material.extensions = material.extensions || {};
+      return { material, uniforms };
     }
 
     function getTileSignature(tile) {
@@ -1368,24 +1461,25 @@
             roughness: 0.45,
             metalness: 0.35,
           });
-          const intensity = tile.type === 'portal' ? 0.9 : 0.35;
-          const opacity = tile.type === 'portal' ? 0.8 : 0.5;
-          const planeMaterial = new THREE.MeshStandardMaterial({
-            color: new THREE.Color(accentColor),
-            emissive: new THREE.Color(accentColor),
-            emissiveIntensity: intensity,
-            transparent: true,
-            opacity,
-            side: THREE.DoubleSide,
-          });
-          const plane = new THREE.Mesh(PORTAL_PLANE_GEOMETRY, planeMaterial);
+          const { material: shaderMaterial, uniforms } = createPortalSurfaceMaterial(
+            accentColor,
+            tile.type === 'portal'
+          );
+          const plane = new THREE.Mesh(PORTAL_PLANE_GEOMETRY, shaderMaterial);
           plane.position.y = height + 0.85;
+          plane.renderOrder = 2;
           group.add(plane);
-          const planeB = new THREE.Mesh(PORTAL_PLANE_GEOMETRY, planeMaterial.clone());
+          const planeBMaterial = shaderMaterial.clone();
+          planeBMaterial.uniforms = uniforms;
+          const planeB = new THREE.Mesh(PORTAL_PLANE_GEOMETRY, planeBMaterial);
           planeB.position.y = height + 0.85;
           planeB.rotation.y = Math.PI / 2;
+          planeB.renderOrder = 2;
           group.add(planeB);
-          renderInfo.animations.portalMaterials = [plane.material, planeB.material];
+          renderInfo.animations.portalSurface = {
+            uniforms,
+            materials: [plane.material, planeB.material],
+          };
           break;
         }
         case 'crystal': {
@@ -1439,11 +1533,21 @@
 
     function updateTileVisual(tile, renderInfo) {
       if (!tile || tile.type === 'void') return;
-      if (renderInfo.animations.portalMaterials) {
-        renderInfo.animations.portalMaterials.forEach((material) => {
-          material.emissiveIntensity = tile.type === 'portal' ? 0.9 + 0.25 * Math.sin(state.elapsed * 3) : 0.35 + 0.2 * Math.sin(state.elapsed * 2);
-          material.opacity = tile.type === 'portal' ? 0.75 : 0.5;
-        });
+      if (renderInfo.animations.portalSurface) {
+        const { uniforms } = renderInfo.animations.portalSurface;
+        uniforms.uTime.value = state.elapsed;
+        if (tile.type === 'portal') {
+          const portalState = tile.portalState;
+          const activation = portalState?.activation ?? 0.6;
+          const surge = portalState?.transition ?? 0;
+          const energy = Math.min(1.6, 0.25 + activation * 0.9 + surge * 0.8);
+          uniforms.uActivation.value = energy;
+          uniforms.uOpacity.value = Math.min(1, 0.65 + activation * 0.25 + surge * 0.2);
+        } else {
+          const dormant = tile.portalState?.activation ?? 0;
+          uniforms.uActivation.value = 0.12 + dormant * 0.4;
+          uniforms.uOpacity.value = 0.45;
+        }
       }
       if (renderInfo.animations.railGlow) {
         const active = state.railPhase === (tile.data?.phase ?? 0);
@@ -2190,6 +2294,92 @@
         actor.eyeMaterial.opacity = 0.6 + aggression * 0.35;
         actor.eyeMaterial.needsUpdate = true;
       });
+      updateMarbleGhosts();
+    }
+
+    function spawnMarbleEchoGhost() {
+      if (state.dimension.id !== 'marble') return;
+      if (!playerMesh || !entityGroup) return;
+      const ghost = playerMesh.clone(true);
+      const materials = [];
+      ghost.traverse((child) => {
+        if (child.isMesh) {
+          const material = new THREE.MeshBasicMaterial({
+            color: new THREE.Color(DIMENSIONS.marble?.theme?.accent ?? '#f3d688'),
+            transparent: true,
+            opacity: 0.18,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false,
+          });
+          child.material = material;
+          materials.push(material);
+        }
+      });
+      ghost.scale.multiplyScalar(1.02);
+      entityGroup.add(ghost);
+      const rotation = Math.atan2(state.player.facing.x, state.player.facing.y);
+      const scenePos = worldToScene(state.player.x, state.player.y);
+      const height = tileSurfaceHeight(state.player.x, state.player.y);
+      ghost.position.set(scenePos.x, height + 0.05, scenePos.z);
+      ghost.rotation.y = rotation;
+      marbleGhosts.push({
+        group: ghost,
+        materials,
+        spawnAt: state.elapsed,
+        triggerAt: state.elapsed + 5,
+        gridX: state.player.x,
+        gridY: state.player.y,
+        rotation,
+      });
+    }
+
+    function disposeMarbleGhost(ghost) {
+      if (!ghost) return;
+      if (ghost.group && entityGroup) {
+        entityGroup.remove(ghost.group);
+      }
+      ghost.materials?.forEach((material) => material?.dispose?.());
+    }
+
+    function clearMarbleGhosts() {
+      for (let i = marbleGhosts.length - 1; i >= 0; i--) {
+        disposeMarbleGhost(marbleGhosts[i]);
+      }
+      marbleGhosts.length = 0;
+    }
+
+    function updateMarbleGhosts() {
+      if (!marbleGhosts.length) return;
+      const accent = DIMENSIONS.marble?.theme?.accent ?? '#f3d688';
+      for (let i = marbleGhosts.length - 1; i >= 0; i--) {
+        const ghost = marbleGhosts[i];
+        if (state.dimension.id !== 'marble') {
+          disposeMarbleGhost(ghost);
+          marbleGhosts.splice(i, 1);
+          continue;
+        }
+        const total = ghost.triggerAt - ghost.spawnAt;
+        const elapsed = state.elapsed - ghost.spawnAt;
+        const ratio = total > 0 ? THREE.MathUtils.clamp(elapsed / total, 0, 1) : 1;
+        const fadeOutElapsed = state.elapsed - ghost.triggerAt;
+        const fadeOut = fadeOutElapsed > 0 ? THREE.MathUtils.clamp(fadeOutElapsed / 0.6, 0, 1) : 0;
+        const intensity = fadeOut > 0 ? Math.max(0, 1 - fadeOut) : THREE.MathUtils.smoothstep(0.05, 1, ratio);
+        const scenePos = worldToScene(ghost.gridX, ghost.gridY);
+        const height = tileSurfaceHeight(ghost.gridX, ghost.gridY);
+        const bob = Math.sin(state.elapsed * 6 + i) * 0.04;
+        ghost.group.position.set(scenePos.x, height + 0.06 + ratio * 0.35 + bob, scenePos.z);
+        ghost.group.rotation.y = ghost.rotation;
+        ghost.materials?.forEach((material) => {
+          if (!material) return;
+          material.opacity = THREE.MathUtils.clamp(0.08 + intensity * 0.5, 0, 0.65);
+          material.color.set(accent);
+          material.color.lerp(new THREE.Color('#ffffff'), ratio * 0.3);
+        });
+        if (fadeOut >= 1) {
+          disposeMarbleGhost(ghost);
+          marbleGhosts.splice(i, 1);
+        }
+      }
     }
 
     function spawnHarvestParticles(x, y, accentColor) {
@@ -2464,6 +2654,15 @@
           pageBackground: `radial-gradient(circle at 20% 20%, rgba(73, 242, 255, 0.2), transparent 45%), radial-gradient(circle at 80% 10%, rgba(247, 183, 51, 0.2), transparent 55%), linear-gradient(160deg, #050912, #0b1230 60%, #05131f 100%)`,
           dimensionGlow: 'rgba(73, 242, 255, 0.45)',
         },
+        atmosphere: {
+          daySky: '#bcd7ff',
+          nightSky: '#0b1324',
+          duskSky: '#f7b07b',
+          groundDay: '#1c283f',
+          groundNight: '#050912',
+          fogColor: '#0b1324',
+          fogDensity: 0.055,
+        },
         rules: {
           moveDelay: 0.15,
         },
@@ -2484,6 +2683,15 @@
           bgTertiary: 'rgba(53, 38, 34, 0.78)',
           pageBackground: `radial-gradient(circle at 18% 22%, rgba(242, 178, 102, 0.18), transparent 45%), radial-gradient(circle at 80% 14%, rgba(79, 103, 132, 0.2), transparent 55%), linear-gradient(160deg, #141014, #27190f 55%, #180f1b 100%)`,
           dimensionGlow: 'rgba(242, 178, 102, 0.35)',
+        },
+        atmosphere: {
+          daySky: '#9c8b72',
+          nightSky: '#1a1111',
+          duskSky: '#e2b183',
+          groundDay: '#2f1f19',
+          groundNight: '#120909',
+          fogColor: '#251611',
+          fogDensity: 0.082,
         },
         rules: {
           moveDelay: 0.18,
@@ -2516,6 +2724,15 @@
           bgTertiary: 'rgba(24, 36, 66, 0.82)',
           pageBackground: `radial-gradient(circle at 18% 20%, rgba(122, 208, 255, 0.18), transparent 50%), radial-gradient(circle at 75% 18%, rgba(148, 135, 255, 0.18), transparent 60%), linear-gradient(160deg, #0a1324, #141b33 55%, #090d18 100%)`,
           dimensionGlow: 'rgba(122, 208, 255, 0.45)',
+        },
+        atmosphere: {
+          daySky: '#8fb4ff',
+          nightSky: '#0a1428',
+          duskSky: '#8e7eff',
+          groundDay: '#1b2d46',
+          groundNight: '#080d19',
+          fogColor: '#122036',
+          fogDensity: 0.06,
         },
         rules: {
           moveDelay: 0.16,
@@ -2551,6 +2768,15 @@
           pageBackground: `radial-gradient(circle at 16% 24%, rgba(187, 134, 255, 0.18), transparent 45%), radial-gradient(circle at 82% 18%, rgba(255, 111, 145, 0.16), transparent 60%), linear-gradient(160deg, #120918, #231126 55%, #16081f 100%)`,
           dimensionGlow: 'rgba(187, 134, 255, 0.42)',
         },
+        atmosphere: {
+          daySky: '#6b4c7b',
+          nightSky: '#120912',
+          duskSky: '#a45d92',
+          groundDay: '#2b1531',
+          groundNight: '#120718',
+          fogColor: '#1c0d21',
+          fogDensity: 0.088,
+        },
         rules: {
           moveDelay: 0.28,
           onMove: (state) => {
@@ -2576,9 +2802,19 @@
           pageBackground: `radial-gradient(circle at 20% 25%, rgba(243, 214, 136, 0.2), transparent 45%), radial-gradient(circle at 80% 20%, rgba(154, 163, 255, 0.18), transparent 60%), linear-gradient(160deg, #101320, #1c1f30 55%, #0f111b 100%)`,
           dimensionGlow: 'rgba(243, 214, 136, 0.4)',
         },
+        atmosphere: {
+          daySky: '#f0ede4',
+          nightSky: '#111522',
+          duskSky: '#ffd9a1',
+          groundDay: '#d9d7cf',
+          groundNight: '#1a1d2c',
+          fogColor: '#dfd8ce',
+          fogDensity: 0.045,
+        },
         rules: {
           moveDelay: 0.18,
           onAction: (state, action) => {
+            spawnMarbleEchoGhost();
             state.echoQueue.push({ at: state.elapsed + 5, action });
           },
           update: (state) => {
@@ -2608,6 +2844,15 @@
           bgTertiary: 'rgba(63, 22, 18, 0.82)',
           pageBackground: `radial-gradient(circle at 18% 22%, rgba(255, 118, 70, 0.18), transparent 45%), radial-gradient(circle at 80% 15%, rgba(255, 208, 95, 0.16), transparent 60%), linear-gradient(160deg, #180909, #2c1110 55%, #12070e 100%)`,
           dimensionGlow: 'rgba(255, 118, 70, 0.4)',
+        },
+        atmosphere: {
+          daySky: '#ff9d73',
+          nightSky: '#290806',
+          duskSky: '#ff6f5b',
+          groundDay: '#4a1c12',
+          groundNight: '#190606',
+          fogColor: '#2b0d07',
+          fogDensity: 0.075,
         },
         rules: {
           moveDelay: 0.14,
@@ -2641,6 +2886,19 @@
       style.setProperty('--page-background', theme.pageBackground);
       style.setProperty('--dimension-glow', theme.dimensionGlow);
       document.body.dataset.dimension = dimension.id;
+    }
+
+    function applyDimensionAtmosphere(dimension) {
+      const atmosphere = { ...BASE_ATMOSPHERE, ...(dimension?.atmosphere ?? {}) };
+      lightingState.daySky.set(atmosphere.daySky);
+      lightingState.nightSky.set(atmosphere.nightSky);
+      lightingState.duskSky.set(atmosphere.duskSky);
+      lightingState.groundDay.set(atmosphere.groundDay);
+      lightingState.groundNight.set(atmosphere.groundNight);
+      if (scene?.fog) {
+        scene.fog.color.set(atmosphere.fogColor);
+        scene.fog.density = atmosphere.fogDensity;
+      }
     }
 
     const state = {
@@ -2705,6 +2963,7 @@
         lastBubblePopAt: -Infinity,
         respawnActive: false,
         respawnCountdownTimeout: null,
+        dimensionTransition: null,
       },
     };
 
@@ -3277,6 +3536,9 @@
       if (state.isRunning) return;
       const context = ensureAudioContext();
       context?.resume?.().catch(() => {});
+      setDimensionTransitionOverlay(false);
+      state.ui.dimensionTransition = null;
+      clearMarbleGhosts();
       if (introModal) {
         introModal.hidden = true;
         introModal.setAttribute('aria-hidden', 'true');
@@ -3348,6 +3610,7 @@
         updateScoreOverlay();
       }
       applyDimensionTheme(dim);
+      applyDimensionAtmosphere(dim);
       document.title = `Infinite Dimension · ${dim.name}`;
       state.world = dim.generator(state);
       resetWorldMeshes();
@@ -3357,6 +3620,7 @@
       state.portals = [];
       state.zombies = [];
       state.ironGolems = [];
+      clearMarbleGhosts();
       state.baseMoveDelay = dim.rules.moveDelay ?? 0.18;
       state.moveDelay = state.baseMoveDelay;
       state.hooks.onMove = [];
@@ -3437,10 +3701,12 @@
       updateZombies(delta);
       handleAir(delta);
       processEchoQueue();
+      updatePortalActivation();
       updateStatusBars();
       updatePortalProgress();
       updateLighting(delta);
       advanceParticles(delta);
+      updateDimensionTransition(delta);
     }
 
     function processEchoQueue() {
@@ -3889,6 +4155,7 @@
 
     function attemptMove(dx, dy, ignoreCooldown = false) {
       if (state.ui.respawnActive) return;
+      if (state.ui.dimensionTransition) return;
       const now = performance.now();
       const delay = (state.baseMoveDelay ?? 0.18) + (state.player.tarStacks || 0) * 0.04;
       if (!ignoreCooldown && now - state.lastMoveAt < delay * 1000) return;
@@ -3915,6 +4182,7 @@
 
     function interact(useAlt = false, echoed = false) {
       if (state.ui.respawnActive) return;
+      if (state.ui.dimensionTransition) return;
       const facingX = state.player.x + state.player.facing.x;
       const facingY = state.player.y + state.player.facing.y;
       const frontTile = getTile(facingX, facingY);
@@ -3982,6 +4250,70 @@
       }
     }
 
+    function ensurePortalState(tile) {
+      if (!tile) return null;
+      if (!tile.portalState) {
+        tile.portalState = { activation: 0, transition: 0 };
+      }
+      return tile.portalState;
+    }
+
+    function setDimensionTransitionOverlay(active) {
+      if (!dimensionTransitionEl) return;
+      if (active) {
+        dimensionTransitionEl.setAttribute('data-active', 'true');
+      } else {
+        dimensionTransitionEl.setAttribute('data-active', 'false');
+        dimensionTransitionEl.style.setProperty('--build', '0');
+        dimensionTransitionEl.style.setProperty('--fade', '0');
+      }
+    }
+
+    function updateTransitionOverlay(build, fade) {
+      if (!dimensionTransitionEl) return;
+      const clampedBuild = Number.isFinite(build) ? THREE.MathUtils.clamp(build, 0, 1) : 0;
+      const clampedFade = Number.isFinite(fade) ? THREE.MathUtils.clamp(fade, 0, 1) : 0;
+      dimensionTransitionEl.style.setProperty('--build', clampedBuild.toFixed(3));
+      dimensionTransitionEl.style.setProperty('--fade', clampedFade.toFixed(3));
+    }
+
+    function beginDimensionTransition(portal, fromId, toId) {
+      if (!portal || !toId) return;
+      if (state.ui.dimensionTransition) return;
+      const portalTiles = portal.tiles
+        .map(({ x, y }) => ({ x, y, tile: getTile(x, y) }))
+        .filter((entry) => entry.tile);
+      portalTiles.forEach(({ tile }) => {
+        const portalState = ensurePortalState(tile);
+        if (portalState) {
+          portalState.transition = 0;
+        }
+      });
+      state.ui.dimensionTransition = {
+        portal,
+        from: fromId,
+        to: toId,
+        stage: 'build',
+        stageStart: state.elapsed,
+        portalTiles,
+        loaded: false,
+      };
+      setDimensionTransitionOverlay(true);
+      updateTransitionOverlay(0, 0);
+      logEvent(`Stabilising bridge to ${DIMENSIONS[toId]?.name ?? toId}...`);
+    }
+
+    function clearTransitionPortalTiles(transition) {
+      if (!transition?.portalTiles) return;
+      transition.portalTiles.forEach(({ tile }) => {
+        const portalState = ensurePortalState(tile);
+        if (portalState) {
+          portalState.transition = 0;
+        }
+      });
+      transition.portalTiles = [];
+    }
+
     function enterPortalAt(x, y) {
       const portal = state.portals.find((p) =>
         p.tiles.some((t) => t.x === x && t.y === y)
@@ -3991,7 +4323,13 @@
         return;
       }
       if (!portal.active) {
-        logEvent('Portal is dormant. Ignite it first.');
+        const tile = getTile(x, y);
+        const activation = tile?.portalState?.activation ?? 0;
+        if (activation < 0.99) {
+          logEvent('Portal is calibrating. Give it a moment to stabilise.');
+        } else {
+          logEvent('Portal is dormant. Ignite it first.');
+        }
         return;
       }
       if (portal.destination === 'netherite' && state.dimension.id === 'netherite') {
@@ -4002,12 +4340,18 @@
         updateDimensionCodex();
         return;
       }
-      if (state.dimension.id === portal.origin && portal.destination) {
-        loadDimension(portal.destination, portal.origin);
+      if (state.ui.dimensionTransition) {
         return;
       }
-      if (state.dimension.id === portal.destination && portal.origin) {
-        loadDimension(portal.origin, portal.destination);
+      const currentId = state.dimension.id;
+      let targetId = null;
+      if (currentId === portal.origin && portal.destination) {
+        targetId = portal.destination;
+      } else if (currentId === portal.destination && portal.origin) {
+        targetId = portal.origin;
+      }
+      if (targetId) {
+        beginDimensionTransition(portal, currentId, targetId);
         return;
       }
     }
@@ -4026,14 +4370,27 @@
         logEvent('Portal already active.');
         return;
       }
-      frame.active = true;
+      if (frame.activation) {
+        logEvent('Portal is already igniting.');
+        return;
+      }
+      frame.active = false;
+      frame.activation = { start: state.elapsed, duration: PORTAL_ACTIVATION_DURATION };
+      frame.announcedActive = false;
       if (hasItem('portal-igniter')) removeItem('portal-igniter', 1);
       else removeItem('torch', 1);
       frame.tiles.forEach(({ x: tx, y: ty }) => {
         const tile = getTile(tx, ty);
-        if (tile) tile.type = 'portal';
+        if (tile) {
+          tile.type = 'portal';
+          const portalState = ensurePortalState(tile);
+          if (portalState) {
+            portalState.activation = 0;
+            portalState.transition = 0;
+          }
+        }
       });
-      logEvent(`${frame.label} shimmers to life.`);
+      logEvent(`${frame.label} begins to awaken.`);
       updatePortalProgress();
     }
 
@@ -4055,6 +4412,8 @@
         frame: framePositions.frame,
         tiles: framePositions.portal,
         active: false,
+        activation: null,
+        announcedActive: false,
         label: `${DIMENSIONS[material]?.name ?? material} Portal`,
         origin: state.dimension.id,
         destination: material,
@@ -4065,7 +4424,14 @@
       });
       portal.tiles.forEach(({ x, y }) => {
         const tile = getTile(x, y);
-        if (tile) tile.type = 'portalDormant';
+        if (tile) {
+          tile.type = 'portalDormant';
+          const portalState = ensurePortalState(tile);
+          if (portalState) {
+            portalState.activation = 0;
+            portalState.transition = 0;
+          }
+        }
       });
       state.portals.push(portal);
       state.unlockedDimensions.add(material);
@@ -4097,13 +4463,22 @@
       });
       tiles.forEach(({ x, y }) => {
         const tile = getTile(x, y);
-        if (tile) tile.type = 'portal';
+        if (tile) {
+          tile.type = 'portal';
+          const portalState = ensurePortalState(tile);
+          if (portalState) {
+            portalState.activation = 1;
+            portalState.transition = 0;
+          }
+        }
       });
       state.portals.push({
         material: targetDimension,
         frame,
         tiles,
         active: true,
+        activation: null,
+        announcedActive: true,
         origin: currentDimension,
         destination: targetDimension,
         label: `Return to ${DIMENSIONS[targetDimension]?.name ?? targetDimension}`,
@@ -4145,6 +4520,52 @@
       return { frame, portal };
     }
 
+    function updatePortalActivation() {
+      if (!state.portals.length) return;
+      const now = state.elapsed;
+      for (const portal of state.portals) {
+        if (portal.activation) {
+          const duration = portal.activation.duration ?? PORTAL_ACTIVATION_DURATION;
+          const progress = duration > 0 ? THREE.MathUtils.clamp((now - portal.activation.start) / duration, 0, 1) : 1;
+          portal.activation.progress = progress;
+          portal.tiles.forEach(({ x, y }) => {
+            const tile = getTile(x, y);
+            if (!tile) return;
+            const portalState = ensurePortalState(tile);
+            if (portalState) {
+              portalState.activation = progress;
+            }
+            tile.type = 'portal';
+          });
+          if (progress >= 1) {
+            portal.active = true;
+            portal.activation = null;
+            portal.tiles.forEach(({ x, y }) => {
+              const tile = getTile(x, y);
+              if (!tile) return;
+              const portalState = ensurePortalState(tile);
+              if (portalState) {
+                portalState.activation = 1;
+              }
+            });
+            if (!portal.announcedActive) {
+              logEvent(`${portal.label} stabilises.`);
+              portal.announcedActive = true;
+            }
+          }
+        } else if (portal.active) {
+          portal.tiles.forEach(({ x, y }) => {
+            const tile = getTile(x, y);
+            if (!tile) return;
+            const portalState = ensurePortalState(tile);
+            if (portalState) {
+              portalState.activation = Math.max(portalState.activation ?? 1, 1);
+            }
+          });
+        }
+      }
+    }
+
     function isWithinBounds(x, y) {
       return x >= 1 && y >= 1 && x < state.width - 1 && y < state.height - 1;
     }
@@ -4164,6 +4585,51 @@
       portalProgressEl.setAttribute('aria-valuenow', Math.round(ratio * 100).toString());
       portalProgressEl.setAttribute('aria-valuetext', `${Math.round(ratio * 100)}% progress toward ${nextName}.`);
       portalProgressEl.title = `Next: ${nextName}`;
+    }
+
+    function updateDimensionTransition(delta) {
+      const transition = state.ui.dimensionTransition;
+      if (!transition) return;
+      const now = state.elapsed;
+      if (transition.stage === 'build') {
+        const progress = Math.min(1, (now - transition.stageStart) / PORTAL_TRANSITION_BUILDUP);
+        transition.progress = progress;
+        transition.portalTiles?.forEach(({ tile }) => {
+          const portalState = ensurePortalState(tile);
+          if (portalState) {
+            portalState.transition = progress;
+          }
+        });
+        updateTransitionOverlay(progress, 0);
+        if (progress >= 1) {
+          transition.stage = 'fade-out';
+          transition.stageStart = now;
+        }
+        return;
+      }
+      if (transition.stage === 'fade-out') {
+        const progress = Math.min(1, (now - transition.stageStart) / PORTAL_TRANSITION_FADE);
+        updateTransitionOverlay(1, progress);
+        if (progress >= 1 && !transition.loaded) {
+          clearTransitionPortalTiles(transition);
+          transition.loaded = true;
+          const targetId = transition.to;
+          const fromId = transition.from;
+          loadDimension(targetId, fromId);
+          transition.stage = 'fade-in';
+          transition.stageStart = state.elapsed;
+          updateTransitionOverlay(0, 1);
+        }
+        return;
+      }
+      if (transition.stage === 'fade-in') {
+        const progress = Math.min(1, (now - transition.stageStart) / PORTAL_TRANSITION_FADE);
+        updateTransitionOverlay(0, Math.max(0, 1 - progress));
+        if (progress >= 1) {
+          setDimensionTransitionOverlay(false);
+          state.ui.dimensionTransition = null;
+        }
+      }
     }
 
     function addToCraftSequence(itemId) {
