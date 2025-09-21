@@ -12,6 +12,7 @@
   --success: #2bc26b;
   --grid-line: rgba(73, 242, 255, 0.08);
   --card-shadow: 0 20px 50px rgba(0, 0, 0, 0.35);
+  --manu-logo-max-size: 220px;
   --page-background: radial-gradient(circle at 20% 20%, rgba(73, 242, 255, 0.2), transparent 45%),
     radial-gradient(circle at 80% 10%, rgba(247, 183, 51, 0.2), transparent 55%),
     linear-gradient(160deg, #050912, #0b1230 60%, #05131f 100%);
@@ -48,7 +49,7 @@ body.game-active {
 
 .manu-logo {
   position: fixed;
-  inset: auto 1.5rem 1.5rem auto;
+  inset: auto 10px 10px auto;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -59,20 +60,20 @@ body.game-active {
   box-shadow: 0 30px 60px rgba(0, 0, 0, 0.4), 0 0 18px rgba(73, 242, 255, 0.35);
   backdrop-filter: blur(10px);
   z-index: 120;
-  opacity: 0.92;
+  opacity: 0.8;
   transition: transform 0.35s ease, opacity 0.3s ease;
 }
 
 .manu-logo:hover,
 .manu-logo:focus-visible {
-  transform: translateY(-4px) scale(1.04);
+  transform: scale(1.1);
   opacity: 1;
   outline: none;
 }
 
 .manu-logo__image {
   display: block;
-  width: clamp(160px, 22vw, 220px);
+  width: clamp(160px, 22vw, var(--manu-logo-max-size));
   height: auto;
 }
 
@@ -1342,7 +1343,7 @@ input[type='search'] {
   }
 
   .manu-logo {
-    inset: auto 1rem 1rem auto;
+    inset: auto 10px 10px auto;
     border-radius: 16px;
     padding: 0.5rem 0.6rem;
   }
@@ -1464,13 +1465,14 @@ input[type='search'] {
   }
 
   .manu-logo {
-    inset: auto 0.75rem calc(0.75rem + env(safe-area-inset-bottom, 0px)) auto;
+    inset: auto 10px calc(10px + env(safe-area-inset-bottom, 0px)) auto;
     padding: 0.45rem 0.5rem;
     border-radius: 14px;
   }
 
   .manu-logo__image {
-    width: clamp(120px, 56vw, 160px);
+    width: calc(var(--manu-logo-max-size) * 0.8);
+    max-width: 100%;
   }
 
   .main-layout {
