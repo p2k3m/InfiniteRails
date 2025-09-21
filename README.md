@@ -40,10 +40,17 @@ Expose an `APP_CONFIG` object before loading `script.js` to wire up Google SSO a
 </script>
 ```
 
-- **Google SSO** – supply a valid `googleClientId` to render the Google Identity Services button. Without it the UI surfaces a disabled “Google SSO unavailable” notice.
+- **Google SSO** – supply a valid `googleClientId` to render the Google Identity Services button so explorers can carry their progress across devices.
 - **User metadata** – on sign-in the app POSTs to `${apiBaseUrl}/users` with the player’s Google ID, preferred name, device snapshot, and geolocation (if permission is granted). The handler can write directly to a DynamoDB table keyed by Google ID.
 - **Scoreboard** – the app loads scores via `GET ${apiBaseUrl}/scores` and upserts the player’s run with `POST ${apiBaseUrl}/scores`. The payload mirrors the UI fields: `name`, `score`, `dimensionCount`, `runTimeSeconds`, `inventoryCount`, plus optional `location` or `locationLabel` fields.
 - **Offline-friendly** – when `apiBaseUrl` is absent the UI persists identities and scores to `localStorage` and displays sample leaderboard entries so the page remains fully interactive.
+
+### Google SSO configuration
+
+1. In the [Google Cloud Console](https://console.cloud.google.com/apis/credentials), create an **OAuth 2.0 Client ID** of type **Web application**.
+2. Add each domain that will host the game to the **Authorized JavaScript origins** list. For local development with `npx serve` include `http://localhost:3000`; add your production hostname such as `https://infinite-dimension.example.com` when you deploy.
+3. Because the experience uses the Google Identity Services popup flow, you do not need to configure an authorized redirect URI.
+4. Copy the generated client ID into `window.APP_CONFIG.googleClientId` as shown above.
 
 ## Gameplay Loop
 

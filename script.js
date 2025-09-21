@@ -2436,7 +2436,7 @@ function ensureLocalProfileId() {
 
 function promptDisplayName(defaultName) {
   const base = defaultName ?? 'Explorer';
-  const response = window.prompt('How should we address you inside Infinite Dimension?', base);
+  const response = window.prompt("What's your name?", base);
   const trimmed = response?.trim();
   return trimmed || base;
 }
