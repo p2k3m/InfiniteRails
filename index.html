@@ -19,10 +19,13 @@
         <h1>Infinite Rails</h1>
         <span class="subtitle">Portals of Dimension</span>
       </div>
-      <div class="status-area">
-        <div class="status-item hearts" id="hearts"></div>
-        <div class="status-item bubbles" id="bubbles"></div>
-        <div class="status-item time" id="timeOfDay"></div>
+      <div class="top-actions">
+        <button type="button" id="openGuide" class="ghost">Game Guide</button>
+        <div class="status-area">
+          <div class="status-item hearts" id="hearts"></div>
+          <div class="status-item bubbles" id="bubbles"></div>
+          <div class="status-item time" id="timeOfDay"></div>
+        </div>
       </div>
     </header>
     <main class="main-layout">
@@ -106,6 +109,122 @@
         </ul>
         <button id="startButton" class="primary">Enter the Rails</button>
       </div>
+    </div>
+
+    <div
+      class="modal guide-modal"
+      id="guideModal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="guideTitle"
+      hidden
+    >
+      <article class="guide-content" data-guide-scroll>
+        <header class="guide-header">
+          <div>
+            <p class="guide-eyebrow">Game Design Document &amp; User Manual</p>
+            <h2 id="guideTitle">Infinite Rails: Portals of Dimension</h2>
+          </div>
+          <button type="button" class="ghost" data-close-guide>Close</button>
+        </header>
+        <section class="guide-section">
+          <h3>Game Overview</h3>
+          <p>
+            Infinite Rails is a browser-based voxel survival puzzle. Gather resources, craft ordered recipes, and build
+            precise 4×3 portals to leap between realms. Each portal material rewrites the physics and threats of the
+            destination dimension.
+          </p>
+          <ul>
+            <li>Portals are the only way to explore fresh territories.</li>
+            <li>Every material introduces a bespoke challenge and reward loop.</li>
+            <li>Crafting is performed by sequencing items rather than arranging them in a grid.</li>
+          </ul>
+        </section>
+        <section class="guide-section">
+          <h3>Look &amp; Feel</h3>
+          <p>Each dimension features a distinct ambience, palette, and soundtrack cues:</p>
+          <ul>
+            <li><strong>Rock:</strong> rugged canyons with dense gravity and ore-rich chasms.</li>
+            <li><strong>Stone:</strong> glowing monochrome rails that phase in rhythmic patterns.</li>
+            <li><strong>Tar:</strong> a viscous, low-visibility swamp that slows movement.</li>
+            <li><strong>Marble:</strong> mirror-bright courtyards where actions echo after five seconds.</li>
+            <li><strong>Netherite:</strong> molten rails collapse behind every step — the final gauntlet.</li>
+          </ul>
+        </section>
+        <section class="guide-section">
+          <h3>How to Play</h3>
+          <ol>
+            <li>Spawn on a quiet grass island. Search trees and stones for early materials.</li>
+            <li>Use the craft circle next to your hearts to arrange items in the correct sequence.</li>
+            <li>Build a 4×3 portal frame from a single material, leave the centre empty, and ignite it.</li>
+            <li>Explore the new realm, solve its rail puzzle, and gather the unique loot inside.</li>
+            <li>Survive the nightly zombie raids, protect villagers, and stabilise the rails.</li>
+            <li>Repeat with higher-tier materials until you conquer the collapsing Netherite dimension.</li>
+          </ol>
+        </section>
+        <section class="guide-section two-column">
+          <div>
+            <h4>Controls (Desktop)</h4>
+            <ul>
+              <li><kbd>WASD</kbd> / <kbd>Arrows</kbd> — move &amp; switch rails</li>
+              <li><kbd>Space</kbd> — jump gaps</li>
+              <li><kbd>Mouse</kbd> — look, mine, place</li>
+              <li><kbd>E</kbd> — inventory</li>
+              <li><kbd>F</kbd> — interact</li>
+              <li><kbd>R</kbd> — build portals</li>
+            </ul>
+          </div>
+          <div>
+            <h4>Controls (Mobile)</h4>
+            <ul>
+              <li>Swipe to swap rails</li>
+              <li>Tap &amp; hold to mine or place blocks</li>
+              <li>Drag to move the camera</li>
+              <li>Use the hotbar for quick slots and the craft circle for recipes</li>
+            </ul>
+          </div>
+        </section>
+        <section class="guide-section">
+          <h3>Dimensions &amp; Objectives</h3>
+          <dl class="dimension-list">
+            <div>
+              <dt>Rock Portal</dt>
+              <dd>Stronger gravity and sliding slopes. Rewards heavy ores and plating.</dd>
+            </div>
+            <div>
+              <dt>Stone Portal</dt>
+              <dd>Rails appear and vanish to a rhythm. Collect pattern crystals for sync tech.</dd>
+            </div>
+            <div>
+              <dt>Tar Portal</dt>
+              <dd>Movement is heavy and tar slugs pursue you. Gather sticky sacs for traps.</dd>
+            </div>
+            <div>
+              <dt>Marble Portal</dt>
+              <dd>Your actions echo after five seconds. Use the reverbs to solve mirrored puzzles.</dd>
+            </div>
+            <div>
+              <dt>Netherite Portal</dt>
+              <dd>Rails crumble behind you. Sprint, align collapsing tracks, and seize the Eternal Ingot.</dd>
+            </div>
+          </dl>
+        </section>
+        <section class="guide-section">
+          <h3>Survival Cycle</h3>
+          <p>
+            Daytime is safe for crafting and exploration. When night falls, zombies swarm the rails and villagers risk
+            conversion. Keep torches lit, stand your ground, and repair damage before dawn. Underwater exploration is
+            limited by your bubbles: once they deplete, hearts drain rapidly.
+          </p>
+        </section>
+        <section class="guide-section">
+          <h3>Winning a Run</h3>
+          <p>
+            Reach the Netherite dimension, stabilise collapsing rails long enough to grab the Eternal Ingot, and return
+            to the Grassland Threshold. Delivering the ingot home completes the run and logs your time on the leaderboards.
+          </p>
+        </section>
+      </article>
     </div>
 
     <div class="mobile-controls" id="mobileControls">

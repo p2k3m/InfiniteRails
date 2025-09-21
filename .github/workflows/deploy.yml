@@ -8,92 +8,128 @@ on:
 
 jobs:
   deploy:
-    name: Sync static site
+    name: Build & Deploy
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
+    outputs:
+      cloudfront_distribution_id: ${{ steps.discover.outputs.distribution-id }}
+      cloudfront_url: ${{ steps.discover.outputs.distribution-domain }}
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Validate deployment secrets
+      - name: Validate AWS secrets
+        id: validate
         env:
-          REQUIRED_SECRETS: >-
-            AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_REGION AWS_S3_BUCKET
-            CLOUDFRONT_DISTRIBUTION_ID CLOUDFRONT_URL
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           AWS_REGION: ${{ secrets.AWS_REGION }}
           AWS_S3_BUCKET: ${{ secrets.AWS_S3_BUCKET }}
-          CLOUDFRONT_DISTRIBUTION_ID: ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID }}
-          CLOUDFRONT_URL: ${{ secrets.CLOUDFRONT_URL }}
         run: |
+          set -euo pipefail
           missing=()
-          for name in $REQUIRED_SECRETS; do
-            value=$(printf '%s' "${!name}")
-            if [ -z "$value" ]; then
-              missing+=("$name")
+          for var in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_REGION AWS_S3_BUCKET; do
+            if [ -z "${!var:-}" ]; then
+              missing+=("$var")
             fi
           done
           if [ ${#missing[@]} -gt 0 ]; then
-            echo "::error::Missing required secrets: ${missing[*]}" >&2
-            echo "Add each secret in GitHub → Settings → Secrets and variables → Actions." >&2
-            for name in "${missing[@]}"; do
-              case "$name" in
-                AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY)
-                  echo "::error::$name is empty. Create an IAM user with programmatic access and paste its key pair." >&2
-                  ;;
-                AWS_REGION)
-                  echo "::error::$name is empty. Set it to the AWS region of your S3 bucket (for example, us-east-1)." >&2
-                  ;;
-                AWS_S3_BUCKET)
-                  echo "::error::$name is empty. Provide the target bucket name without the s3:// prefix." >&2
-                  ;;
-                CLOUDFRONT_DISTRIBUTION_ID)
-                  echo "::error::$name is empty. Provide the CloudFront distribution ID to invalidate." >&2
-                  ;;
-                CLOUDFRONT_URL)
-                  echo "::error::$name is empty. Provide the public CloudFront URL so the workflow can announce it." >&2
-                  ;;
-              esac
-            done
+            printf '::error::Missing required GitHub secret(s): %s
+' "${missing[*]}"
+            {
+              echo '### ❌ Deployment blocked'
+              echo ''
+              echo 'The workflow cannot continue because the following secrets are missing:'
+              for name in "${missing[@]}"; do
+                echo "- \`${name}\`"
+              done
+              echo ''
+              echo '#### How to fix'
+              echo '1. Open **Settings → Secrets and variables → Actions** in this repository.'
+              echo '2. Create each secret listed above with the exact name.'
+              echo '3. Re-run the workflow from the Actions tab once the secrets are saved.'
+            } >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
 
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v2
+        uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
 
-      - name: Upload site to S3
+      - name: Sync site to S3
         env:
-          AWS_S3_BUCKET: ${{ secrets.AWS_S3_BUCKET }}
+          DEPLOY_BUCKET: ${{ secrets.AWS_S3_BUCKET }}
         run: |
-          aws s3 sync . "s3://${AWS_S3_BUCKET}" \
-            --delete \
-            --exclude ".git/*" \
-            --exclude ".github/*"
+          set -euo pipefail
+          if [ -z "${DEPLOY_BUCKET}" ]; then
+            echo '::error::AWS_S3_BUCKET secret resolved to an empty string. Ensure the secret contains the bucket name.'
+            exit 1
+          fi
+          aws s3 sync . "s3://${DEPLOY_BUCKET}" --delete --exclude ".git/*" --exclude ".github/*" --exclude "README.md" --exclude "LICENSE"
+
+      - name: Discover CloudFront distribution
+        id: discover
+        env:
+          DEPLOY_BUCKET: ${{ secrets.AWS_S3_BUCKET }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+        run: |
+          set -euo pipefail
+          ORIGIN_CLASSIC="${DEPLOY_BUCKET}.s3.amazonaws.com"
+          ORIGIN_REGIONAL="${DEPLOY_BUCKET}.s3.${AWS_REGION}.amazonaws.com"
+          ORIGIN_WEBSITE="${DEPLOY_BUCKET}.s3-website-${AWS_REGION}.amazonaws.com"
+          MATCH=$(aws cloudfront list-distributions --query "DistributionList.Items[?Origins.Items[?DomainName=='${ORIGIN_CLASSIC}' || DomainName=='${ORIGIN_REGIONAL}' || DomainName=='${ORIGIN_WEBSITE}']]|[0]")
+          if [ -z "$MATCH" ] || [ "$MATCH" = "null" ]; then
+            echo '::error::No CloudFront distribution is configured for the provided S3 bucket.'
+            {
+              echo '### ❌ CloudFront distribution not found'
+              echo ''
+              echo "No CloudFront distribution could be matched to bucket \`${DEPLOY_BUCKET}\` in region \`${AWS_REGION}\`."
+              echo ''
+              echo '#### How to fix'
+              echo '1. Create a CloudFront distribution with the S3 bucket as an origin (Origin Access Control recommended).'
+              echo '2. Alternatively, ensure an existing distribution origin domain exactly matches one of:'
+              echo "   - ${ORIGIN_CLASSIC}"
+              echo "   - ${ORIGIN_REGIONAL}"
+              echo "   - ${ORIGIN_WEBSITE}"
+              echo '3. Re-run this workflow to publish the site once the distribution exists.'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          CF_ID=$(echo "$MATCH" | jq -r '.Id // empty')
+          CF_DOMAIN=$(echo "$MATCH" | jq -r '.DomainName // empty')
+          if [ -z "$CF_ID" ] || [ -z "$CF_DOMAIN" ]; then
+            echo '::error::CloudFront distribution is missing an Id or DomainName. Inspect the AWS console.'
+            exit 1
+          fi
+          echo "distribution-id=${CF_ID}" >> "$GITHUB_OUTPUT"
+          echo "distribution-domain=https://${CF_DOMAIN}" >> "$GITHUB_OUTPUT"
+          {
+            echo '### ✅ CloudFront distribution detected'
+            echo ''
+            echo "- **Distribution ID**: \`${CF_ID}\`"
+            echo "- **CloudFront URL**: https://${CF_DOMAIN}"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Invalidate CloudFront cache
         env:
-          CLOUDFRONT_DISTRIBUTION_ID: ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID }}
+          DISTRIBUTION_ID: ${{ steps.discover.outputs.distribution-id }}
         run: |
-          aws cloudfront create-invalidation \
-            --distribution-id "$CLOUDFRONT_DISTRIBUTION_ID" \
-            --paths '/*'
+          set -euo pipefail
+          if [ -z "${DISTRIBUTION_ID}" ]; then
+            echo '::error::CloudFront distribution ID is empty. Check the discovery step output.'
+            exit 1
+          fi
+          aws cloudfront create-invalidation --distribution-id "$DISTRIBUTION_ID" --paths '/*'
 
-      - name: Publish deployment URL
-        env:
-          AWS_S3_BUCKET: ${{ secrets.AWS_S3_BUCKET }}
-          CLOUDFRONT_DISTRIBUTION_ID: ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID }}
-          CLOUDFRONT_URL: ${{ secrets.CLOUDFRONT_URL }}
+      - name: Announce deployment URL
         run: |
-          cat <<'SUMMARY' >> "$GITHUB_STEP_SUMMARY"
-          ## Infinite Rails Deployment
-          - ✅ Site synced to **${AWS_S3_BUCKET}**
-          - ✅ CloudFront invalidated (**${CLOUDFRONT_DISTRIBUTION_ID}**)
-          - 🌐 Play it live: **${CLOUDFRONT_URL}**
-          SUMMARY
-          echo "CloudFront URL: ${CLOUDFRONT_URL}"
+          set -euo pipefail
+          echo "::notice::Deployment available at ${{ steps.discover.outputs.distribution-domain }}"
+          {
+            echo '### 🌐 Play the latest build'
+            echo ''
+            echo "- CloudFront URL: ${{ steps.discover.outputs.distribution-domain }}"
+            echo "- Distribution ID: \`${{ steps.discover.outputs.distribution-id }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
