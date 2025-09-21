@@ -11,8 +11,8 @@ jobs:
     name: Build & Deploy
     runs-on: ubuntu-latest
     outputs:
-      cloudfront_distribution_id: ${{ steps.discover.outputs.distribution-id }}
-      cloudfront_url: ${{ steps.discover.outputs.distribution-domain }}
+      cloudfront_distribution_id: ${{ steps.ensure_distribution.outputs.distribution-id }}
+      cloudfront_url: ${{ steps.ensure_distribution.outputs.distribution-domain }}
     steps:
       - name: Validate AWS secrets
         id: validate
@@ -99,8 +99,52 @@ jobs:
 
           aws s3 sync . "s3://${DEPLOY_BUCKET}" --delete --exclude ".git/*" --exclude ".github/*" --exclude "README.md" --exclude "LICENSE"
 
-      - name: Discover CloudFront distribution
-        id: discover
+      - name: Configure S3 static website hosting
+        env:
+          DEPLOY_BUCKET: ${{ secrets.AWS_S3_BUCKET }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DEPLOY_BUCKET}" ]; then
+            echo '::error::Deployment bucket name is empty. Ensure AWS_S3_BUCKET is set.'
+            exit 1
+          fi
+
+          aws s3api put-public-access-block \
+            --bucket "${DEPLOY_BUCKET}" \
+            --public-access-block-configuration BlockPublicAcls=false,IgnorePublicAcls=false,BlockPublicPolicy=false,RestrictPublicBuckets=false
+
+          aws s3 website "s3://${DEPLOY_BUCKET}/" --index-document index.html --error-document index.html
+
+          POLICY_FILE=$(mktemp)
+          cat >"${POLICY_FILE}" <<POLICY
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "AllowPublicRead",
+      "Effect": "Allow",
+      "Principal": "*",
+      "Action": "s3:GetObject",
+      "Resource": "arn:aws:s3:::${DEPLOY_BUCKET}/*"
+    }
+  ]
+}
+POLICY
+
+          aws s3api put-bucket-policy --bucket "${DEPLOY_BUCKET}" --policy "file://${POLICY_FILE}"
+          rm -f "${POLICY_FILE}"
+
+          {
+            echo '### 🌐 Enabled static website hosting'
+            echo ''
+            echo "- Bucket: \`${DEPLOY_BUCKET}\`"
+            echo "- Index document: \`index.html\`"
+            echo "- Error document: \`index.html\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Ensure CloudFront distribution
+        id: ensure_distribution
         env:
           DEPLOY_BUCKET: ${{ secrets.AWS_S3_BUCKET }}
           AWS_REGION: ${{ secrets.AWS_REGION }}
@@ -110,48 +154,95 @@ jobs:
           ORIGIN_REGIONAL="${DEPLOY_BUCKET}.s3.${AWS_REGION}.amazonaws.com"
           ORIGIN_WEBSITE="${DEPLOY_BUCKET}.s3-website-${AWS_REGION}.amazonaws.com"
           MATCH=$(aws cloudfront list-distributions --query "DistributionList.Items[?Origins.Items[?DomainName=='${ORIGIN_CLASSIC}' || DomainName=='${ORIGIN_REGIONAL}' || DomainName=='${ORIGIN_WEBSITE}']]|[0]")
-          if [ -z "$MATCH" ] || [ "$MATCH" = "null" ]; then
-            echo '::warning::No CloudFront distribution is configured for the provided S3 bucket. Skipping distribution discovery.'
+          if [ -n "$MATCH" ] && [ "$MATCH" != "null" ]; then
+            CF_ID=$(echo "$MATCH" | jq -r '.Id // empty')
+            CF_DOMAIN=$(echo "$MATCH" | jq -r '.DomainName // empty')
+            if [ -z "$CF_ID" ] || [ -z "$CF_DOMAIN" ]; then
+              echo '::error::CloudFront distribution is missing an Id or DomainName. Inspect the AWS console.'
+              exit 1
+            fi
+            echo "distribution-id=${CF_ID}" >> "$GITHUB_OUTPUT"
+            echo "distribution-domain=https://${CF_DOMAIN}" >> "$GITHUB_OUTPUT"
             {
-              echo '### ⚠️ CloudFront distribution not found'
+              echo '### ✅ CloudFront distribution detected'
               echo ''
-              echo "No CloudFront distribution could be matched to bucket \`${DEPLOY_BUCKET}\` in region \`${AWS_REGION}\`."
-              echo ''
-              echo '#### What happens next'
-              echo '- The site has been synced to S3 successfully.'
-              echo '- CloudFront cache invalidation will be skipped.'
-              echo ''
-              echo '#### How to add CloudFront (optional)'
-              echo '1. Create a CloudFront distribution with the S3 bucket as an origin (Origin Access Control recommended).'
-              echo '2. Alternatively, ensure an existing distribution origin domain exactly matches one of:'
-              echo "   - ${ORIGIN_CLASSIC}"
-              echo "   - ${ORIGIN_REGIONAL}"
-              echo "   - ${ORIGIN_WEBSITE}"
-              echo '3. Re-run this workflow once the distribution exists to enable automatic cache invalidation and deployment URL reporting.'
+              echo "- **Distribution ID**: \`${CF_ID}\`"
+              echo "- **CloudFront URL**: https://${CF_DOMAIN}"
             } >> "$GITHUB_STEP_SUMMARY"
-            echo 'distribution-id=' >> "$GITHUB_OUTPUT"
-            echo 'distribution-domain=' >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          CF_ID=$(echo "$MATCH" | jq -r '.Id // empty')
-          CF_DOMAIN=$(echo "$MATCH" | jq -r '.DomainName // empty')
+
+          CALLER_REFERENCE="infinite-rails-${DEPLOY_BUCKET}-$(date +%s)"
+          CONFIG_FILE=$(mktemp)
+          cat >"${CONFIG_FILE}" <<JSON
+{
+  "CallerReference": "${CALLER_REFERENCE}",
+  "Comment": "Infinite Rails static site for bucket ${DEPLOY_BUCKET}",
+  "Enabled": true,
+  "PriceClass": "PriceClass_All",
+  "Origins": {
+    "Quantity": 1,
+    "Items": [
+      {
+        "Id": "S3-${DEPLOY_BUCKET}-website",
+        "DomainName": "${ORIGIN_WEBSITE}",
+        "CustomOriginConfig": {
+          "HTTPPort": 80,
+          "HTTPSPort": 443,
+          "OriginProtocolPolicy": "http-only",
+          "OriginSslProtocols": {
+            "Quantity": 3,
+            "Items": ["TLSv1", "TLSv1.1", "TLSv1.2"]
+          }
+        }
+      }
+    ]
+  },
+  "DefaultRootObject": "index.html",
+  "DefaultCacheBehavior": {
+    "TargetOriginId": "S3-${DEPLOY_BUCKET}-website",
+    "ViewerProtocolPolicy": "redirect-to-https",
+    "AllowedMethods": {
+      "Quantity": 2,
+      "Items": ["GET", "HEAD"],
+      "CachedMethods": {
+        "Quantity": 2,
+        "Items": ["GET", "HEAD"]
+      }
+    },
+    "Compress": true,
+    "CachePolicyId": "658327ea-f89d-4fab-a63d-7e88639e58f6"
+  }
+}
+JSON
+
+          CREATE_OUTPUT=$(aws cloudfront create-distribution --distribution-config "file://${CONFIG_FILE}")
+          rm -f "${CONFIG_FILE}"
+
+          CF_ID=$(echo "$CREATE_OUTPUT" | jq -r '.Distribution.Id // empty')
+          CF_DOMAIN=$(echo "$CREATE_OUTPUT" | jq -r '.Distribution.DomainName // empty')
           if [ -z "$CF_ID" ] || [ -z "$CF_DOMAIN" ]; then
-            echo '::error::CloudFront distribution is missing an Id or DomainName. Inspect the AWS console.'
+            echo '::error::Failed to parse CloudFront distribution details from creation response.'
             exit 1
           fi
+
+          aws cloudfront wait distribution-deployed --id "$CF_ID"
+
           echo "distribution-id=${CF_ID}" >> "$GITHUB_OUTPUT"
           echo "distribution-domain=https://${CF_DOMAIN}" >> "$GITHUB_OUTPUT"
+
           {
-            echo '### ✅ CloudFront distribution detected'
+            echo '### 🚀 Created CloudFront distribution'
             echo ''
             echo "- **Distribution ID**: \`${CF_ID}\`"
             echo "- **CloudFront URL**: https://${CF_DOMAIN}"
+            echo "- **Origin**: ${ORIGIN_WEBSITE}"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Invalidate CloudFront cache
-        if: steps.discover.outputs['distribution-id'] != ''
+        if: steps.ensure_distribution.outputs['distribution-id'] != ''
         env:
-          DISTRIBUTION_ID: ${{ steps.discover.outputs.distribution-id }}
+          DISTRIBUTION_ID: ${{ steps.ensure_distribution.outputs.distribution-id }}
         run: |
           set -euo pipefail
           if [ -z "${DISTRIBUTION_ID}" ]; then
@@ -162,8 +253,8 @@ jobs:
 
       - name: Announce deployment URL
         env:
-          DISTRIBUTION_DOMAIN: ${{ steps.discover.outputs.distribution-domain }}
-          DISTRIBUTION_ID: ${{ steps.discover.outputs.distribution-id }}
+          DISTRIBUTION_DOMAIN: ${{ steps.ensure_distribution.outputs.distribution-domain }}
+          DISTRIBUTION_ID: ${{ steps.ensure_distribution.outputs.distribution-id }}
           DEPLOY_BUCKET: ${{ secrets.AWS_S3_BUCKET }}
           AWS_REGION: ${{ secrets.AWS_REGION }}
         run: |
