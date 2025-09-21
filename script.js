@@ -25,6 +25,18 @@ const codexListEl = document.getElementById('dimensionCodex');
 const openGuideButton = document.getElementById('openGuide');
 const portalProgressLabel = portalProgressEl.querySelector('.label');
 const portalProgressBar = portalProgressEl.querySelector('.bar');
+const headerUserNameEl = document.getElementById('headerUserName');
+const headerUserLocationEl = document.getElementById('headerUserLocation');
+const userNameDisplayEl = document.getElementById('userNameDisplay');
+const userLocationDisplayEl = document.getElementById('userLocationDisplay');
+const userDeviceDisplayEl = document.getElementById('userDeviceDisplay');
+const googleButtonContainer = document.getElementById('googleButtonContainer');
+const googleFallbackSignIn = document.getElementById('googleFallbackSignIn');
+const googleSignOutButton = document.getElementById('googleSignOut');
+const scoreboardSection = document.getElementById('scoreboardSection');
+const scoreboardListEl = document.getElementById('scoreboardList');
+const scoreboardStatusEl = document.getElementById('scoreboardStatus');
+const refreshScoresButton = document.getElementById('refreshScores');
 const rootElement = document.documentElement;
 const computedVars = getComputedStyle(rootElement);
 const readVar = (name, fallback) => {
@@ -44,6 +56,11 @@ const BASE_THEME = {
       'radial-gradient(circle at 20% 20%, rgba(73, 242, 255, 0.2), transparent 45%), radial-gradient(circle at 80% 10%, rgba(247, 183, 51, 0.2), transparent 55%), linear-gradient(160deg, #050912, #0b1230 60%, #05131f 100%)'
     ),
   dimensionGlow: readVar('--dimension-glow', 'rgba(73, 242, 255, 0.45)'),
+};
+
+const appConfig = {
+  apiBaseUrl: window.APP_CONFIG?.apiBaseUrl ?? null,
+  googleClientId: window.APP_CONFIG?.googleClientId ?? null,
 };
 
 const TILE_UNIT = 1;
@@ -70,6 +87,20 @@ const orbitState = {
 
 const baseMaterialCache = new Map();
 const accentMaterialCache = new Map();
+
+const identityState = {
+  googleProfile: null,
+  displayName: null,
+  location: null,
+  device: null,
+  scoreboard: [],
+  scoreboardSource: 'remote',
+  loadingScores: false,
+  googleInitialized: false,
+};
+
+const SCOREBOARD_STORAGE_KEY = 'infinite-dimension-scoreboard';
+const PROFILE_STORAGE_KEY = 'infinite-dimension-profile';
 
 function getBaseMaterial(color) {
   if (!baseMaterialCache.has(color)) {
@@ -990,6 +1021,7 @@ const state = {
   pressedKeys: new Set(),
   isRunning: false,
   victory: false,
+  scoreSubmitted: false,
 };
 
 initRenderer();
@@ -1456,6 +1488,7 @@ function startGame() {
   state.isRunning = true;
   state.player.effects = {};
   state.victory = false;
+  state.scoreSubmitted = false;
   state.dimensionHistory = ['origin'];
   state.unlockedDimensions = new Set(['origin']);
   state.knownRecipes = new Set(['stick', 'stone-pickaxe']);
@@ -1487,7 +1520,7 @@ function loadDimension(id, fromId = null) {
     state.dimensionHistory.push(id);
   }
   applyDimensionTheme(dim);
-  document.title = `Infinite Rails · ${dim.name}`;
+  document.title = `Infinite Dimension · ${dim.name}`;
   state.world = dim.generator(state);
   resetWorldMeshes();
   updateWorldTarget();
@@ -1522,6 +1555,7 @@ function loadDimension(id, fromId = null) {
   if (id === 'origin' && fromId && hasItem('eternal-ingot')) {
     state.victory = true;
     logEvent('Victory! You returned with the Eternal Ingot.');
+    handleVictoryAchieved();
   }
   updateDimensionOverlay();
   updateDimensionCodex();
@@ -2184,10 +2218,569 @@ function initEventListeners() {
   openGuideButton?.addEventListener('click', openGuideModal);
 }
 
+function collectDeviceSnapshot() {
+  return {
+    userAgent: navigator.userAgent,
+    platform: navigator.platform,
+    language: navigator.language,
+    screen: {
+      width: window.screen?.width ?? null,
+      height: window.screen?.height ?? null,
+      pixelRatio: window.devicePixelRatio ?? 1,
+    },
+  };
+}
+
+function formatDeviceSnapshot(device) {
+  if (!device) return 'Device details pending';
+  const platform = device.platform || 'Unknown device';
+  const width = device.screen?.width;
+  const height = device.screen?.height;
+  const ratio = device.screen?.pixelRatio;
+  const size = width && height ? `${width}×${height}` : 'unknown size';
+  const ratioText = ratio ? ` @${Number(ratio).toFixed(1)}x` : '';
+  return `${platform} · ${size}${ratioText}`;
+}
+
+function formatLocationBadge(location) {
+  if (!location) return 'Location unavailable';
+  if (location.error) return `Location: ${location.error}`;
+  if (typeof location.latitude === 'number' && typeof location.longitude === 'number') {
+    return `Lat ${location.latitude.toFixed(2)}, Lon ${location.longitude.toFixed(2)}`;
+  }
+  if (location.label) return location.label;
+  return 'Location hidden';
+}
+
+function formatLocationDetail(location) {
+  if (!location) return 'Location unavailable';
+  if (location.error) return `Location: ${location.error}`;
+  if (typeof location.latitude === 'number' && typeof location.longitude === 'number') {
+    const accuracy = location.accuracy ? ` · ±${Math.round(location.accuracy)}m` : '';
+    return `Latitude ${location.latitude.toFixed(3)}, Longitude ${location.longitude.toFixed(3)}${accuracy}`;
+  }
+  if (location.label) return location.label;
+  return 'Location hidden';
+}
+
+function formatScoreNumber(score) {
+  return Math.round(score ?? 0).toLocaleString();
+}
+
+function formatRunTime(seconds) {
+  if (!seconds) return '—';
+  const totalSeconds = Math.max(0, Math.round(seconds));
+  const minutes = Math.floor(totalSeconds / 60);
+  const secs = totalSeconds % 60;
+  if (minutes >= 60) {
+    const hours = Math.floor(minutes / 60);
+    const remMinutes = minutes % 60;
+    return `${hours}h ${remMinutes}m`;
+  }
+  if (minutes > 0) {
+    return `${minutes}m ${secs}s`;
+  }
+  return `${secs}s`;
+}
+
+function formatLocationLabel(entry) {
+  if (entry.locationLabel) return entry.locationLabel;
+  const location = entry.location;
+  if (!location) return 'Location hidden';
+  if (location.error) return location.error;
+  if (location.latitude !== undefined && location.longitude !== undefined) {
+    return `Lat ${Number(location.latitude).toFixed(1)}, Lon ${Number(location.longitude).toFixed(1)}`;
+  }
+  return 'Location hidden';
+}
+
+function updateIdentityUI() {
+  if (headerUserNameEl) headerUserNameEl.textContent = identityState.displayName ?? 'Guest Explorer';
+  if (userNameDisplayEl) userNameDisplayEl.textContent = identityState.displayName ?? 'Guest Explorer';
+  if (headerUserLocationEl) headerUserLocationEl.textContent = formatLocationBadge(identityState.location);
+  if (userLocationDisplayEl) userLocationDisplayEl.textContent = formatLocationDetail(identityState.location);
+  if (userDeviceDisplayEl) userDeviceDisplayEl.textContent = formatDeviceSnapshot(identityState.device);
+
+  const signedIn = Boolean(identityState.googleProfile);
+  if (googleSignOutButton) googleSignOutButton.hidden = !signedIn;
+  if (scoreboardSection) scoreboardSection.hidden = !signedIn;
+  if (googleButtonContainer) googleButtonContainer.hidden = signedIn || !identityState.googleInitialized;
+  if (googleFallbackSignIn) {
+    const showFallback = !signedIn && !identityState.googleInitialized;
+    googleFallbackSignIn.hidden = !showFallback;
+    googleFallbackSignIn.disabled = !appConfig.googleClientId;
+    if (!appConfig.googleClientId) {
+      googleFallbackSignIn.textContent = 'Google SSO unavailable';
+      googleFallbackSignIn.title = 'Provide APP_CONFIG.googleClientId to enable Google sign-in.';
+    }
+  }
+
+  if (scoreboardStatusEl) {
+    let statusText = '';
+    if (!signedIn) {
+      statusText = 'Sign in with Google to view the multiverse scorecard.';
+    } else if (identityState.loadingScores) {
+      statusText = 'Loading score data...';
+    } else if (!identityState.scoreboard.length) {
+      statusText = 'No scores recorded yet.';
+    } else if (identityState.scoreboardSource === 'sample') {
+      statusText = 'Showing sample data. Connect the API to DynamoDB for live scores.';
+    }
+    scoreboardStatusEl.textContent = statusText;
+    scoreboardStatusEl.hidden = statusText === '';
+  }
+
+  renderScoreboard(identityState.scoreboard);
+}
+
+function renderScoreboard(entries) {
+  if (!scoreboardListEl) return;
+  scoreboardListEl.innerHTML = '';
+  if (!entries?.length) return;
+  entries
+    .slice()
+    .sort((a, b) => (b.score ?? 0) - (a.score ?? 0))
+    .forEach((entry, index) => {
+      const item = document.createElement('li');
+      item.className = 'score-entry';
+
+      const rank = document.createElement('span');
+      rank.className = 'rank';
+      rank.textContent = (index + 1).toString();
+
+      const body = document.createElement('div');
+      body.className = 'score-entry__body';
+      const name = document.createElement('strong');
+      name.textContent = entry.name ?? 'Explorer';
+      const details = document.createElement('span');
+      const dimensionCount = entry.dimensionCount ?? 0;
+      const inventoryCount = entry.inventoryCount ?? 0;
+      details.textContent = `${formatScoreNumber(entry.score)} pts · ${dimensionCount} realms · ${formatRunTime(
+        entry.runTimeSeconds
+      )} · ${inventoryCount} items`;
+      body.append(name, details);
+
+      const meta = document.createElement('div');
+      meta.className = 'score-entry__meta';
+      const location = document.createElement('span');
+      location.textContent = formatLocationLabel(entry);
+      meta.appendChild(location);
+      if (entry.updatedAt) {
+        const updated = document.createElement('span');
+        try {
+          updated.textContent = `Updated ${new Date(entry.updatedAt).toLocaleString()}`;
+        } catch (error) {
+          updated.textContent = `Updated ${entry.updatedAt}`;
+        }
+        meta.appendChild(updated);
+      }
+
+      item.append(rank, body, meta);
+      scoreboardListEl.appendChild(item);
+    });
+}
+
+function decodeJwt(token) {
+  if (!token) return null;
+  const payload = token.split('.')[1];
+  if (!payload) return null;
+  const normalized = payload.replace(/-/g, '+').replace(/_/g, '/');
+  try {
+    const decoded = atob(normalized);
+    const json = decodeURIComponent(
+      Array.prototype.map
+        .call(decoded, (char) => `%${`00${char.charCodeAt(0).toString(16)}`.slice(-2)}`)
+        .join('')
+    );
+    return JSON.parse(json);
+  } catch (error) {
+    console.warn('Failed to decode Google credential.', error);
+    return null;
+  }
+}
+
+function promptDisplayName(defaultName) {
+  const base = defaultName ?? 'Explorer';
+  const response = window.prompt('How should we address you inside Infinite Dimension?', base);
+  const trimmed = response?.trim();
+  return trimmed || base;
+}
+
+async function handleGoogleCredentialResponse({ credential }) {
+  const decoded = decodeJwt(credential);
+  if (!decoded) {
+    console.warn('Received invalid Google credential payload.');
+    return;
+  }
+  const defaultName = decoded.name ?? decoded.given_name ?? (decoded.email ? decoded.email.split('@')[0] : 'Explorer');
+  const preferredName = promptDisplayName(defaultName);
+  await finalizeSignIn({ ...decoded, credential }, preferredName);
+}
+
+async function finalizeSignIn(profile, preferredName) {
+  const googleId =
+    profile.sub ?? profile.user_id ?? profile.id ?? (profile.email ? `email:${profile.email}` : `guest:${Date.now()}`);
+  identityState.googleProfile = {
+    sub: googleId,
+    email: profile.email ?? null,
+    picture: profile.picture ?? null,
+  };
+  identityState.displayName = preferredName ?? profile.name ?? 'Explorer';
+  identityState.device = collectDeviceSnapshot();
+  updateIdentityUI();
+
+  identityState.location = await captureLocation();
+  updateIdentityUI();
+
+  await syncUserMetadata();
+  await loadScoreboard();
+}
+
+function attemptGoogleInit(retries = 12) {
+  if (!appConfig.googleClientId) {
+    identityState.googleInitialized = false;
+    updateIdentityUI();
+    return;
+  }
+  if (window.google?.accounts?.id) {
+    google.accounts.id.initialize({
+      client_id: appConfig.googleClientId,
+      callback: handleGoogleCredentialResponse,
+      ux_mode: 'popup',
+      auto_select: false,
+    });
+    if (googleButtonContainer) {
+      google.accounts.id.renderButton(googleButtonContainer, {
+        type: 'standard',
+        theme: 'outline',
+        size: 'large',
+        text: 'signin_with',
+        shape: 'pill',
+        width: 260,
+      });
+      googleButtonContainer.hidden = false;
+    }
+    identityState.googleInitialized = true;
+    updateIdentityUI();
+    return;
+  }
+  if (retries > 0) {
+    setTimeout(() => attemptGoogleInit(retries - 1), 400);
+  } else {
+    identityState.googleInitialized = false;
+    updateIdentityUI();
+  }
+}
+
+function attemptGoogleSignInFlow() {
+  if (!appConfig.googleClientId) {
+    console.warn('Google client ID missing.');
+    return;
+  }
+  if (!identityState.googleInitialized) {
+    attemptGoogleInit();
+  }
+  if (window.google?.accounts?.id && identityState.googleInitialized) {
+    google.accounts.id.prompt((notification) => {
+      if (notification.isNotDisplayed?.()) {
+        console.warn('Google Sign-In prompt was not displayed.', notification.getNotDisplayedReason?.());
+      }
+      if (notification.isSkippedMoment?.()) {
+        console.warn('Google Sign-In prompt was skipped.', notification.getSkippedReason?.());
+      }
+    });
+  } else {
+    alert('Google Sign-In is still initialising. Please try again in a moment.');
+  }
+}
+
+function handleGoogleSignOut() {
+  identityState.googleProfile = null;
+  identityState.displayName = null;
+  identityState.location = null;
+  identityState.scoreboard = [];
+  identityState.scoreboardSource = 'remote';
+  identityState.loadingScores = false;
+  state.scoreSubmitted = false;
+  if (window.google?.accounts?.id) {
+    google.accounts.id.disableAutoSelect();
+  }
+  updateIdentityUI();
+}
+
+async function syncUserMetadata() {
+  if (!identityState.googleProfile) return;
+  const payload = {
+    googleId: identityState.googleProfile.sub,
+    name: identityState.displayName,
+    email: identityState.googleProfile.email,
+    location: identityState.location,
+    device: identityState.device,
+    lastSeenAt: new Date().toISOString(),
+  };
+  try {
+    localStorage.setItem(
+      PROFILE_STORAGE_KEY,
+      JSON.stringify({ name: payload.name, location: payload.location, lastSeenAt: payload.lastSeenAt })
+    );
+  } catch (error) {
+    console.warn('Unable to persist profile preferences locally.', error);
+  }
+  if (!appConfig.apiBaseUrl) return;
+  try {
+    await fetch(`${appConfig.apiBaseUrl.replace(/\/$/, '')}/users`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  } catch (error) {
+    console.warn('Failed to sync user metadata with API.', error);
+  }
+}
+
+function loadLocalScores() {
+  try {
+    const stored = localStorage.getItem(SCOREBOARD_STORAGE_KEY);
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      if (Array.isArray(parsed)) {
+        return parsed;
+      }
+    }
+  } catch (error) {
+    console.warn('Unable to load cached scores.', error);
+  }
+  return [
+    {
+      id: 'sample-aurora',
+      name: 'Aurora',
+      score: 2450,
+      dimensionCount: 4,
+      runTimeSeconds: 1420,
+      inventoryCount: 36,
+      locationLabel: 'Northern Citadel',
+      updatedAt: new Date(Date.now() - 86400000).toISOString(),
+    },
+    {
+      id: 'sample-zenith',
+      name: 'Zenith',
+      score: 1980,
+      dimensionCount: 3,
+      runTimeSeconds: 1185,
+      inventoryCount: 28,
+      locationLabel: 'Lunar Outpost',
+      updatedAt: new Date(Date.now() - 172800000).toISOString(),
+    },
+    {
+      id: 'sample-orbit',
+      name: 'Orbit',
+      score: 1675,
+      dimensionCount: 3,
+      runTimeSeconds: 960,
+      inventoryCount: 24,
+      locationLabel: 'Synthwave Reef',
+      updatedAt: new Date(Date.now() - 259200000).toISOString(),
+    },
+  ];
+}
+
+function saveLocalScores(entries) {
+  try {
+    localStorage.setItem(SCOREBOARD_STORAGE_KEY, JSON.stringify(entries));
+  } catch (error) {
+    console.warn('Unable to cache scores locally.', error);
+  }
+}
+
+function normalizeScoreEntries(entries = []) {
+  return entries
+    .map((entry) => ({
+      id: entry.id ?? entry.googleId ?? entry.playerId ?? `guest-${Math.random().toString(36).slice(2)}`,
+      name: entry.name ?? entry.displayName ?? 'Explorer',
+      score: Number(entry.score ?? entry.points ?? 0),
+      dimensionCount: Number(entry.dimensionCount ?? entry.dimensions ?? entry.realms ?? 0),
+      runTimeSeconds: Number(entry.runTimeSeconds ?? entry.runtimeSeconds ?? entry.runtime ?? 0),
+      inventoryCount: Number(entry.inventoryCount ?? entry.resources ?? entry.items ?? 0),
+      location: entry.location ??
+        (entry.latitude !== undefined && entry.longitude !== undefined
+          ? { latitude: entry.latitude, longitude: entry.longitude }
+          : null),
+      locationLabel: entry.locationLabel ?? entry.location?.label ?? entry.locationName ?? null,
+      updatedAt: entry.updatedAt ?? entry.lastUpdated ?? entry.updated_at ?? null,
+    }))
+    .sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+}
+
+function upsertScoreEntry(entries, entry) {
+  const next = entries.slice();
+  const index = next.findIndex((item) => item.id === entry.id);
+  if (index >= 0) {
+    if ((entry.score ?? 0) >= (next[index].score ?? 0)) {
+      next[index] = { ...next[index], ...entry };
+    } else {
+      next[index] = { ...entry, score: next[index].score };
+    }
+  } else {
+    next.push(entry);
+  }
+  return normalizeScoreEntries(next);
+}
+
+async function loadScoreboard() {
+  if (!identityState.googleProfile) {
+    identityState.scoreboard = [];
+    identityState.scoreboardSource = 'remote';
+    identityState.loadingScores = false;
+    updateIdentityUI();
+    return;
+  }
+  identityState.loadingScores = true;
+  updateIdentityUI();
+  let entries = [];
+  if (appConfig.apiBaseUrl) {
+    try {
+      const response = await fetch(`${appConfig.apiBaseUrl.replace(/\/$/, '')}/scores`);
+      if (response.ok) {
+        const payload = await response.json();
+        entries = Array.isArray(payload) ? payload : payload?.items ?? [];
+        identityState.scoreboardSource = 'remote';
+      }
+    } catch (error) {
+      console.warn('Unable to load remote scoreboard.', error);
+    }
+  }
+  if (!entries.length) {
+    entries = loadLocalScores();
+    identityState.scoreboardSource = 'sample';
+  }
+  identityState.scoreboard = normalizeScoreEntries(entries);
+  identityState.loadingScores = false;
+  updateIdentityUI();
+}
+
+async function recordScore(snapshot) {
+  if (!identityState.googleProfile) return;
+  const entry = {
+    id: identityState.googleProfile.sub,
+    name: identityState.displayName ?? 'Explorer',
+    score: snapshot.score,
+    dimensionCount: snapshot.dimensionCount,
+    runTimeSeconds: snapshot.runTimeSeconds,
+    inventoryCount: snapshot.inventoryCount,
+    location: identityState.location && !identityState.location.error ? identityState.location : null,
+    locationLabel: identityState.location?.label ?? null,
+    updatedAt: new Date().toISOString(),
+  };
+  identityState.scoreboard = upsertScoreEntry(identityState.scoreboard, entry);
+  if (!appConfig.apiBaseUrl) {
+    identityState.scoreboardSource = 'sample';
+  }
+  saveLocalScores(identityState.scoreboard);
+  updateIdentityUI();
+  if (appConfig.apiBaseUrl) {
+    try {
+      await fetch(`${appConfig.apiBaseUrl.replace(/\/$/, '')}/scores`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...entry,
+          googleId: identityState.googleProfile.sub,
+          email: identityState.googleProfile.email,
+        }),
+      });
+    } catch (error) {
+      console.warn('Failed to sync score with API.', error);
+    }
+  }
+  await syncUserMetadata();
+}
+
+function computeScoreSnapshot() {
+  const uniqueDimensions = new Set(state.dimensionHistory ?? []).size;
+  const inventoryBundles = mergeInventory();
+  const satchelCount = state.player.satchel?.reduce((sum, bundle) => sum + (bundle?.quantity ?? 0), 0) ?? 0;
+  const inventoryCount = inventoryBundles.reduce((sum, bundle) => sum + bundle.quantity, 0) + satchelCount;
+  const heartsScore = (state.player.hearts ?? 0) * 40;
+  const baseScore = uniqueDimensions * 500 + inventoryCount * 25 + heartsScore;
+  return {
+    score: Math.round(baseScore),
+    dimensionCount: uniqueDimensions,
+    runTimeSeconds: Math.round(state.elapsed ?? 0),
+    inventoryCount,
+  };
+}
+
+function handleVictoryAchieved() {
+  if (state.scoreSubmitted) return;
+  state.scoreSubmitted = true;
+  if (!identityState.googleProfile) {
+    logEvent('Sign in with Google to publish your victory on the multiverse scoreboard.');
+    return;
+  }
+  const snapshot = computeScoreSnapshot();
+  recordScore(snapshot);
+}
+
+async function captureLocation() {
+  if (!('geolocation' in navigator)) {
+    return { error: 'Geolocation unavailable' };
+  }
+  return new Promise((resolve) => {
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        resolve({
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+          accuracy: position.coords.accuracy,
+          timestamp: position.timestamp,
+        });
+      },
+      (error) => {
+        if (error.code === error.PERMISSION_DENIED) {
+          resolve({ error: 'Permission denied' });
+        } else {
+          resolve({ error: error.message || 'Location unavailable' });
+        }
+      },
+      { enableHighAccuracy: false, timeout: 8000, maximumAge: 300000 }
+    );
+  });
+}
+
+function initializeIdentityLayer() {
+  identityState.device = collectDeviceSnapshot();
+  try {
+    const cachedProfile = localStorage.getItem(PROFILE_STORAGE_KEY);
+    if (cachedProfile) {
+      const parsed = JSON.parse(cachedProfile);
+      if (parsed?.name && !identityState.displayName) {
+        identityState.displayName = parsed.name;
+      }
+      if (parsed?.location && !identityState.location) {
+        identityState.location = parsed.location;
+      }
+    }
+  } catch (error) {
+    console.warn('Unable to hydrate cached profile.', error);
+  }
+  updateIdentityUI();
+  attemptGoogleInit();
+  googleFallbackSignIn?.addEventListener('click', attemptGoogleSignInFlow);
+  googleSignOutButton?.addEventListener('click', handleGoogleSignOut);
+  refreshScoresButton?.addEventListener('click', () => {
+    if (!identityState.googleProfile) {
+      updateIdentityUI();
+      return;
+    }
+    loadScoreboard();
+  });
+}
+
 startButton.addEventListener('click', startGame);
 initEventListeners();
 
 setupGuideModal();
+initializeIdentityLayer();
 
 function openGuideModal() {
   if (!guideModal) return;

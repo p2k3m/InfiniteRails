@@ -1,0 +1,39 @@
+<svg width="220" height="60" viewBox="0 0 220 60" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="glow" x1="0" y1="0" x2="220" y2="60" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#49F2FF" />
+      <stop offset="0.5" stop-color="#8A79FF" />
+      <stop offset="1" stop-color="#F7B733" />
+    </linearGradient>
+    <radialGradient id="pulse" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(110 30) scale(70)">
+      <stop stop-color="#49F2FF" stop-opacity="0.8" />
+      <stop offset="0.55" stop-color="#102B54" stop-opacity="0.4" />
+      <stop offset="1" stop-color="#020915" stop-opacity="0" />
+    </radialGradient>
+  </defs>
+  <rect x="6" y="6" width="208" height="48" rx="16" fill="url(#pulse)" />
+  <path
+    d="M32 42C25.3726 42 20 36.6274 20 30C20 23.3726 25.3726 18 32 18H188C194.627 18 200 23.3726 200 30C200 36.6274 194.627 42 188 42H32Z"
+    fill="url(#glow)"
+    fill-opacity="0.2"
+  />
+  <path
+    d="M44 30C44 24.4772 48.4772 20 54 20H90C95.5228 20 100 24.4772 100 30C100 35.5228 95.5228 40 90 40H54C48.4772 40 44 35.5228 44 30Z"
+    stroke="url(#glow)"
+    stroke-width="2.5"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+  <path
+    d="M120 20H166C171.523 20 176 24.4772 176 30C176 35.5228 171.523 40 166 40H120"
+    stroke="url(#glow)"
+    stroke-width="2.5"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+  <circle cx="54" cy="30" r="6" fill="#49F2FF" />
+  <circle cx="166" cy="30" r="6" fill="#F7B733" />
+  <text x="110" y="36" text-anchor="middle" font-family="'Chakra Petch', sans-serif" font-size="20" letter-spacing="6" fill="#E7F7FF">
+    I D
+  </text>
+</svg>
