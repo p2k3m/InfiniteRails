@@ -296,14 +296,56 @@ function updateCameraOrbit() {
 }
 
 function initPointerControls() {
-  const pointer = { active: false, id: null, lastX: 0, lastY: 0 };
+  const pointer = {
+    active: false,
+    id: null,
+    lastX: 0,
+    lastY: 0,
+    totalDeltaX: 0,
+    totalDeltaY: 0,
+    pointerType: null,
+    button: 0,
+  };
+  const CLICK_THRESHOLD_PX = 6;
   canvas.style.cursor = 'grab';
 
+  const resetPointerState = () => {
+    pointer.active = false;
+    pointer.id = null;
+    pointer.totalDeltaX = 0;
+    pointer.totalDeltaY = 0;
+    pointer.pointerType = null;
+    pointer.button = 0;
+    canvas.style.cursor = 'grab';
+  };
+
+  const releasePointerCapture = () => {
+    if (pointer.id !== null) {
+      try {
+        canvas.releasePointerCapture(pointer.id);
+      } catch (error) {
+        console.warn('Unable to release pointer capture', error);
+      }
+    }
+  };
+
+  const endPointerInteraction = () => {
+    releasePointerCapture();
+    resetPointerState();
+  };
+
   canvas.addEventListener('pointerdown', (event) => {
+    if (event.pointerType === 'mouse' && event.button !== 0) {
+      return;
+    }
     pointer.active = true;
     pointer.id = event.pointerId;
     pointer.lastX = event.clientX;
     pointer.lastY = event.clientY;
+    pointer.totalDeltaX = 0;
+    pointer.totalDeltaY = 0;
+    pointer.pointerType = event.pointerType;
+    pointer.button = event.button;
     canvas.setPointerCapture(event.pointerId);
     canvas.style.cursor = 'grabbing';
   });
@@ -312,6 +354,8 @@ function initPointerControls() {
     if (!pointer.active) return;
     const dx = event.clientX - pointer.lastX;
     const dy = event.clientY - pointer.lastY;
+    pointer.totalDeltaX += dx;
+    pointer.totalDeltaY += dy;
     pointer.lastX = event.clientX;
     pointer.lastY = event.clientY;
     orbitState.azimuth -= dx * 0.005;
@@ -319,17 +363,28 @@ function initPointerControls() {
     updateCameraOrbit();
   });
 
-  const stopPointer = (event) => {
-    if (pointer.id !== null) {
-      canvas.releasePointerCapture(pointer.id);
+  canvas.addEventListener('pointerup', (event) => {
+    if (!pointer.active) return;
+    const distanceSq = pointer.totalDeltaX * pointer.totalDeltaX + pointer.totalDeltaY * pointer.totalDeltaY;
+    const withinClickThreshold = distanceSq <= CLICK_THRESHOLD_PX * CLICK_THRESHOLD_PX;
+    const isPrimaryPointer =
+      pointer.pointerType === 'touch' ||
+      pointer.pointerType === 'pen' ||
+      pointer.button === 0 ||
+      event.button === 0;
+    if (withinClickThreshold && isPrimaryPointer && state.isRunning) {
+      interact();
     }
-    pointer.active = false;
-    pointer.id = null;
-    canvas.style.cursor = 'grab';
+    endPointerInteraction();
+  });
+
+  const cancelPointer = () => {
+    if (!pointer.active) return;
+    endPointerInteraction();
   };
 
-  canvas.addEventListener('pointerup', stopPointer);
-  canvas.addEventListener('pointerleave', stopPointer);
+  canvas.addEventListener('pointerleave', cancelPointer);
+  canvas.addEventListener('pointercancel', cancelPointer);
 
   canvas.addEventListener(
     'wheel',
