@@ -521,8 +521,21 @@
     }
 
     function initRenderer() {
-      if (renderer) return;
-      renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+      if (renderer) return true;
+      try {
+        renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+        const gl = renderer.getContext();
+        if (!gl || typeof gl.getParameter !== 'function') {
+          throw new Error('WebGL context unavailable');
+        }
+      } catch (error) {
+        renderer = null;
+        showDependencyError(
+          'Your browser could not initialise the 3D renderer. Please ensure WebGL is enabled and refresh to try again.',
+          error
+        );
+        return false;
+      }
       renderer.setPixelRatio(window.devicePixelRatio ?? 1);
       handleResize();
 
@@ -548,6 +561,7 @@
       updateWorldTarget();
       createPlayerMesh();
       createPlayerLocator();
+      return true;
     }
 
     function updateWorldTarget() {
