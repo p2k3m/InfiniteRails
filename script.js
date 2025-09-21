@@ -98,6 +98,13 @@
     const scoreboardListEl = document.getElementById('scoreboardList');
     const scoreboardStatusEl = document.getElementById('scoreboardStatus');
     const refreshScoresButton = document.getElementById('refreshScores');
+    const scorePanelEl = document.getElementById('scorePanel');
+    const scoreTotalEl = document.getElementById('scoreTotal');
+    const scoreRecipesEl = document.getElementById('scoreRecipes');
+    const scoreDimensionsEl = document.getElementById('scoreDimensions');
+    const damageFlashEl = document.getElementById('damageFlash');
+    const defeatOverlayEl = document.getElementById('defeatOverlay');
+    const defeatOverlayDetailEl = document.getElementById('defeatOverlayDetail');
     const playerHintEl = document.getElementById('playerHint');
     const mainLayoutEl = document.querySelector('.main-layout');
     const primaryPanelEl = document.querySelector('.primary-panel');
@@ -139,6 +146,22 @@
     const CRYSTAL_GEOMETRY = new THREE.OctahedronGeometry(TILE_UNIT * 0.22);
     const raycaster = new THREE.Raycaster();
 
+    const SCORE_POINTS = {
+      recipe: 2,
+      dimension: 5,
+    };
+
+    const SURVIVAL_KEEP_ITEMS = new Set([
+      'stone-pickaxe',
+      'tar-blade',
+      'marble-echo',
+      'portal-igniter',
+      'rail-key',
+      'eternal-ingot',
+    ]);
+
+    let audioContext = null;
+
     let renderer;
     let scene;
     let camera;
@@ -161,12 +184,19 @@
       }
     });
 
+    damageFlashEl?.addEventListener('animationend', () => {
+      damageFlashEl.classList.remove('damage-flash--active');
+    });
+
+    const DEFAULT_CAMERA_VIEW_HEIGHT = 14;
+    const MAX_CAMERA_YAW = Math.PI / 4;
     const CAMERA_EYE_OFFSET = 0.76;
     const CAMERA_FORWARD_OFFSET = 0.22;
     const CAMERA_LOOK_DISTANCE = 6.5;
     const WORLD_UP = new THREE.Vector3(0, 1, 0);
     const cameraState = {
       lastFacing: new THREE.Vector3(0, 0, 1),
+      viewHeight: DEFAULT_CAMERA_VIEW_HEIGHT,
     };
     const tmpCameraForward = new THREE.Vector3();
     const tmpCameraTarget = new THREE.Vector3();
@@ -335,6 +365,21 @@
       }
     }
 
+    function updateCameraProjection(width, height) {
+      if (!camera) return;
+      const viewportWidth = width ?? canvas.clientWidth || canvas.width || 1;
+      const viewportHeight = height ?? canvas.clientHeight || canvas.height || 1;
+      if (viewportHeight <= 0) return;
+      const aspect = viewportWidth / viewportHeight;
+      const viewHeight = cameraState.viewHeight ?? DEFAULT_CAMERA_VIEW_HEIGHT;
+      const viewWidth = viewHeight * aspect;
+      camera.left = -viewWidth / 2;
+      camera.right = viewWidth / 2;
+      camera.top = viewHeight / 2;
+      camera.bottom = -viewHeight / 2;
+      camera.updateProjectionMatrix();
+    }
+
     function handleResize() {
       updateLayoutMetrics();
       syncSidebarForViewport();
@@ -342,8 +387,7 @@
       const width = canvas.clientWidth || canvas.width || 1;
       const height = canvas.clientHeight || canvas.height || 1;
       renderer.setSize(width, height, false);
-      camera.aspect = width / height;
-      camera.updateProjectionMatrix();
+      updateCameraProjection(width, height);
       syncCameraToPlayer({ idleBob: 0, walkBob: 0, movementStrength: 0 });
     }
 
@@ -361,6 +405,9 @@
         tmpCameraForward.copy(cameraState.lastFacing);
       } else {
         tmpCameraForward.normalize();
+        const yaw = Math.atan2(tmpCameraForward.x, tmpCameraForward.z);
+        const clampedYaw = clamp(yaw, -MAX_CAMERA_YAW, MAX_CAMERA_YAW);
+        tmpCameraForward.set(Math.sin(clampedYaw), 0, Math.cos(clampedYaw));
         cameraState.lastFacing.copy(tmpCameraForward);
       }
 
@@ -538,12 +585,24 @@
         return false;
       }
       renderer.setPixelRatio(window.devicePixelRatio ?? 1);
-      handleResize();
+      const initialWidth = canvas.clientWidth || canvas.width || 1;
+      const initialHeight = canvas.clientHeight || canvas.height || 1;
+      renderer.setSize(initialWidth, initialHeight, false);
 
       scene = new THREE.Scene();
       scene.fog = new THREE.FogExp2('#0b1324', 0.055);
 
-      camera = new THREE.PerspectiveCamera(55, (canvas.clientWidth || canvas.width) / (canvas.clientHeight || canvas.height), 0.1, 1000);
+      const aspect = initialHeight === 0 ? 1 : initialWidth / initialHeight;
+      const viewHeight = cameraState.viewHeight;
+      const viewWidth = viewHeight * aspect;
+      camera = new THREE.OrthographicCamera(
+        -viewWidth / 2,
+        viewWidth / 2,
+        viewHeight / 2,
+        -viewHeight / 2,
+        0.1,
+        200
+      );
 
       worldGroup = new THREE.Group();
       entityGroup = new THREE.Group();
@@ -561,6 +620,7 @@
       window.addEventListener('resize', handleResize);
       createPlayerMesh();
       createPlayerLocator();
+      handleResize();
       syncCameraToPlayer({ idleBob: 0, walkBob: 0, movementStrength: 0 });
       return true;
     }
@@ -1799,14 +1859,33 @@
         tarStacks: 0,
         tarSlowTimer: 0,
         zombieHits: 0,
+        lastDamageAt: -Infinity,
+        nextRegenAt: null,
+        drownTimer: 0,
+        isRespawning: false,
+        isUnderwater: false,
       },
       pressedKeys: new Set(),
       isRunning: false,
       victory: false,
+      score: 0,
+      scoreBreakdown: createScoreBreakdown(),
       scoreSubmitted: false,
     };
 
+    const hudState = {
+      heartPulse: null,
+      heartPulseUntil: 0,
+      bubblePulse: null,
+      bubblePulseUntil: 0,
+      lastHearts: state.player.hearts,
+      lastAir: state.player.air,
+      defeatTimer: null,
+      defeatInProgress: false,
+    };
+
     initRenderer();
+    updateScoreOverlay();
 
     function generateOriginIsland(state) {
       const grid = [];
@@ -2017,6 +2096,19 @@
       return Math.max(min, Math.min(max, val));
     }
 
+    function createScoreBreakdown() {
+      return {
+        recipes: new Set(),
+        dimensions: new Set(),
+      };
+    }
+
+    function resetScoreTracking(options = {}) {
+      state.scoreBreakdown = createScoreBreakdown();
+      state.score = 0;
+      updateScoreOverlay(options);
+    }
+
     function addItemToInventory(itemId, quantity = 1) {
       const def = ITEM_DEFS[itemId];
       if (!def) return false;
@@ -2126,31 +2218,96 @@
     }
 
     function updateStatusBars() {
+      if (!heartsEl || !bubblesEl) return;
+
       heartsEl.innerHTML = '';
-      const hearts = document.createElement('div');
-      hearts.className = 'meter';
-      for (let i = 0; i < state.player.maxHearts; i++) {
+      const heartsMeter = document.createElement('div');
+      heartsMeter.className = 'meter heart-meter';
+      const maxHearts = state.player.maxHearts;
+      for (let i = 0; i < maxHearts; i++) {
         const el = document.createElement('span');
         el.className = 'heart';
-        if (i >= state.player.hearts) {
+        const fill = clamp(state.player.hearts - i, 0, 1);
+        el.style.setProperty('--fill', fill.toFixed(2));
+        if (fill <= 0) {
           el.classList.add('empty');
         }
-        hearts.appendChild(el);
+        heartsMeter.appendChild(el);
       }
-      heartsEl.appendChild(hearts);
+      if (hudState.heartPulse && state.elapsed > hudState.heartPulseUntil) {
+        hudState.heartPulse = null;
+      }
+      if (hudState.heartPulse) {
+        heartsMeter.dataset.pulse = hudState.heartPulse;
+      }
+      heartsEl.appendChild(heartsMeter);
+
+      if (state.player.hearts < state.player.maxHearts && !state.player.isRespawning) {
+        const regenMeter = document.createElement('div');
+        regenMeter.className = 'regen-meter';
+        const now = state.elapsed;
+        const lastDamageAt = state.player.lastDamageAt ?? -Infinity;
+        const sinceDamage = now - lastDamageAt;
+        let phase = 'cooldown';
+        let progress = clamp(sinceDamage / 5, 0, 1);
+        let timeRemaining = Math.max(5 - sinceDamage, 0);
+        if (sinceDamage >= 5) {
+          phase = 'charging';
+          if (state.player.nextRegenAt) {
+            timeRemaining = Math.max(state.player.nextRegenAt - now, 0);
+            progress = clamp(1 - timeRemaining / 3, 0, 1);
+          } else {
+            progress = 1;
+            timeRemaining = 0;
+          }
+        }
+        regenMeter.dataset.phase = phase;
+        regenMeter.setAttribute('role', 'progressbar');
+        regenMeter.setAttribute('aria-valuemin', '0');
+        regenMeter.setAttribute('aria-valuemax', '100');
+        regenMeter.setAttribute('aria-valuenow', Math.round(progress * 100).toString());
+        const regenBar = document.createElement('div');
+        regenBar.className = 'regen-meter__bar';
+        regenBar.style.setProperty('--progress', progress.toFixed(3));
+        regenMeter.appendChild(regenBar);
+        const regenLabel = document.createElement('span');
+        regenLabel.className = 'regen-meter__label';
+        if (phase === 'cooldown' && timeRemaining > 0) {
+          regenLabel.textContent = `Regeneration ready in ${timeRemaining.toFixed(1)}s`;
+        } else if (phase === 'charging' && timeRemaining > 0) {
+          regenLabel.textContent = `Restoring +0.5 in ${timeRemaining.toFixed(1)}s`;
+        } else {
+          regenLabel.textContent = 'Restoring vitality';
+        }
+        regenMeter.appendChild(regenLabel);
+        heartsEl.appendChild(regenMeter);
+      }
 
       bubblesEl.innerHTML = '';
-      const bubbles = document.createElement('div');
-      bubbles.className = 'meter';
-      for (let i = 0; i < state.player.maxAir; i++) {
+      const bubblesMeter = document.createElement('div');
+      bubblesMeter.className = 'meter bubble-meter';
+      const maxAir = state.player.maxAir;
+      for (let i = 0; i < maxAir; i++) {
         const el = document.createElement('span');
         el.className = 'bubble';
-        if (i >= state.player.air) {
+        const fill = clamp(state.player.air - i, 0, 1);
+        el.style.setProperty('--fill', fill.toFixed(2));
+        if (fill <= 0) {
           el.classList.add('empty');
         }
-        bubbles.appendChild(el);
+        bubblesMeter.appendChild(el);
       }
-      bubblesEl.appendChild(bubbles);
+      if (hudState.bubblePulse && state.elapsed > hudState.bubblePulseUntil) {
+        hudState.bubblePulse = null;
+      }
+      if (hudState.bubblePulse) {
+        bubblesMeter.dataset.pulse = hudState.bubblePulse;
+      }
+      bubblesMeter.dataset.state = state.player.isUnderwater ? 'submerged' : 'surface';
+      bubblesEl.appendChild(bubblesMeter);
+
+      hudState.lastHearts = state.player.hearts;
+      hudState.lastAir = state.player.air;
 
       const ratio = (state.elapsed % state.dayLength) / state.dayLength;
       rootElement.style.setProperty('--time-phase', ratio.toFixed(3));
@@ -2165,6 +2322,28 @@
       track.append(label, bar);
       timeEl.innerHTML = '';
       timeEl.appendChild(track);
+    }
+
+    function updateScoreOverlay(options = {}) {
+      if (!scoreTotalEl || !scoreRecipesEl || !scoreDimensionsEl) return;
+      const recipeCount = state.scoreBreakdown?.recipes?.size ?? 0;
+      const dimensionCount = state.scoreBreakdown?.dimensions?.size ?? 0;
+      const recipePoints = recipeCount * SCORE_POINTS.recipe;
+      const dimensionPoints = dimensionCount * SCORE_POINTS.dimension;
+      state.score = recipePoints + dimensionPoints;
+      scoreTotalEl.textContent = state.score.toString();
+      scoreRecipesEl.textContent = `${recipeCount} (+${recipePoints} pts)`;
+      scoreDimensionsEl.textContent = `${dimensionCount} (+${dimensionPoints} pts)`;
+      if (scorePanelEl) {
+        scorePanelEl.setAttribute('data-score', state.score.toString());
+        if (options.flash) {
+          scorePanelEl.classList.remove('score-overlay--flash');
+          void scorePanelEl.offsetWidth;
+          scorePanelEl.classList.add('score-overlay--flash');
+        } else {
+          scorePanelEl.classList.remove('score-overlay--flash');
+        }
+      }
     }
 
     function updateDimensionOverlay() {
@@ -2307,10 +2486,23 @@
       state.dimensionHistory = ['origin'];
       state.unlockedDimensions = new Set(['origin']);
       state.knownRecipes = new Set(['stick', 'stone-pickaxe']);
+      resetScoreTracking();
       state.player.inventory = Array.from({ length: 10 }, () => null);
       state.player.satchel = [];
       state.player.selectedSlot = 0;
       state.craftSequence = [];
+      state.player.hearts = state.player.maxHearts;
+      state.player.air = state.player.maxAir;
+      state.player.lastDamageAt = -Infinity;
+      state.player.nextRegenAt = null;
+      state.player.drownTimer = 0;
+      state.player.isRespawning = false;
+      state.player.isUnderwater = false;
+      state.player.zombieHits = 0;
+      hudState.heartPulse = null;
+      hudState.bubblePulse = null;
+      hudState.lastHearts = state.player.hearts;
+      hudState.lastAir = state.player.air;
       renderVictoryBanner();
       loadDimension('origin');
       updateInventoryUI();
@@ -2341,6 +2533,17 @@
       state.unlockedDimensions.add(id);
       if (!state.dimensionHistory.includes(id)) {
         state.dimensionHistory.push(id);
+      }
+      if (id !== 'origin') {
+        if (!state.scoreBreakdown.dimensions.has(id)) {
+          state.scoreBreakdown.dimensions.add(id);
+          logEvent(`${dim.name} documented as explored (+${SCORE_POINTS.dimension} pts).`);
+          updateScoreOverlay({ flash: true });
+        } else {
+          updateScoreOverlay();
+        }
+      } else {
+        updateScoreOverlay();
       }
       applyDimensionTheme(dim);
       document.title = `Infinite Dimension · ${dim.name}`;
@@ -2425,6 +2628,7 @@
       updateIronGolems(delta);
       updateZombies(delta);
       handleAir(delta);
+      updateRegeneration(delta);
       processEchoQueue();
       updateStatusBars();
       updatePortalProgress();
@@ -2441,13 +2645,59 @@
 
     function handleAir(delta) {
       const tile = getTile(state.player.x, state.player.y);
-      if (tile?.type === 'water') {
-        state.player.air = Math.max(0, state.player.air - delta * 2);
+      const wasUnderwater = state.player.isUnderwater;
+      const isUnderwater = tile?.type === 'water';
+      state.player.isUnderwater = isUnderwater;
+      const previousAir = state.player.air;
+      const drainRate = state.player.maxAir / 30;
+      const refillRate = state.player.maxAir / 12;
+      if (isUnderwater && !state.player.isRespawning) {
+        state.player.air = clamp(state.player.air - drainRate * delta, 0, state.player.maxAir);
         if (state.player.air === 0) {
-          applyDamage(0.5 * delta * 5);
+          state.player.drownTimer = (state.player.drownTimer ?? 0) + delta;
+          while (state.player.drownTimer >= 1) {
+            applyDamage(1, 'drowning');
+            state.player.drownTimer -= 1;
+            if (state.player.hearts <= 0) break;
+          }
+        } else {
+          state.player.drownTimer = 0;
         }
       } else {
-        state.player.air = clamp(state.player.air + delta * 3, 0, state.player.maxAir);
+        state.player.air = clamp(state.player.air + refillRate * delta, 0, state.player.maxAir);
+        state.player.drownTimer = 0;
+      }
+      if (state.player.air < previousAir - 0.05) {
+        triggerBubblePulse('drain');
+      } else if (state.player.air > previousAir + 0.05) {
+        triggerBubblePulse('refill');
+      } else if (wasUnderwater !== isUnderwater) {
+        triggerBubblePulse(isUnderwater ? 'drain' : 'refill');
+      }
+    }
+
+    function updateRegeneration(delta) {
+      if (state.player.isRespawning) return;
+      if (state.player.hearts >= state.player.maxHearts) {
+        state.player.nextRegenAt = null;
+        return;
+      }
+      const now = state.elapsed;
+      const lastDamageAt = state.player.lastDamageAt ?? -Infinity;
+      const sinceDamage = now - lastDamageAt;
+      if (sinceDamage < 5) {
+        return;
+      }
+      if (!state.player.nextRegenAt) {
+        state.player.nextRegenAt = now + 3;
+      }
+      if (state.player.nextRegenAt - now <= 0) {
+        healPlayer(0.5);
+        if (state.player.hearts >= state.player.maxHearts) {
+          state.player.nextRegenAt = null;
+        } else {
+          state.player.nextRegenAt = now + 3;
+        }
       }
     }
 
@@ -2614,18 +2864,16 @@
     }
 
     function handleZombieHit() {
+      if (state.player.isRespawning) return;
       state.player.zombieHits = (state.player.zombieHits ?? 0) + 1;
+      triggerDamageFlash();
+      applyDamage(0.5, 'zombie');
       const hits = state.player.zombieHits;
-      const heartsPerHit = state.player.maxHearts / 5;
-      const remainingHearts = state.player.maxHearts - heartsPerHit * hits;
-      state.player.hearts = clamp(remainingHearts, 0, state.player.maxHearts);
       if (hits >= 5) {
-        state.player.hearts = 0;
-        updateStatusBars();
         handlePlayerDefeat('The Minecraft zombies overwhelm Steve. You respawn among the rails.');
         return;
       }
-      const remainingHits = 5 - hits;
+      const remainingHits = Math.max(0, 5 - hits);
       logEvent(
         `Minecraft zombie strike! ${remainingHits} more hit${remainingHits === 1 ? '' : 's'} before defeat.`
       );
@@ -2633,19 +2881,185 @@
     }
 
     function handlePlayerDefeat(message) {
-      if (state.victory) return;
-      logEvent(message);
+      if (state.victory || hudState.defeatInProgress) return;
+      hudState.defeatInProgress = true;
+      state.player.isRespawning = true;
+      const detail = message ?? 'The realm fractures and pulls you back to the start.';
+      logEvent(detail);
+      const lostResources = stripInventoryForRespawn();
+      if (lostResources) {
+        logEvent('Raw resources scatter as the realm resets. Crafted tools endure.');
+      } else {
+        logEvent('You cling to your crafted tools as the realm resets.');
+      }
+      state.player.hearts = 0;
+      state.player.air = 0;
+      state.player.nextRegenAt = null;
+      state.player.drownTimer = 0;
+      hudState.heartPulse = null;
+      hudState.bubblePulse = null;
+      state.craftSequence = [];
+      updateInventoryUI();
+      updateCraftQueue();
+      updateStatusBars();
+      showDefeatOverlay(detail);
+      playDefeatTone();
+      if (hudState.defeatTimer) {
+        window.clearTimeout(hudState.defeatTimer);
+      }
+      hudState.defeatTimer = window.setTimeout(() => {
+        completePlayerRespawn();
+      }, 1800);
+    }
+
+    function stripInventoryForRespawn() {
+      let removed = false;
+      state.player.inventory = state.player.inventory.map((slot) => {
+        if (!slot) return null;
+        if (SURVIVAL_KEEP_ITEMS.has(slot.item)) {
+          return slot;
+        }
+        removed = true;
+        return null;
+      });
+      state.player.satchel = state.player.satchel.filter((slot) => {
+        if (!slot) return false;
+        if (SURVIVAL_KEEP_ITEMS.has(slot.item)) return true;
+        removed = true;
+        return false;
+      });
+      return removed;
+    }
+
+    function completePlayerRespawn() {
       loadDimension('origin');
       state.player.hearts = state.player.maxHearts;
       state.player.air = state.player.maxAir;
+      state.player.lastDamageAt = state.elapsed;
+      state.player.nextRegenAt = null;
+      state.player.drownTimer = 0;
       state.player.zombieHits = 0;
+      state.player.isRespawning = false;
+      state.player.isUnderwater = false;
+      hudState.heartPulse = null;
+      hudState.bubblePulse = null;
+      hudState.lastHearts = state.player.hearts;
+      hudState.lastAir = state.player.air;
+      state.craftSequence = [];
+      updateInventoryUI();
+      updateCraftQueue();
       updateStatusBars();
+      updateDimensionOverlay();
+      logEvent('Respawning at the Grassland Threshold.');
+      hideDefeatOverlay();
+      hudState.defeatInProgress = false;
+      hudState.defeatTimer = null;
     }
 
-    function applyDamage(amount) {
-      state.player.hearts = clamp(state.player.hearts - amount, 0, state.player.maxHearts);
+    function triggerHeartPulse(type) {
+      hudState.heartPulse = type;
+      hudState.heartPulseUntil = state.elapsed + (type === 'damage' ? 0.9 : 1.2);
+    }
+
+    function triggerBubblePulse(type) {
+      hudState.bubblePulse = type;
+      hudState.bubblePulseUntil = state.elapsed + 0.9;
+    }
+
+    function triggerDamageFlash() {
+      if (!damageFlashEl) return;
+      damageFlashEl.classList.remove('damage-flash--active');
+      void damageFlashEl.offsetWidth;
+      damageFlashEl.classList.add('damage-flash--active');
+    }
+
+    function showDefeatOverlay(detail) {
+      if (!defeatOverlayEl) return;
+      if (defeatOverlayDetailEl) {
+        defeatOverlayDetailEl.textContent = detail ?? '';
+      }
+      defeatOverlayEl.hidden = false;
+      requestAnimationFrame(() => {
+        defeatOverlayEl.classList.add('defeat-overlay--visible');
+      });
+    }
+
+    function hideDefeatOverlay() {
+      if (!defeatOverlayEl) return;
+      defeatOverlayEl.classList.remove('defeat-overlay--visible');
+      window.setTimeout(() => {
+        if (!hudState.defeatInProgress) {
+          defeatOverlayEl.hidden = true;
+          if (defeatOverlayDetailEl) {
+            defeatOverlayDetailEl.textContent = '';
+          }
+        }
+      }, 420);
+    }
+
+    function getAudioContext() {
+      if (audioContext) return audioContext;
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContextClass) return null;
+      try {
+        audioContext = new AudioContextClass();
+      } catch (error) {
+        console.warn('Unable to initialize audio context.', error);
+        audioContext = null;
+      }
+      return audioContext;
+    }
+
+    function playTone({ frequency = 220, duration = 1, type = 'sine', gain = 0.18 } = {}) {
+      const ctx = getAudioContext();
+      if (!ctx) return;
+      if (ctx.state === 'suspended') {
+        ctx.resume().catch(() => {});
+      }
+      const oscillator = ctx.createOscillator();
+      const gainNode = ctx.createGain();
+      const now = ctx.currentTime;
+      oscillator.type = type;
+      oscillator.frequency.setValueAtTime(frequency, now);
+      gainNode.gain.setValueAtTime(0.0001, now);
+      gainNode.gain.linearRampToValueAtTime(gain, now + 0.05);
+      gainNode.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+      oscillator.connect(gainNode).connect(ctx.destination);
+      oscillator.start(now);
+      oscillator.stop(now + duration + 0.15);
+    }
+
+    function playDefeatTone() {
+      playTone({ frequency: 196, duration: 1.2, type: 'sawtooth', gain: 0.24 });
+      playTone({ frequency: 98, duration: 1.4, type: 'sine', gain: 0.18 });
+    }
+
+    function applyDamage(amount, reason = 'generic') {
+      if (state.player.isRespawning || amount <= 0) return;
+      const previous = state.player.hearts;
+      state.player.hearts = clamp(previous - amount, 0, state.player.maxHearts);
+      if (state.player.hearts < previous) {
+        triggerHeartPulse('damage');
+        state.player.lastDamageAt = state.elapsed;
+        state.player.nextRegenAt = null;
+      }
+      updateStatusBars();
       if (state.player.hearts <= 0 && !state.victory) {
-        handlePlayerDefeat('You collapse. Echoes rebuild the realm...');
+        handlePlayerDefeat(
+          reason === 'drowning'
+            ? 'You black out beneath the water. The rails pull you back to safety.'
+            : 'You collapse. Echoes rebuild the realm...'
+        );
+      }
+    }
+
+    function healPlayer(amount) {
+      if (state.player.isRespawning || amount <= 0) return;
+      const previous = state.player.hearts;
+      state.player.hearts = clamp(previous + amount, 0, state.player.maxHearts);
+      if (state.player.hearts > previous) {
+        triggerHeartPulse('regen');
+        updateStatusBars();
       }
     }
 
@@ -2984,8 +3398,16 @@
       }
       recipe.sequence.forEach((itemId) => removeItem(itemId, 1));
       addItemToInventory(recipe.output.item, recipe.output.quantity);
+      const recipePreviouslyKnown = state.knownRecipes.has(recipe.id);
       state.knownRecipes.add(recipe.id);
       logEvent(`${recipe.name} crafted.`);
+      if (!recipePreviouslyKnown && !state.scoreBreakdown.recipes.has(recipe.id)) {
+        state.scoreBreakdown.recipes.add(recipe.id);
+        logEvent(`Recipe mastery recorded (+${SCORE_POINTS.recipe} pts).`);
+        updateScoreOverlay({ flash: true });
+      } else {
+        updateScoreOverlay();
+      }
       if (recipe.output.item === 'portal-igniter') {
         state.player.hasIgniter = true;
       }
@@ -3690,15 +4112,16 @@
     }
 
     function computeScoreSnapshot() {
-      const uniqueDimensions = new Set(state.dimensionHistory ?? []).size;
+      const dimensionCount = state.scoreBreakdown?.dimensions?.size ?? new Set(state.dimensionHistory ?? []).size;
+      const recipeCount = state.scoreBreakdown?.recipes?.size ?? 0;
       const inventoryBundles = mergeInventory();
       const satchelCount = state.player.satchel?.reduce((sum, bundle) => sum + (bundle?.quantity ?? 0), 0) ?? 0;
       const inventoryCount = inventoryBundles.reduce((sum, bundle) => sum + bundle.quantity, 0) + satchelCount;
-      const heartsScore = (state.player.hearts ?? 0) * 40;
-      const baseScore = uniqueDimensions * 500 + inventoryCount * 25 + heartsScore;
+      const totalScore =
+        state.score ?? recipeCount * SCORE_POINTS.recipe + dimensionCount * SCORE_POINTS.dimension;
       return {
-        score: Math.round(baseScore),
-        dimensionCount: uniqueDimensions,
+        score: Math.round(totalScore),
+        dimensionCount,
         runTimeSeconds: Math.round(state.elapsed ?? 0),
         inventoryCount,
       };
