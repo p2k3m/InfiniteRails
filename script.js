@@ -161,12 +161,16 @@
       }
     });
 
-    const orbitState = {
-      azimuth: -Math.PI / 4,
-      polar: Math.PI / 3,
-      radius: 18,
-      target: new THREE.Vector3(),
+    const CAMERA_EYE_OFFSET = 0.76;
+    const CAMERA_FORWARD_OFFSET = 0.22;
+    const CAMERA_LOOK_DISTANCE = 6.5;
+    const WORLD_UP = new THREE.Vector3(0, 1, 0);
+    const cameraState = {
+      lastFacing: new THREE.Vector3(0, 0, 1),
     };
+    const tmpCameraForward = new THREE.Vector3();
+    const tmpCameraTarget = new THREE.Vector3();
+    const tmpCameraRight = new THREE.Vector3();
 
     const baseMaterialCache = new Map();
     const accentMaterialCache = new Map();
@@ -340,16 +344,48 @@
       renderer.setSize(width, height, false);
       camera.aspect = width / height;
       camera.updateProjectionMatrix();
-      updateCameraOrbit();
+      syncCameraToPlayer({ idleBob: 0, walkBob: 0, movementStrength: 0 });
     }
 
-    function updateCameraOrbit() {
-      const { azimuth, polar, radius, target } = orbitState;
-      const sinPolar = Math.sin(polar);
-      camera.position.x = target.x + radius * sinPolar * Math.cos(azimuth);
-      camera.position.y = target.y + radius * Math.cos(polar);
-      camera.position.z = target.z + radius * sinPolar * Math.sin(azimuth);
-      camera.lookAt(target);
+    function syncCameraToPlayer(options = {}) {
+      if (!camera || !state?.player) return;
+      const facing = options.facing ?? state.player?.facing ?? { x: 0, y: 1 };
+      const idleBob = options.idleBob ?? 0;
+      const walkBob = options.walkBob ?? 0;
+      const movementStrength = options.movementStrength ?? 0;
+      const { x, z } = worldToScene(state.player.x, state.player.y);
+      const baseHeight = tileSurfaceHeight(state.player.x, state.player.y) || 0;
+
+      tmpCameraForward.set(facing.x, 0, facing.y);
+      if (tmpCameraForward.lengthSq() < 0.0001) {
+        tmpCameraForward.copy(cameraState.lastFacing);
+      } else {
+        tmpCameraForward.normalize();
+        cameraState.lastFacing.copy(tmpCameraForward);
+      }
+
+      const timestamp = performance?.now ? performance.now() : Date.now();
+      const bobOffset = idleBob * 0.35 + walkBob * 0.22;
+      const bounceOffset =
+        movementStrength > 0.01 ? Math.sin(timestamp / 320) * 0.05 * movementStrength : 0;
+      const eyeY = baseHeight + CAMERA_EYE_OFFSET + bobOffset + bounceOffset;
+
+      camera.position.set(x, eyeY, z);
+      camera.position.addScaledVector(cameraState.lastFacing, CAMERA_FORWARD_OFFSET);
+
+      tmpCameraTarget.copy(camera.position);
+      tmpCameraTarget.addScaledVector(cameraState.lastFacing, CAMERA_LOOK_DISTANCE);
+
+      if (movementStrength > 0.01) {
+        const sway = Math.sin(timestamp / 280) * 0.18 * movementStrength;
+        if (Math.abs(sway) > 0.0001) {
+          tmpCameraRight.crossVectors(cameraState.lastFacing, WORLD_UP).normalize();
+          tmpCameraTarget.addScaledVector(tmpCameraRight, sway);
+        }
+      }
+
+      camera.up.copy(WORLD_UP);
+      camera.lookAt(tmpCameraTarget);
     }
 
     function initPointerControls() {
@@ -523,27 +559,10 @@
 
       initPointerControls();
       window.addEventListener('resize', handleResize);
-      updateWorldTarget();
       createPlayerMesh();
       createPlayerLocator();
+      syncCameraToPlayer({ idleBob: 0, walkBob: 0, movementStrength: 0 });
       return true;
-    }
-
-    function updateWorldTarget() {
-      const offsetX = ((state.width - 1) * TILE_UNIT) / 2;
-      const offsetZ = ((state.height - 1) * TILE_UNIT) / 2;
-      const surface = tileSurfaceHeight(state.player.x, state.player.y) || 0;
-      orbitState.target.set(offsetX, surface + 0.75, offsetZ);
-      orbitState.azimuth = -Math.PI / 4;
-      orbitState.polar = Math.PI / 3;
-
-      const diagonal = Math.max(1, Math.hypot(state.width, state.height));
-      const minRadius = Math.max(6.5, diagonal * 0.6);
-      const maxRadius = Math.max(minRadius, diagonal * 1.05);
-      const idealRadius = clamp(diagonal * 0.72, minRadius, maxRadius);
-      orbitState.radius = idealRadius;
-      orbitState.polar = clamp(orbitState.polar, 0.9, 1.2);
-      updateCameraOrbit();
     }
 
     function resetWorldMeshes() {
@@ -1386,6 +1405,13 @@
             playerMeshParts.head.rotation.x = idlePitch + Math.cos(walkCycle * 0.5) * 0.04 * movementStrength;
           }
         }
+
+        syncCameraToPlayer({
+          idleBob,
+          walkBob: bob,
+          movementStrength,
+          facing,
+        });
       }
       if (playerLocator) {
         const { x, z } = worldToScene(state.player.x, state.player.y);
@@ -2320,7 +2346,6 @@
       document.title = `Infinite Dimension · ${dim.name}`;
       state.world = dim.generator(state);
       resetWorldMeshes();
-      updateWorldTarget();
       state.player.x = Math.floor(state.width / 2);
       state.player.y = Math.floor(state.height / 2);
       state.player.facing = { x: 0, y: 1 };
@@ -2348,6 +2373,7 @@
       state.player.tarSlowTimer = 0;
       state.player.isSliding = false;
       state.player.zombieHits = 0;
+      syncCameraToPlayer({ idleBob: 0, walkBob: 0, movementStrength: 0, facing: state.player.facing });
       if (fromId && id !== 'origin' && id !== 'netherite') {
         spawnReturnPortal(fromId, id);
       }
