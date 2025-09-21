@@ -8,6 +8,7 @@ const bubblesEl = document.getElementById('bubbles');
 const timeEl = document.getElementById('timeOfDay');
 const dimensionInfoEl = document.getElementById('dimensionInfo');
 const portalProgressEl = document.getElementById('portalProgress');
+const victoryBannerEl = document.getElementById('victoryBanner');
 const hotbarEl = document.getElementById('hotbar');
 const extendedInventoryEl = document.getElementById('extendedInventory');
 const toggleExtendedBtn = document.getElementById('toggleExtended');
@@ -18,8 +19,29 @@ const clearCraftButton = document.getElementById('clearCraft');
 const recipeListEl = document.getElementById('recipeList');
 const recipeSearchEl = document.getElementById('recipeSearch');
 const eventLogEl = document.getElementById('eventLog');
-const portalProgressBar = document.createElement('span');
-portalProgressEl.appendChild(portalProgressBar);
+const codexListEl = document.getElementById('dimensionCodex');
+const portalProgressLabel = portalProgressEl.querySelector('.label');
+const portalProgressBar = portalProgressEl.querySelector('.bar');
+const rootElement = document.documentElement;
+const computedVars = getComputedStyle(rootElement);
+const readVar = (name, fallback) => {
+  const value = computedVars.getPropertyValue(name);
+  return value ? value.trim() : fallback;
+};
+const BASE_THEME = {
+  accent: readVar('--accent', '#49f2ff'),
+  accentStrong: readVar('--accent-strong', '#f7b733'),
+  accentSoft: readVar('--accent-soft', 'rgba(73, 242, 255, 0.3)'),
+  bgPrimary: readVar('--bg-primary', '#050912'),
+  bgSecondary: readVar('--bg-secondary', '#0d182f'),
+  bgTertiary: readVar('--bg-tertiary', 'rgba(21, 40, 72, 0.85)'),
+  pageBackground:
+    readVar(
+      '--page-background',
+      'radial-gradient(circle at 20% 20%, rgba(73, 242, 255, 0.2), transparent 45%), radial-gradient(circle at 80% 10%, rgba(247, 183, 51, 0.2), transparent 55%), linear-gradient(160deg, #050912, #0b1230 60%, #05131f 100%)'
+    ),
+  dimensionGlow: readVar('--dimension-glow', 'rgba(73, 242, 255, 0.45)'),
+};
 
 const TILE_TYPES = {
   grass: { base: '#1d934d', accent: '#91ffb7', walkable: true },
@@ -134,6 +156,16 @@ const DIMENSIONS = {
     description:
       'A peaceful island afloat in void. Gather wood and stone, craft tools, and prepare the first portal.',
     palette: ['#1d934d', '#49f2ff'],
+    theme: {
+      accent: '#49f2ff',
+      accentStrong: '#f7b733',
+      accentSoft: 'rgba(73, 242, 255, 0.3)',
+      bgPrimary: '#050912',
+      bgSecondary: '#0d182f',
+      bgTertiary: 'rgba(21, 40, 72, 0.85)',
+      pageBackground: `radial-gradient(circle at 20% 20%, rgba(73, 242, 255, 0.2), transparent 45%), radial-gradient(circle at 80% 10%, rgba(247, 183, 51, 0.2), transparent 55%), linear-gradient(160deg, #050912, #0b1230 60%, #05131f 100%)`,
+      dimensionGlow: 'rgba(73, 242, 255, 0.45)',
+    },
     rules: {
       moveDelay: 0.15,
     },
@@ -145,6 +177,16 @@ const DIMENSIONS = {
     description:
       'Gravity tugs harder. Slippery slopes will slide you downward. Mine heavy ore guarded by golems.',
     palette: ['#483c30', '#b08d64'],
+    theme: {
+      accent: '#f2b266',
+      accentStrong: '#ff7b3d',
+      accentSoft: 'rgba(242, 178, 102, 0.25)',
+      bgPrimary: '#160f13',
+      bgSecondary: '#22191b',
+      bgTertiary: 'rgba(53, 38, 34, 0.78)',
+      pageBackground: `radial-gradient(circle at 18% 22%, rgba(242, 178, 102, 0.18), transparent 45%), radial-gradient(circle at 80% 14%, rgba(79, 103, 132, 0.2), transparent 55%), linear-gradient(160deg, #141014, #27190f 55%, #180f1b 100%)`,
+      dimensionGlow: 'rgba(242, 178, 102, 0.35)',
+    },
     rules: {
       moveDelay: 0.18,
       onMove: (state, from, to, dir) => {
@@ -167,6 +209,16 @@ const DIMENSIONS = {
     description:
       'Rails materialize in rhythm. Time your crossings to harvest pattern crystals from glowing seams.',
     palette: ['#1c2435', '#49f2ff'],
+    theme: {
+      accent: '#7ad0ff',
+      accentStrong: '#a998ff',
+      accentSoft: 'rgba(122, 208, 255, 0.28)',
+      bgPrimary: '#091224',
+      bgSecondary: '#131b33',
+      bgTertiary: 'rgba(24, 36, 66, 0.82)',
+      pageBackground: `radial-gradient(circle at 18% 20%, rgba(122, 208, 255, 0.18), transparent 50%), radial-gradient(circle at 75% 18%, rgba(148, 135, 255, 0.18), transparent 60%), linear-gradient(160deg, #0a1324, #141b33 55%, #090d18 100%)`,
+      dimensionGlow: 'rgba(122, 208, 255, 0.45)',
+    },
     rules: {
       moveDelay: 0.16,
       update: (state, delta) => {
@@ -191,6 +243,16 @@ const DIMENSIONS = {
     description:
       'Everything is heavy. Movement slows and tar slugs trail you. Harvest tar sacs carefully.',
     palette: ['#251c23', '#5f374d'],
+    theme: {
+      accent: '#bb86ff',
+      accentStrong: '#ff6f91',
+      accentSoft: 'rgba(187, 134, 255, 0.28)',
+      bgPrimary: '#150b16',
+      bgSecondary: '#1f1024',
+      bgTertiary: 'rgba(53, 24, 55, 0.78)',
+      pageBackground: `radial-gradient(circle at 16% 24%, rgba(187, 134, 255, 0.18), transparent 45%), radial-gradient(circle at 82% 18%, rgba(255, 111, 145, 0.16), transparent 60%), linear-gradient(160deg, #120918, #231126 55%, #16081f 100%)`,
+      dimensionGlow: 'rgba(187, 134, 255, 0.42)',
+    },
     rules: {
       moveDelay: 0.28,
       onMove: (state) => {
@@ -206,6 +268,16 @@ const DIMENSIONS = {
     description:
       'Every action echoes. Five seconds later, your past self repeats it. Build portals with mirrored discipline.',
     palette: ['#f6f2ed', '#f7b733'],
+    theme: {
+      accent: '#f3d688',
+      accentStrong: '#ffffff',
+      accentSoft: 'rgba(243, 214, 136, 0.28)',
+      bgPrimary: '#11131f',
+      bgSecondary: '#1b1e30',
+      bgTertiary: 'rgba(32, 36, 58, 0.82)',
+      pageBackground: `radial-gradient(circle at 20% 25%, rgba(243, 214, 136, 0.2), transparent 45%), radial-gradient(circle at 80% 20%, rgba(154, 163, 255, 0.18), transparent 60%), linear-gradient(160deg, #101320, #1c1f30 55%, #0f111b 100%)`,
+      dimensionGlow: 'rgba(243, 214, 136, 0.4)',
+    },
     rules: {
       moveDelay: 0.18,
       onAction: (state, action) => {
@@ -229,6 +301,16 @@ const DIMENSIONS = {
     description:
       'Rails crumble behind you. Sprint ahead, align collapsing tracks, and claim the Eternal Ingot.',
     palette: ['#402020', '#ff8249'],
+    theme: {
+      accent: '#ff7646',
+      accentStrong: '#ffd05f',
+      accentSoft: 'rgba(255, 118, 70, 0.28)',
+      bgPrimary: '#1b0d0d',
+      bgSecondary: '#261011',
+      bgTertiary: 'rgba(63, 22, 18, 0.82)',
+      pageBackground: `radial-gradient(circle at 18% 22%, rgba(255, 118, 70, 0.18), transparent 45%), radial-gradient(circle at 80% 15%, rgba(255, 208, 95, 0.16), transparent 60%), linear-gradient(160deg, #180909, #2c1110 55%, #12070e 100%)`,
+      dimensionGlow: 'rgba(255, 118, 70, 0.4)',
+    },
     rules: {
       moveDelay: 0.14,
       onMove: (state, from, to) => {
@@ -247,6 +329,21 @@ const DIMENSIONS = {
     generator: (state) => generateNetheriteCollapse(state),
   },
 };
+
+function applyDimensionTheme(dimension) {
+  if (!dimension) return;
+  const theme = { ...BASE_THEME, ...(dimension.theme ?? {}) };
+  const style = rootElement.style;
+  style.setProperty('--accent', theme.accent);
+  style.setProperty('--accent-strong', theme.accentStrong);
+  style.setProperty('--accent-soft', theme.accentSoft);
+  style.setProperty('--bg-primary', theme.bgPrimary);
+  style.setProperty('--bg-secondary', theme.bgSecondary);
+  style.setProperty('--bg-tertiary', theme.bgTertiary);
+  style.setProperty('--page-background', theme.pageBackground);
+  style.setProperty('--dimension-glow', theme.dimensionGlow);
+  document.body.dataset.dimension = dimension.id;
+}
 
 const state = {
   width: 16,
@@ -643,10 +740,12 @@ function updateStatusBars() {
   bubblesEl.appendChild(bubbles);
 
   const ratio = (state.elapsed % state.dayLength) / state.dayLength;
+  rootElement.style.setProperty('--time-phase', ratio.toFixed(3));
   const track = document.createElement('div');
   track.className = 'time-track';
   const label = document.createElement('span');
-  label.textContent = ratio < 0.5 ? 'Daylight' : 'Nightfall';
+  const percent = Math.round(ratio * 100);
+  label.textContent = ratio < 0.5 ? `Daylight ${percent}%` : `Nightfall ${percent}%`;
   const bar = document.createElement('div');
   bar.className = 'bar';
   bar.style.setProperty('--progress', ratio.toFixed(2));
@@ -663,6 +762,22 @@ function updateDimensionOverlay() {
   } else if (!state.unlockedDimensions.has('stone')) {
     tasks.push('Assemble a Rock portal frame and ignite it.');
   }
+  switch (state.dimension.id) {
+    case 'stone':
+      tasks.push('Move with the rhythm – only lit rails are safe.');
+      break;
+    case 'tar':
+      tasks.push('Shake off tar stacks by pausing between strides.');
+      break;
+    case 'marble':
+      tasks.push('Plan ahead. Every action echoes back in five seconds.');
+      break;
+    case 'netherite':
+      tasks.push('Plot a path before rails collapse into the void.');
+      break;
+    default:
+      break;
+  }
   if (state.dimension.id === 'netherite' && !state.victory) {
     tasks.push('Keep moving! Rails collapse moments after contact.');
   }
@@ -674,6 +789,58 @@ function updateDimensionOverlay() {
     <span>${info.description}</span>
     ${tasks.length ? `<span>Objectives:</span><ul>${tasks.map((t) => `<li>${t}</li>`).join('')}</ul>` : ''}
   `;
+}
+
+function getCodexStatus(dimId) {
+  if (!state.unlockedDimensions.has(dimId)) return 'Locked';
+  if (dimId === 'origin' && state.victory) return 'Return';
+  if (dimId === 'netherite' && state.player.effects.hasEternalIngot && !state.victory) return 'Ingot';
+  if (state.dimension.id === dimId) return 'Active';
+  if (state.dimensionHistory.includes(dimId)) return 'Cleared';
+  return 'Ready';
+}
+
+function updateDimensionCodex() {
+  if (!codexListEl) return;
+  codexListEl.innerHTML = '';
+  DIMENSION_SEQUENCE.forEach((dimId) => {
+    const dim = DIMENSIONS[dimId];
+    const item = document.createElement('li');
+    item.className = 'codex-item';
+    if (dimId === 'netherite') item.classList.add('final');
+    if (!state.unlockedDimensions.has(dimId)) item.classList.add('locked');
+    if (state.dimensionHistory.includes(dimId) && dimId !== state.dimension.id) item.classList.add('complete');
+    if (state.dimension.id === dimId) item.classList.add('active');
+    const label = document.createElement('strong');
+    label.textContent = dim?.name ?? dimId;
+    const status = document.createElement('span');
+    status.textContent = getCodexStatus(dimId).toUpperCase();
+    item.title = dim?.description ?? dimId;
+    item.append(label, status);
+    codexListEl.appendChild(item);
+  });
+}
+
+function renderVictoryBanner() {
+  if (!victoryBannerEl) return;
+  if (state.victory) {
+    victoryBannerEl.innerHTML = `
+      <h3>Victory Achieved</h3>
+      <p>Return to the Grassland Threshold to archive your run.</p>
+    `;
+    victoryBannerEl.classList.add('visible');
+    return;
+  }
+  if (state.player.effects.hasEternalIngot) {
+    victoryBannerEl.innerHTML = `
+      <h3>Eternal Ingot Secured</h3>
+      <p>Stabilise a return portal and step back to origin.</p>
+    `;
+    victoryBannerEl.classList.add('visible');
+    return;
+  }
+  victoryBannerEl.classList.remove('visible');
+  victoryBannerEl.innerHTML = '';
 }
 
 function logEvent(message) {
@@ -688,6 +855,16 @@ function logEvent(message) {
 function startGame() {
   introModal.style.display = 'none';
   state.isRunning = true;
+  state.player.effects = {};
+  state.victory = false;
+  state.dimensionHistory = ['origin'];
+  state.unlockedDimensions = new Set(['origin']);
+  state.knownRecipes = new Set(['stick', 'stone-pickaxe']);
+  state.player.inventory = Array.from({ length: 10 }, () => null);
+  state.player.satchel = [];
+  state.player.selectedSlot = 0;
+  state.craftSequence = [];
+  renderVictoryBanner();
   loadDimension('origin');
   updateInventoryUI();
   updateRecipesList();
@@ -698,6 +875,8 @@ function startGame() {
   logEvent('You awaken on a floating island.');
   addItemToInventory('wood', 2);
   addItemToInventory('stone', 1);
+  updateInventoryUI();
+  updateDimensionOverlay();
 }
 
 function loadDimension(id, fromId = null) {
@@ -705,6 +884,11 @@ function loadDimension(id, fromId = null) {
   if (!dim) return;
   state.dimension = dim;
   state.unlockedDimensions.add(id);
+  if (!state.dimensionHistory.includes(id)) {
+    state.dimensionHistory.push(id);
+  }
+  applyDimensionTheme(dim);
+  document.title = `Infinite Rails · ${dim.name}`;
   state.world = dim.generator(state);
   state.player.x = Math.floor(state.width / 2);
   state.player.y = Math.floor(state.height / 2);
@@ -739,6 +923,8 @@ function loadDimension(id, fromId = null) {
     logEvent('Victory! You returned with the Eternal Ingot.');
   }
   updateDimensionOverlay();
+  updateDimensionCodex();
+  renderVictoryBanner();
   updateRecipesList();
   updatePortalProgress();
   logEvent(`Entered ${dim.name}.`);
@@ -976,6 +1162,8 @@ function enterPortalAt(x, y) {
     state.victory = true;
     addItemToInventory('eternal-ingot', 1);
     logEvent('You seize the Eternal Ingot! Return home victorious.');
+    renderVictoryBanner();
+    updateDimensionCodex();
     return;
   }
   if (state.dimension.id === portal.origin && portal.destination) {
@@ -1044,6 +1232,9 @@ function buildPortal(material) {
     if (tile) tile.type = 'portalDormant';
   });
   state.portals.push(portal);
+  state.unlockedDimensions.add(material);
+  updateDimensionCodex();
+  updatePortalProgress();
   logEvent(`Constructed ${portal.label}. Ignite to travel.`);
 }
 
@@ -1127,8 +1318,16 @@ function updatePortalProgress() {
   const currentIndex = DIMENSION_SEQUENCE.indexOf(state.dimension.id);
   const total = DIMENSION_SEQUENCE.length - 1;
   const ratio = clamp(currentIndex / total, 0, 1);
-  portalProgressEl.style.display = 'block';
-  portalProgressBar.style.width = `${ratio * 100}%`;
+  portalProgressEl.classList.add('visible');
+  portalProgressBar.style.setProperty('--progress', ratio.toFixed(3));
+  const stage = currentIndex + 1;
+  const totalStages = DIMENSION_SEQUENCE.length;
+  const nextDim = DIMENSION_SEQUENCE[currentIndex + 1];
+  const nextName = nextDim ? DIMENSIONS[nextDim]?.name ?? nextDim : 'Final Gate';
+  portalProgressLabel.textContent = `${stage}/${totalStages} · ${state.dimension.name.toUpperCase()}`;
+  portalProgressEl.setAttribute('aria-valuenow', Math.round(ratio * 100).toString());
+  portalProgressEl.setAttribute('aria-valuetext', `${Math.round(ratio * 100)}% progress toward ${nextName}.`);
+  portalProgressEl.title = `Next: ${nextName}`;
 }
 
 function addToCraftSequence(itemId) {
@@ -1222,6 +1421,8 @@ function openChest(tile) {
   if (loot.item === 'eternal-ingot') {
     state.player.effects.hasEternalIngot = true;
     logEvent('The Eternal Ingot pulses with limitless energy! Return home.');
+    renderVictoryBanner();
+    updateDimensionCodex();
   } else {
     logEvent(`Chest yields ${ITEM_DEFS[loot.item]?.name ?? loot.item} ×${loot.qty}.`);
   }

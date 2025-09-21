@@ -1,12 +1,14 @@
-name: Deploy to AWS CloudFront
+name: Deploy to AWS
 
 on:
   push:
-    branches: ["main"]
+    branches:
+      - main
   workflow_dispatch:
 
 jobs:
   deploy:
+    name: Sync static site
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -14,10 +16,49 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Prepare static bundle
+      - name: Validate deployment secrets
+        env:
+          REQUIRED_SECRETS: >-
+            AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_REGION AWS_S3_BUCKET
+            CLOUDFRONT_DISTRIBUTION_ID CLOUDFRONT_URL
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          AWS_S3_BUCKET: ${{ secrets.AWS_S3_BUCKET }}
+          CLOUDFRONT_DISTRIBUTION_ID: ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID }}
+          CLOUDFRONT_URL: ${{ secrets.CLOUDFRONT_URL }}
         run: |
-          mkdir -p dist
-          cp index.html styles.css script.js dist/
+          missing=()
+          for name in $REQUIRED_SECRETS; do
+            value=$(printf '%s' "${!name}")
+            if [ -z "$value" ]; then
+              missing+=("$name")
+            fi
+          done
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::Missing required secrets: ${missing[*]}" >&2
+            echo "Add each secret in GitHub → Settings → Secrets and variables → Actions." >&2
+            for name in "${missing[@]}"; do
+              case "$name" in
+                AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY)
+                  echo "::error::$name is empty. Create an IAM user with programmatic access and paste its key pair." >&2
+                  ;;
+                AWS_REGION)
+                  echo "::error::$name is empty. Set it to the AWS region of your S3 bucket (for example, us-east-1)." >&2
+                  ;;
+                AWS_S3_BUCKET)
+                  echo "::error::$name is empty. Provide the target bucket name without the s3:// prefix." >&2
+                  ;;
+                CLOUDFRONT_DISTRIBUTION_ID)
+                  echo "::error::$name is empty. Provide the CloudFront distribution ID to invalidate." >&2
+                  ;;
+                CLOUDFRONT_URL)
+                  echo "::error::$name is empty. Provide the public CloudFront URL so the workflow can announce it." >&2
+                  ;;
+              esac
+            done
+            exit 1
+          fi
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v2
@@ -26,23 +67,33 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
 
-      - name: Sync site to S3
+      - name: Upload site to S3
+        env:
+          AWS_S3_BUCKET: ${{ secrets.AWS_S3_BUCKET }}
         run: |
-          aws s3 sync dist s3://${{ secrets.S3_BUCKET }} --delete
+          aws s3 sync . "s3://${AWS_S3_BUCKET}" \
+            --delete \
+            --exclude ".git/*" \
+            --exclude ".github/*"
 
       - name: Invalidate CloudFront cache
-        if: ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID }}
+        env:
+          CLOUDFRONT_DISTRIBUTION_ID: ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID }}
         run: |
           aws cloudfront create-invalidation \
-            --distribution-id ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID }} \
-            --paths "/*"
+            --distribution-id "$CLOUDFRONT_DISTRIBUTION_ID" \
+            --paths '/*'
 
-      - name: Publish deployment link
+      - name: Publish deployment URL
+        env:
+          AWS_S3_BUCKET: ${{ secrets.AWS_S3_BUCKET }}
+          CLOUDFRONT_DISTRIBUTION_ID: ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID }}
+          CLOUDFRONT_URL: ${{ secrets.CLOUDFRONT_URL }}
         run: |
-          echo "### 🌐 Deployment" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          if [ -n "${{ secrets.CLOUDFRONT_URL }}" ]; then
-            echo "${{ secrets.CLOUDFRONT_URL }}" >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "CloudFront URL secret not provided." >> "$GITHUB_STEP_SUMMARY"
-          fi
+          cat <<'SUMMARY' >> "$GITHUB_STEP_SUMMARY"
+          ## Infinite Rails Deployment
+          - ✅ Site synced to **${AWS_S3_BUCKET}**
+          - ✅ CloudFront invalidated (**${CLOUDFRONT_DISTRIBUTION_ID}**)
+          - 🌐 Play it live: **${CLOUDFRONT_URL}**
+          SUMMARY
+          echo "CloudFront URL: ${CLOUDFRONT_URL}"
