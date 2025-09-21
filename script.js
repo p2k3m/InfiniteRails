@@ -106,6 +106,153 @@
     const scoreTotalEl = document.getElementById('scoreTotal');
     const scoreRecipesEl = document.getElementById('scoreRecipes');
     const scoreDimensionsEl = document.getElementById('scoreDimensions');
+    let scoreOverlayInitialized = false;
+
+    function initializeScoreOverlayUI() {
+      if (scoreOverlayInitialized) return;
+      if (!scoreTotalEl) return;
+
+      const initialValue = (scoreTotalEl.textContent || '0').trim() || '0';
+      scoreTotalEl.dataset.value = initialValue;
+      scoreTotalEl.textContent = '';
+      scoreTotalEl.classList.add('score-overlay__value--ready');
+
+      const digits = initialValue.split('');
+      digits.forEach((digit, index) => {
+        const slot = document.createElement('span');
+        slot.className = 'score-digit-slot';
+
+        const digitEl = document.createElement('span');
+        digitEl.className = 'score-digit score-digit--current';
+        digitEl.dataset.value = digit;
+        digitEl.textContent = digit;
+        digitEl.style.setProperty('--digit-index', index);
+
+        slot.appendChild(digitEl);
+        scoreTotalEl.appendChild(slot);
+      });
+
+      if (scoreRecipesEl) {
+        scoreRecipesEl.dataset.value = scoreRecipesEl.textContent ?? '';
+      }
+
+      if (scoreDimensionsEl) {
+        scoreDimensionsEl.dataset.value = scoreDimensionsEl.textContent ?? '';
+      }
+
+      scoreOverlayInitialized = true;
+    }
+
+    function createDigitElement(char, index) {
+      const digitEl = document.createElement('span');
+      digitEl.className = 'score-digit score-digit--current score-digit--enter';
+      digitEl.dataset.value = char;
+      digitEl.textContent = char;
+      digitEl.style.setProperty('--digit-index', index);
+      digitEl.addEventListener(
+        'animationend',
+        () => {
+          digitEl.classList.remove('score-digit--enter');
+        },
+        { once: true },
+      );
+      return digitEl;
+    }
+
+    function animateScoreDigits(container, value) {
+      if (!container) return;
+      const normalizedValue = value.toString();
+      const previousValue = container.dataset.value ?? '';
+      if (previousValue === normalizedValue) return;
+
+      const digits = normalizedValue.split('');
+      const existingSlots = Array.from(container.querySelectorAll('.score-digit-slot'));
+
+      while (existingSlots.length < digits.length) {
+        const slot = document.createElement('span');
+        slot.className = 'score-digit-slot';
+        container.appendChild(slot);
+        existingSlots.push(slot);
+      }
+
+      digits.forEach((char, index) => {
+        const slot = existingSlots[index];
+        if (!slot) return;
+        const currentDigit = slot.querySelector('.score-digit--current');
+        if (currentDigit?.dataset.value === char) {
+          currentDigit.style.setProperty('--digit-index', index);
+          return;
+        }
+
+        if (currentDigit) {
+          currentDigit.classList.remove('score-digit--current');
+          currentDigit.classList.add('score-digit--exit');
+          currentDigit.style.setProperty('--digit-index', index);
+          currentDigit.addEventListener(
+            'animationend',
+            () => {
+              if (currentDigit.parentElement === slot) {
+                currentDigit.remove();
+              }
+            },
+            { once: true },
+          );
+        }
+
+        const digitEl = createDigitElement(char, index);
+        slot.appendChild(digitEl);
+      });
+
+      for (let i = digits.length; i < existingSlots.length; i += 1) {
+        const slot = existingSlots[i];
+        const currentDigit = slot.querySelector('.score-digit--current');
+        if (currentDigit) {
+          currentDigit.classList.remove('score-digit--current');
+          currentDigit.classList.add('score-digit--exit');
+          currentDigit.style.setProperty('--digit-index', i);
+          currentDigit.addEventListener(
+            'animationend',
+            () => {
+              if (slot.parentElement) {
+                slot.remove();
+              }
+            },
+            { once: true },
+          );
+        } else if (slot.parentElement) {
+          slot.remove();
+        }
+      }
+
+      container.dataset.value = normalizedValue;
+    }
+
+    function animateMetricUpdate(element, text) {
+      if (!element) return;
+      const previousValue = element.dataset.value ?? '';
+      if (previousValue === text) return;
+
+      element.dataset.value = text;
+      element.textContent = text;
+
+      if (typeof element.getAnimations === 'function') {
+        element.getAnimations().forEach((animation) => animation.cancel());
+      }
+
+      if (typeof element.animate === 'function') {
+        element.animate(
+          [
+            { transform: 'translateY(0.55em)', opacity: 0 },
+            { transform: 'translateY(0)', opacity: 1, offset: 0.45 },
+            { transform: 'translateY(0)', opacity: 1 },
+          ],
+          {
+            duration: 420,
+            easing: 'cubic-bezier(0.22, 0.61, 0.36, 1)',
+          },
+        );
+      }
+    }
     const playerHintEl = document.getElementById('playerHint');
     const drowningVignetteEl = document.getElementById('drowningVignette');
     const defeatOverlayEl = document.getElementById('defeatOverlay');
@@ -2985,14 +3132,18 @@
 
     function updateScoreOverlay(options = {}) {
       if (!scoreTotalEl || !scoreRecipesEl || !scoreDimensionsEl) return;
+
+      initializeScoreOverlayUI();
+
       const recipeCount = state.scoreBreakdown?.recipes?.size ?? 0;
       const dimensionCount = state.scoreBreakdown?.dimensions?.size ?? 0;
       const recipePoints = recipeCount * SCORE_POINTS.recipe;
       const dimensionPoints = dimensionCount * SCORE_POINTS.dimension;
       state.score = recipePoints + dimensionPoints;
-      scoreTotalEl.textContent = state.score.toString();
-      scoreRecipesEl.textContent = `${recipeCount} (+${recipePoints} pts)`;
-      scoreDimensionsEl.textContent = `${dimensionCount} (+${dimensionPoints} pts)`;
+
+      animateScoreDigits(scoreTotalEl, state.score);
+      animateMetricUpdate(scoreRecipesEl, `${recipeCount} (+${recipePoints} pts)`);
+      animateMetricUpdate(scoreDimensionsEl, `${dimensionCount} (+${dimensionPoints} pts)`);
       if (scorePanelEl) {
         scorePanelEl.setAttribute('data-score', state.score.toString());
         if (options.flash) {
