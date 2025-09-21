@@ -60,12 +60,43 @@ jobs:
       - name: Sync site to S3
         env:
           DEPLOY_BUCKET: ${{ secrets.AWS_S3_BUCKET }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
         run: |
           set -euo pipefail
           if [ -z "${DEPLOY_BUCKET}" ]; then
             echo '::error::AWS_S3_BUCKET secret resolved to an empty string. Ensure the secret contains the bucket name.'
             exit 1
           fi
+
+          if ! OUTPUT=$(aws s3api head-bucket --bucket "${DEPLOY_BUCKET}" 2>&1); then
+            STATUS=$?
+            if echo "${OUTPUT}" | grep -q '(404)'; then
+              CREATE_ARGS=(--bucket "${DEPLOY_BUCKET}")
+              if [ -n "${AWS_REGION:-}" ] && [ "${AWS_REGION}" != "us-east-1" ]; then
+                CREATE_ARGS+=(--create-bucket-configuration "LocationConstraint=${AWS_REGION}")
+              fi
+              aws s3api create-bucket "${CREATE_ARGS[@]}"
+              aws s3api wait bucket-exists --bucket "${DEPLOY_BUCKET}"
+              {
+                echo '### 🪣 Created deployment bucket'
+                echo ''
+                echo "- Bucket: \`${DEPLOY_BUCKET}\`"
+                if [ -n "${AWS_REGION:-}" ]; then
+                  echo "- Region: \`${AWS_REGION}\`"
+                fi
+              } >> "$GITHUB_STEP_SUMMARY"
+            elif echo "${OUTPUT}" | grep -q '(301)'; then
+              echo "::error::S3 bucket ${DEPLOY_BUCKET} exists in a different region. Set AWS_S3_BUCKET to a bucket in ${AWS_REGION:-your configured region} or update the AWS_REGION secret to match the bucket's location."
+              exit 1
+            elif echo "${OUTPUT}" | grep -qi 'AccessDenied'; then
+              echo "::error::Access denied when checking bucket ${DEPLOY_BUCKET}. Confirm that the IAM user has s3:HeadBucket permissions."
+              exit 1
+            else
+              echo "::error::Failed to access S3 bucket ${DEPLOY_BUCKET}. AWS CLI exited with status ${STATUS}. Output: ${OUTPUT}"
+              exit 1
+            fi
+          fi
+
           aws s3 sync . "s3://${DEPLOY_BUCKET}" --delete --exclude ".git/*" --exclude ".github/*" --exclude "README.md" --exclude "LICENSE"
 
       - name: Discover CloudFront distribution
