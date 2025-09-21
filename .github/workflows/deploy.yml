@@ -99,7 +99,7 @@ jobs:
 
           aws s3 sync . "s3://${DEPLOY_BUCKET}" --delete --exclude ".git/*" --exclude ".github/*" --exclude "README.md" --exclude "LICENSE"
 
-      - name: Configure S3 static website hosting
+      - name: Configure bucket access policy
         env:
           DEPLOY_BUCKET: ${{ secrets.AWS_S3_BUCKET }}
           AWS_REGION: ${{ secrets.AWS_REGION }}
@@ -113,8 +113,6 @@ jobs:
           aws s3api put-public-access-block \
             --bucket "${DEPLOY_BUCKET}" \
             --public-access-block-configuration BlockPublicAcls=false,IgnorePublicAcls=false,BlockPublicPolicy=false,RestrictPublicBuckets=false
-
-          aws s3 website "s3://${DEPLOY_BUCKET}/" --index-document index.html --error-document index.html
 
           POLICY_FILE=$(mktemp)
           cat >"${POLICY_FILE}" <<POLICY
@@ -136,11 +134,10 @@ jobs:
           rm -f "${POLICY_FILE}"
 
           {
-            echo '### 🌐 Enabled static website hosting'
+            echo '### 📄 Configured bucket access'
             echo ''
             echo "- Bucket: \`${DEPLOY_BUCKET}\`"
-            echo "- Index document: \`index.html\`"
-            echo "- Error document: \`index.html\`"
+            echo "- Public reads: enabled"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Ensure CloudFront distribution
@@ -161,6 +158,58 @@ jobs:
               echo '::error::CloudFront distribution is missing an Id or DomainName. Inspect the AWS console.'
               exit 1
             fi
+
+            CURRENT_ORIGIN=$(echo "$MATCH" | jq -r '.Origins.Items[0].DomainName // empty')
+            if [ "$CURRENT_ORIGIN" = "$ORIGIN_WEBSITE" ]; then
+              echo '::notice::Updating CloudFront distribution to use the S3 REST endpoint.'
+              CONFIG_OUTPUT=$(aws cloudfront get-distribution-config --id "$CF_ID")
+              ETAG=$(echo "$CONFIG_OUTPUT" | jq -r '.ETag // empty')
+              if [ -z "$ETAG" ]; then
+                echo '::error::Failed to read distribution ETag.'
+                exit 1
+              fi
+
+              ORIGIN_ID="S3-${DEPLOY_BUCKET}"
+              ORIGIN_ID_OLD="S3-${DEPLOY_BUCKET}-website"
+              UPDATED_CONFIG=$(echo "$CONFIG_OUTPUT" | jq -r '.DistributionConfig' | jq \
+                --arg domain "$ORIGIN_REGIONAL" \
+                --arg origin_id "$ORIGIN_ID" \
+                --arg origin_id_old "$ORIGIN_ID_OLD" \
+                --arg website "$ORIGIN_WEBSITE" \
+                '
+                  .Origins.Items = (.Origins.Items | map(
+                    if (.Id == $origin_id_old) or (.DomainName == $website) then
+                      (.Id = $origin_id
+                       | .DomainName = $domain
+                       | .S3OriginConfig = { OriginAccessIdentity: "" }
+                       | del(.CustomOriginConfig))
+                    else
+                      .
+                    end
+                  ))
+                  | .Origins.Quantity = (.Origins.Items | length)
+                  | .DefaultCacheBehavior.TargetOriginId =
+                      (if .DefaultCacheBehavior.TargetOriginId == $origin_id_old then $origin_id else .DefaultCacheBehavior.TargetOriginId end)
+                  | if .CacheBehaviors? and (.CacheBehaviors.Items | length) > 0 then
+                      .CacheBehaviors.Items = (.CacheBehaviors.Items | map(
+                        if .TargetOriginId == $origin_id_old then
+                          .TargetOriginId = $origin_id
+                        else
+                          .
+                        end
+                      ))
+                    else
+                      .
+                    end
+                ')
+
+              TMP_CONFIG=$(mktemp)
+              echo "$UPDATED_CONFIG" > "$TMP_CONFIG"
+              aws cloudfront update-distribution --id "$CF_ID" --if-match "$ETAG" --distribution-config "file://${TMP_CONFIG}"
+              rm -f "$TMP_CONFIG"
+              aws cloudfront wait distribution-deployed --id "$CF_ID"
+            fi
+
             echo "distribution-id=${CF_ID}" >> "$GITHUB_OUTPUT"
             echo "distribution-domain=https://${CF_DOMAIN}" >> "$GITHUB_OUTPUT"
             {
@@ -184,23 +233,17 @@ jobs:
               "Quantity": 1,
               "Items": [
                 {
-                  "Id": "S3-${DEPLOY_BUCKET}-website",
-                  "DomainName": "${ORIGIN_WEBSITE}",
-                  "CustomOriginConfig": {
-                    "HTTPPort": 80,
-                    "HTTPSPort": 443,
-                    "OriginProtocolPolicy": "http-only",
-                    "OriginSslProtocols": {
-                      "Quantity": 3,
-                      "Items": ["TLSv1", "TLSv1.1", "TLSv1.2"]
-                    }
+                  "Id": "S3-${DEPLOY_BUCKET}",
+                  "DomainName": "${ORIGIN_REGIONAL}",
+                  "S3OriginConfig": {
+                    "OriginAccessIdentity": ""
                   }
                 }
               ]
             },
             "DefaultRootObject": "index.html",
             "DefaultCacheBehavior": {
-              "TargetOriginId": "S3-${DEPLOY_BUCKET}-website",
+              "TargetOriginId": "S3-${DEPLOY_BUCKET}",
               "ViewerProtocolPolicy": "redirect-to-https",
               "AllowedMethods": {
                 "Quantity": 2,
@@ -236,7 +279,7 @@ jobs:
             echo ''
             echo "- **Distribution ID**: \`${CF_ID}\`"
             echo "- **CloudFront URL**: https://${CF_DOMAIN}"
-            echo "- **Origin**: ${ORIGIN_WEBSITE}"
+            echo "- **Origin**: ${ORIGIN_REGIONAL}"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Invalidate CloudFront cache
