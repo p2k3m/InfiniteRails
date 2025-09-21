@@ -86,6 +86,7 @@ let playerMesh;
 let playerMeshParts;
 let tileRenderState = [];
 const zombieMeshes = [];
+const ironGolemMeshes = [];
 let playerLocator;
 let playerHintTimer = null;
 let lastDimensionHintKey = null;
@@ -724,13 +725,15 @@ function createPlayerMesh() {
   }
   playerMeshParts = null;
   const colors = {
-    skin: '#f5c39a',
-    shirt: '#4eb9f0',
-    pants: '#2753c6',
-    boots: '#1a213d',
-    hair: '#3b2a1c',
-    eye: '#1a2e4a',
-    eyeHighlight: '#c9f0ff',
+    skin: '#c58e64',
+    shirt: '#3aa7c9',
+    shirtHighlight: '#6fd4e0',
+    pants: '#2b3b90',
+    boots: '#1a243c',
+    hair: '#3a2a1b',
+    eye: '#1f3554',
+    eyeHighlight: '#cdeaff',
+    beard: '#8f5f3a',
   };
   const group = new THREE.Group();
   group.name = 'player-avatar';
@@ -776,7 +779,16 @@ function createPlayerMesh() {
     height: torsoHeight,
     y: hipsY + torsoHeight / 2,
   });
-  torso.material.roughness = 0.55;
+  torso.material.roughness = 0.5;
+
+  const shirtHighlight = addBlock(group, {
+    color: colors.shirtHighlight,
+    width: 0.32,
+    depth: 0.04,
+    height: 0.24,
+    y: shoulderY - 0.14,
+  });
+  shirtHighlight.position.z = 0.2;
 
   const belt = addBlock(group, {
     color: '#1f273a',
@@ -877,6 +889,15 @@ function createPlayerMesh() {
   });
   nose.position.z = faceZ + 0.04;
 
+  const beard = addBlock(headGroup, {
+    color: colors.beard,
+    width: 0.44,
+    depth: 0.06,
+    height: 0.2,
+    y: headHeight * 0.38,
+  });
+  beard.position.z = faceZ - 0.02;
+
   group.add(headGroup);
 
   entityGroup.add(group);
@@ -914,28 +935,232 @@ function createPlayerLocator() {
 function ensureZombieMeshCount(count) {
   while (zombieMeshes.length < count) {
     const zombie = new THREE.Group();
+    zombie.name = 'minecraft-zombie';
+    const colors = {
+      skin: '#6cc26e',
+      shirt: '#2f70af',
+      pants: '#2f3b6a',
+      eye: '#d34848',
+    };
+
+    const legHeight = 0.55;
+    const torsoHeight = 0.7;
+    const headHeight = 0.45;
+    const hipsY = legHeight;
+    const shoulderY = legHeight + torsoHeight;
+
+    const buildLeg = (offsetX) => {
+      const leg = new THREE.Group();
+      leg.position.set(offsetX, hipsY, 0);
+      addBlock(leg, {
+        color: colors.pants,
+        width: 0.28,
+        depth: 0.34,
+        height: legHeight,
+        y: -legHeight / 2,
+      });
+      return leg;
+    };
+
+    zombie.add(buildLeg(-0.18));
+    zombie.add(buildLeg(0.18));
+
     addBlock(zombie, {
-      color: '#234d2f',
-      width: 0.55,
-      depth: 0.55,
-      height: 1,
-      y: 0.5,
+      color: colors.shirt,
+      width: 0.68,
+      depth: 0.36,
+      height: torsoHeight,
+      y: hipsY + torsoHeight / 2,
     });
-    const head = addBlock(zombie, {
-      color: '#6cff9d',
+
+    const buildArm = (offsetX) => {
+      const arm = new THREE.Group();
+      arm.position.set(offsetX, shoulderY, 0);
+      addBlock(arm, {
+        color: colors.shirt,
+        width: 0.2,
+        depth: 0.3,
+        height: 0.52,
+        y: -0.26,
+      });
+      addBlock(arm, {
+        color: colors.skin,
+        width: 0.2,
+        depth: 0.3,
+        height: 0.2,
+        y: -0.62,
+      });
+      return arm;
+    };
+
+    zombie.add(buildArm(-0.46));
+    zombie.add(buildArm(0.46));
+
+    const headGroup = new THREE.Group();
+    headGroup.position.set(0, shoulderY + 0.05, 0);
+    const head = addBlock(headGroup, {
+      color: colors.skin,
       width: 0.5,
-      depth: 0.5,
-      height: 0.4,
-      y: 1 + 0.2,
+      depth: 0.48,
+      height: headHeight,
+      y: headHeight / 2,
     });
-    head.material.emissive = new THREE.Color('#6cff9d');
-    head.material.emissiveIntensity = 0.3;
+    head.material.roughness = 0.5;
+
+    const eyeMaterial = new THREE.MeshBasicMaterial({ color: colors.eye });
+    const eyeGeometry = new THREE.PlaneGeometry(0.08, 0.1);
+    const leftEye = new THREE.Mesh(eyeGeometry, eyeMaterial);
+    leftEye.position.set(-0.12, headHeight * 0.65, 0.22);
+    headGroup.add(leftEye);
+    const rightEye = leftEye.clone();
+    rightEye.position.x = 0.12;
+    headGroup.add(rightEye);
+
+    const brow = addBlock(headGroup, {
+      color: '#3c8b45',
+      width: 0.52,
+      depth: 0.08,
+      height: 0.12,
+      y: headHeight * 0.78,
+    });
+    brow.position.z = 0.2;
+
+    zombie.add(headGroup);
     entityGroup.add(zombie);
     zombieMeshes.push(zombie);
   }
   while (zombieMeshes.length > count) {
     const zombie = zombieMeshes.pop();
     entityGroup.remove(zombie);
+  }
+}
+
+function ensureIronGolemMeshCount(count) {
+  while (ironGolemMeshes.length < count) {
+    const golem = new THREE.Group();
+    golem.name = 'iron-golem';
+    const colors = {
+      body: '#d8d2c8',
+      accent: '#b49a8a',
+      vines: '#6a9b54',
+      eye: '#d75757',
+    };
+
+    const legHeight = 0.7;
+    const torsoHeight = 0.9;
+    const headHeight = 0.36;
+    const hipsY = legHeight;
+    const shoulderY = legHeight + torsoHeight;
+
+    const buildLeg = (offsetX) => {
+      const leg = new THREE.Group();
+      leg.position.set(offsetX, hipsY, 0);
+      addBlock(leg, {
+        color: colors.body,
+        width: 0.34,
+        depth: 0.42,
+        height: legHeight,
+        y: -legHeight / 2,
+      });
+      addBlock(leg, {
+        color: colors.accent,
+        width: 0.36,
+        depth: 0.46,
+        height: 0.18,
+        y: -legHeight + 0.09,
+      });
+      return leg;
+    };
+
+    golem.add(buildLeg(-0.26));
+    golem.add(buildLeg(0.26));
+
+    const torso = addBlock(golem, {
+      color: colors.body,
+      width: 0.98,
+      depth: 0.6,
+      height: torsoHeight,
+      y: hipsY + torsoHeight / 2,
+    });
+    torso.material.roughness = 0.7;
+
+    const chestPlate = addBlock(golem, {
+      color: colors.accent,
+      width: 0.9,
+      depth: 0.16,
+      height: 0.32,
+      y: hipsY + torsoHeight * 0.75,
+    });
+    chestPlate.position.z = 0.3;
+
+    const buildArm = (offsetX) => {
+      const arm = new THREE.Group();
+      arm.position.set(offsetX, shoulderY, 0);
+      addBlock(arm, {
+        color: colors.body,
+        width: 0.26,
+        depth: 0.36,
+        height: 0.7,
+        y: -0.35,
+      });
+      addBlock(arm, {
+        color: colors.accent,
+        width: 0.28,
+        depth: 0.38,
+        height: 0.24,
+        y: -0.82,
+      });
+      return arm;
+    };
+
+    golem.add(buildArm(-0.78));
+    golem.add(buildArm(0.78));
+
+    const vineWrap = addBlock(golem, {
+      color: colors.vines,
+      width: 0.2,
+      depth: 0.64,
+      height: 0.5,
+      y: hipsY + torsoHeight * 0.4,
+    });
+    vineWrap.position.x = -0.35;
+
+    const headGroup = new THREE.Group();
+    headGroup.position.set(0, shoulderY + 0.12, 0);
+    const head = addBlock(headGroup, {
+      color: colors.body,
+      width: 0.58,
+      depth: 0.5,
+      height: headHeight,
+      y: headHeight / 2,
+    });
+    head.material.roughness = 0.65;
+
+    const brow = addBlock(headGroup, {
+      color: colors.accent,
+      width: 0.6,
+      depth: 0.12,
+      height: 0.1,
+      y: headHeight * 0.74,
+    });
+    brow.position.z = 0.2;
+
+    const eyeMaterial = new THREE.MeshBasicMaterial({ color: colors.eye });
+    const eyeGeometry = new THREE.PlaneGeometry(0.1, 0.1);
+    const leftEye = new THREE.Mesh(eyeGeometry, eyeMaterial);
+    leftEye.position.set(-0.12, headHeight * 0.58, 0.24);
+    headGroup.add(leftEye);
+    const rightEye = leftEye.clone();
+    rightEye.position.x = 0.12;
+    headGroup.add(rightEye);
+
+    golem.add(headGroup);
+    entityGroup.add(golem);
+    ironGolemMeshes.push(golem);
+  }
+  while (ironGolemMeshes.length > count) {
+    const golem = ironGolemMeshes.pop();
+    entityGroup.remove(golem);
   }
 }
 
@@ -998,11 +1223,19 @@ function updateEntities() {
     }
   }
   ensureZombieMeshCount(state.zombies.length);
+  ensureIronGolemMeshCount(state.ironGolems?.length ?? 0);
   state.zombies.forEach((zombie, index) => {
     const mesh = zombieMeshes[index];
     if (!mesh) return;
     const { x, z } = worldToScene(zombie.x, zombie.y);
     const h = tileSurfaceHeight(zombie.x, zombie.y);
+    mesh.position.set(x, h, z);
+  });
+  state.ironGolems?.forEach((golem, index) => {
+    const mesh = ironGolemMeshes[index];
+    if (!mesh) return;
+    const { x, z } = worldToScene(golem.x, golem.y);
+    const h = tileSurfaceHeight(golem.x, golem.y);
     mesh.position.set(x, h, z);
   });
 }
@@ -1331,6 +1564,7 @@ const state = {
   railTimer: 0,
   portals: [],
   zombies: [],
+  ironGolems: [],
   lootables: [],
   chests: [],
   lastMoveAt: 0,
@@ -1361,6 +1595,7 @@ const state = {
     hasIgniter: false,
     tarStacks: 0,
     tarSlowTimer: 0,
+    zombieHits: 0,
   },
   pressedKeys: new Set(),
   isRunning: false,
@@ -1901,6 +2136,7 @@ function loadDimension(id, fromId = null) {
   state.player.facing = { x: 0, y: 1 };
   state.portals = [];
   state.zombies = [];
+  state.ironGolems = [];
   state.baseMoveDelay = dim.rules.moveDelay ?? 0.18;
   state.moveDelay = state.baseMoveDelay;
   state.hooks.onMove = [];
@@ -1921,6 +2157,7 @@ function loadDimension(id, fromId = null) {
   state.player.tarStacks = 0;
   state.player.tarSlowTimer = 0;
   state.player.isSliding = false;
+  state.player.zombieHits = 0;
   if (fromId && id !== 'origin' && id !== 'netherite') {
     spawnReturnPortal(fromId, id);
   }
@@ -1935,6 +2172,7 @@ function loadDimension(id, fromId = null) {
   renderVictoryBanner();
   updateRecipesList();
   updatePortalProgress();
+  deployIronGolems();
   logEvent(`Entered ${dim.name}.`);
 }
 
@@ -1968,6 +2206,7 @@ function update(delta) {
   if (isNight && state.zombies.length < 4) {
     spawnZombie();
   }
+  updateIronGolems(delta);
   updateZombies(delta);
   handleAir(delta);
   processEchoQueue();
@@ -1996,6 +2235,132 @@ function handleAir(delta) {
   }
 }
 
+function deployIronGolems() {
+  if (!state.ironGolems) state.ironGolems = [];
+  state.ironGolems.length = 0;
+  const desiredCount = 2;
+  const origin = { x: state.player.x, y: state.player.y };
+  const preferredOffsets = [
+    { x: 1, y: 0 },
+    { x: -1, y: 0 },
+    { x: 0, y: 1 },
+    { x: 0, y: -1 },
+    { x: 2, y: 0 },
+    { x: -2, y: 0 },
+    { x: 0, y: 2 },
+    { x: 0, y: -2 },
+    { x: 1, y: 1 },
+    { x: -1, y: 1 },
+    { x: 1, y: -1 },
+    { x: -1, y: -1 },
+  ];
+
+  const placeGolemAt = (x, y) => {
+    if (state.ironGolems.length >= desiredCount) return true;
+    if (!isWalkable(x, y)) return false;
+    if (x === origin.x && y === origin.y) return false;
+    if (state.ironGolems.some((g) => g.x === x && g.y === y)) return false;
+    state.ironGolems.push({ x, y, cooldown: 0 });
+    return true;
+  };
+
+  for (const offset of preferredOffsets) {
+    if (placeGolemAt(origin.x + offset.x, origin.y + offset.y)) continue;
+    if (state.ironGolems.length >= desiredCount) break;
+  }
+
+  if (state.ironGolems.length < desiredCount) {
+    const candidates = [];
+    for (let y = 0; y < state.height; y++) {
+      for (let x = 0; x < state.width; x++) {
+        if (!isWalkable(x, y)) continue;
+        if (x === origin.x && y === origin.y) continue;
+        candidates.push({ x, y, dist: Math.abs(x - origin.x) + Math.abs(y - origin.y) });
+      }
+    }
+    candidates.sort((a, b) => a.dist - b.dist);
+    for (const candidate of candidates) {
+      if (placeGolemAt(candidate.x, candidate.y)) {
+        if (state.ironGolems.length >= desiredCount) break;
+      }
+    }
+  }
+
+  if (state.ironGolems.length === 0) {
+    state.ironGolems.push({ x: origin.x, y: origin.y, cooldown: 0 });
+  }
+}
+
+function findNearestZombie(origin) {
+  if (!state.zombies.length) return null;
+  let best = null;
+  let bestDist = Infinity;
+  state.zombies.forEach((zombie) => {
+    const dist = Math.abs(zombie.x - origin.x) + Math.abs(zombie.y - origin.y);
+    if (dist < bestDist) {
+      best = zombie;
+      bestDist = dist;
+    }
+  });
+  return best;
+}
+
+function updateIronGolems(delta) {
+  if (!state.ironGolems?.length) return;
+  state.ironGolems.forEach((golem) => {
+    golem.cooldown = (golem.cooldown ?? 0) - delta;
+    if (golem.cooldown > 0) return;
+    const target = findNearestZombie(golem);
+    if (!target) {
+      golem.cooldown = 0.45;
+      return;
+    }
+    const dx = Math.sign(target.x - golem.x);
+    const dy = Math.sign(target.y - golem.y);
+    let moved = false;
+    if (Math.abs(dx) >= Math.abs(dy)) {
+      if (dx !== 0 && isWalkable(golem.x + dx, golem.y)) {
+        golem.x += dx;
+        moved = true;
+      } else if (dy !== 0 && isWalkable(golem.x, golem.y + dy)) {
+        golem.y += dy;
+        moved = true;
+      }
+    } else {
+      if (dy !== 0 && isWalkable(golem.x, golem.y + dy)) {
+        golem.y += dy;
+        moved = true;
+      } else if (dx !== 0 && isWalkable(golem.x + dx, golem.y)) {
+        golem.x += dx;
+        moved = true;
+      }
+    }
+    golem.cooldown = moved ? 0.28 : 0.35;
+  });
+
+  const defeatedIndices = new Set();
+  state.ironGolems.forEach((golem) => {
+    state.zombies.forEach((zombie, index) => {
+      const distance = Math.abs(zombie.x - golem.x) + Math.abs(zombie.y - golem.y);
+      if (distance <= 1) {
+        defeatedIndices.add(index);
+      }
+    });
+  });
+
+  if (defeatedIndices.size) {
+    const defeatedZombies = [];
+    state.zombies = state.zombies.filter((zombie, index) => {
+      if (defeatedIndices.has(index)) {
+        defeatedZombies.push(zombie);
+        return false;
+      }
+      return true;
+    });
+    defeatedZombies.forEach(() => logEvent('An iron golem smashes a Minecraft zombie to protect you.'));
+  }
+}
+
 function spawnZombie() {
   const spawnEdges = [
     { x: Math.floor(Math.random() * state.width), y: 0 },
@@ -2005,7 +2370,7 @@ function spawnZombie() {
   ];
   const spawn = choose(spawnEdges);
   state.zombies.push({ x: spawn.x, y: spawn.y, speed: 0.8, cooldown: 0 });
-  logEvent('A zombie claws onto the rails.');
+  logEvent('A Minecraft zombie claws onto the rails.');
 }
 
 function updateZombies(delta) {
@@ -2023,8 +2388,7 @@ function updateZombies(delta) {
     }
     zombie.cooldown = 0.5;
     if (zombie.x === state.player.x && zombie.y === state.player.y) {
-      applyDamage(0.5);
-      logEvent('Zombie strike! Lose 0.5 heart.');
+      handleZombieHit();
     }
   });
   state.zombies = state.zombies.filter((z) => {
@@ -2033,13 +2397,39 @@ function updateZombies(delta) {
   });
 }
 
+function handleZombieHit() {
+  state.player.zombieHits = (state.player.zombieHits ?? 0) + 1;
+  const hits = state.player.zombieHits;
+  const heartsPerHit = state.player.maxHearts / 5;
+  const remainingHearts = state.player.maxHearts - heartsPerHit * hits;
+  state.player.hearts = clamp(remainingHearts, 0, state.player.maxHearts);
+  if (hits >= 5) {
+    state.player.hearts = 0;
+    updateStatusBars();
+    handlePlayerDefeat('The Minecraft zombies overwhelm Steve. You respawn among the rails.');
+    return;
+  }
+  const remainingHits = 5 - hits;
+  logEvent(
+    `Minecraft zombie strike! ${remainingHits} more hit${remainingHits === 1 ? '' : 's'} before defeat.`
+  );
+  updateStatusBars();
+}
+
+function handlePlayerDefeat(message) {
+  if (state.victory) return;
+  logEvent(message);
+  loadDimension('origin');
+  state.player.hearts = state.player.maxHearts;
+  state.player.air = state.player.maxAir;
+  state.player.zombieHits = 0;
+  updateStatusBars();
+}
+
 function applyDamage(amount) {
   state.player.hearts = clamp(state.player.hearts - amount, 0, state.player.maxHearts);
   if (state.player.hearts <= 0 && !state.victory) {
-    logEvent('You collapse. Echoes rebuild the realm...');
-    loadDimension('origin');
-    state.player.hearts = state.player.maxHearts;
-    state.player.air = state.player.maxAir;
+    handlePlayerDefeat('You collapse. Echoes rebuild the realm...');
   }
 }
 
