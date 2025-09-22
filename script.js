@@ -416,6 +416,11 @@
     const tmpCameraRight = new THREE.Vector3();
     const tmpColorA = new THREE.Color();
     const tmpColorB = new THREE.Color();
+    const tmpColorC = new THREE.Color();
+    const tmpColorD = new THREE.Color();
+
+    const ZOMBIE_OUTLINE_COLOR = new THREE.Color('#ff5a7a');
+    const GOLEM_OUTLINE_COLOR = new THREE.Color('#58b7ff');
 
     const baseMaterialCache = new Map();
     const accentMaterialCache = new Map();
@@ -442,6 +447,8 @@
       duskSky: new THREE.Color(BASE_ATMOSPHERE.duskSky),
       groundDay: new THREE.Color(BASE_ATMOSPHERE.groundDay),
       groundNight: new THREE.Color(BASE_ATMOSPHERE.groundNight),
+      dayStrength: 1,
+      nightStrength: 0,
     };
 
     const identityState = {
@@ -883,15 +890,27 @@
         playerHintTimer = null;
       }
       playerHintEl.classList.remove('visible');
+      playerHintEl.removeAttribute('data-variant');
     }
 
     function showPlayerHint(message, options = {}) {
-      if (!playerHintEl || !message) return;
+      if (!playerHintEl || (!message && !options.html)) return;
       if (playerHintTimer) {
         clearTimeout(playerHintTimer);
         playerHintTimer = null;
       }
-      playerHintEl.textContent = message;
+      if (options.variant) {
+        playerHintEl.setAttribute('data-variant', options.variant);
+      } else {
+        playerHintEl.removeAttribute('data-variant');
+      }
+      if (options.html) {
+        playerHintEl.innerHTML = options.html;
+      } else if (message) {
+        playerHintEl.textContent = message;
+      } else {
+        playerHintEl.textContent = '';
+      }
       playerHintEl.classList.add('visible');
       const duration = Number.isFinite(options.duration) ? Number(options.duration) : 5600;
       if (!options.persist) {
@@ -899,6 +918,72 @@
           hidePlayerHint();
         }, Math.max(1000, duration));
       }
+    }
+
+    const coarsePointerQuery =
+      typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+        ? window.matchMedia('(pointer: coarse)')
+        : null;
+
+    function prefersTouchControls() {
+      if (coarsePointerQuery?.matches) return true;
+      if (navigator.maxTouchPoints != null && navigator.maxTouchPoints > 0) return true;
+      if (navigator.msMaxTouchPoints != null && navigator.msMaxTouchPoints > 0) return true;
+      return typeof window !== 'undefined' && 'ontouchstart' in window;
+    }
+
+    function createControlsHintMarkup(preferredScheme = 'desktop') {
+      const desktopActive = preferredScheme === 'desktop';
+      const mobileActive = preferredScheme === 'touch';
+      const desktopBadge = desktopActive ? '<span class="player-hint__badge">Detected</span>' : '';
+      const mobileBadge = mobileActive ? '<span class="player-hint__badge">Detected</span>' : '';
+      const desktopList = [
+        'Move with WASD or the arrow keys.',
+        'Press Space or click adjacent tiles to gather resources.',
+        'Press Q to place blocks and R to ignite portal frames.',
+      ];
+      const mobileList = [
+        'Tap the on-screen arrows to move.',
+        'Tap ✦ to interact or gather from nearby tiles.',
+        'Tap ⧉ to ignite portal frames.',
+      ];
+      const renderList = (items) =>
+        `<ul class="player-hint__list">${items.map((item) => `<li>${item}</li>`).join('')}</ul>`;
+      const renderKeys = (keys) =>
+        `<div class="player-hint__key-row" aria-hidden="true">${keys
+          .map((key) => `<span class="player-hint__key">${key}</span>`)
+          .join('')}</div>`;
+      const desktopKeys = renderKeys(['W', 'A', 'S', 'D']);
+      const mobileKeys =
+        '<div class="player-hint__key-row player-hint__key-row--mobile" aria-hidden="true">' +
+        ['◀', '▲', '▼', '▶']
+          .map((key) => `<span class="player-hint__key player-hint__key--arrow">${key}</span>`)
+          .join('') +
+        '</div>';
+      return `
+        <div class="player-hint__controls">
+          <h3 class="player-hint__title">Choose your controls</h3>
+          <p class="player-hint__intro">Pick the movement scheme that matches your device before night falls.</p>
+          <div class="player-hint__columns">
+            <section class="player-hint__column${desktopActive ? ' is-active' : ''}" aria-label="Desktop controls">
+              <header class="player-hint__column-header">
+                <span class="player-hint__label">Desktop</span>
+                ${desktopBadge}
+              </header>
+              ${desktopKeys}
+              ${renderList(desktopList)}
+            </section>
+            <section class="player-hint__column${mobileActive ? ' is-active' : ''}" aria-label="Touch controls">
+              <header class="player-hint__column-header">
+                <span class="player-hint__label">Touch</span>
+                ${mobileBadge}
+              </header>
+              ${mobileKeys}
+              ${renderList(mobileList)}
+            </section>
+          </div>
+        </div>
+      `;
     }
 
     function handleResize() {
@@ -1900,6 +1985,17 @@
         brow.position.z = 0.2;
 
         zombie.add(headGroup);
+        const bodyMaterials = [];
+        const baseBodyColors = [];
+        const baseEmissiveColors = [];
+        zombie.traverse((child) => {
+          if (!child?.isMesh || child.material === eyeMaterial) return;
+          const material = child.material;
+          if (!material) return;
+          bodyMaterials.push(material);
+          baseBodyColors.push(material.color?.clone?.() ?? new THREE.Color('#ffffff'));
+          baseEmissiveColors.push(material.emissive?.clone?.() ?? new THREE.Color('#000000'));
+        });
         entityGroup.add(zombie);
         zombieMeshes.push({
           group: zombie,
@@ -1915,6 +2011,9 @@
           baseEyeColor: new THREE.Color(colors.eye),
           aggressiveEyeColor: new THREE.Color('#ff9a9a'),
           tempColor: new THREE.Color(colors.eye),
+          bodyMaterials,
+          baseBodyColors,
+          baseEmissiveColors,
           previousXZ: new THREE.Vector2(),
           hasPrev: false,
           lastUpdate: typeof performance !== 'undefined' ? performance.now() : Date.now(),
@@ -2058,6 +2157,17 @@
         headGroup.add(rightEye);
 
         golem.add(headGroup);
+        const bodyMaterials = [];
+        const baseBodyColors = [];
+        const baseEmissiveColors = [];
+        golem.traverse((child) => {
+          if (!child?.isMesh || child.material === eyeMaterial) return;
+          const material = child.material;
+          if (!material) return;
+          bodyMaterials.push(material);
+          baseBodyColors.push(material.color?.clone?.() ?? new THREE.Color('#ffffff'));
+          baseEmissiveColors.push(material.emissive?.clone?.() ?? new THREE.Color('#000000'));
+        });
         entityGroup.add(golem);
         ironGolemMeshes.push({
           group: golem,
@@ -2073,6 +2183,9 @@
           baseEyeColor: new THREE.Color(colors.eye),
           aggressiveEyeColor: new THREE.Color('#ffe2a8'),
           tempColor: new THREE.Color(colors.eye),
+          bodyMaterials,
+          baseBodyColors,
+          baseEmissiveColors,
           previousXZ: new THREE.Vector2(),
           hasPrev: false,
           lastUpdate: typeof performance !== 'undefined' ? performance.now() : Date.now(),
@@ -2178,6 +2291,7 @@
       }
       ensureZombieMeshCount(state.zombies.length);
       ensureIronGolemMeshCount(state.ironGolems?.length ?? 0);
+      const nightFactor = THREE.MathUtils.clamp(lightingState.nightStrength ?? 0, 0, 1);
       state.zombies.forEach((zombie, index) => {
         const actor = zombieMeshes[index];
         if (!actor) return;
@@ -2234,6 +2348,29 @@
         actor.eyeMaterial.color.copy(eyeColor);
         actor.eyeMaterial.opacity = 0.75 + aggression * 0.25;
         actor.eyeMaterial.needsUpdate = true;
+        if (actor.bodyMaterials?.length) {
+          const outlineStrength = THREE.MathUtils.clamp(nightFactor * 0.85 + aggression * 0.45, 0, 1);
+          actor.bodyMaterials.forEach((material, matIndex) => {
+            if (!material) return;
+            const baseColor = actor.baseBodyColors?.[matIndex];
+            const baseEmissive = actor.baseEmissiveColors?.[matIndex];
+            if (baseColor && material.color) {
+              tmpColorC.copy(baseColor);
+              const targetColor = tmpColorD.copy(ZOMBIE_OUTLINE_COLOR);
+              material.color.copy(tmpColorC.lerp(targetColor, outlineStrength * 0.35));
+            }
+            if (material.emissive) {
+              const base = baseEmissive ?? material.emissive;
+              tmpColorC.copy(base);
+              const target = tmpColorD.copy(ZOMBIE_OUTLINE_COLOR);
+              material.emissive.copy(tmpColorC.lerp(target, outlineStrength));
+            } else {
+              material.emissive = new THREE.Color('#000000');
+              material.emissive.copy(ZOMBIE_OUTLINE_COLOR).multiplyScalar(outlineStrength);
+            }
+            material.emissiveIntensity = 0.25 + outlineStrength * 0.9;
+          });
+        }
       });
       state.ironGolems?.forEach((golem, index) => {
         const actor = ironGolemMeshes[index];
@@ -2293,6 +2430,29 @@
         actor.eyeMaterial.color.copy(eyeColor);
         actor.eyeMaterial.opacity = 0.6 + aggression * 0.35;
         actor.eyeMaterial.needsUpdate = true;
+        if (actor.bodyMaterials?.length) {
+          const outlineStrength = THREE.MathUtils.clamp(nightFactor * 0.75 + aggression * 0.6, 0, 1);
+          actor.bodyMaterials.forEach((material, matIndex) => {
+            if (!material) return;
+            const baseColor = actor.baseBodyColors?.[matIndex];
+            const baseEmissive = actor.baseEmissiveColors?.[matIndex];
+            if (baseColor && material.color) {
+              tmpColorC.copy(baseColor);
+              const targetColor = tmpColorD.copy(GOLEM_OUTLINE_COLOR);
+              material.color.copy(tmpColorC.lerp(targetColor, outlineStrength * 0.32));
+            }
+            if (material.emissive) {
+              const base = baseEmissive ?? material.emissive;
+              tmpColorC.copy(base);
+              const target = tmpColorD.copy(GOLEM_OUTLINE_COLOR);
+              material.emissive.copy(tmpColorC.lerp(target, outlineStrength));
+            } else {
+              material.emissive = new THREE.Color('#000000');
+              material.emissive.copy(GOLEM_OUTLINE_COLOR).multiplyScalar(outlineStrength);
+            }
+            material.emissiveIntensity = 0.3 + outlineStrength * 0.85;
+          });
+        }
       });
       updateMarbleGhosts();
     }
@@ -2467,6 +2627,7 @@
       const sunAngle = ratio * Math.PI * 2;
       const sunElevation = Math.sin(sunAngle);
       const dayStrength = THREE.MathUtils.clamp((sunElevation + 1) / 2, 0, 1);
+      lightingState.dayStrength = dayStrength;
       const sunRadius = 24;
       sunLight.position.set(
         playerScene.x + Math.cos(sunAngle) * sunRadius,
@@ -2480,6 +2641,7 @@
       const moonAngle = sunAngle + Math.PI;
       const moonElevation = Math.sin(moonAngle);
       const nightStrength = THREE.MathUtils.clamp((moonElevation + 1) / 2, 0, 1);
+      lightingState.nightStrength = nightStrength;
       const moonRadius = 22;
       moonLight.position.set(
         playerScene.x + Math.cos(moonAngle) * moonRadius,
@@ -3582,10 +3744,12 @@
       updateDimensionOverlay();
       window.setTimeout(() => {
         if (state.isRunning) {
-          showPlayerHint(
-            'You are the luminous explorer at the heart of the island. Click or tap tiles around you to gather nearby resources.',
-            { duration: 7200 }
-          );
+          const preferredScheme = prefersTouchControls() ? 'touch' : 'desktop';
+          showPlayerHint(null, {
+            html: createControlsHintMarkup(preferredScheme),
+            variant: 'controls',
+            persist: true,
+          });
         }
       }, 900);
     }
