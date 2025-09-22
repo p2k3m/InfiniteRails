@@ -1843,6 +1843,8 @@
       if (renderer) return true;
       try {
         renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
         const gl = renderer.getContext();
         if (!gl || typeof gl.getParameter !== 'function') {
           throw new Error('WebGL context unavailable');
@@ -1886,6 +1888,19 @@
       sunLight = new THREE.DirectionalLight(0xfff2d8, 1.4);
       sunLight.position.set(12, 16, 6);
       sunLight.target.position.set(0, 0, 0);
+      sunLight.castShadow = true;
+      const sunShadowSize = 24;
+      sunLight.shadow.mapSize.set(2048, 2048);
+      sunLight.shadow.camera.near = 0.5;
+      sunLight.shadow.camera.far = 80;
+      sunLight.shadow.camera.left = -sunShadowSize;
+      sunLight.shadow.camera.right = sunShadowSize;
+      sunLight.shadow.camera.top = sunShadowSize;
+      sunLight.shadow.camera.bottom = -sunShadowSize;
+      sunLight.shadow.bias = -0.0008;
+      sunLight.shadow.normalBias = 0.02;
+      sunLight.shadow.radius = 2.5;
+      sunLight.shadow.camera.updateProjectionMatrix();
       scene.add(sunLight);
       scene.add(sunLight.target);
 
@@ -1896,7 +1911,12 @@
       scene.add(moonLight.target);
 
       torchLight = new THREE.PointLight(0xffd27f, 0, 8, 2.4);
-      torchLight.castShadow = false;
+      torchLight.castShadow = true;
+      torchLight.shadow.mapSize.set(1024, 1024);
+      torchLight.shadow.camera.near = 0.1;
+      torchLight.shadow.camera.far = 16;
+      torchLight.shadow.bias = -0.001;
+      torchLight.shadow.radius = 3;
       torchLight.visible = false;
       scene.add(torchLight);
 
@@ -1981,6 +2001,11 @@
         mat = new THREE.MeshStandardMaterial(materialOptions);
       }
       const mesh = new THREE.Mesh(geometry, mat);
+      const materialOpacity = mat && typeof mat.opacity === 'number' ? mat.opacity : undefined;
+      const materialIsTransparent =
+        transparent || (mat && mat.transparent) || (materialOpacity !== undefined && materialOpacity < 1);
+      mesh.castShadow = !materialIsTransparent;
+      mesh.receiveShadow = true;
       mesh.scale.set(width, height, depth);
       mesh.position.y = y;
       group.add(mesh);
@@ -1991,6 +2016,7 @@
       const plate = new THREE.Mesh(PLANE_GEOMETRY, getAccentMaterial(color, opacity));
       plate.rotation.x = -Math.PI / 2;
       plate.position.y = height + 0.01;
+      plate.receiveShadow = true;
       group.add(plate);
       return plate;
     }
@@ -3496,6 +3522,7 @@
         torchLight.distance = holdingTorch ? 7.5 : 4;
         torchLight.decay = 1.8;
         torchLight.visible = torchLight.intensity > 0.05;
+        torchLight.castShadow = torchLight.visible;
         torchLight.position.set(
           playerScene.x + playerFacing.x * 0.45,
           playerHeight + 0.65,
