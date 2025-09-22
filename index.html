@@ -608,7 +608,9 @@
             <p class="guide-eyebrow">Game Design Document &amp; User Manual</p>
             <h2 id="guideTitle">Infinite Dimension: Portals Reimagined</h2>
           </div>
-          <button type="button" class="ghost" data-close-guide>Close</button>
+          <button type="button" class="guide-close" data-close-guide aria-label="Close guide">
+            <span aria-hidden="true">&times;</span>
+          </button>
         </header>
         <section class="guide-section guide-carousel" data-guide-carousel aria-label="Interactive player guide">
           <div class="guide-carousel__viewport">
@@ -659,27 +661,77 @@
             <li>Repeat with higher-tier materials until you conquer the collapsing Netherite dimension.</li>
           </ol>
         </section>
-        <section class="guide-section two-column">
-          <div>
-            <h4>Controls (Desktop)</h4>
-            <ul>
-              <li><kbd>WASD</kbd> / <kbd>Arrows</kbd> — move &amp; switch rails</li>
-              <li><kbd>Space</kbd> — jump gaps</li>
-              <li><kbd>Mouse</kbd> — look, mine, place</li>
-              <li><kbd>E</kbd> — inventory</li>
-              <li><kbd>F</kbd> — interact</li>
-              <li><kbd>R</kbd> — build portals</li>
-            </ul>
-          </div>
-          <div>
-            <h4>Controls (Mobile)</h4>
-            <ul>
-              <li>Swipe to swap rails</li>
-              <li>Tap &amp; hold to mine or place blocks</li>
-              <li>Click or tap tiles to gather resources</li>
-              <li>Use the hotbar for quick slots and the craft circle for recipes</li>
-            </ul>
-          </div>
+        <section class="guide-section">
+          <h3>Control Reference</h3>
+          <table class="guide-controls-table">
+            <caption class="visually-hidden">Desktop and mobile control mapping</caption>
+            <thead>
+              <tr>
+                <th scope="col">Action</th>
+                <th scope="col">Desktop</th>
+                <th scope="col">Mobile</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <th scope="row">Move &amp; swap rails</th>
+                <td><kbd>WASD</kbd> or <kbd>Arrows</kbd></td>
+                <td>Swipe ⟷</td>
+              </tr>
+              <tr>
+                <th scope="row">Jump</th>
+                <td><kbd>Space</kbd></td>
+                <td>Tap Jump</td>
+              </tr>
+              <tr>
+                <th scope="row">Interact</th>
+                <td><kbd>F</kbd> / <kbd>Mouse</kbd> click</td>
+                <td>Tap interact icon</td>
+              </tr>
+              <tr>
+                <th scope="row">Inventory</th>
+                <td><kbd>E</kbd></td>
+                <td>Inventory button</td>
+              </tr>
+              <tr>
+                <th scope="row">Portal planner</th>
+                <td><kbd>R</kbd></td>
+                <td>Portal overlay toggle</td>
+              </tr>
+              <tr>
+                <th scope="row">Quick deploy</th>
+                <td><kbd>1</kbd>–<kbd>5</kbd> hotbar</td>
+                <td>Hotbar tap</td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+        <section class="guide-section guide-section--tips">
+          <h3>Field Tips</h3>
+          <ul class="guide-tips">
+            <li>Blue cadence lights foreshadow collapsing rails — reposition early.</li>
+            <li>Sequencing an item twice stores it in the crafting suggestions list for fast reuse.</li>
+            <li>Villagers reward you with buffs if their homes survive a raid streak.</li>
+            <li>Place torches near portals to keep the ignition matrix stable overnight.</li>
+          </ul>
+        </section>
+        <section class="guide-section guide-section--diagram">
+          <h3>Portal Frame Blueprint</h3>
+          <figure class="guide-portal-diagram">
+            <svg viewBox="0 0 200 160" role="img" aria-labelledby="portalDiagramTitle">
+              <title id="portalDiagramTitle">Four by three portal frame blueprint</title>
+              <rect x="24" y="20" width="152" height="120" fill="none" stroke="rgba(73, 242, 255, 0.45)" stroke-width="8" rx="10" ry="10"></rect>
+              <rect x="40" y="36" width="120" height="88" fill="rgba(73, 242, 255, 0.12)" stroke="rgba(73, 242, 255, 0.35)" stroke-width="2" stroke-dasharray="6 8" rx="8" ry="8"></rect>
+              <line x1="40" y1="60" x2="160" y2="60" stroke="rgba(73, 242, 255, 0.2)" stroke-width="1.5" stroke-dasharray="4 6"></line>
+              <line x1="40" y1="92" x2="160" y2="92" stroke="rgba(73, 242, 255, 0.2)" stroke-width="1.5" stroke-dasharray="4 6"></line>
+              <line x1="40" y1="124" x2="160" y2="124" stroke="rgba(73, 242, 255, 0.2)" stroke-width="1.5" stroke-dasharray="4 6"></line>
+              <line x1="72" y1="36" x2="72" y2="124" stroke="rgba(73, 242, 255, 0.2)" stroke-width="1.5" stroke-dasharray="4 6"></line>
+              <line x1="104" y1="36" x2="104" y2="124" stroke="rgba(73, 242, 255, 0.2)" stroke-width="1.5" stroke-dasharray="4 6"></line>
+              <line x1="136" y1="36" x2="136" y2="124" stroke="rgba(73, 242, 255, 0.2)" stroke-width="1.5" stroke-dasharray="4 6"></line>
+              <text x="100" y="150" text-anchor="middle" fill="rgba(247, 183, 51, 0.85)" font-size="12" font-family="'Chakra Petch', sans-serif">Build 4×3, ignite centre</text>
+            </svg>
+            <figcaption>Keep the frame uniform — mismatched materials destabilise the gateway.</figcaption>
+          </figure>
         </section>
         <section class="guide-section">
           <h3>Dimensions &amp; Objectives</h3>
