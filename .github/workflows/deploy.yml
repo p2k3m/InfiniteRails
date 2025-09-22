@@ -97,7 +97,15 @@ jobs:
             fi
           fi
 
-          aws s3 sync . "s3://${DEPLOY_BUCKET}" --delete --exclude ".git/*" --exclude ".github/*" --exclude "README.md" --exclude "LICENSE"
+          aws s3 sync . "s3://${DEPLOY_BUCKET}" \
+            --delete \
+            --exclude "*" \
+            --include "index.html" \
+            --include "styles.css" \
+            --include "script.js" \
+            --include "scoreboard-utils.js" \
+            --include "assets/*" \
+            --include "vendor/*"
 
       - name: Configure bucket access policy
         env:
