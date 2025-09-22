@@ -1685,6 +1685,7 @@
     const accentMaterialCache = new Map();
     const textureVariantCache = new Map();
     const spriteTextureCache = new Map();
+    let treeLeavesMaterial = null;
 
     const textureLoader = new THREE.TextureLoader();
     textureLoader.setCrossOrigin?.('anonymous');
@@ -1836,6 +1837,35 @@
       return texture;
     }
 
+    function clonePreviewTexture(baseTexture, options = {}) {
+      if (!baseTexture) {
+        return null;
+      }
+      const texture = baseTexture.clone();
+      texture.image = baseTexture.image;
+      texture.needsUpdate = true;
+      texture.wrapS = options.wrapS ?? baseTexture.wrapS ?? THREE.RepeatWrapping;
+      texture.wrapT = options.wrapT ?? baseTexture.wrapT ?? THREE.RepeatWrapping;
+      const repeat = options.repeat;
+      if (typeof repeat === 'number') {
+        texture.repeat.set(repeat, repeat);
+      } else if (repeat) {
+        texture.repeat.set(repeat.x ?? texture.repeat.x, repeat.y ?? texture.repeat.y);
+      } else if (baseTexture.repeat) {
+        texture.repeat.copy(baseTexture.repeat);
+      }
+      texture.magFilter = options.magFilter ?? baseTexture.magFilter ?? THREE.LinearFilter;
+      texture.minFilter = options.minFilter ?? baseTexture.minFilter ?? THREE.LinearMipmapLinearFilter;
+      texture.colorSpace = options.colorSpace ?? baseTexture.colorSpace ?? THREE.SRGBColorSpace;
+      texture.generateMipmaps = baseTexture.generateMipmaps ?? true;
+      const maxAnisotropy = renderer?.capabilities?.getMaxAnisotropy?.() ?? 1;
+      texture.anisotropy = options.anisotropy ?? baseTexture.anisotropy ?? maxAnisotropy;
+      if (options.transparent || baseTexture.format === THREE.RGBAFormat) {
+        texture.format = THREE.RGBAFormat;
+      }
+      return texture;
+    }
+
     function addNoise(ctx, size, variance = 0.15) {
       const image = ctx.getImageData(0, 0, size, size);
       for (let i = 0; i < image.data.length; i += 4) {
@@ -1848,26 +1878,31 @@
     }
 
     function createDewTextureSet() {
+      ensurePreviewTextures();
+      const baseGrass = previewAssets.textures.grass;
+      let grassTexture = clonePreviewTexture(baseGrass, { repeat: { x: 4, y: 4 } });
       const size = 256;
-      const albedoUrl = createProceduralTextureDataUrl(size, (ctx, dimension) => {
-        const gradient = ctx.createLinearGradient(0, 0, dimension, dimension);
-        gradient.addColorStop(0, '#1d7a46');
-        gradient.addColorStop(1, '#2aa35a');
-        ctx.fillStyle = gradient;
-        ctx.fillRect(0, 0, dimension, dimension);
-        for (let i = 0; i < 220; i++) {
-          const radius = Math.random() * 6 + 2;
-          const x = Math.random() * dimension;
-          const y = Math.random() * dimension;
-          const droplet = ctx.createRadialGradient(x, y, 0, x, y, radius);
-          droplet.addColorStop(0, 'rgba(255, 255, 255, 0.75)');
-          droplet.addColorStop(1, 'rgba(255, 255, 255, 0)');
-          ctx.fillStyle = droplet;
-          ctx.fillRect(x - radius, y - radius, radius * 2, radius * 2);
-        }
-        addNoise(ctx, dimension, 0.05);
-      });
-
+      if (!grassTexture) {
+        const fallbackUrl = createProceduralTextureDataUrl(size, (ctx, dimension) => {
+          const gradient = ctx.createLinearGradient(0, 0, dimension, dimension);
+          gradient.addColorStop(0, '#1d7a46');
+          gradient.addColorStop(1, '#2aa35a');
+          ctx.fillStyle = gradient;
+          ctx.fillRect(0, 0, dimension, dimension);
+          for (let i = 0; i < 220; i++) {
+            const radius = Math.random() * 6 + 2;
+            const x = Math.random() * dimension;
+            const y = Math.random() * dimension;
+            const droplet = ctx.createRadialGradient(x, y, 0, x, y, radius);
+            droplet.addColorStop(0, 'rgba(255, 255, 255, 0.75)');
+            droplet.addColorStop(1, 'rgba(255, 255, 255, 0)');
+            ctx.fillStyle = droplet;
+            ctx.fillRect(x - radius, y - radius, radius * 2, radius * 2);
+          }
+          addNoise(ctx, dimension, 0.05);
+        });
+        grassTexture = createTexture(fallbackUrl, { repeat: { x: 4, y: 4 }, colorSpace: THREE.SRGBColorSpace });
+      }
       const normalUrl = createProceduralTextureDataUrl(size, (ctx, dimension) => {
         ctx.fillStyle = 'rgb(128,128,255)';
         ctx.fillRect(0, 0, dimension, dimension);
@@ -1900,9 +1935,9 @@
       });
 
       return {
-        map: createTexture(albedoUrl, { repeat: { x: 3, y: 3 }, colorSpace: THREE.SRGBColorSpace }),
-        normalMap: createTexture(normalUrl, { repeat: { x: 3, y: 3 }, colorSpace: THREE.NoColorSpace }),
-        roughnessMap: createTexture(roughnessUrl, { repeat: { x: 3, y: 3 }, colorSpace: THREE.NoColorSpace }),
+        map: grassTexture,
+        normalMap: createTexture(normalUrl, { repeat: { x: 4, y: 4 }, colorSpace: THREE.NoColorSpace }),
+        roughnessMap: createTexture(roughnessUrl, { repeat: { x: 4, y: 4 }, colorSpace: THREE.NoColorSpace }),
       };
     }
 
@@ -1963,32 +1998,37 @@
     }
 
     function createBarkTextureSet() {
+      ensurePreviewTextures();
+      const baseWood = previewAssets.textures.wood;
+      let woodTexture = clonePreviewTexture(baseWood, { repeat: { x: 1.4, y: 1.4 } });
       const size = 256;
-      const albedoUrl = createProceduralTextureDataUrl(size, (ctx, dimension) => {
-        const gradient = ctx.createLinearGradient(0, 0, dimension, dimension);
-        gradient.addColorStop(0, '#4f3418');
-        gradient.addColorStop(1, '#3a2412');
-        ctx.fillStyle = gradient;
-        ctx.fillRect(0, 0, dimension, dimension);
-        ctx.strokeStyle = 'rgba(255, 210, 150, 0.22)';
-        ctx.lineWidth = 4;
-        for (let i = 0; i < 12; i++) {
-          const x = (dimension / 12) * i + Math.random() * 6;
-          ctx.beginPath();
-          ctx.moveTo(x, 0);
-          ctx.bezierCurveTo(
-            x + Math.random() * 10 - 5,
-            dimension * 0.25,
-            x + Math.random() * 10 - 5,
-            dimension * 0.75,
-            x + Math.random() * 8 - 4,
-            dimension
-          );
-          ctx.stroke();
-        }
-        addNoise(ctx, dimension, 0.18);
-      });
-
+      if (!woodTexture) {
+        const fallbackUrl = createProceduralTextureDataUrl(size, (ctx, dimension) => {
+          const gradient = ctx.createLinearGradient(0, 0, dimension, dimension);
+          gradient.addColorStop(0, '#4f3418');
+          gradient.addColorStop(1, '#3a2412');
+          ctx.fillStyle = gradient;
+          ctx.fillRect(0, 0, dimension, dimension);
+          ctx.strokeStyle = 'rgba(255, 210, 150, 0.22)';
+          ctx.lineWidth = 4;
+          for (let i = 0; i < 12; i++) {
+            const x = (dimension / 12) * i + Math.random() * 6;
+            ctx.beginPath();
+            ctx.moveTo(x, 0);
+            ctx.bezierCurveTo(
+              x + Math.random() * 10 - 5,
+              dimension * 0.25,
+              x + Math.random() * 10 - 5,
+              dimension * 0.75,
+              x + Math.random() * 8 - 4,
+              dimension
+            );
+            ctx.stroke();
+          }
+          addNoise(ctx, dimension, 0.18);
+        });
+        woodTexture = createTexture(fallbackUrl, { repeat: { x: 1.4, y: 1.4 }, colorSpace: THREE.SRGBColorSpace });
+      }
       const normalUrl = createProceduralTextureDataUrl(size, (ctx, dimension) => {
         ctx.fillStyle = 'rgb(128,128,255)';
         ctx.fillRect(0, 0, dimension, dimension);
@@ -2026,7 +2066,7 @@
       });
 
       return {
-        map: createTexture(albedoUrl, { repeat: { x: 1.4, y: 1.4 }, colorSpace: THREE.SRGBColorSpace }),
+        map: woodTexture,
         normalMap: createTexture(normalUrl, { repeat: { x: 1.4, y: 1.4 }, colorSpace: THREE.NoColorSpace }),
         roughnessMap: createTexture(roughnessUrl, { repeat: { x: 1.4, y: 1.4 }, colorSpace: THREE.NoColorSpace }),
       };
@@ -3706,6 +3746,42 @@
       }
     }
 
+    function getTreeLeavesMaterial() {
+      if (treeLeavesMaterial) {
+        return treeLeavesMaterial;
+      }
+      ensurePreviewTextures();
+      const baseLeaves = previewAssets.textures.leaves;
+      if (!baseLeaves) {
+        treeLeavesMaterial = new THREE.MeshStandardMaterial({
+          color: new THREE.Color('#2e8b57'),
+          roughness: 0.55,
+          metalness: 0.08,
+          transparent: true,
+          opacity: 0.95,
+          alphaTest: 0.25,
+          side: THREE.DoubleSide,
+        });
+        return treeLeavesMaterial;
+      }
+      const leavesTexture = clonePreviewTexture(baseLeaves, {
+        repeat: { x: 2, y: 2 },
+        transparent: true,
+      });
+      leavesTexture.needsUpdate = true;
+      treeLeavesMaterial = new THREE.MeshStandardMaterial({
+        map: leavesTexture,
+        color: new THREE.Color('#2e8b57'),
+        roughness: 0.55,
+        metalness: 0.08,
+        transparent: true,
+        opacity: 0.95,
+        alphaTest: 0.25,
+        side: THREE.DoubleSide,
+      });
+      return treeLeavesMaterial;
+    }
+
     function rebuildTileGroup(renderInfo, tile) {
       const { group } = renderInfo;
       while (group.children.length) {
@@ -3801,10 +3877,10 @@
             y: 0.9 + 0.7,
           });
           addBlock(group, {
-            color: accentColor,
-            width: 1.1,
-            depth: 1.1,
-            height: 1.1,
+            material: getTreeLeavesMaterial(),
+            width: 1.3,
+            depth: 1.3,
+            height: 1.2,
             y: 0.9 + 1.4,
           });
           break;
