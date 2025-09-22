@@ -168,6 +168,11 @@
     const scoreRecipesEl = document.getElementById('scoreRecipes');
     const scoreDimensionsEl = document.getElementById('scoreDimensions');
     let scoreOverlayInitialized = false;
+    const inventoryModal = document.getElementById('inventoryModal');
+    const closeInventoryButton = document.getElementById('closeInventory');
+    const inventoryGridEl = document.getElementById('inventoryGrid');
+    const inventorySortButton = document.getElementById('inventorySortButton');
+    const inventoryOverflowEl = document.getElementById('inventoryOverflow');
 
     const reduceMotionQuery =
       typeof window !== 'undefined' && window.matchMedia
@@ -3936,6 +3941,7 @@
         dimensionTransition: null,
         victoryCelebrationVisible: false,
         victoryCelebrationShown: false,
+        inventorySortMode: 'default',
       },
     };
 
@@ -4256,7 +4262,7 @@
       });
 
       extendedInventoryEl.innerHTML = '';
-      const combined = mergeInventory();
+      const combined = getInventoryDisplayBundles();
       combined.forEach((bundle) => {
         const el = document.createElement('div');
         el.className = 'inventory-slot';
@@ -4265,6 +4271,8 @@
         extendedInventoryEl.appendChild(el);
       });
       updateCraftingInventoryOverlay(combined);
+      updateInventoryModalGrid(combined);
+      updateInventorySortButtonState();
     }
 
     function mergeInventory() {
@@ -4274,6 +4282,84 @@
         map.set(entry.item, (map.get(entry.item) ?? 0) + entry.quantity);
       });
       return Array.from(map.entries()).map(([item, quantity]) => ({ item, quantity }));
+    }
+
+    function getInventoryDisplayBundles() {
+      const bundles = mergeInventory();
+      if (state.ui.inventorySortMode === 'alpha') {
+        bundles.sort((a, b) => {
+          const nameA = ITEM_DEFS[a.item]?.name ?? a.item;
+          const nameB = ITEM_DEFS[b.item]?.name ?? b.item;
+          return nameA.localeCompare(nameB, undefined, { sensitivity: 'base' });
+        });
+      }
+      return bundles;
+    }
+
+    function updateInventoryModalGrid(fromCombined) {
+      if (!inventoryGridEl) return;
+      const combinedSource = Array.isArray(fromCombined) ? fromCombined : getInventoryDisplayBundles();
+      const combined = combinedSource.slice();
+      const overflow = Math.max(0, combined.length - 9);
+      const bundles = combined.slice(0, 9);
+      inventoryGridEl.innerHTML = '';
+      bundles.forEach((bundle, index) => {
+        if (!bundle) return;
+        const { item, quantity } = bundle;
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'inventory-modal__slot';
+        button.setAttribute('data-item-id', item);
+        button.setAttribute('data-grid-index', String(index));
+        button.setAttribute('role', 'gridcell');
+        const name = ITEM_DEFS[item]?.name ?? item;
+        button.setAttribute('aria-label', `${name} ×${quantity}`);
+        button.innerHTML = `
+          <span class="inventory-modal__item-name">${name}</span>
+          <span class="inventory-modal__item-quantity">×${quantity}</span>
+        `;
+        button.addEventListener('pointerdown', (event) => beginInventoryDrag(event, item, quantity));
+        button.addEventListener('click', () => {
+          if (inventoryClickBypass.has(button)) {
+            inventoryClickBypass.delete(button);
+            return;
+          }
+          addToCraftSequence(item);
+        });
+        inventoryGridEl.appendChild(button);
+      });
+      for (let i = bundles.length; i < 9; i++) {
+        const empty = document.createElement('div');
+        empty.className = 'inventory-modal__slot inventory-modal__slot--empty';
+        empty.setAttribute('role', 'gridcell');
+        empty.setAttribute('aria-label', 'Empty slot');
+        empty.innerHTML = '<span class="inventory-modal__item-name">Empty</span>';
+        inventoryGridEl.appendChild(empty);
+      }
+      inventoryGridEl.setAttribute('data-empty', bundles.length === 0 ? 'true' : 'false');
+      if (inventoryOverflowEl) {
+        if (overflow > 0) {
+          const bundleWord = overflow === 1 ? 'bundle' : 'bundles';
+          inventoryOverflowEl.textContent = `+${overflow} more ${bundleWord} stored off-grid`;
+          inventoryOverflowEl.hidden = false;
+        } else {
+          inventoryOverflowEl.textContent = '';
+          inventoryOverflowEl.hidden = true;
+        }
+      }
+    }
+
+    function updateInventorySortButtonState() {
+      if (!inventorySortButton) return;
+      const sorted = state.ui.inventorySortMode === 'alpha';
+      inventorySortButton.textContent = sorted ? 'Reset Order' : 'Sort (A→Z)';
+      inventorySortButton.setAttribute('aria-pressed', sorted ? 'true' : 'false');
+    }
+
+    function toggleInventorySortMode() {
+      state.ui.inventorySortMode = state.ui.inventorySortMode === 'alpha' ? 'default' : 'alpha';
+      updateInventorySortButtonState();
+      updateInventoryUI();
     }
 
     function updateCraftingInventoryOverlay(fromCombined) {
@@ -6610,7 +6696,19 @@
 
     function handleKeyDown(event) {
       if (event.repeat) return;
-      switch (event.key.toLowerCase()) {
+      const key = event.key.toLowerCase();
+      const target = event.target;
+      if (
+        target instanceof HTMLElement &&
+        (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)
+      ) {
+        return;
+      }
+      if (isInventoryModalOpen() && key !== 'e' && key !== 'escape') {
+        event.preventDefault();
+        return;
+      }
+      switch (key) {
         case 'w':
         case 'arrowup':
           attemptMove(0, -1);
@@ -6637,7 +6735,8 @@
           promptPortalBuild();
           break;
         case 'e':
-          toggleExtended();
+          toggleInventoryModal({ focusFirstSlot: true });
+          event.preventDefault();
           break;
         case 'f':
           interact();
@@ -6698,9 +6797,54 @@
       buildPortal(material);
     }
 
-    function toggleExtended() {
-      extendedInventoryEl.classList.toggle('open');
-      toggleExtendedBtn.textContent = extendedInventoryEl.classList.contains('open') ? 'Close Satchel' : 'Open Satchel';
+    function isInventoryModalOpen() {
+      return Boolean(inventoryModal && inventoryModal.hidden === false);
+    }
+
+    function openInventoryModal(shouldFocusFirstSlot = false) {
+      if (!inventoryModal) return;
+      if (!inventoryModal.hidden) return;
+      inventoryModal.hidden = false;
+      inventoryModal.setAttribute('aria-hidden', 'false');
+      toggleExtendedBtn?.setAttribute('aria-expanded', 'true');
+      if (toggleExtendedBtn) {
+        toggleExtendedBtn.textContent = 'Close Inventory';
+      }
+      updateInventoryModalGrid();
+      updateInventorySortButtonState();
+      if (shouldFocusFirstSlot) {
+        window.setTimeout(() => {
+          const focusTarget =
+            inventoryGridEl?.querySelector('.inventory-modal__slot:not(.inventory-modal__slot--empty)') ||
+            inventorySortButton ||
+            closeInventoryButton ||
+            null;
+          focusTarget?.focus();
+        }, 0);
+      }
+    }
+
+    function closeInventoryModal(shouldFocusTrigger = false) {
+      if (!inventoryModal) return;
+      if (inventoryModal.hidden) return;
+      inventoryModal.hidden = true;
+      inventoryModal.setAttribute('aria-hidden', 'true');
+      toggleExtendedBtn?.setAttribute('aria-expanded', 'false');
+      if (toggleExtendedBtn) {
+        toggleExtendedBtn.textContent = 'Open Inventory';
+      }
+      if (shouldFocusTrigger) {
+        toggleExtendedBtn?.focus();
+      }
+    }
+
+    function toggleInventoryModal(options = {}) {
+      const { focusTrigger = false, focusFirstSlot = false } = options;
+      if (isInventoryModalOpen()) {
+        closeInventoryModal(focusTrigger);
+      } else {
+        openInventoryModal(focusFirstSlot);
+      }
     }
 
     function updateFromMobile(action) {
@@ -6777,7 +6921,10 @@
       });
       craftingSearchInput?.addEventListener('input', updateCraftingSearchPanelResults);
       craftLauncherButton?.addEventListener('click', openCraftingModal);
-      toggleExtendedBtn.addEventListener('click', toggleExtended);
+      toggleExtendedBtn?.addEventListener('click', () =>
+        toggleInventoryModal({ focusTrigger: true, focusFirstSlot: true })
+      );
+      inventorySortButton?.addEventListener('click', toggleInventorySortMode);
       mobileControls.querySelectorAll('button').forEach((button) => {
         button.addEventListener('click', () => updateFromMobile(button.dataset.action));
       });
@@ -6793,6 +6940,11 @@
       });
       window.addEventListener('keydown', (event) => {
         if (event.key !== 'Escape') return;
+        if (inventoryModal && !inventoryModal.hidden) {
+          closeInventoryModal(true);
+          event.preventDefault();
+          return;
+        }
         if (sidePanelEl?.classList.contains('open')) {
           closeSidebar(true);
           event.preventDefault();
@@ -7622,6 +7774,7 @@
 
     setupSettingsModal();
     setupCraftingModal();
+    setupInventoryModal();
 
     const GUIDE_SLIDES = [
       {
@@ -7884,6 +8037,24 @@
           }
         }
       });
+    }
+
+    function setupInventoryModal() {
+      if (!inventoryModal) return;
+      inventoryModal.hidden = true;
+      inventoryModal.setAttribute('aria-hidden', 'true');
+      toggleExtendedBtn?.setAttribute('aria-expanded', 'false');
+      inventoryModal.addEventListener('click', (event) => {
+        if (event.target === inventoryModal) {
+          closeInventoryModal(true);
+        }
+      });
+      closeInventoryButton?.addEventListener('click', () => closeInventoryModal(true));
+      updateInventorySortButtonState();
+      if (inventoryOverflowEl) {
+        inventoryOverflowEl.hidden = true;
+        inventoryOverflowEl.textContent = '';
+      }
     }
 
     function openGuideModal() {
