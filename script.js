@@ -95,9 +95,10 @@
     const userNameDisplayEl = document.getElementById('userNameDisplay');
     const userLocationDisplayEl = document.getElementById('userLocationDisplay');
     const userDeviceDisplayEl = document.getElementById('userDeviceDisplay');
-    const googleButtonContainer = document.getElementById('googleButtonContainer');
-    const googleFallbackSignIn = document.getElementById('googleFallbackSignIn');
-    const googleSignOutButton = document.getElementById('googleSignOut');
+    const googleButtonContainers = Array.from(document.querySelectorAll('[data-google-button-container]'));
+    const googleFallbackButtons = Array.from(document.querySelectorAll('[data-google-fallback-signin]'));
+    const googleSignOutButtons = Array.from(document.querySelectorAll('[data-google-sign-out]'));
+    const landingSignInPanel = document.getElementById('landingSignInPanel');
     const scoreboardSection = document.getElementById('scoreboardSection');
     const scoreboardListEl = document.getElementById('scoreboardList');
     const scoreboardStatusEl = document.getElementById('scoreboardStatus');
@@ -5274,28 +5275,34 @@
       if (userDeviceDisplayEl) userDeviceDisplayEl.textContent = formatDeviceSnapshot(identityState.device);
 
       const signedIn = Boolean(identityState.googleProfile);
-      if (googleSignOutButton) googleSignOutButton.hidden = !signedIn;
+      googleSignOutButtons.forEach((button) => {
+        button.hidden = !signedIn;
+      });
       if (scoreboardSection) scoreboardSection.hidden = !signedIn;
-      if (googleButtonContainer) {
+      googleButtonContainers.forEach((container) => {
         const shouldHideGoogleButton =
           signedIn || !identityState.googleInitialized || !appConfig.googleClientId;
-        googleButtonContainer.hidden = shouldHideGoogleButton;
-      }
-      if (googleFallbackSignIn) {
+        container.hidden = shouldHideGoogleButton;
+      });
+      googleFallbackButtons.forEach((button) => {
         const showFallback = !signedIn;
-        googleFallbackSignIn.hidden = !showFallback;
+        button.hidden = !showFallback;
         if (appConfig.googleClientId) {
           const ready = identityState.googleInitialized;
-          googleFallbackSignIn.disabled = !ready;
-          googleFallbackSignIn.textContent = ready ? 'Sign in with Google' : 'Preparing Google Sign-In…';
-          googleFallbackSignIn.title = ready
+          button.disabled = !ready;
+          button.textContent = ready ? 'Sign in with Google' : 'Preparing Google Sign-In…';
+          button.title = ready
             ? 'Open the Google Sign-In prompt.'
             : 'Google services are still initialising. This will become clickable momentarily.';
         } else {
-          googleFallbackSignIn.disabled = false;
-          googleFallbackSignIn.textContent = 'Create local explorer profile';
-          googleFallbackSignIn.title = 'Skip Google Sign-In and save your progress locally on this device.';
+          button.disabled = false;
+          button.textContent = 'Create local explorer profile';
+          button.title = 'Skip Google Sign-In and save your progress locally on this device.';
         }
+      });
+      if (landingSignInPanel) {
+        landingSignInPanel.hidden = signedIn;
+        landingSignInPanel.setAttribute('aria-hidden', signedIn ? 'true' : 'false');
       }
 
       if (scoreboardStatusEl) {
@@ -5475,8 +5482,9 @@
           ux_mode: 'popup',
           auto_select: false,
         });
-        if (googleButtonContainer) {
-          google.accounts.id.renderButton(googleButtonContainer, {
+        googleButtonContainers.forEach((container) => {
+          if (!container || container.dataset.rendered === 'true') return;
+          google.accounts.id.renderButton(container, {
             type: 'standard',
             theme: 'outline',
             size: 'large',
@@ -5484,8 +5492,9 @@
             shape: 'pill',
             width: 260,
           });
-          googleButtonContainer.hidden = false;
-        }
+          container.dataset.rendered = 'true';
+          container.hidden = false;
+        });
         identityState.googleInitialized = true;
         updateIdentityUI();
         return;
@@ -5768,14 +5777,18 @@
       }
       updateIdentityUI();
       attemptGoogleInit();
-      googleFallbackSignIn?.addEventListener('click', () => {
-        if (appConfig.googleClientId) {
-          attemptGoogleSignInFlow();
-        } else {
-          handleLocalProfileSignIn();
-        }
+      googleFallbackButtons.forEach((button) => {
+        button.addEventListener('click', () => {
+          if (appConfig.googleClientId) {
+            attemptGoogleSignInFlow();
+          } else {
+            handleLocalProfileSignIn();
+          }
+        });
       });
-      googleSignOutButton?.addEventListener('click', handleGoogleSignOut);
+      googleSignOutButtons.forEach((button) => {
+        button.addEventListener('click', handleGoogleSignOut);
+      });
       refreshScoresButton?.addEventListener('click', () => {
         if (!identityState.googleProfile) {
           updateIdentityUI();

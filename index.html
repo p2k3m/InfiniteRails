@@ -112,7 +112,9 @@
             <button type="button" class="ghost small side-panel-close" data-close-sidebar aria-label="Close player panels">
               Close
             </button>
-            <button type="button" id="googleSignOut" class="ghost small" hidden>Sign out</button>
+            <button type="button" id="googleSignOut" class="ghost small" data-google-sign-out hidden>
+              Sign out
+            </button>
           </header>
           <div class="player-panel__content">
             <div class="identity-pill" id="userNameDisplay">Guest Explorer</div>
@@ -120,8 +122,8 @@
               <span id="userLocationDisplay">Location unavailable</span>
               <span id="userDeviceDisplay">Device details pending</span>
             </div>
-            <div id="googleButtonContainer" class="gsi-container" hidden></div>
-            <button type="button" id="googleFallbackSignIn" class="primary">Sign in with Google</button>
+            <div class="gsi-container" data-google-button-container hidden></div>
+            <button type="button" class="primary" data-google-fallback-signin>Sign in with Google</button>
             <p class="player-panel__hint">
               Sign in to capture your location badge, sync your device fingerprint, and compete on the Infinite Dimension scorecard.
             </p>
@@ -179,6 +181,18 @@
           Survive, craft, and weave portals across dimensions. Gather resources from each world, solve rail puzzles,
           and bring home the Eternal Ingot.
         </p>
+        <section class="signin-callout" id="landingSignInPanel" aria-label="Link your explorer profile">
+          <h3>Sync your journey before you depart</h3>
+          <p class="signin-callout__summary">
+            Sign in with Google to unlock the shared scoreboard, capture your location badge, and mirror your progress across
+            every device.
+          </p>
+          <div class="signin-callout__actions">
+            <div class="gsi-container" data-google-button-container hidden></div>
+            <button type="button" class="primary" data-google-fallback-signin>Sign in with Google</button>
+            <p class="signin-callout__note">Prefer to explore as a guest? You can connect later from the Player Hub.</p>
+          </div>
+        </section>
         <ul class="modal-highlights">
           <li>Build 4×3 portals with unique materials to unlock new rules.</li>
           <li>Craft using ordered sequences and uncover hidden recipes.</li>

@@ -10,6 +10,7 @@ Infinite Dimension is a browser-based voxel survival-puzzle prototype built enti
 - **Google-powered sign-in** – authenticate with Google to unlock the shared scorecard and sync your metadata.
 - **DynamoDB-ready APIs** – the frontend posts user/device/location telemetry to `/users` and reads/writes scores at `/scores`.
 - **Live scoreboard** – explore top multiverse runs, complete with dimension counts, run time, inventory haul, and location tags.
+- **Serverless backend** – deployable AWS Lambda handlers and DynamoDB tables now live in `serverless/` for `/users` and `/scores`.
 
 ## Game Highlights
 
@@ -48,6 +49,20 @@ Expose an `APP_CONFIG` object before loading `script.js` to wire up Google SSO a
 - **User metadata** – on sign-in the app POSTs to `${apiBaseUrl}/users` with the player’s Google ID, preferred name, device snapshot, and geolocation (if permission is granted). The handler can write directly to a DynamoDB table keyed by Google ID.
 - **Scoreboard** – the app loads scores via `GET ${apiBaseUrl}/scores` and upserts the player’s run with `POST ${apiBaseUrl}/scores`. The payload mirrors the UI fields: `name`, `score`, `dimensionCount`, `runTimeSeconds`, `inventoryCount`, plus optional `location` or `locationLabel` fields.
 - **Offline-friendly** – when `apiBaseUrl` is absent the UI persists identities and scores to `localStorage` and displays sample leaderboard entries so the page remains fully interactive.
+
+### Deploying the AWS backend
+
+Provision the serverless API and DynamoDB tables with the provided AWS SAM template:
+
+```bash
+cd serverless
+sam build
+sam deploy --guided
+```
+
+- The stack creates a `/users` Lambda (for Google profile sync) and a `/scores` Lambda (for leaderboard reads/writes) behind an API Gateway stage.
+- DynamoDB tables `UsersTable` and `ScoresTable` are configured for on-demand billing with encryption enabled. The scoreboard table includes a `ScoreIndex` global secondary index that the Lambda uses to return the highest scores first.
+- After deployment, copy the generated API endpoint URL into `window.APP_CONFIG.apiBaseUrl` so the frontend will sync identities and victories to DynamoDB.
 
 ### Google SSO configuration
 
