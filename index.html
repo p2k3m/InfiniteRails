@@ -148,11 +148,22 @@
           aria-hidden="true"
           tabindex="-1"
         >
-          <div class="defeat-overlay__content" role="dialog" aria-modal="true" aria-labelledby="defeatTitle">
-            <h3 id="defeatTitle">Respawn Imminent</h3>
+          <div
+            class="defeat-overlay__content"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="defeatTitle"
+            aria-describedby="defeatMessage defeatCountdown"
+          >
+            <h3 id="defeatTitle">You Perished</h3>
             <p class="defeat-overlay__message" id="defeatMessage"></p>
             <div class="defeat-overlay__inventory" id="defeatInventory" aria-live="polite"></div>
-            <p class="defeat-overlay__countdown" id="defeatCountdown"></p>
+            <p class="defeat-overlay__countdown" id="defeatCountdown" role="status" aria-live="assertive"></p>
+            <div class="defeat-overlay__actions">
+              <button type="button" class="defeat-overlay__respawn-button" id="defeatRespawn">
+                Respawn Now
+              </button>
+            </div>
           </div>
         </div>
       </section>
