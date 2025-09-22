@@ -25,6 +25,23 @@
           <span class="subtitle">Portals Reimagined</span>
         </div>
       </div>
+      <div class="top-bar__center">
+        <button
+          type="button"
+          id="openLeaderboard"
+          class="leaderboard-toggle"
+          aria-haspopup="dialog"
+          aria-controls="leaderboardModal"
+          aria-expanded="false"
+        >
+          <span class="leaderboard-toggle__icon" aria-hidden="true">
+            <span></span>
+            <span></span>
+            <span></span>
+          </span>
+          <span class="leaderboard-toggle__label">Leaderboard</span>
+        </button>
+      </div>
       <div class="top-actions">
         <button type="button" id="openGuide" class="ghost">Game Guide</button>
         <button
@@ -128,14 +145,6 @@
               Sign in to capture your location badge, sync your device fingerprint, and compete on the Infinite Dimension scorecard.
             </p>
           </div>
-        </section>
-        <section class="scoreboard-panel" id="scoreboardSection" aria-label="Multiverse scoreboard" hidden>
-          <header>
-            <h2>Multiverse Scoreboard</h2>
-            <button type="button" id="refreshScores" class="ghost small">Refresh</button>
-          </header>
-          <p class="scoreboard-status" id="scoreboardStatus" aria-live="polite">Sign in to view the multiverse scorecard.</p>
-          <ol class="scoreboard-list" id="scoreboardList" aria-live="polite"></ol>
         </section>
         <section class="inventory-panel">
           <h2>Inventory</h2>
@@ -361,6 +370,58 @@
           </p>
         </section>
       </article>
+    </div>
+
+    <div
+      class="modal leaderboard-modal"
+      id="leaderboardModal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="leaderboardTitle"
+      hidden
+    >
+      <div class="modal-content leaderboard-modal__content">
+        <header class="leaderboard-modal__header">
+          <div>
+            <p class="leaderboard-modal__eyebrow">Global Rankings</p>
+            <h2 id="leaderboardTitle">Multiverse Scoreboard</h2>
+          </div>
+          <button type="button" class="ghost small" id="closeLeaderboard" aria-label="Close leaderboard">Close</button>
+        </header>
+        <p class="leaderboard-status" id="scoreboardStatus" aria-live="polite"></p>
+        <div class="leaderboard-controls">
+          <button type="button" id="refreshScores" class="ghost small leaderboard-refresh" data-loading="false">
+            <span class="leaderboard-refresh__spinner" aria-hidden="true"></span>
+            <span class="leaderboard-refresh__label">Refresh</span>
+          </button>
+        </div>
+        <div class="leaderboard-table__container" id="leaderboardTable" data-empty="true">
+          <table class="leaderboard-table">
+            <thead>
+              <tr>
+                <th scope="col" class="leaderboard-col-rank">#</th>
+                <th scope="col" class="leaderboard-sortable" data-sort-key="name" tabindex="0">Explorer</th>
+                <th
+                  scope="col"
+                  class="leaderboard-sortable"
+                  data-sort-key="score"
+                  data-sort-direction="desc"
+                  tabindex="0"
+                >
+                  Score
+                </th>
+                <th scope="col" class="leaderboard-sortable" data-sort-key="runTimeSeconds" tabindex="0">Run Time</th>
+                <th scope="col" class="leaderboard-sortable" data-sort-key="dimensionCount" tabindex="0">Realms</th>
+                <th scope="col" class="leaderboard-sortable" data-sort-key="inventoryCount" tabindex="0">Inventory</th>
+                <th scope="col" class="leaderboard-sortable" data-sort-key="locationLabel" tabindex="0">Location</th>
+                <th scope="col" class="leaderboard-sortable" data-sort-key="updatedAt" tabindex="0">Updated</th>
+              </tr>
+            </thead>
+            <tbody id="scoreboardList"></tbody>
+          </table>
+          <p class="leaderboard-empty" id="leaderboardEmptyMessage">Sign in to publish your victories and see the live rankings.</p>
+        </div>
+      </div>
     </div>
 
     <div class="mobile-controls" id="mobileControls">

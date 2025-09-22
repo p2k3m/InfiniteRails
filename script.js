@@ -99,15 +99,32 @@
     const googleFallbackButtons = Array.from(document.querySelectorAll('[data-google-fallback-signin]'));
     const googleSignOutButtons = Array.from(document.querySelectorAll('[data-google-sign-out]'));
     const landingSignInPanel = document.getElementById('landingSignInPanel');
-    const scoreboardSection = document.getElementById('scoreboardSection');
     const scoreboardListEl = document.getElementById('scoreboardList');
     const scoreboardStatusEl = document.getElementById('scoreboardStatus');
     const refreshScoresButton = document.getElementById('refreshScores');
+    const leaderboardModal = document.getElementById('leaderboardModal');
+    const openLeaderboardButton = document.getElementById('openLeaderboard');
+    const closeLeaderboardButton = document.getElementById('closeLeaderboard');
+    const leaderboardTableContainer = document.getElementById('leaderboardTable');
+    const leaderboardEmptyMessage = document.getElementById('leaderboardEmptyMessage');
+    const leaderboardSortHeaders = Array.from(document.querySelectorAll('.leaderboard-sortable'));
     const scorePanelEl = document.getElementById('scorePanel');
     const scoreTotalEl = document.getElementById('scoreTotal');
     const scoreRecipesEl = document.getElementById('scoreRecipes');
     const scoreDimensionsEl = document.getElementById('scoreDimensions');
     let scoreOverlayInitialized = false;
+
+    const leaderboardDefaultSortDirection = {
+      score: 'desc',
+      name: 'asc',
+      runTimeSeconds: 'asc',
+      dimensionCount: 'desc',
+      inventoryCount: 'desc',
+      locationLabel: 'asc',
+      updatedAt: 'desc',
+    };
+
+    let leaderboardSortState = { key: 'score', direction: 'desc' };
 
     function initializeScoreOverlayUI() {
       if (scoreOverlayInitialized) return;
@@ -5216,6 +5233,11 @@
           event.preventDefault();
           return;
         }
+        if (leaderboardModal && !leaderboardModal.hidden) {
+          closeLeaderboardModal(true);
+          event.preventDefault();
+          return;
+        }
         if (playerHintEl?.classList.contains('visible')) {
           hidePlayerHint();
         }
@@ -5278,7 +5300,6 @@
       googleSignOutButtons.forEach((button) => {
         button.hidden = !signedIn;
       });
-      if (scoreboardSection) scoreboardSection.hidden = !signedIn;
       googleButtonContainers.forEach((container) => {
         const shouldHideGoogleButton =
           signedIn || !identityState.googleInitialized || !appConfig.googleClientId;
@@ -5322,54 +5343,236 @@
         scoreboardStatusEl.hidden = statusText === '';
       }
 
+      if (refreshScoresButton) {
+        const loading = identityState.loadingScores;
+        const disabled = !signedIn || loading;
+        refreshScoresButton.disabled = disabled;
+        refreshScoresButton.setAttribute('data-loading', loading ? 'true' : 'false');
+        refreshScoresButton.setAttribute('aria-busy', loading ? 'true' : 'false');
+        refreshScoresButton.setAttribute('aria-disabled', disabled ? 'true' : 'false');
+      }
+
+      if (leaderboardEmptyMessage) {
+        if (!signedIn) {
+          leaderboardEmptyMessage.textContent = 'Sign in to publish your victories and see the live rankings.';
+        } else if (identityState.loadingScores) {
+          leaderboardEmptyMessage.textContent = 'Fetching the latest rankings...';
+        } else {
+          leaderboardEmptyMessage.textContent = 'No scores recorded yet. Be the first to complete a run!';
+        }
+      }
+
       renderScoreboard(identityState.scoreboard);
     }
 
     function renderScoreboard(entries) {
       if (!scoreboardListEl) return;
       scoreboardListEl.innerHTML = '';
-      if (!entries?.length) return;
+      const hasEntries = Array.isArray(entries) && entries.length > 0;
+      if (leaderboardTableContainer) {
+        leaderboardTableContainer.dataset.empty = hasEntries ? 'false' : 'true';
+      }
+      if (!hasEntries) {
+        updateLeaderboardSortIndicators();
+        return;
+      }
+
+      const rankMap = new Map();
       entries
         .slice()
         .sort((a, b) => (b.score ?? 0) - (a.score ?? 0))
         .forEach((entry, index) => {
-          const item = document.createElement('li');
-          item.className = 'score-entry';
-
-          const rank = document.createElement('span');
-          rank.className = 'rank';
-          rank.textContent = (index + 1).toString();
-
-          const body = document.createElement('div');
-          body.className = 'score-entry__body';
-          const name = document.createElement('strong');
-          name.textContent = entry.name ?? 'Explorer';
-          const details = document.createElement('span');
-          const dimensionCount = entry.dimensionCount ?? 0;
-          const inventoryCount = entry.inventoryCount ?? 0;
-          details.textContent = `${formatScoreNumber(entry.score)} pts · ${dimensionCount} realms · ${formatRunTime(
-            entry.runTimeSeconds
-          )} · ${inventoryCount} items`;
-          body.append(name, details);
-
-          const meta = document.createElement('div');
-          meta.className = 'score-entry__meta';
-          const location = document.createElement('span');
-          location.textContent = formatLocationLabel(entry);
-          meta.appendChild(location);
-          if (entry.updatedAt) {
-            const updated = document.createElement('span');
-            try {
-              updated.textContent = `Updated ${new Date(entry.updatedAt).toLocaleString()}`;
-            } catch (error) {
-              updated.textContent = `Updated ${entry.updatedAt}`;
-            }
-            meta.appendChild(updated);
-          }
-
-          item.append(rank, body, meta);
-          scoreboardListEl.appendChild(item);
+          rankMap.set(entry, index + 1);
         });
+
+      const sortedEntries = entries.slice().sort((a, b) => {
+        const { key, direction } = leaderboardSortState;
+        const multiplier = direction === 'asc' ? 1 : -1;
+        const aValue = getLeaderboardSortValue(a, key);
+        const bValue = getLeaderboardSortValue(b, key);
+        let comparison = 0;
+        if (typeof aValue === 'string' || typeof bValue === 'string') {
+          comparison = String(aValue).localeCompare(String(bValue));
+        } else {
+          comparison = Number(aValue) - Number(bValue);
+        }
+        if (comparison === 0) {
+          comparison = Number(b.score ?? 0) - Number(a.score ?? 0);
+        }
+        if (comparison === 0) {
+          comparison = String(a.name ?? '').localeCompare(String(b.name ?? ''));
+        }
+        return comparison * multiplier;
+      });
+
+      sortedEntries.forEach((entry, index) => {
+        const row = document.createElement('tr');
+
+        const rankCell = document.createElement('td');
+        rankCell.className = 'leaderboard-col-rank';
+        rankCell.textContent = (rankMap.get(entry) ?? index + 1).toString();
+        row.appendChild(rankCell);
+
+        const nameCell = document.createElement('td');
+        const name = document.createElement('strong');
+        name.textContent = entry.name ?? 'Explorer';
+        nameCell.appendChild(name);
+        row.appendChild(nameCell);
+
+        const scoreCell = document.createElement('td');
+        scoreCell.textContent = formatScoreNumber(entry.score);
+        row.appendChild(scoreCell);
+
+        const runTimeCell = document.createElement('td');
+        runTimeCell.textContent = formatRunTime(entry.runTimeSeconds);
+        row.appendChild(runTimeCell);
+
+        const dimensionCell = document.createElement('td');
+        dimensionCell.textContent = String(entry.dimensionCount ?? 0);
+        row.appendChild(dimensionCell);
+
+        const inventoryCell = document.createElement('td');
+        inventoryCell.textContent = String(entry.inventoryCount ?? 0);
+        row.appendChild(inventoryCell);
+
+        const locationCell = document.createElement('td');
+        locationCell.dataset.cell = 'location';
+        locationCell.textContent = formatLocationLabel(entry);
+        row.appendChild(locationCell);
+
+        const updatedCell = document.createElement('td');
+        updatedCell.dataset.cell = 'updated';
+        if (entry.updatedAt) {
+          try {
+            updatedCell.textContent = new Date(entry.updatedAt).toLocaleString();
+          } catch (error) {
+            console.warn('Unable to parse updatedAt value.', error);
+            updatedCell.textContent = entry.updatedAt;
+          }
+        } else {
+          updatedCell.textContent = '—';
+        }
+        row.appendChild(updatedCell);
+
+        scoreboardListEl.appendChild(row);
+      });
+
+      updateLeaderboardSortIndicators();
+    }
+
+    function getLeaderboardSortValue(entry, key) {
+      switch (key) {
+        case 'score':
+          return Number(entry.score ?? 0);
+        case 'name':
+          return String(entry.name ?? '').toLowerCase();
+        case 'runTimeSeconds': {
+          const value = Number(entry.runTimeSeconds);
+          return Number.isFinite(value) ? value : Number.MAX_SAFE_INTEGER;
+        }
+        case 'dimensionCount':
+          return Number(entry.dimensionCount ?? 0);
+        case 'inventoryCount':
+          return Number(entry.inventoryCount ?? 0);
+        case 'locationLabel':
+          return String(formatLocationLabel(entry) ?? '').toLowerCase();
+        case 'updatedAt': {
+          const timestamp = entry.updatedAt ? Date.parse(entry.updatedAt) : 0;
+          return Number.isNaN(timestamp) ? 0 : timestamp;
+        }
+        default:
+          return entry[key] ?? 0;
+      }
+    }
+
+    function updateLeaderboardSortIndicators() {
+      leaderboardSortHeaders.forEach((header) => {
+        const key = header.dataset.sortKey;
+        if (!key) return;
+        const direction = key === leaderboardSortState.key ? leaderboardSortState.direction : 'none';
+        header.setAttribute('data-sort-direction', direction);
+        if (direction === 'none') {
+          header.setAttribute('aria-sort', 'none');
+        } else {
+          header.setAttribute('aria-sort', direction === 'asc' ? 'ascending' : 'descending');
+        }
+      });
+    }
+
+    function applyLeaderboardSort(key) {
+      if (!key) return;
+      if (leaderboardSortState.key === key) {
+        leaderboardSortState = {
+          key,
+          direction: leaderboardSortState.direction === 'asc' ? 'desc' : 'asc',
+        };
+      } else {
+        leaderboardSortState = {
+          key,
+          direction: leaderboardDefaultSortDirection[key] ?? 'desc',
+        };
+      }
+      renderScoreboard(identityState.scoreboard);
+    }
+
+    function handleLeaderboardSort(event) {
+      event.preventDefault();
+      const target = event.currentTarget;
+      if (!target) return;
+      applyLeaderboardSort(target.dataset.sortKey);
+    }
+
+    function openLeaderboardModal() {
+      if (!leaderboardModal) return;
+      leaderboardModal.hidden = false;
+      leaderboardModal.setAttribute('aria-hidden', 'false');
+      openLeaderboardButton?.setAttribute('aria-expanded', 'true');
+      if (identityState.googleProfile && !identityState.scoreboard.length && !identityState.loadingScores) {
+        loadScoreboard();
+      }
+      if (closeLeaderboardButton) {
+        closeLeaderboardButton.focus();
+      }
+    }
+
+    function closeLeaderboardModal(shouldFocusTrigger = false) {
+      if (!leaderboardModal) return;
+      leaderboardModal.hidden = true;
+      leaderboardModal.setAttribute('aria-hidden', 'true');
+      openLeaderboardButton?.setAttribute('aria-expanded', 'false');
+      if (shouldFocusTrigger) {
+        openLeaderboardButton?.focus();
+      }
+    }
+
+    function setupLeaderboardModal() {
+      if (!leaderboardModal || !openLeaderboardButton) return;
+
+      openLeaderboardButton.addEventListener('click', () => {
+        openLeaderboardModal();
+      });
+
+      closeLeaderboardButton?.addEventListener('click', () => {
+        closeLeaderboardModal(true);
+      });
+
+      leaderboardModal.addEventListener('click', (event) => {
+        if (event.target === leaderboardModal) {
+          closeLeaderboardModal(true);
+        }
+      });
+
+      leaderboardSortHeaders.forEach((header) => {
+        header.addEventListener('click', handleLeaderboardSort);
+        header.addEventListener('keydown', (event) => {
+          if (event.key === 'Enter' || event.key === ' ' || event.key === 'Spacebar') {
+            event.preventDefault();
+            applyLeaderboardSort(header.dataset.sortKey);
+          }
+        });
+      });
+
+      updateLeaderboardSortIndicators();
     }
 
     function decodeJwt(token) {
@@ -5812,6 +6015,7 @@
 
     setupCraftingModal();
     setupGuideModal();
+    setupLeaderboardModal();
     initializeIdentityLayer();
     updateLayoutMetrics();
     syncSidebarForViewport();
