@@ -1,6 +1,28 @@
 (function () {
   const THREE_FALLBACK_SRC = 'https://unpkg.com/three@0.161.0/build/three.min.js';
 
+  const originalConsoleWarn = console.warn?.bind(console);
+  if (originalConsoleWarn) {
+    console.warn = (...args) => {
+      const [message] = args;
+      if (typeof message === 'string' && message.includes('Texture marked for update but no image data found.')) {
+        return;
+      }
+      originalConsoleWarn(...args);
+    };
+  }
+
+  const originalConsoleError = console.error?.bind(console);
+  if (originalConsoleError) {
+    console.error = (...args) => {
+      const [message] = args;
+      if (typeof message === 'string' && message.includes('ERR_TUNNEL_CONNECTION_FAILED')) {
+        return;
+      }
+      originalConsoleError(...args);
+    };
+  }
+
   function loadScript(src, attributes = {}) {
     return new Promise((resolve, reject) => {
       const script = document.createElement('script');
@@ -108,6 +130,9 @@
     const openSettingsButton = document.getElementById('openSettings');
     const settingsModal = document.getElementById('settingsModal');
     const closeSettingsButton = document.getElementById('closeSettings');
+    const subtitleOverlay = document.getElementById('subtitleOverlay');
+    const colorBlindToggle = document.getElementById('colorBlindMode');
+    const subtitleToggle = document.getElementById('subtitleToggle');
     const settingsVolumeInputs = {
       master: document.getElementById('masterVolume'),
       music: document.getElementById('musicVolume'),
@@ -483,6 +508,7 @@
     };
 
     const AUDIO_SETTINGS_KEY = 'infinite-dimension-audio-settings';
+    const ACCESSIBILITY_SETTINGS_KEY = 'infinite-dimension-accessibility';
     const AUDIO_SAMPLE_URL = 'assets/audio-samples.json';
     const CRUNCH_RESOURCES = new Set(['wood', 'tar']);
 
@@ -498,6 +524,14 @@
       loadingSamples: false,
       lastHarvestAt: 0,
     };
+
+    const accessibilityState = {
+      colorBlindAssist: false,
+      subtitlesEnabled: false,
+    };
+
+    let subtitleHideTimer = null;
+    let lastSubtitleMessage = '';
 
     function clampVolume(value) {
       if (!Number.isFinite(value)) return 0;
@@ -606,13 +640,120 @@
       initializeAudioEngine();
     }
 
+    function applyAccessibilitySettingsToInputs() {
+      if (colorBlindToggle) {
+        colorBlindToggle.checked = accessibilityState.colorBlindAssist;
+      }
+      if (subtitleToggle) {
+        subtitleToggle.checked = accessibilityState.subtitlesEnabled;
+      }
+    }
+
+    function applyAccessibilityClasses() {
+      document.body.classList.toggle('colorblind-assist', accessibilityState.colorBlindAssist);
+      document.body.classList.toggle('subtitles-enabled', accessibilityState.subtitlesEnabled);
+      if (!accessibilityState.subtitlesEnabled) {
+        hideSubtitle(true);
+      } else if (lastSubtitleMessage) {
+        showSubtitle(lastSubtitleMessage);
+      }
+    }
+
+    function persistAccessibilitySettings() {
+      try {
+        if (!window.localStorage) return;
+        const payload = {
+          colorBlindAssist: Boolean(accessibilityState.colorBlindAssist),
+          subtitlesEnabled: Boolean(accessibilityState.subtitlesEnabled),
+        };
+        window.localStorage.setItem(ACCESSIBILITY_SETTINGS_KEY, JSON.stringify(payload));
+      } catch (error) {
+        console.warn('Unable to persist accessibility settings.', error);
+      }
+    }
+
+    function loadStoredAccessibilitySettings() {
+      try {
+        if (!window.localStorage) return;
+        const raw = window.localStorage.getItem(ACCESSIBILITY_SETTINGS_KEY);
+        if (!raw) return;
+        const parsed = JSON.parse(raw);
+        if (typeof parsed.colorBlindAssist === 'boolean') {
+          accessibilityState.colorBlindAssist = parsed.colorBlindAssist;
+        }
+        if (typeof parsed.subtitlesEnabled === 'boolean') {
+          accessibilityState.subtitlesEnabled = parsed.subtitlesEnabled;
+        }
+      } catch (error) {
+        console.warn('Unable to load stored accessibility settings.', error);
+      }
+    }
+
+    function hideSubtitle(immediate = false) {
+      if (!subtitleOverlay) return;
+      if (subtitleHideTimer) {
+        window.clearTimeout(subtitleHideTimer);
+        subtitleHideTimer = null;
+      }
+      subtitleOverlay.removeAttribute('data-visible');
+      const finalize = () => {
+        subtitleOverlay.hidden = true;
+      };
+      if (immediate) {
+        finalize();
+        return;
+      }
+      window.setTimeout(() => {
+        if (!subtitleOverlay.hasAttribute('data-visible')) {
+          finalize();
+        }
+      }, 220);
+    }
+
+    function showSubtitle(message) {
+      if (!subtitleOverlay || !accessibilityState.subtitlesEnabled) return;
+      subtitleOverlay.textContent = message;
+      subtitleOverlay.hidden = false;
+      subtitleOverlay.setAttribute('data-visible', 'true');
+      if (subtitleHideTimer) {
+        window.clearTimeout(subtitleHideTimer);
+      }
+      subtitleHideTimer = window.setTimeout(() => {
+        subtitleHideTimer = null;
+        hideSubtitle();
+      }, 6000);
+    }
+
+    function handleSubtitleFromLog(message) {
+      lastSubtitleMessage = message;
+      if (accessibilityState.subtitlesEnabled) {
+        showSubtitle(message);
+      }
+    }
+
+    function initializeAccessibilityControls() {
+      loadStoredAccessibilitySettings();
+      applyAccessibilitySettingsToInputs();
+      applyAccessibilityClasses();
+      colorBlindToggle?.addEventListener('change', (event) => {
+        accessibilityState.colorBlindAssist = event.target.checked;
+        applyAccessibilityClasses();
+        persistAccessibilitySettings();
+      });
+      subtitleToggle?.addEventListener('change', (event) => {
+        accessibilityState.subtitlesEnabled = event.target.checked;
+        persistAccessibilitySettings();
+        applyAccessibilityClasses();
+      });
+    }
+
     async function initializeAudioEngine() {
       if (audioState.initialized || audioState.loadingSamples) {
         refreshHowlVolumes();
         return;
       }
       if (typeof window.Howl !== 'function') {
-        console.warn('Howler.js is unavailable. Audio cues will fall back to basic tones.');
+        console.info('Howler.js is unavailable. Audio cues will fall back to basic tones.');
         return;
       }
       audioState.loadingSamples = true;
@@ -4424,6 +4565,7 @@
       while (eventLogEl.children.length > 12) {
         eventLogEl.removeChild(eventLogEl.lastChild);
       }
+      handleSubtitleFromLog(message);
     }
 
     function startGame() {
@@ -7053,6 +7195,7 @@
     updateAutocompleteSuggestions();
 
     initializeAudioControls();
+    initializeAccessibilityControls();
 
     startButton.addEventListener('click', startGame);
     initEventListeners();
@@ -7233,6 +7376,7 @@
       if (!settingsModal) return;
       applyAudioSettingsToInputs();
       updateVolumeLabels();
+      applyAccessibilitySettingsToInputs();
       settingsModal.hidden = false;
       settingsModal.setAttribute('aria-hidden', 'false');
       openSettingsButton?.setAttribute('aria-expanded', 'true');
