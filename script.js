@@ -959,7 +959,7 @@
     });
 
     const CAMERA_EYE_OFFSET = 0.76;
-    const CAMERA_FORWARD_OFFSET = 0.22;
+    const CAMERA_FORWARD_OFFSET = 5;
     const CAMERA_LOOK_DISTANCE = 6.5;
     const CAMERA_FRUSTUM_HEIGHT = 9.2;
     const CAMERA_BASE_ZOOM = 1.18;
@@ -1622,7 +1622,7 @@
       camera.position.set(x, eyeY, z);
       camera.position.addScaledVector(cameraState.lastFacing, CAMERA_FORWARD_OFFSET);
 
-      tmpCameraTarget.copy(camera.position);
+      tmpCameraTarget.set(x, eyeY, z);
       tmpCameraTarget.addScaledVector(cameraState.lastFacing, CAMERA_LOOK_DISTANCE);
 
       if (movementStrength > 0.01) {
