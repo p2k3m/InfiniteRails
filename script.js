@@ -997,12 +997,12 @@
     const particleSystems = [];
 
     const BASE_ATMOSPHERE = {
-      daySky: '#bcd7ff',
-      nightSky: '#0b1324',
+      daySky: '#ffffff',
+      nightSky: '#333366',
       duskSky: '#f7b07b',
-      groundDay: '#1c283f',
-      groundNight: '#050912',
-      fogColor: '#0b1324',
+      groundDay: '#a0a0ff',
+      groundNight: '#1c1c3f',
+      fogColor: '#333366',
       fogDensity: 0.055,
     };
 
@@ -1882,7 +1882,7 @@
       scene.add(entityGroup);
       scene.add(particleGroup);
 
-      hemiLight = new THREE.HemisphereLight(0xbcd7ff, 0x0b1324, 1.05);
+      hemiLight = new THREE.HemisphereLight(0xffffff, 0xa0a0ff, 1.05);
       scene.add(hemiLight);
 
       sunLight = new THREE.DirectionalLight(0xfff2d8, 1.4);
