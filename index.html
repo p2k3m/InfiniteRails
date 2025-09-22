@@ -140,6 +140,50 @@
           </div>
         </div>
         <div class="victory-banner" id="victoryBanner" role="status" aria-live="assertive"></div>
+        <div
+          class="victory-celebration"
+          id="victoryCelebration"
+          hidden
+          aria-hidden="true"
+        >
+          <div class="victory-celebration__backdrop" aria-hidden="true"></div>
+          <div class="victory-celebration__effects" aria-hidden="true">
+            <div class="victory-confetti" id="victoryConfetti" aria-hidden="true"></div>
+            <div class="victory-fireworks" id="victoryFireworks" aria-hidden="true"></div>
+          </div>
+          <div
+            class="victory-celebration__content"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="victoryTitle"
+            aria-describedby="victoryMessage victoryStats victoryShareStatus"
+          >
+            <span class="victory-celebration__eyebrow">Multiverse Secured</span>
+            <h2 id="victoryTitle">Victory Achieved</h2>
+            <p id="victoryMessage">
+              You returned with the Eternal Ingot. The bridge between worlds is safe once more.
+            </p>
+            <dl class="victory-celebration__stats" id="victoryStats">
+              <div>
+                <dt>Final Score</dt>
+                <dd>0</dd>
+              </div>
+              <div>
+                <dt>Dimensions Stabilised</dt>
+                <dd>0</dd>
+              </div>
+              <div>
+                <dt>Run Time</dt>
+                <dd>00:00</dd>
+              </div>
+            </dl>
+            <div class="victory-celebration__actions">
+              <button type="button" class="primary" id="victoryShareButton">Share your run</button>
+              <button type="button" class="ghost" id="victoryCloseButton">Continue exploring</button>
+            </div>
+            <p class="victory-celebration__share-status" id="victoryShareStatus" role="status" aria-live="polite"></p>
+          </div>
+        </div>
         <div class="drowning-vignette" id="drowningVignette" aria-hidden="true"></div>
         <div class="dimension-transition" id="dimensionTransition" aria-hidden="true"></div>
         <div

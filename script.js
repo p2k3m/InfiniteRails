@@ -74,6 +74,14 @@
     const hudRootEl = document.getElementById('gameHud');
     const objectivesPanelEl = document.getElementById('objectivesPanel');
     const victoryBannerEl = document.getElementById('victoryBanner');
+    const victoryCelebrationEl = document.getElementById('victoryCelebration');
+    const victoryConfettiEl = document.getElementById('victoryConfetti');
+    const victoryFireworksEl = document.getElementById('victoryFireworks');
+    const victoryShareButton = document.getElementById('victoryShareButton');
+    const victoryCloseButton = document.getElementById('victoryCloseButton');
+    const victoryShareStatusEl = document.getElementById('victoryShareStatus');
+    const victoryStatsEl = document.getElementById('victoryStats');
+    const victoryMessageEl = document.getElementById('victoryMessage');
     const hotbarEl = document.getElementById('hotbar');
     const extendedInventoryEl = document.getElementById('extendedInventory');
     const toggleExtendedBtn = document.getElementById('toggleExtended');
@@ -135,6 +143,26 @@
     const scoreRecipesEl = document.getElementById('scoreRecipes');
     const scoreDimensionsEl = document.getElementById('scoreDimensions');
     let scoreOverlayInitialized = false;
+
+    const reduceMotionQuery =
+      typeof window !== 'undefined' && window.matchMedia
+        ? window.matchMedia('(prefers-reduced-motion: reduce)')
+        : null;
+
+    victoryCloseButton?.addEventListener('click', () => {
+      dismissVictoryCelebration();
+    });
+
+    victoryShareButton?.addEventListener('click', handleVictoryShareClick);
+
+    victoryCelebrationEl?.addEventListener('click', (event) => {
+      if (
+        event.target === victoryCelebrationEl ||
+        (event.target instanceof HTMLElement && event.target.classList.contains('victory-celebration__backdrop'))
+      ) {
+        dismissVictoryCelebration();
+      }
+    });
 
     const HUD_INACTIVITY_TIMEOUT = 12000;
     let hudInactivityTimer = null;
@@ -693,6 +721,12 @@
     const MAX_CRAFT_SLOTS = 7;
     const craftSlots = [];
     let craftConfettiTimer = null;
+    let victoryConfettiInterval = null;
+    let victoryFireworksInterval = null;
+    const victoryFireworkTimeouts = new Set();
+    let victoryHideTimeout = null;
+    let previousVictoryFocus = null;
+    let latestVictoryShareDetails = null;
     let craftingDragGhost = null;
     let craftingDragTrailEl = null;
     let activeInventoryDrag = null;
@@ -3461,6 +3495,8 @@
         respawnActive: false,
         respawnCountdownTimeout: null,
         dimensionTransition: null,
+        victoryCelebrationVisible: false,
+        victoryCelebrationShown: false,
       },
     };
 
@@ -4035,10 +4071,10 @@
 
     function renderVictoryBanner() {
       if (!victoryBannerEl) return;
-      if (state.victory) {
+      if (state.victory && state.dimension?.id === 'origin' && hasItem('eternal-ingot')) {
         victoryBannerEl.innerHTML = `
           <h3>Victory Achieved</h3>
-          <p>Return to the Grassland Threshold to archive your run.</p>
+          <p>Share your triumph or continue charting the multiverse.</p>
         `;
         victoryBannerEl.classList.add('visible');
         return;
@@ -4053,6 +4089,332 @@
       }
       victoryBannerEl.classList.remove('visible');
       victoryBannerEl.innerHTML = '';
+    }
+
+    function shouldReduceMotion() {
+      return Boolean(reduceMotionQuery?.matches);
+    }
+
+    function clearVictoryFireworkTimeouts() {
+      victoryFireworkTimeouts.forEach((handle) => window.clearTimeout(handle));
+      victoryFireworkTimeouts.clear();
+    }
+
+    function scheduleVictoryFireworkSpawn(delay = 0) {
+      const handle = window.setTimeout(() => {
+        spawnVictoryFirework();
+        victoryFireworkTimeouts.delete(handle);
+      }, delay);
+      victoryFireworkTimeouts.add(handle);
+    }
+
+    function spawnVictoryFirework() {
+      if (!victoryFireworksEl) return;
+      const firework = document.createElement('span');
+      firework.className = 'victory-firework';
+      const hue = Math.floor(Math.random() * 360);
+      const left = 18 + Math.random() * 64;
+      const duration = 1.65 + Math.random() * 0.65;
+      const delay = Math.random() * 0.35;
+      const travel = -34 - Math.random() * 32;
+      firework.style.setProperty('--hue', `${hue}`);
+      firework.style.setProperty('--left', `${left}%`);
+      firework.style.setProperty('--duration', `${duration}s`);
+      firework.style.setProperty('--delay', `${delay}s`);
+      firework.style.setProperty('--travel', `${travel}vh`);
+      const burst = document.createElement('span');
+      burst.className = 'victory-firework__burst';
+      firework.appendChild(burst);
+      victoryFireworksEl.appendChild(firework);
+      const burstDelay = Math.max((delay + duration - 0.3) * 1000, 0);
+      const removeDelay = (delay + duration + 1.8) * 1000;
+      const burstHandle = window.setTimeout(() => {
+        firework.classList.add('burst');
+        victoryFireworkTimeouts.delete(burstHandle);
+      }, burstDelay);
+      const removeHandle = window.setTimeout(() => {
+        firework.remove();
+        victoryFireworkTimeouts.delete(removeHandle);
+      }, removeDelay);
+      victoryFireworkTimeouts.add(burstHandle);
+      victoryFireworkTimeouts.add(removeHandle);
+    }
+
+    function startVictoryFireworks() {
+      if (!victoryFireworksEl || shouldReduceMotion()) return;
+      stopVictoryFireworks();
+      for (let i = 0; i < 3; i++) {
+        scheduleVictoryFireworkSpawn(i * 200);
+      }
+      victoryFireworksInterval = window.setInterval(() => {
+        spawnVictoryFirework();
+        scheduleVictoryFireworkSpawn(220 + Math.random() * 180);
+      }, 1400);
+    }
+
+    function stopVictoryFireworks() {
+      if (victoryFireworksInterval) {
+        window.clearInterval(victoryFireworksInterval);
+        victoryFireworksInterval = null;
+      }
+      clearVictoryFireworkTimeouts();
+      if (victoryFireworksEl) {
+        victoryFireworksEl.innerHTML = '';
+      }
+    }
+
+    function spawnVictoryConfettiBurst(count = 48) {
+      if (!victoryConfettiEl) return;
+      const colors = ['#49f2ff', '#f7b733', '#2bc26b', '#ff4976', '#d66bff', '#fff072'];
+      const fragment = document.createDocumentFragment();
+      for (let i = 0; i < count; i++) {
+        const piece = document.createElement('span');
+        piece.className = 'victory-confetti__piece';
+        const x = Math.random() * 100;
+        const offset = (Math.random() * 60 - 30).toFixed(1);
+        const duration = 2.3 + Math.random() * 1.5;
+        const delay = Math.random() * 0.6;
+        const rotation = Math.random() * 720 - 360;
+        piece.style.setProperty('--x', `${x}%`);
+        piece.style.setProperty('--offset-x', `${offset}vw`);
+        piece.style.setProperty('--duration', `${duration}s`);
+        piece.style.setProperty('--delay', `${delay}s`);
+        piece.style.setProperty('--rotation', `${rotation}deg`);
+        piece.style.setProperty('--color', colors[i % colors.length]);
+        piece.addEventListener('animationend', () => {
+          piece.remove();
+        });
+        fragment.appendChild(piece);
+      }
+      victoryConfettiEl.appendChild(fragment);
+    }
+
+    function startVictoryConfetti() {
+      if (!victoryConfettiEl || shouldReduceMotion()) return;
+      stopVictoryConfetti();
+      spawnVictoryConfettiBurst();
+      victoryConfettiInterval = window.setInterval(() => {
+        spawnVictoryConfettiBurst(26 + Math.floor(Math.random() * 18));
+      }, 1200);
+    }
+
+    function stopVictoryConfetti() {
+      if (victoryConfettiInterval) {
+        window.clearInterval(victoryConfettiInterval);
+        victoryConfettiInterval = null;
+      }
+      if (victoryConfettiEl) {
+        victoryConfettiEl.innerHTML = '';
+      }
+    }
+
+    function updateVictoryCelebrationStats(snapshot) {
+      if (!victoryStatsEl) return;
+      const runtimeLabel = formatRunTime(snapshot.runTimeSeconds);
+      const displayRuntime = runtimeLabel === '—' ? '0s' : runtimeLabel;
+      const inventoryWord = snapshot.inventoryCount === 1 ? 'artifact' : 'artifacts';
+      victoryStatsEl.innerHTML = `
+        <div>
+          <dt>Final Score</dt>
+          <dd>${formatScoreNumber(snapshot.score ?? 0)}</dd>
+        </div>
+        <div>
+          <dt>Dimensions Stabilised</dt>
+          <dd>${snapshot.dimensionCount ?? 0}</dd>
+        </div>
+        <div>
+          <dt>Run Time</dt>
+          <dd>${displayRuntime}</dd>
+        </div>
+        <div>
+          <dt>Artifacts Secured</dt>
+          <dd>${snapshot.inventoryCount ?? 0} ${inventoryWord}</dd>
+        </div>
+      `;
+    }
+
+    function getVictoryShareDetails(snapshot) {
+      const scoreLabel = formatScoreNumber(snapshot.score ?? 0);
+      const dimensionWord = snapshot.dimensionCount === 1 ? 'dimension' : 'dimensions';
+      const runtimeLabel = formatRunTime(snapshot.runTimeSeconds);
+      const displayRuntime = runtimeLabel === '—' ? `${Math.max(0, Math.round(snapshot.runTimeSeconds ?? 0))}s` : runtimeLabel;
+      const inventoryWord = snapshot.inventoryCount === 1 ? 'artifact' : 'artifacts';
+      const playerName = identityState.displayName ?? 'Guest Explorer';
+      const url = `${window.location.origin}${window.location.pathname}`;
+      const text = `${playerName} returned with the Eternal Ingot in Infinite Dimension — ${scoreLabel} pts, ${snapshot.dimensionCount} ${dimensionWord}, ${displayRuntime}, ${snapshot.inventoryCount} ${inventoryWord}. Can you beat this run?`;
+      return {
+        title: 'Infinite Dimension Victory',
+        text,
+        url,
+        fallbackText: `${text} ${url}`,
+      };
+    }
+
+    function handleVictoryKeydown(event) {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        dismissVictoryCelebration();
+      }
+    }
+
+    function openVictoryCelebration() {
+      if (!victoryCelebrationEl) return;
+      if (state.ui.victoryCelebrationVisible) return;
+      if (victoryHideTimeout) {
+        window.clearTimeout(victoryHideTimeout);
+        victoryHideTimeout = null;
+      }
+      const snapshot = computeScoreSnapshot();
+      updateVictoryCelebrationStats(snapshot);
+      latestVictoryShareDetails = getVictoryShareDetails(snapshot);
+      const signedIn = Boolean(identityState.googleProfile);
+      if (victoryMessageEl) {
+        victoryMessageEl.textContent = signedIn
+          ? 'Your run has been archived on the multiverse scoreboard. Share the legend or dive back in for hidden secrets.'
+          : 'Sign in to immortalise this run on the multiverse scoreboard, then share the legend or dive back in for hidden secrets.';
+      }
+      if (victoryShareStatusEl) {
+        victoryShareStatusEl.textContent = signedIn
+          ? 'Score synced to the multiverse ledger.'
+          : 'Score not yet published—sign in to broadcast it to the multiverse leaderboard.';
+      }
+      if (victoryShareButton) {
+        victoryShareButton.textContent = navigator.share ? 'Share your run' : 'Copy share message';
+      }
+      previousVictoryFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      victoryCelebrationEl.hidden = false;
+      victoryCelebrationEl.setAttribute('aria-hidden', 'false');
+      victoryCelebrationEl.classList.add('active');
+      document.body?.classList.add('victory-celebration-active');
+      startVictoryConfetti();
+      startVictoryFireworks();
+      state.ui.victoryCelebrationVisible = true;
+      state.ui.victoryCelebrationShown = true;
+      document.addEventListener('keydown', handleVictoryKeydown, true);
+      if (victoryShareButton) {
+        window.setTimeout(() => {
+          victoryShareButton.focus({ preventScroll: true });
+        }, 90);
+      }
+    }
+
+    function dismissVictoryCelebration(options = {}) {
+      const { reset = false, immediate = false } = options;
+      if (!victoryCelebrationEl) {
+        if (reset) {
+          state.ui.victoryCelebrationShown = false;
+        }
+        latestVictoryShareDetails = null;
+        return;
+      }
+      if (!state.ui.victoryCelebrationVisible && !reset) {
+        return;
+      }
+      document.removeEventListener('keydown', handleVictoryKeydown, true);
+      state.ui.victoryCelebrationVisible = false;
+      if (reset) {
+        state.ui.victoryCelebrationShown = false;
+      }
+      stopVictoryConfetti();
+      stopVictoryFireworks();
+      document.body?.classList.remove('victory-celebration-active');
+      victoryCelebrationEl.classList.remove('active');
+      victoryCelebrationEl.setAttribute('aria-hidden', 'true');
+      if (victoryShareStatusEl) {
+        victoryShareStatusEl.textContent = '';
+      }
+      latestVictoryShareDetails = null;
+      if (victoryHideTimeout) {
+        window.clearTimeout(victoryHideTimeout);
+        victoryHideTimeout = null;
+      }
+      if (immediate) {
+        victoryCelebrationEl.hidden = true;
+      } else {
+        victoryHideTimeout = window.setTimeout(() => {
+          if (!state.ui.victoryCelebrationVisible) {
+            victoryCelebrationEl.hidden = true;
+          }
+          victoryHideTimeout = null;
+        }, 320);
+      }
+      const focusTarget = previousVictoryFocus;
+      previousVictoryFocus = null;
+      if (focusTarget && typeof focusTarget.focus === 'function') {
+        window.setTimeout(() => {
+          try {
+            focusTarget.focus({ preventScroll: true });
+          } catch (error) {
+            focusTarget.focus();
+          }
+        }, 150);
+      }
+    }
+
+    async function copyVictoryShareText(text) {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+        return true;
+      }
+      const textarea = document.createElement('textarea');
+      textarea.value = text;
+      textarea.setAttribute('readonly', 'true');
+      textarea.style.position = 'absolute';
+      textarea.style.left = '-9999px';
+      document.body.appendChild(textarea);
+      textarea.select();
+      let success = false;
+      try {
+        success = document.execCommand('copy');
+      } catch (error) {
+        success = false;
+      }
+      textarea.remove();
+      return success;
+    }
+
+    async function handleVictoryShareClick() {
+      if (!state.victory) {
+        if (victoryShareStatusEl) {
+          victoryShareStatusEl.textContent = 'Secure the Eternal Ingot and return home to share your run.';
+        }
+        return;
+      }
+      const snapshot = computeScoreSnapshot();
+      latestVictoryShareDetails = getVictoryShareDetails(snapshot);
+      const shareDetails = latestVictoryShareDetails;
+      if (victoryShareStatusEl) {
+        victoryShareStatusEl.textContent = 'Preparing share message...';
+      }
+      if (navigator.share) {
+        try {
+          await navigator.share({ title: shareDetails.title, text: shareDetails.text, url: shareDetails.url });
+          if (victoryShareStatusEl) {
+            victoryShareStatusEl.textContent = 'Shared! Challenge your crew to beat your run.';
+          }
+          return;
+        } catch (error) {
+          if (error?.name === 'AbortError') {
+            if (victoryShareStatusEl) {
+              victoryShareStatusEl.textContent = 'Share cancelled.';
+            }
+            return;
+          }
+          console.warn('Share failed.', error);
+        }
+      }
+      try {
+        const copied = await copyVictoryShareText(shareDetails.fallbackText);
+        if (victoryShareStatusEl) {
+          victoryShareStatusEl.textContent = copied
+            ? 'Run details copied to your clipboard.'
+            : `Share support unavailable. Copy this message manually: ${shareDetails.fallbackText}`;
+        }
+      } catch (error) {
+        if (victoryShareStatusEl) {
+          victoryShareStatusEl.textContent = `Share support unavailable. Copy this message manually: ${shareDetails.fallbackText}`;
+        }
+      }
     }
 
     function logEvent(message) {
@@ -4093,6 +4455,7 @@
       state.player.effects = {};
       state.victory = false;
       state.scoreSubmitted = false;
+      dismissVictoryCelebration({ reset: true, immediate: true });
       state.dimensionHistory = ['origin'];
       state.unlockedDimensions = new Set(['origin']);
       state.knownRecipes = new Set(['stick', 'stone-pickaxe']);
@@ -4188,6 +4551,7 @@
       if (id === 'origin' && fromId && hasItem('eternal-ingot')) {
         state.victory = true;
         logEvent('Victory! You returned with the Eternal Ingot.');
+        openVictoryCelebration();
         handleVictoryAchieved();
       }
       lastDimensionHintKey = null;
