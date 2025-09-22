@@ -883,6 +883,7 @@
     let particleGroup;
     let playerMesh;
     let playerMeshParts;
+    let playerActionAnimation = null;
     let tileRenderState = [];
     const zombieMeshes = [];
     const ironGolemMeshes = [];
@@ -893,6 +894,45 @@
     let playerLocator;
     let playerHintTimer = null;
     let lastDimensionHintKey = null;
+
+    function getNowMs() {
+      return typeof performance !== 'undefined' ? performance.now() : Date.now();
+    }
+
+    function normalizeDirectionVector(direction) {
+      if (!direction) return { x: 0, y: 1 };
+      const dx = Number.isFinite(direction.x) ? direction.x : 0;
+      const dy = Number.isFinite(direction.y) ? direction.y : 0;
+      const length = Math.hypot(dx, dy);
+      if (length === 0) {
+        return { x: 0, y: 1 };
+      }
+      return { x: dx / length, y: dy / length };
+    }
+
+    function triggerPlayerActionAnimation(type, options = {}) {
+      playerActionAnimation = {
+        type,
+        start: getNowMs(),
+        duration: options.duration ?? 520,
+        direction: normalizeDirectionVector(options.direction),
+        strength: THREE.MathUtils.clamp(options.strength ?? 1, 0, 2),
+      };
+    }
+
+    function triggerGolemPunchAnimation(golem, options = {}) {
+      if (!golem) return;
+      const direction = normalizeDirectionVector(options.direction ?? golem.facing);
+      const duration = options.duration ?? 620;
+      const strength = THREE.MathUtils.clamp(options.strength ?? 1, 0.2, 2);
+      golem.attackAnimation = {
+        type: 'punch',
+        start: getNowMs(),
+        duration,
+        direction,
+        strength,
+      };
+    }
 
     playerHintEl?.addEventListener('click', hidePlayerHint);
     playerHintEl?.addEventListener('keydown', (event) => {
@@ -2815,7 +2855,6 @@
         const { x, z } = worldToScene(state.player.x, state.player.y);
         const height = tileSurfaceHeight(state.player.x, state.player.y);
         const facing = state.player?.facing ?? { x: 0, y: 1 };
-        playerMesh.rotation.y = Math.atan2(facing.x, facing.y);
 
         const movementDelta = now - (state.lastMoveAt || 0);
         const pressedStrength = state.pressedKeys?.size ? 0.75 : 0;
@@ -2824,52 +2863,152 @@
         const walkCycle = now / 240;
         const idleBob = Math.sin(now / 1200) * 0.02;
         const bob = Math.sin(walkCycle) * 0.08 * movementStrength;
-        playerMesh.position.set(x, height + idleBob + bob, z);
+        const baseHeight = height + idleBob + bob;
+
+        let playerBodyHeightOffset = 0;
+        let playerBodyPitch = 0;
+        let playerBodyRoll = 0;
 
         if (playerMeshParts) {
           const swing = Math.sin(walkCycle) * 0.35 * movementStrength;
           const stride = Math.sin(walkCycle) * 0.4 * movementStrength;
+          const idleYaw = Math.sin(now / 1800) * 0.03;
+          const idlePitch = Math.cos(now / 1700) * 0.02;
+          let leftArmRotation = { x: swing, y: 0, z: 0 };
+          let rightArmRotation = { x: -swing, y: 0, z: 0 };
+          let leftLegRotation = { x: -stride, z: 0 };
+          let rightLegRotation = { x: stride, z: 0 };
+          let headRotationY = idleYaw + Math.sin(walkCycle * 0.7) * 0.08 * movementStrength;
+          let headRotationX = idlePitch + Math.cos(walkCycle * 0.5) * 0.04 * movementStrength;
+
+          const hairBase = playerMeshParts.hairBasePosition;
+          const fringeBase = playerMeshParts.fringeBasePosition;
+          const idleSway = Math.sin(now / 420) * 0.03;
+          const stepSway = Math.sin(walkCycle * 1.2) * 0.08 * movementStrength;
+          const backDrift = Math.max(0, Math.cos(walkCycle)) * 0.05 * movementStrength;
+          let hairRotationX = -0.18 * movementStrength + (idleSway + stepSway) * 0.7;
+          let hairRotationZ = Math.sin(now / 960) * 0.05;
+          let hairPosX = hairBase ? hairBase.x + Math.sin(walkCycle * 0.5) * 0.02 * movementStrength : null;
+          let hairPosY = hairBase ? hairBase.y : null;
+          let hairPosZ = hairBase ? hairBase.z - 0.03 * movementStrength - backDrift : null;
+
+          const idleLift = Math.sin(now / 360) * 0.02;
+          const forwardSwing = Math.sin(walkCycle * 1.1 + Math.PI / 3) * 0.05 * movementStrength;
+          let fringeRotationX = 0.12 * movementStrength - (idleLift + forwardSwing);
+          let fringePosX =
+            fringeBase ? fringeBase.x + Math.sin(walkCycle * 0.8 + Math.PI / 6) * 0.015 * movementStrength : null;
+          let fringePosY = fringeBase ? fringeBase.y : null;
+          let fringePosZ =
+            fringeBase ? fringeBase.z + Math.max(0, Math.sin(walkCycle)) * 0.03 * movementStrength : null;
+
+          const action = playerActionAnimation;
+          if (action) {
+            const elapsed = now - action.start;
+            if (elapsed >= action.duration) {
+              playerActionAnimation = null;
+            } else if (action.type === 'mine') {
+              const ratio = THREE.MathUtils.clamp(elapsed / action.duration, 0, 1);
+              const strength = action.strength ?? 1;
+              const direction = action.direction ?? { x: 0, y: 1 };
+              const windupPhase = THREE.MathUtils.clamp(ratio / 0.38, 0, 1);
+              const strikePhase = THREE.MathUtils.clamp((ratio - 0.32) / 0.3, 0, 1);
+              const recoveryPhase = THREE.MathUtils.clamp((ratio - 0.72) / 0.28, 0, 1);
+              const windup = Math.sin(windupPhase * Math.PI * 0.5) * strength;
+              const strike = Math.sin(strikePhase * Math.PI) * strength;
+              const recovery = recoveryPhase * strength;
+              const actionWeight = Math.sin(ratio * Math.PI) * strength;
+              const damping = THREE.MathUtils.clamp(1 - actionWeight * 0.9, 0.1, 1);
+
+              leftArmRotation = {
+                x: swing * damping + windup * 0.32 - strike * 0.12,
+                y: -0.14 * strike,
+                z: windup * 0.22 + strike * 0.08,
+              };
+              rightArmRotation = {
+                x: -windup * 0.65 - strike * 1.55 + recovery * 0.75,
+                y: (direction.x ?? 0) * 0.4 * strike,
+                z: -0.45 * strike - windup * 0.3,
+              };
+              leftLegRotation = {
+                x: leftLegRotation.x * (1 - actionWeight * 0.45),
+                z: (direction.x ?? 0) * -0.08 * strike,
+              };
+              rightLegRotation = {
+                x: rightLegRotation.x * (1 - actionWeight * 0.45),
+                z: (direction.x ?? 0) * 0.08 * strike,
+              };
+              headRotationY += (direction.x ?? 0) * 0.26 * strike;
+              headRotationX = headRotationX - strike * 0.2 + recovery * 0.12;
+              hairRotationX -= strike * 0.32;
+              hairRotationZ += (direction.x ?? 0) * 0.08 * strike;
+              if (hairPosX !== null && hairPosZ !== null) {
+                hairPosX += (direction.x ?? 0) * 0.03 * strike;
+                hairPosZ -= 0.05 * strike;
+              }
+              if (hairPosY !== null) {
+                hairPosY += windup * 0.02 - strike * 0.02;
+              }
+              fringeRotationX -= strike * 0.3;
+              if (fringePosX !== null && fringePosZ !== null) {
+                fringePosX += (direction.x ?? 0) * 0.02 * strike;
+                fringePosZ += 0.05 * strike;
+              }
+              if (fringePosY !== null) {
+                fringePosY += windup * 0.015 - strike * 0.02;
+              }
+              playerBodyPitch = -strike * 0.1 + windup * 0.05;
+              playerBodyRoll = -(direction.x ?? 0) * 0.05 * strike;
+              playerBodyHeightOffset = -actionWeight * 0.05 + recovery * 0.02;
+            }
+          }
+
           if (playerMeshParts.leftArm) {
-            playerMeshParts.leftArm.rotation.x = swing;
+            playerMeshParts.leftArm.rotation.x = leftArmRotation.x;
+            playerMeshParts.leftArm.rotation.y = leftArmRotation.y;
+            playerMeshParts.leftArm.rotation.z = leftArmRotation.z;
           }
           if (playerMeshParts.rightArm) {
-            playerMeshParts.rightArm.rotation.x = -swing;
+            playerMeshParts.rightArm.rotation.x = rightArmRotation.x;
+            playerMeshParts.rightArm.rotation.y = rightArmRotation.y;
+            playerMeshParts.rightArm.rotation.z = rightArmRotation.z;
           }
           if (playerMeshParts.leftLeg) {
-            playerMeshParts.leftLeg.rotation.x = -stride;
+            playerMeshParts.leftLeg.rotation.x = leftLegRotation.x;
+            playerMeshParts.leftLeg.rotation.z = leftLegRotation.z;
           }
           if (playerMeshParts.rightLeg) {
-            playerMeshParts.rightLeg.rotation.x = stride;
+            playerMeshParts.rightLeg.rotation.x = rightLegRotation.x;
+            playerMeshParts.rightLeg.rotation.z = rightLegRotation.z;
           }
           if (playerMeshParts.head) {
-            const idleYaw = Math.sin(now / 1800) * 0.03;
-            const idlePitch = Math.cos(now / 1700) * 0.02;
-            playerMeshParts.head.rotation.y = idleYaw + Math.sin(walkCycle * 0.7) * 0.08 * movementStrength;
-            playerMeshParts.head.rotation.x = idlePitch + Math.cos(walkCycle * 0.5) * 0.04 * movementStrength;
+            playerMeshParts.head.rotation.y = headRotationY;
+            playerMeshParts.head.rotation.x = headRotationX;
           }
           if (playerMeshParts.hair) {
-            const base = playerMeshParts.hairBasePosition;
-            const idleSway = Math.sin(now / 420) * 0.03;
-            const stepSway = Math.sin(walkCycle * 1.2) * 0.08 * movementStrength;
-            const backDrift = Math.max(0, Math.cos(walkCycle)) * 0.05 * movementStrength;
-            playerMeshParts.hair.rotation.x = -0.18 * movementStrength + (idleSway + stepSway) * 0.7;
-            playerMeshParts.hair.rotation.z = Math.sin(now / 960) * 0.05;
-            if (base) {
-              playerMeshParts.hair.position.x = base.x + Math.sin(walkCycle * 0.5) * 0.02 * movementStrength;
-              playerMeshParts.hair.position.z = base.z - 0.03 * movementStrength - backDrift;
+            playerMeshParts.hair.rotation.x = hairRotationX;
+            playerMeshParts.hair.rotation.z = hairRotationZ;
+            if (hairPosX !== null && hairPosZ !== null) {
+              playerMeshParts.hair.position.x = hairPosX;
+              playerMeshParts.hair.position.z = hairPosZ;
+            }
+            if (hairPosY !== null) {
+              playerMeshParts.hair.position.y = hairPosY;
             }
           }
           if (playerMeshParts.fringe) {
-            const base = playerMeshParts.fringeBasePosition;
-            const idleLift = Math.sin(now / 360) * 0.02;
-            const forwardSwing = Math.sin(walkCycle * 1.1 + Math.PI / 3) * 0.05 * movementStrength;
-            playerMeshParts.fringe.rotation.x = 0.12 * movementStrength - (idleLift + forwardSwing);
-            if (base) {
-              playerMeshParts.fringe.position.x = base.x + Math.sin(walkCycle * 0.8 + Math.PI / 6) * 0.015 * movementStrength;
-              playerMeshParts.fringe.position.z = base.z + Math.max(0, Math.sin(walkCycle)) * 0.03 * movementStrength;
+            playerMeshParts.fringe.rotation.x = fringeRotationX;
+            if (fringePosX !== null && fringePosZ !== null) {
+              playerMeshParts.fringe.position.x = fringePosX;
+              playerMeshParts.fringe.position.z = fringePosZ;
+            }
+            if (fringePosY !== null) {
+              playerMeshParts.fringe.position.y = fringePosY;
             }
           }
         }
+
+        playerMesh.position.set(x, baseHeight + playerBodyHeightOffset, z);
+        playerMesh.rotation.set(playerBodyPitch, Math.atan2(facing.x, facing.y), playerBodyRoll);
 
         syncCameraToPlayer({
           idleBob,
@@ -2994,27 +3133,90 @@
         actor.walkPhase = (actor.walkPhase ?? Math.random() * Math.PI * 2) + deltaSeconds * (3.2 + movement * 4.2);
         const swing = Math.sin(actor.walkPhase) * 0.38 * movement;
         const stomp = Math.max(0, Math.sin(actor.walkPhase + Math.PI / 2)) * 0.3 * movement;
+        let leftLegRotationX = swing;
+        let rightLegRotationX = -swing;
+        let leftLegRotationZ = 0;
+        let rightLegRotationZ = 0;
+        let leftArmRotation = { x: -swing * 0.4 - movement * 0.18, y: 0, z: -0.05 * movement };
+        let rightArmRotation = { x: swing * 0.4 - movement * 0.18, y: 0, z: 0.05 * movement };
+        let headRotationY = Math.sin(actor.walkPhase * 0.35) * 0.1 * movement;
+        let headRotationX = Math.cos(now / 1600 + index) * 0.03;
+        let groupOffsetX = 0;
+        let groupOffsetY = stomp;
+        let groupOffsetZ = 0;
+        let bodyPitch = 0;
+        let bodyRoll = 0;
+        let facingDirection = golem.attackAnimation?.direction ?? golem.facing ?? { x: 0, y: 1 };
+
+        const attack = golem.attackAnimation;
+        if (attack) {
+          const elapsed = now - attack.start;
+          if (elapsed >= attack.duration) {
+            golem.attackAnimation = null;
+            facingDirection = golem.facing ?? facingDirection;
+          } else {
+            const ratio = THREE.MathUtils.clamp(elapsed / attack.duration, 0, 1);
+            const strength = attack.strength ?? 1;
+            facingDirection = attack.direction ?? facingDirection;
+            const windupPhase = THREE.MathUtils.clamp(ratio / 0.38, 0, 1);
+            const strikePhase = THREE.MathUtils.clamp((ratio - 0.3) / 0.28, 0, 1);
+            const recoveryPhase = THREE.MathUtils.clamp((ratio - 0.72) / 0.28, 0, 1);
+            const windup = Math.sin(windupPhase * Math.PI * 0.5) * strength;
+            const strike = Math.sin(strikePhase * Math.PI) * strength;
+            const recovery = recoveryPhase * strength;
+            const actionWeight = Math.sin(ratio * Math.PI) * strength;
+            const damping = THREE.MathUtils.clamp(1 - actionWeight * 0.85, 0.2, 1);
+            leftLegRotationX *= damping;
+            rightLegRotationX *= damping;
+            leftLegRotationZ = (facingDirection.x ?? 0) * -0.1 * strike;
+            rightLegRotationZ = (facingDirection.x ?? 0) * 0.1 * strike;
+            leftArmRotation = {
+              x: -swing * 0.2 - movement * 0.12 + windup * 0.35,
+              y: -0.15 * windup,
+              z: -0.22 * windup,
+            };
+            rightArmRotation = {
+              x: swing * 0.12 - movement * 0.12 - windup * 0.55 - strike * 1.7 + recovery * 0.8,
+              y: (facingDirection.x ?? 0) * 0.55 * strike,
+              z: -0.35 * strike - 0.18 * windup,
+            };
+            headRotationY = (facingDirection.x ?? 0) * 0.28 * strike + headRotationY * (1 - strike * 0.6);
+            headRotationX = headRotationX - strike * 0.1 + windup * 0.05;
+            const lunge = strike * 0.18;
+            groupOffsetX += (facingDirection.x ?? 0) * lunge;
+            groupOffsetZ += (facingDirection.y ?? 0) * lunge;
+            groupOffsetY += windup * 0.05 - strike * 0.1 + recovery * 0.05;
+            bodyPitch = -strike * 0.09 + windup * 0.05;
+            bodyRoll = -(facingDirection.x ?? 0) * strike * 0.06;
+          }
+        }
+
         if (parts.leftLeg) {
-          parts.leftLeg.rotation.x = swing;
-          parts.leftLeg.rotation.z = 0;
+          parts.leftLeg.rotation.x = leftLegRotationX;
+          parts.leftLeg.rotation.z = leftLegRotationZ;
         }
         if (parts.rightLeg) {
-          parts.rightLeg.rotation.x = -swing;
-          parts.rightLeg.rotation.z = 0;
+          parts.rightLeg.rotation.x = rightLegRotationX;
+          parts.rightLeg.rotation.z = rightLegRotationZ;
         }
         if (parts.leftArm) {
-          parts.leftArm.rotation.x = -swing * 0.4 - movement * 0.18;
-          parts.leftArm.rotation.z = -0.05 * movement;
+          parts.leftArm.rotation.x = leftArmRotation.x;
+          parts.leftArm.rotation.y = leftArmRotation.y;
+          parts.leftArm.rotation.z = leftArmRotation.z;
         }
         if (parts.rightArm) {
-          parts.rightArm.rotation.x = swing * 0.4 - movement * 0.18;
-          parts.rightArm.rotation.z = 0.05 * movement;
+          parts.rightArm.rotation.x = rightArmRotation.x;
+          parts.rightArm.rotation.y = rightArmRotation.y;
+          parts.rightArm.rotation.z = rightArmRotation.z;
         }
         if (parts.head) {
-          parts.head.rotation.y = Math.sin(actor.walkPhase * 0.35) * 0.1 * movement;
-          parts.head.rotation.x = Math.cos(now / 1600 + index) * 0.03;
+          parts.head.rotation.y = headRotationY;
+          parts.head.rotation.x = headRotationX;
         }
-        group.position.set(x, h + stomp, z);
+
+        const directionForRotation = normalizeDirectionVector(facingDirection);
+        group.position.set(x + groupOffsetX, h + groupOffsetY, z + groupOffsetZ);
+        group.rotation.set(bodyPitch, Math.atan2(directionForRotation.x, directionForRotation.y), bodyRoll);
 
         let nearestZombie = Infinity;
         state.zombies.forEach((z) => {
@@ -4949,7 +5151,13 @@
         if (!isWalkable(x, y)) return false;
         if (x === origin.x && y === origin.y) return false;
         if (state.ironGolems.some((g) => g.x === x && g.y === y)) return false;
-        state.ironGolems.push({ x, y, cooldown: 0 });
+        state.ironGolems.push({
+          x,
+          y,
+          cooldown: 0,
+          facing: { x: 0, y: 1 },
+          attackAnimation: null,
+        });
         return true;
       };
 
@@ -4976,7 +5184,13 @@
       }
 
       if (state.ironGolems.length === 0) {
-        state.ironGolems.push({ x: origin.x, y: origin.y, cooldown: 0 });
+        state.ironGolems.push({
+          x: origin.x,
+          y: origin.y,
+          cooldown: 0,
+          facing: { x: 0, y: 1 },
+          attackAnimation: null,
+        });
       }
     }
 
@@ -5024,15 +5238,41 @@
             moved = true;
           }
         }
+        if (moved && (dx !== 0 || dy !== 0)) {
+          golem.facing = normalizeDirectionVector({ x: dx, y: dy });
+        } else if (target) {
+          const lookX = Math.sign(target.x - golem.x);
+          const lookY = Math.sign(target.y - golem.y);
+          if (lookX !== 0 || lookY !== 0) {
+            golem.facing = normalizeDirectionVector({ x: lookX, y: lookY });
+          }
+        }
         golem.cooldown = moved ? 0.28 : 0.35;
       });
 
       const defeatedIndices = new Set();
       state.ironGolems.forEach((golem) => {
+        let punched = false;
         state.zombies.forEach((zombie, index) => {
           const distance = Math.abs(zombie.x - golem.x) + Math.abs(zombie.y - golem.y);
           if (distance <= 1) {
             defeatedIndices.add(index);
+            if (!punched) {
+              const direction = {
+                x: zombie.x - golem.x,
+                y: zombie.y - golem.y,
+              };
+              if (direction.x === 0 && direction.y === 0 && golem.facing) {
+                direction.x = golem.facing.x;
+                direction.y = golem.facing.y;
+              }
+              golem.facing = normalizeDirectionVector(direction);
+              triggerGolemPunchAnimation(golem, {
+                direction,
+                strength: THREE.MathUtils.clamp(1.15 - distance * 0.1, 0.5, 1.25),
+              });
+              punched = true;
+            }
           }
         });
       });
@@ -5364,6 +5604,10 @@
         logEvent('You need a Stone Pickaxe.');
         return;
       }
+      triggerPlayerActionAnimation('mine', {
+        direction: state.player?.facing,
+        strength: itemId === 'stone' ? 1.25 : 1,
+      });
       tile.data.yield -= 1;
       addItemToInventory(itemId, 1);
       logEvent(`Gathered ${ITEM_DEFS[itemId]?.name ?? itemId}.`);
