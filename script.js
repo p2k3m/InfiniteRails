@@ -1,11 +1,15 @@
 (function () {
-  const THREE_FALLBACK_SRC = 'https://unpkg.com/three@0.161.0/build/three.min.js';
+  const THREE_CDN_URLS = [
+    'https://unpkg.com/three@0.161.0/build/three.min.js',
+    'https://cdn.jsdelivr.net/npm/three@0.161.0/build/three.min.js',
+  ];
   const GLTF_SCRIPT_URLS = [
     'vendor/GLTFLoader.js',
     'https://unpkg.com/three@0.161.0/examples/js/loaders/GLTFLoader.js',
     'https://cdn.jsdelivr.net/npm/three@0.161.0/examples/js/loaders/GLTFLoader.js',
   ];
   let gltfLoaderPromise = null;
+  let threeLoaderPromise = null;
 
   const originalConsoleWarn = console.warn?.bind(console);
   if (originalConsoleWarn) {
@@ -11269,19 +11273,65 @@
       scope.THREE = existing;
       return Promise.resolve(existing);
     }
-    if (typeof document !== 'undefined' && document.querySelector('script[data-three-fallback]')) {
-      return Promise.reject(new Error('Three.js failed to initialise.'));
+
+    if (threeLoaderPromise) {
+      return threeLoaderPromise;
     }
-    return loadScript(THREE_FALLBACK_SRC, { 'data-three-fallback': 'true' })
-      .then(() => {
-        const instance = scope.THREE_GLOBAL || scope.THREE;
-        if (!instance) {
-          throw new Error('Three.js failed to load even after attempting fallback.');
+
+    let startIndex = 0;
+    if (typeof document !== 'undefined') {
+      const attemptedFallbacks = Array.from(
+        document.querySelectorAll('script[data-three-fallback-index]')
+      )
+        .map((script) => Number.parseInt(script.getAttribute('data-three-fallback-index') || '', 10))
+        .filter((value) => Number.isFinite(value) && value >= 0);
+      if (attemptedFallbacks.length > 0) {
+        startIndex = Math.min(THREE_CDN_URLS.length, Math.max(...attemptedFallbacks) + 1);
+      }
+    }
+
+    const tryLoad = (index = startIndex, lastError = null) => {
+      if (index >= THREE_CDN_URLS.length) {
+        const error = new Error('Three.js failed to load after attempting CDN fallbacks.');
+        if (lastError) {
+          error.cause = lastError;
         }
-        scope.THREE_GLOBAL = instance;
-        scope.THREE = instance;
-        return instance;
-      });
+        return Promise.reject(error);
+      }
+
+      const url = THREE_CDN_URLS[index];
+      return loadScript(url, {
+        'data-three-fallback': 'true',
+        'data-three-fallback-index': String(index),
+      })
+        .then(() => {
+          const instance = scope.THREE_GLOBAL || scope.THREE;
+          if (!instance) {
+            throw new Error('Three.js script loaded but did not expose THREE.');
+          }
+          scope.THREE_GLOBAL = instance;
+          scope.THREE = instance;
+          return instance;
+        })
+        .catch((error) => {
+          if (typeof document !== 'undefined') {
+            const fallbackElement = document.querySelector(
+              `script[data-three-fallback-index="${index}"]`
+            );
+            if (fallbackElement) {
+              fallbackElement.setAttribute('data-three-fallback-error', 'true');
+            }
+          }
+          return tryLoad(index + 1, error);
+        });
+    };
+
+    threeLoaderPromise = tryLoad().catch((error) => {
+      threeLoaderPromise = null;
+      return Promise.reject(error);
+    });
+
+    return threeLoaderPromise;
   }
 
   function ensureGLTFLoader(THREE) {
