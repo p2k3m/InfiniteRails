@@ -1681,6 +1681,52 @@ input[type='search'] {
   color: var(--accent-strong);
 }
 
+.signin-callout {
+  margin: 1.75rem 0 2rem;
+  padding: 1.5rem 1.75rem 1.75rem;
+  border-radius: 20px;
+  border: 1px solid rgba(73, 242, 255, 0.24);
+  background: linear-gradient(160deg, rgba(6, 22, 44, 0.95), rgba(6, 22, 44, 0.75));
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.4);
+  display: grid;
+  gap: 1rem;
+  justify-items: center;
+  text-align: center;
+}
+
+.signin-callout h3 {
+  font-family: 'Chakra Petch', sans-serif;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--accent);
+  font-size: clamp(1.1rem, 1.6vw, 1.35rem);
+}
+
+.signin-callout__summary {
+  color: var(--text-secondary);
+  margin: 0 auto;
+  max-width: 28rem;
+  line-height: 1.6;
+}
+
+.signin-callout__actions {
+  display: grid;
+  gap: 0.75rem;
+  justify-items: center;
+  width: 100%;
+}
+
+.signin-callout__actions .primary {
+  min-width: clamp(200px, 60%, 260px);
+}
+
+.signin-callout__note {
+  color: rgba(242, 245, 250, 0.65);
+  font-size: 0.875rem;
+  margin: 0;
+  max-width: 26rem;
+}
+
 .guide-modal {
   align-items: flex-start;
   overflow-y: auto;
