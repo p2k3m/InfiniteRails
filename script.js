@@ -395,6 +395,7 @@
     }
     const playerHintEl = document.getElementById('playerHint');
     const drowningVignetteEl = document.getElementById('drowningVignette');
+    const tarOverlayEl = document.getElementById('tarOverlay');
     const dimensionTransitionEl = document.getElementById('dimensionTransition');
     const defeatOverlayEl = document.getElementById('defeatOverlay');
     const defeatMessageEl = document.getElementById('defeatMessage');
@@ -3980,12 +3981,14 @@
         victoryCelebrationVisible: false,
         victoryCelebrationShown: false,
         inventorySortMode: 'default',
+        tarOverlayLevel: 0,
       },
     };
 
     state.player.heartsAtLastDamage = state.player.hearts;
 
     resetStatusMeterMemory();
+    resetTarOverlay();
     initRenderer();
     updateScoreOverlay();
 
@@ -4438,6 +4441,13 @@
       state.ui.heartsValue = state.player.hearts;
       state.ui.airValue = state.player.air;
       state.ui.lastAirUnits = Math.ceil(state.player.air);
+    }
+
+    function resetTarOverlay() {
+      state.ui.tarOverlayLevel = 0;
+      if (!tarOverlayEl) return;
+      tarOverlayEl.setAttribute('data-active', 'false');
+      tarOverlayEl.style.setProperty('--tar-overlay-strength', '0');
     }
 
     function updateStatusBars() {
@@ -5160,6 +5170,7 @@
       state.player.tarSlowTimer = 0;
       state.player.isSliding = false;
       state.player.zombieHits = 0;
+      resetTarOverlay();
       syncCameraToPlayer({ idleBob: 0, walkBob: 0, movementStrength: 0, facing: state.player.facing });
       updateLighting(0);
       if (fromId && id !== 'origin' && id !== 'netherite') {
@@ -5226,6 +5237,7 @@
       updatePortalProgress();
       updateLighting(delta);
       advanceParticles(delta);
+      updateTarOverlay(delta);
       updateDimensionTransition(delta);
     }
 
@@ -5236,6 +5248,31 @@
         return;
       }
       // queue handled in marble update hook
+    }
+
+    function updateTarOverlay(delta) {
+      if (!tarOverlayEl) return;
+      const isTarDimension = state.dimension?.id === 'tar';
+      const stacks = state.player?.tarStacks ?? 0;
+      const slowTimer = state.player?.tarSlowTimer ?? 0;
+      let target = 0;
+      if (isTarDimension && (stacks > 0 || slowTimer > 0)) {
+        const stackRatio = THREE.MathUtils.clamp(stacks / 4, 0, 1);
+        const timerRatio = THREE.MathUtils.clamp(slowTimer / 2.4, 0, 1);
+        target = Math.min(1, 0.18 + stackRatio * 0.6 + timerRatio * 0.45);
+      }
+      const previous = state.ui.tarOverlayLevel ?? 0;
+      const rampSpeed = target > previous ? 6 : 3.5;
+      const lerpAlpha = Math.min(1, delta * rampSpeed);
+      const next = THREE.MathUtils.lerp(previous, target, lerpAlpha);
+      const intensity = THREE.MathUtils.clamp(next, 0, 1);
+      state.ui.tarOverlayLevel = intensity;
+      tarOverlayEl.style.setProperty('--tar-overlay-strength', intensity.toFixed(3));
+      if (intensity <= 0.01) {
+        tarOverlayEl.setAttribute('data-active', 'false');
+      } else {
+        tarOverlayEl.setAttribute('data-active', 'true');
+      }
     }
 
     function handleAir(delta) {
