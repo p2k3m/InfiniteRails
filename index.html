@@ -193,31 +193,55 @@
       </div>
     </footer>
 
-    <div class="modal" id="introModal" role="dialog" aria-modal="true" aria-labelledby="introTitle">
-      <div class="modal-content">
-        <h2 id="introTitle">Welcome to Infinite Dimension</h2>
-        <p>
-          Survive, craft, and weave portals across dimensions. Gather resources from each world, solve rail puzzles,
-          and bring home the Eternal Ingot.
-        </p>
-        <section class="signin-callout" id="landingSignInPanel" aria-label="Link your explorer profile">
-          <h3>Sync your journey before you depart</h3>
-          <p class="signin-callout__summary">
-            Sign in with Google to unlock the shared scoreboard, capture your location badge, and mirror your progress across
-            every device.
-          </p>
-          <div class="signin-callout__actions">
-            <div class="gsi-container" data-google-button-container hidden></div>
-            <button type="button" class="primary" data-google-fallback-signin>Sign in with Google</button>
-            <p class="signin-callout__note">Prefer to explore as a guest? You can connect later from the Player Hub.</p>
+    <div
+      class="modal landing-modal"
+      id="introModal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="introTitle"
+    >
+      <div class="landing-modal__background" aria-hidden="true">
+        <div class="landing-modal__stars landing-modal__stars--back"></div>
+        <div class="landing-modal__stars landing-modal__stars--front"></div>
+        <div class="landing-modal__glow"></div>
+      </div>
+      <div class="modal-content landing-modal__content" role="document">
+        <div class="landing-modal__layout">
+          <header class="landing-modal__header">
+            <p class="landing-modal__eyebrow">Infinite Rails</p>
+            <h1 id="introTitle" class="landing-modal__title">Portals of Dimension</h1>
+            <p class="landing-modal__tagline">
+              Stabilise shimmering tracks between realities before you brave the storm of fractured worlds.
+            </p>
+            <div class="landing-modal__actions">
+              <button id="startButton" class="primary landing-modal__start">Start Expedition</button>
+              <button type="button" class="ghost landing-modal__howto" id="landingGuideButton">How to Play</button>
+            </div>
+          </header>
+          <div class="landing-modal__body">
+            <section
+              class="signin-callout landing-modal__signin"
+              id="landingSignInPanel"
+              aria-label="Link your explorer profile"
+            >
+              <h3>Sync your journey before you depart</h3>
+              <p class="signin-callout__summary">
+                Sign in with Google to unlock the shared scoreboard, capture your location badge, and mirror your progress across
+                every device.
+              </p>
+              <div class="signin-callout__actions">
+                <div class="gsi-container" data-google-button-container hidden></div>
+                <button type="button" class="primary" data-google-fallback-signin>Sign in with Google</button>
+                <p class="signin-callout__note">Prefer to explore as a guest? You can connect later from the Player Hub.</p>
+              </div>
+            </section>
+            <ul class="landing-modal__highlights" aria-label="Highlights">
+              <li>Build 4×3 portals with unique materials to unlock new rules.</li>
+              <li>Craft using ordered sequences and uncover hidden recipes.</li>
+              <li>Survive nightly assaults while protecting villagers and rails.</li>
+            </ul>
           </div>
-        </section>
-        <ul class="modal-highlights">
-          <li>Build 4×3 portals with unique materials to unlock new rules.</li>
-          <li>Craft using ordered sequences and uncover hidden recipes.</li>
-          <li>Survive nightly assaults while protecting villagers and rails.</li>
-        </ul>
-        <button id="startButton" class="primary">Enter the Rails</button>
+        </div>
       </div>
     </div>
 
