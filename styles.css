@@ -1928,6 +1928,104 @@ input[type='search'] {
   font-size: clamp(1.1rem, 1.6vw, 1.35rem);
 }
 
+.settings-modal__content {
+  max-width: 420px;
+  text-align: left;
+  padding: 2.25rem 2.5rem;
+}
+
+.settings-modal__header {
+  display: grid;
+  gap: 0.5rem;
+  margin-bottom: 1.75rem;
+}
+
+.settings-modal__header p {
+  margin: 0;
+  color: var(--text-secondary);
+}
+
+.settings-modal__form {
+  display: grid;
+  gap: 1.5rem;
+}
+
+.settings-modal__fieldset {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 1.25rem;
+}
+
+.settings-modal__field {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.settings-modal__label-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.settings-modal__value {
+  font-variant-numeric: tabular-nums;
+  color: var(--accent);
+}
+
+.settings-modal__range {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.settings-modal__range::-webkit-slider-runnable-track {
+  height: 6px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(73, 242, 255, 0.75), rgba(73, 242, 255, 0.3));
+}
+
+.settings-modal__range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 18px;
+  width: 18px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 4px rgba(73, 242, 255, 0.18);
+  margin-top: -6px;
+  cursor: pointer;
+}
+
+.settings-modal__range::-moz-range-track {
+  height: 6px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(73, 242, 255, 0.75), rgba(73, 242, 255, 0.3));
+}
+
+.settings-modal__range::-moz-range-thumb {
+  height: 18px;
+  width: 18px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 4px rgba(73, 242, 255, 0.18);
+  border: 0;
+  cursor: pointer;
+}
+
+.settings-modal__hint {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+}
+
+.settings-modal__actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
 .signin-callout__summary {
   color: var(--text-secondary);
   margin: 0 auto;
