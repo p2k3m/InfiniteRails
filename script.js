@@ -1501,6 +1501,10 @@
     let tileRenderState = [];
     const zombieMeshes = [];
     const ironGolemMeshes = [];
+    let zombieModelTemplate = null;
+    let zombieModelPromise = null;
+    let ironGolemModelTemplate = null;
+    let ironGolemModelPromise = null;
     let hemiLight;
     let sunLight;
     let moonLight;
@@ -1551,6 +1555,28 @@
         return { x: 0, y: 1 };
       }
       return { x: dx / length, y: dy / length };
+    }
+
+    function getDayNightMetrics(elapsedOverride) {
+      const dayLength = state.dayLength > 0 ? state.dayLength : 1;
+      const ratio = dayLength > 0 ? ((elapsedOverride ?? state.elapsed) % dayLength) / dayLength : 0;
+      const clampedDayPortion = THREE.MathUtils.clamp(DAY_PORTION, 0.05, 0.95);
+      const clampedNightPortion = Math.max(1 - clampedDayPortion, 0.05);
+      const isNight = ratio >= clampedDayPortion;
+      const safeDayPortion = clampedDayPortion || 1;
+      const safeNightPortion = clampedNightPortion || 1;
+      const dayProgress = isNight ? 1 : THREE.MathUtils.clamp(ratio / safeDayPortion, 0, 1);
+      const nightProgress = isNight
+        ? THREE.MathUtils.clamp((ratio - clampedDayPortion) / safeNightPortion, 0, 1)
+        : 0;
+      return {
+        ratio,
+        isNight,
+        dayProgress,
+        nightProgress,
+        dayPortion: clampedDayPortion,
+        nightPortion: clampedNightPortion,
+      };
     }
 
     function triggerPlayerActionAnimation(type, options = {}) {
@@ -1631,6 +1657,12 @@
 
     const ZOMBIE_OUTLINE_COLOR = new THREE.Color('#ff5a7a');
     const GOLEM_OUTLINE_COLOR = new THREE.Color('#58b7ff');
+    const DAY_PORTION = 0.7;
+    const NIGHT_PORTION = 1 - DAY_PORTION;
+    const ZOMBIE_WAVE_SIZE = 5;
+    const ZOMBIE_SPAWN_INTERVAL = 10;
+    const ZOMBIE_AGGRO_RANGE = 10;
+    const MAX_CONCURRENT_ZOMBIES = 30;
 
     const baseMaterialCache = new Map();
     const accentMaterialCache = new Map();
@@ -3794,323 +3826,284 @@
       entityGroup.add(playerLocator);
     }
 
-    function ensureZombieMeshCount(count) {
-      while (zombieMeshes.length < count) {
-        const zombie = new THREE.Group();
-        zombie.name = 'minecraft-zombie';
-        const colors = {
-          skin: '#6cc26e',
-          shirt: '#2f70af',
-          pants: '#2f3b6a',
-          eye: '#d34848',
-        };
-
-        const legHeight = 0.55;
-        const torsoHeight = 0.7;
-        const headHeight = 0.45;
-        const hipsY = legHeight;
-        const shoulderY = legHeight + torsoHeight;
-
-        const buildLeg = (offsetX) => {
-          const leg = new THREE.Group();
-          leg.position.set(offsetX, hipsY, 0);
-          addBlock(leg, {
-            color: colors.pants,
-            width: 0.28,
-            depth: 0.34,
-            height: legHeight,
-            y: -legHeight / 2,
-          });
-          return leg;
-        };
-
-        const leftLeg = buildLeg(-0.18);
-        const rightLeg = buildLeg(0.18);
-        zombie.add(leftLeg);
-        zombie.add(rightLeg);
-
-        addBlock(zombie, {
-          color: colors.shirt,
-          width: 0.68,
-          depth: 0.36,
-          height: torsoHeight,
-          y: hipsY + torsoHeight / 2,
-        });
-
-        const buildArm = (offsetX) => {
-          const arm = new THREE.Group();
-          arm.position.set(offsetX, shoulderY, 0);
-          addBlock(arm, {
-            color: colors.shirt,
-            width: 0.2,
-            depth: 0.3,
-            height: 0.52,
-            y: -0.26,
-          });
-          addBlock(arm, {
-            color: colors.skin,
-            width: 0.2,
-            depth: 0.3,
-            height: 0.2,
-            y: -0.62,
-          });
-          return arm;
-        };
-
-        const leftArm = buildArm(-0.46);
-        const rightArm = buildArm(0.46);
-        zombie.add(leftArm);
-        zombie.add(rightArm);
-
-        const headGroup = new THREE.Group();
-        headGroup.position.set(0, shoulderY + 0.05, 0);
-        const head = addBlock(headGroup, {
-          color: colors.skin,
-          width: 0.5,
-          depth: 0.48,
-          height: headHeight,
-          y: headHeight / 2,
-        });
-        head.material.roughness = 0.5;
-
-        const eyeMaterial = new THREE.MeshBasicMaterial({ color: colors.eye });
-        eyeMaterial.transparent = true;
-        eyeMaterial.opacity = 0.85;
-        eyeMaterial.depthWrite = false;
-        const eyeGeometry = new THREE.PlaneGeometry(0.08, 0.1);
-        const leftEye = new THREE.Mesh(eyeGeometry, eyeMaterial);
-        leftEye.position.set(-0.12, headHeight * 0.65, 0.22);
-        headGroup.add(leftEye);
-        const rightEye = new THREE.Mesh(eyeGeometry, eyeMaterial);
-        rightEye.position.set(0.12, headHeight * 0.65, 0.22);
-        headGroup.add(rightEye);
-
-        const brow = addBlock(headGroup, {
-          color: '#3c8b45',
-          width: 0.52,
-          depth: 0.08,
-          height: 0.12,
-          y: headHeight * 0.78,
-        });
-        brow.position.z = 0.2;
-
-        zombie.add(headGroup);
-        const bodyMaterials = [];
-        const baseBodyColors = [];
-        const baseEmissiveColors = [];
-        zombie.traverse((child) => {
-          if (!child?.isMesh || child.material === eyeMaterial) return;
-          const material = child.material;
-          if (!material) return;
-          bodyMaterials.push(material);
-          baseBodyColors.push(material.color?.clone?.() ?? new THREE.Color('#ffffff'));
-          baseEmissiveColors.push(material.emissive?.clone?.() ?? new THREE.Color('#000000'));
-        });
-        entityGroup.add(zombie);
-        zombieMeshes.push({
-          group: zombie,
-          parts: {
-            leftLeg,
-            rightLeg,
-            leftArm,
-            rightArm,
-            head: headGroup,
+    function ensureZombieModelTemplate() {
+      if (zombieModelTemplate || zombieModelPromise) return zombieModelPromise;
+      if (!THREE.GLTFLoader) {
+        console.error('GLTFLoader is unavailable; cannot create the zombie model.');
+        return null;
+      }
+      if (!gltfLoader) {
+        gltfLoader = new THREE.GLTFLoader();
+      }
+      zombieModelPromise = new Promise((resolve) => {
+        gltfLoader.load(
+          'assets/zombie.gltf',
+          (gltf) => {
+            const zombieScene = gltf.scene || gltf.scenes?.[0];
+            if (!zombieScene) {
+              console.error('Zombie model did not include a scene.');
+              resolve(null);
+              return;
+            }
+            zombieScene.position.set(0, 0, 0);
+            zombieScene.rotation.set(0, 0, 0);
+            zombieScene.scale.set(1, 1, 1);
+            zombieScene.updateMatrixWorld(true);
+            const bounds = new THREE.Box3().setFromObject(zombieScene);
+            zombieModelTemplate = {
+              scene: zombieScene,
+              groundOffset: -bounds.min.y,
+              defaultScale: 0.6,
+            };
+            resolve(zombieModelTemplate);
           },
-          eyes: [leftEye, rightEye],
-          eyeMaterial,
-          baseEyeColor: new THREE.Color(colors.eye),
-          aggressiveEyeColor: new THREE.Color('#ff9a9a'),
-          tempColor: new THREE.Color(colors.eye),
-          bodyMaterials,
-          baseBodyColors,
-          baseEmissiveColors,
-          previousXZ: new THREE.Vector2(),
-          hasPrev: false,
-          lastUpdate: typeof performance !== 'undefined' ? performance.now() : Date.now(),
-          walkPhase: Math.random() * Math.PI * 2,
-          movement: 0,
-          aggression: 0,
-        });
+          undefined,
+          (error) => {
+            console.error('Failed to load the zombie model.', error);
+            resolve(null);
+          }
+        );
+      });
+      return zombieModelPromise;
+    }
+
+    function createZombieActor() {
+      if (!entityGroup || !zombieModelTemplate?.scene) return null;
+      const { scene: templateScene, groundOffset = 0, defaultScale = 0.6 } = zombieModelTemplate;
+      const clone = templateScene.clone(true);
+      clone.name = 'minecraft-zombie';
+      clone.traverse((child) => {
+        if (!child?.isMesh) return;
+        child.castShadow = true;
+        child.receiveShadow = true;
+        if (child.material) {
+          child.material = child.material.clone();
+          if (child.material.color?.isColor) {
+            child.material.color.convertSRGBToLinear?.();
+          }
+        }
+      });
+      clone.scale.setScalar(defaultScale);
+      const parts = {
+        leftLeg: clone.getObjectByName('ZombieLeftLeg') ?? null,
+        rightLeg: clone.getObjectByName('ZombieRightLeg') ?? null,
+        leftArm: clone.getObjectByName('ZombieLeftArm') ?? null,
+        rightArm: clone.getObjectByName('ZombieRightArm') ?? null,
+        head: clone.getObjectByName('ZombieHead') ?? null,
+        leftEye: clone.getObjectByName('ZombieLeftEye') ?? null,
+        rightEye: clone.getObjectByName('ZombieRightEye') ?? null,
+      };
+      const bodyMaterials = [];
+      const baseBodyColors = [];
+      const baseEmissiveColors = [];
+      const eyeMaterials = [];
+      const baseEyeColors = [];
+      clone.traverse((child) => {
+        if (!child?.isMesh || !child.material) return;
+        const material = child.material;
+        const isEye = child.name?.toLowerCase?.().includes('eye');
+        if (isEye) {
+          eyeMaterials.push(material);
+          if (material.color?.isColor) {
+            baseEyeColors.push(material.color.clone());
+          } else {
+            baseEyeColors.push(new THREE.Color('#ffffff'));
+          }
+          return;
+        }
+        bodyMaterials.push(material);
+        if (material.color?.isColor) {
+          baseBodyColors.push(material.color.clone());
+        } else {
+          baseBodyColors.push(new THREE.Color('#ffffff'));
+        }
+        if (material.emissive?.isColor) {
+          baseEmissiveColors.push(material.emissive.clone());
+        } else {
+          baseEmissiveColors.push(new THREE.Color('#000000'));
+          material.emissive = new THREE.Color('#000000');
+        }
+      });
+      const actor = {
+        group: clone,
+        parts,
+        eyeMaterials,
+        baseEyeColors,
+        aggressiveEyeColor: new THREE.Color('#ff9a9a'),
+        tempColor: new THREE.Color('#ffffff'),
+        bodyMaterials,
+        baseBodyColors,
+        baseEmissiveColors,
+        previousXZ: new THREE.Vector2(),
+        hasPrev: false,
+        lastUpdate: getNowMs(),
+        walkPhase: Math.random() * Math.PI * 2,
+        movement: 0,
+        aggression: 0,
+        groundOffset: groundOffset * defaultScale,
+      };
+      entityGroup.add(clone);
+      return actor;
+    }
+
+    function ensureZombieMeshCount(count) {
+      ensureZombieModelTemplate();
+      if (!entityGroup || !zombieModelTemplate?.scene) return;
+      while (zombieMeshes.length < count) {
+        const actor = createZombieActor();
+        if (!actor) break;
+        zombieMeshes.push(actor);
       }
       while (zombieMeshes.length > count) {
         const zombieData = zombieMeshes.pop();
         if (!zombieData) continue;
         entityGroup.remove(zombieData.group);
-        zombieData.eyeMaterial?.dispose?.();
+        zombieData.group?.traverse?.((child) => {
+          if (child?.isMesh && child.material) {
+            child.material.dispose?.();
+          }
+        });
       }
     }
 
-    function ensureIronGolemMeshCount(count) {
-      while (ironGolemMeshes.length < count) {
-        const golem = new THREE.Group();
-        golem.name = 'iron-golem';
-        const colors = {
-          body: '#d8d2c8',
-          accent: '#b49a8a',
-          vines: '#6a9b54',
-          eye: '#d75757',
-        };
-
-        const legHeight = 0.7;
-        const torsoHeight = 0.9;
-        const headHeight = 0.36;
-        const hipsY = legHeight;
-        const shoulderY = legHeight + torsoHeight;
-
-        const buildLeg = (offsetX) => {
-          const leg = new THREE.Group();
-          leg.position.set(offsetX, hipsY, 0);
-          addBlock(leg, {
-            color: colors.body,
-            width: 0.34,
-            depth: 0.42,
-            height: legHeight,
-            y: -legHeight / 2,
-          });
-          addBlock(leg, {
-            color: colors.accent,
-            width: 0.36,
-            depth: 0.46,
-            height: 0.18,
-            y: -legHeight + 0.09,
-          });
-          return leg;
-        };
-
-        const leftLeg = buildLeg(-0.26);
-        const rightLeg = buildLeg(0.26);
-        golem.add(leftLeg);
-        golem.add(rightLeg);
-
-        const torso = addBlock(golem, {
-          color: colors.body,
-          width: 0.98,
-          depth: 0.6,
-          height: torsoHeight,
-          y: hipsY + torsoHeight / 2,
-        });
-        torso.material.roughness = 0.7;
-
-        const chestPlate = addBlock(golem, {
-          color: colors.accent,
-          width: 0.9,
-          depth: 0.16,
-          height: 0.32,
-          y: hipsY + torsoHeight * 0.75,
-        });
-        chestPlate.position.z = 0.3;
-
-        const buildArm = (offsetX) => {
-          const arm = new THREE.Group();
-          arm.position.set(offsetX, shoulderY, 0);
-          addBlock(arm, {
-            color: colors.body,
-            width: 0.26,
-            depth: 0.36,
-            height: 0.7,
-            y: -0.35,
-          });
-          addBlock(arm, {
-            color: colors.accent,
-            width: 0.28,
-            depth: 0.38,
-            height: 0.24,
-            y: -0.82,
-          });
-          return arm;
-        };
-
-        const leftArm = buildArm(-0.78);
-        const rightArm = buildArm(0.78);
-        golem.add(leftArm);
-        golem.add(rightArm);
-
-        const vineWrap = addBlock(golem, {
-          color: colors.vines,
-          width: 0.2,
-          depth: 0.64,
-          height: 0.5,
-          y: hipsY + torsoHeight * 0.4,
-        });
-        vineWrap.position.x = -0.35;
-
-        const headGroup = new THREE.Group();
-        headGroup.position.set(0, shoulderY + 0.12, 0);
-        const head = addBlock(headGroup, {
-          color: colors.body,
-          width: 0.58,
-          depth: 0.5,
-          height: headHeight,
-          y: headHeight / 2,
-        });
-        head.material.roughness = 0.65;
-
-        const brow = addBlock(headGroup, {
-          color: colors.accent,
-          width: 0.6,
-          depth: 0.12,
-          height: 0.1,
-          y: headHeight * 0.74,
-        });
-        brow.position.z = 0.2;
-
-        const eyeMaterial = new THREE.MeshBasicMaterial({ color: colors.eye });
-        eyeMaterial.transparent = true;
-        eyeMaterial.opacity = 0.9;
-        eyeMaterial.depthWrite = false;
-        const eyeGeometry = new THREE.PlaneGeometry(0.1, 0.1);
-        const leftEye = new THREE.Mesh(eyeGeometry, eyeMaterial);
-        leftEye.position.set(-0.12, headHeight * 0.58, 0.24);
-        headGroup.add(leftEye);
-        const rightEye = new THREE.Mesh(eyeGeometry, eyeMaterial);
-        rightEye.position.set(0.12, headHeight * 0.58, 0.24);
-        headGroup.add(rightEye);
-
-        golem.add(headGroup);
-        const bodyMaterials = [];
-        const baseBodyColors = [];
-        const baseEmissiveColors = [];
-        golem.traverse((child) => {
-          if (!child?.isMesh || child.material === eyeMaterial) return;
-          const material = child.material;
-          if (!material) return;
-          bodyMaterials.push(material);
-          baseBodyColors.push(material.color?.clone?.() ?? new THREE.Color('#ffffff'));
-          baseEmissiveColors.push(material.emissive?.clone?.() ?? new THREE.Color('#000000'));
-        });
-        entityGroup.add(golem);
-        ironGolemMeshes.push({
-          group: golem,
-          parts: {
-            leftLeg,
-            rightLeg,
-            leftArm,
-            rightArm,
-            head: headGroup,
+    function ensureIronGolemModelTemplate() {
+      if (ironGolemModelTemplate || ironGolemModelPromise) return ironGolemModelPromise;
+      if (!THREE.GLTFLoader) {
+        console.error('GLTFLoader is unavailable; cannot create the iron golem model.');
+        return null;
+      }
+      if (!gltfLoader) {
+        gltfLoader = new THREE.GLTFLoader();
+      }
+      ironGolemModelPromise = new Promise((resolve) => {
+        gltfLoader.load(
+          'assets/iron_golem.gltf',
+          (gltf) => {
+            const golemScene = gltf.scene || gltf.scenes?.[0];
+            if (!golemScene) {
+              console.error('Iron golem model did not include a scene.');
+              resolve(null);
+              return;
+            }
+            golemScene.position.set(0, 0, 0);
+            golemScene.rotation.set(0, 0, 0);
+            golemScene.scale.set(1, 1, 1);
+            golemScene.updateMatrixWorld(true);
+            const bounds = new THREE.Box3().setFromObject(golemScene);
+            ironGolemModelTemplate = {
+              scene: golemScene,
+              groundOffset: -bounds.min.y,
+              defaultScale: 0.55,
+            };
+            resolve(ironGolemModelTemplate);
           },
-          eyes: [leftEye, rightEye],
-          eyeMaterial,
-          baseEyeColor: new THREE.Color(colors.eye),
-          aggressiveEyeColor: new THREE.Color('#ffe2a8'),
-          tempColor: new THREE.Color(colors.eye),
-          bodyMaterials,
-          baseBodyColors,
-          baseEmissiveColors,
-          previousXZ: new THREE.Vector2(),
-          hasPrev: false,
-          lastUpdate: typeof performance !== 'undefined' ? performance.now() : Date.now(),
-          walkPhase: Math.random() * Math.PI * 2,
-          movement: 0,
-          aggression: 0,
-        });
+          undefined,
+          (error) => {
+            console.error('Failed to load the iron golem model.', error);
+            resolve(null);
+          }
+        );
+      });
+      return ironGolemModelPromise;
+    }
+
+    function createIronGolemActor() {
+      if (!entityGroup || !ironGolemModelTemplate?.scene) return null;
+      const { scene: templateScene, groundOffset = 0, defaultScale = 0.55 } = ironGolemModelTemplate;
+      const clone = templateScene.clone(true);
+      clone.name = 'iron-golem';
+      clone.traverse((child) => {
+        if (!child?.isMesh) return;
+        child.castShadow = true;
+        child.receiveShadow = true;
+        if (child.material) {
+          child.material = child.material.clone();
+          if (child.material.color?.isColor) {
+            child.material.color.convertSRGBToLinear?.();
+          }
+        }
+      });
+      clone.scale.setScalar(defaultScale);
+      const parts = {
+        leftLeg: clone.getObjectByName('GolemLeftLeg') ?? null,
+        rightLeg: clone.getObjectByName('GolemRightLeg') ?? null,
+        leftArm: clone.getObjectByName('GolemLeftArm') ?? null,
+        rightArm: clone.getObjectByName('GolemRightArm') ?? null,
+        head: clone.getObjectByName('GolemHead') ?? null,
+      };
+      const bodyMaterials = [];
+      const baseBodyColors = [];
+      const baseEmissiveColors = [];
+      const eyeMaterials = [];
+      const baseEyeColors = [];
+      clone.traverse((child) => {
+        if (!child?.isMesh || !child.material) return;
+        const material = child.material;
+        const isEye = child.name?.toLowerCase?.().includes('eye');
+        if (isEye) {
+          eyeMaterials.push(material);
+          if (material.color?.isColor) {
+            baseEyeColors.push(material.color.clone());
+          } else {
+            baseEyeColors.push(new THREE.Color('#ffffff'));
+          }
+          return;
+        }
+        bodyMaterials.push(material);
+        if (material.color?.isColor) {
+          baseBodyColors.push(material.color.clone());
+        } else {
+          baseBodyColors.push(new THREE.Color('#ffffff'));
+        }
+        if (material.emissive?.isColor) {
+          baseEmissiveColors.push(material.emissive.clone());
+        } else {
+          baseEmissiveColors.push(new THREE.Color('#000000'));
+          material.emissive = new THREE.Color('#000000');
+        }
+      });
+      const actor = {
+        group: clone,
+        parts,
+        eyeMaterials,
+        baseEyeColors,
+        aggressiveEyeColor: new THREE.Color('#ffd1d1'),
+        tempColor: new THREE.Color('#ffffff'),
+        bodyMaterials,
+        baseBodyColors,
+        baseEmissiveColors,
+        previousXZ: new THREE.Vector2(),
+        hasPrev: false,
+        lastUpdate: getNowMs(),
+        walkPhase: Math.random() * Math.PI * 2,
+        movement: 0,
+        aggression: 0,
+        groundOffset: groundOffset * defaultScale,
+      };
+      entityGroup.add(clone);
+      return actor;
+    }
+
+    function ensureIronGolemMeshCount(count) {
+      ensureIronGolemModelTemplate();
+      if (!entityGroup || !ironGolemModelTemplate?.scene) return;
+      while (ironGolemMeshes.length < count) {
+        const actor = createIronGolemActor();
+        if (!actor) break;
+        ironGolemMeshes.push(actor);
       }
       while (ironGolemMeshes.length > count) {
         const golemData = ironGolemMeshes.pop();
         if (!golemData) continue;
         entityGroup.remove(golemData.group);
-        golemData.eyeMaterial?.dispose?.();
+        golemData.group?.traverse?.((child) => {
+          if (child?.isMesh && child.material) {
+            child.material.dispose?.();
+          }
+        });
       }
     }
+
 
     function tileSurfaceHeight(x, y) {
       const tile = getTile(x, y);
@@ -4329,7 +4322,7 @@
       state.zombies.forEach((zombie, index) => {
         const actor = zombieMeshes[index];
         if (!actor) return;
-        const { group, parts } = actor;
+        const { group, parts, eyeMaterials = [], baseEyeColors = [], groundOffset = 0 } = actor;
         const { x, z } = worldToScene(zombie.x, zombie.y);
         const h = tileSurfaceHeight(zombie.x, zombie.y);
         const deltaMs = actor.lastUpdate != null ? now - actor.lastUpdate : 16;
@@ -4369,7 +4362,7 @@
           parts.head.rotation.x = Math.cos(now / 780 + index) * 0.07 + Math.cos(actor.walkPhase * 0.4) * 0.05 * movement;
         }
         const bob = Math.abs(lift) * 0.15 + Math.sin(now / 520 + index) * 0.01 * (1 - movement);
-        group.position.set(x, h + bob, z);
+        group.position.set(x, h + groundOffset + bob, z);
 
         const distToPlayer = Math.abs(zombie.x - state.player.x) + Math.abs(zombie.y - state.player.y);
         const aggressionTarget = distToPlayer <= 1 ? 1 : Math.max(0, 1 - distToPlayer / 6);
@@ -4378,10 +4371,18 @@
         actor.aggression = aggression;
         const pulse = (Math.sin(now / 120 + index) + 1) * 0.25 * aggression;
         const eyeColor = actor.tempColor;
-        eyeColor.copy(actor.baseEyeColor).lerp(actor.aggressiveEyeColor, THREE.MathUtils.clamp(aggression + pulse, 0, 1));
-        actor.eyeMaterial.color.copy(eyeColor);
-        actor.eyeMaterial.opacity = 0.75 + aggression * 0.25;
-        actor.eyeMaterial.needsUpdate = true;
+        const eyeBlend = THREE.MathUtils.clamp(aggression + pulse, 0, 1);
+        eyeMaterials.forEach((material, eyeIndex) => {
+          if (!material?.color) return;
+          const baseColor = baseEyeColors[eyeIndex] ?? material.color;
+          eyeColor.copy(baseColor).lerp(actor.aggressiveEyeColor, eyeBlend);
+          material.color.copy(eyeColor);
+          if (typeof material.opacity === 'number') {
+            material.opacity = 0.75 + aggression * 0.25;
+            material.transparent = true;
+          }
+          material.needsUpdate = true;
+        });
         if (actor.bodyMaterials?.length) {
           const outlineStrength = THREE.MathUtils.clamp(nightFactor * 0.85 + aggression * 0.45, 0, 1);
           actor.bodyMaterials.forEach((material, matIndex) => {
@@ -4409,7 +4410,7 @@
       state.ironGolems?.forEach((golem, index) => {
         const actor = ironGolemMeshes[index];
         if (!actor) return;
-        const { group, parts } = actor;
+        const { group, parts, eyeMaterials = [], baseEyeColors = [], groundOffset = 0 } = actor;
         const { x, z } = worldToScene(golem.x, golem.y);
         const h = tileSurfaceHeight(golem.x, golem.y);
         const deltaMs = actor.lastUpdate != null ? now - actor.lastUpdate : 16;
@@ -4509,7 +4510,7 @@
         }
 
         const directionForRotation = normalizeDirectionVector(facingDirection);
-        group.position.set(x + groupOffsetX, h + groupOffsetY, z + groupOffsetZ);
+        group.position.set(x + groupOffsetX, h + groundOffset + groupOffsetY, z + groupOffsetZ);
         group.rotation.set(bodyPitch, Math.atan2(directionForRotation.x, directionForRotation.y), bodyRoll);
 
         let nearestZombie = Infinity;
@@ -4523,10 +4524,18 @@
         actor.aggression = aggression;
         const glowPulse = (Math.sin(now / 180 + index) + 1) * 0.2 * aggression;
         const eyeColor = actor.tempColor;
-        eyeColor.copy(actor.baseEyeColor).lerp(actor.aggressiveEyeColor, THREE.MathUtils.clamp(aggression + glowPulse, 0, 1));
-        actor.eyeMaterial.color.copy(eyeColor);
-        actor.eyeMaterial.opacity = 0.6 + aggression * 0.35;
-        actor.eyeMaterial.needsUpdate = true;
+        const golemEyeBlend = THREE.MathUtils.clamp(aggression + glowPulse, 0, 1);
+        eyeMaterials.forEach((material, eyeIndex) => {
+          if (!material?.color) return;
+          const baseColor = baseEyeColors[eyeIndex] ?? material.color;
+          eyeColor.copy(baseColor).lerp(actor.aggressiveEyeColor, golemEyeBlend);
+          material.color.copy(eyeColor);
+          if (typeof material.opacity === 'number') {
+            material.opacity = 0.6 + aggression * 0.35;
+            material.transparent = true;
+          }
+          material.needsUpdate = true;
+        });
         if (actor.bodyMaterials?.length) {
           const outlineStrength = THREE.MathUtils.clamp(nightFactor * 0.75 + aggression * 0.6, 0, 1);
           actor.bodyMaterials.forEach((material, matIndex) => {
@@ -4836,12 +4845,15 @@
 
     function updateLighting(delta) {
       if (!scene || !state || !hemiLight || !sunLight || !moonLight) return;
-      const ratio = state.dayLength > 0 ? (state.elapsed % state.dayLength) / state.dayLength : 0;
+      const cycle = getDayNightMetrics();
+      const ratio = cycle.ratio;
       const playerFacing = state.player?.facing ?? { x: 0, y: 1 };
       const playerScene = worldToScene(state.player?.x ?? 0, state.player?.y ?? 0);
       const playerHeight = tileSurfaceHeight(state.player?.x ?? 0, state.player?.y ?? 0) + 0.6;
 
-      const sunAngle = ratio * Math.PI * 2;
+      const sunAngle = cycle.isNight
+        ? Math.PI + cycle.nightProgress * Math.PI
+        : cycle.dayProgress * Math.PI;
       const sunElevation = Math.sin(sunAngle);
       const dayStrength = THREE.MathUtils.clamp((sunElevation + 1) / 2, 0, 1);
       lightingState.dayStrength = dayStrength;
@@ -4873,8 +4885,11 @@
       hemiLight.color.lerpColors(lightingState.nightSky, lightingState.daySky, dayStrength);
       hemiLight.groundColor.lerpColors(lightingState.groundNight, lightingState.groundDay, dayStrength);
 
-      const dawnDistance = Math.min(Math.abs(ratio), Math.abs(ratio - 1));
-      const duskDistance = Math.abs(ratio - 0.5);
+      const dawnDistance = Math.min(
+        Math.abs(ratio) / (cycle.dayPortion || 1),
+        Math.abs(ratio - 1) / (cycle.dayPortion || 1)
+      );
+      const duskDistance = Math.abs(ratio - cycle.dayPortion) / (cycle.nightPortion || 1);
       const duskMix = Math.max(0, 0.22 - Math.min(dawnDistance, duskDistance)) / 0.22;
       tmpColorA.copy(lightingState.nightSky).lerp(lightingState.daySky, dayStrength);
       if (duskMix > 0) {
@@ -5315,6 +5330,11 @@
       dimensionHistory: ['origin'],
       elapsed: 0,
       dayLength: 180,
+      dayCycle: {
+        isNight: false,
+        spawnTimer: 0,
+        waveCount: 0,
+      },
       railPhase: 0,
       railTimer: 0,
       portals: [],
@@ -6298,16 +6318,20 @@
       const airRemaining = Math.max(0, Math.ceil(state.player.air));
       bubblesEl.setAttribute('aria-label', `${airRemaining} bubbles of air remaining`);
 
-      const ratio = (state.elapsed % state.dayLength) / state.dayLength;
-      rootElement.style.setProperty('--time-phase', ratio.toFixed(3));
+      const cycle = getDayNightMetrics();
+      rootElement.style.setProperty('--time-phase', cycle.ratio.toFixed(3));
       const track = document.createElement('div');
       track.className = 'time-track';
       const label = document.createElement('span');
-      const percent = Math.round(ratio * 100);
-      label.textContent = ratio < 0.5 ? `Daylight ${percent}%` : `Nightfall ${percent}%`;
+      const phasePercent = cycle.isNight
+        ? Math.round(cycle.nightProgress * 100)
+        : Math.round(cycle.dayProgress * 100);
+      label.textContent = cycle.isNight
+        ? `Nightfall ${phasePercent}%`
+        : `Daylight ${phasePercent}%`;
       const bar = document.createElement('div');
       bar.className = 'bar';
-      bar.style.setProperty('--progress', ratio.toFixed(2));
+      bar.style.setProperty('--progress', cycle.ratio.toFixed(3));
       track.append(label, bar);
       timeEl.innerHTML = '';
       timeEl.appendChild(track);
@@ -6964,6 +6988,11 @@
       state.portals = [];
       state.zombies = [];
       state.ironGolems = [];
+      if (state.dayCycle) {
+        state.dayCycle.isNight = false;
+        state.dayCycle.spawnTimer = 0;
+        state.dayCycle.waveCount = 0;
+      }
       clearMarbleGhosts();
       state.baseMoveDelay = dim.rules.moveDelay ?? 0.18;
       state.moveDelay = state.baseMoveDelay;
@@ -7039,10 +7068,35 @@
           }
         }
       }
-      const dayProgress = (state.elapsed % state.dayLength) / state.dayLength;
-      const isNight = dayProgress > 0.5;
-      if (isNight && state.zombies.length < 4) {
-        spawnZombie();
+      const cycleMetrics = getDayNightMetrics();
+      const cycleState = state.dayCycle;
+      if (cycleState) {
+        if (cycleMetrics.isNight && !cycleState.isNight) {
+          cycleState.spawnTimer = 0;
+          cycleState.waveCount = 0;
+          deployIronGolems();
+        } else if (!cycleMetrics.isNight && cycleState.isNight) {
+          cycleState.spawnTimer = ZOMBIE_SPAWN_INTERVAL;
+          cycleState.waveCount = 0;
+          if (state.zombies.length) {
+            state.zombies = [];
+          }
+        }
+        if (cycleMetrics.isNight) {
+          cycleState.spawnTimer -= delta;
+          if (cycleState.spawnTimer <= 0) {
+            const spawned = spawnZombieWave();
+            if (spawned > 0) {
+              cycleState.waveCount = (cycleState.waveCount ?? 0) + 1;
+              cycleState.spawnTimer = ZOMBIE_SPAWN_INTERVAL;
+            } else {
+              cycleState.spawnTimer = Math.min(ZOMBIE_SPAWN_INTERVAL, cycleState.spawnTimer + 1);
+            }
+          }
+        } else {
+          cycleState.spawnTimer = Math.min(cycleState.spawnTimer + delta, ZOMBIE_SPAWN_INTERVAL);
+        }
+        cycleState.isNight = cycleMetrics.isNight;
       }
       updateIronGolems(delta);
       updateZombies(delta);
@@ -7367,33 +7421,134 @@
       }
     }
 
-    function spawnZombie() {
-      const spawnEdges = [
-        { x: Math.floor(Math.random() * state.width), y: 0 },
-        { x: Math.floor(Math.random() * state.width), y: state.height - 1 },
-        { x: 0, y: Math.floor(Math.random() * state.height) },
-        { x: state.width - 1, y: Math.floor(Math.random() * state.height) },
-      ];
-      const spawn = choose(spawnEdges);
-      state.zombies.push({ x: spawn.x, y: spawn.y, speed: 0.8, cooldown: 0 });
-      logEvent('A Minecraft zombie claws onto the rails.');
-      playZombieGroan();
+    function spawnZombieWave() {
+      if (!state?.player) return 0;
+      const cycle = getDayNightMetrics();
+      if (!cycle.isNight) return 0;
+      const remainingCapacity = Math.max(0, MAX_CONCURRENT_ZOMBIES - state.zombies.length);
+      const spawnCount = Math.min(ZOMBIE_WAVE_SIZE, remainingCapacity);
+      if (spawnCount <= 0) return 0;
+
+      const playerX = state.player.x;
+      const playerY = state.player.y;
+      const occupied = new Set(state.zombies.map((z) => `${z.x},${z.y}`));
+      const golemPositions = new Set((state.ironGolems ?? []).map((g) => `${g.x},${g.y}`));
+
+      const primaryCandidates = [];
+      const fallbackCandidates = [];
+
+      for (let y = 0; y < state.height; y++) {
+        for (let x = 0; x < state.width; x++) {
+          const key = `${x},${y}`;
+          if (occupied.has(key) || golemPositions.has(key)) continue;
+          const tile = getTile(x, y);
+          if (!tile || tile.type === 'void' || tile.type === 'railVoid') continue;
+          if (!isWalkable(x, y)) continue;
+          const distance = Math.abs(x - playerX) + Math.abs(y - playerY);
+          if (distance === 0) continue;
+          if (distance >= 4 && distance <= ZOMBIE_AGGRO_RANGE) {
+            primaryCandidates.push({ x, y });
+          } else if (distance <= ZOMBIE_AGGRO_RANGE + 2) {
+            fallbackCandidates.push({ x, y });
+          }
+        }
+      }
+
+      const selections = [];
+      const chooseFrom = (list) => {
+        while (list.length && selections.length < spawnCount) {
+          const index = Math.floor(Math.random() * list.length);
+          const [choice] = list.splice(index, 1);
+          if (!choice) continue;
+          const key = `${choice.x},${choice.y}`;
+          if (occupied.has(key)) continue;
+          occupied.add(key);
+          selections.push(choice);
+        }
+      };
+
+      chooseFrom(primaryCandidates);
+      if (selections.length < spawnCount) {
+        chooseFrom(fallbackCandidates);
+      }
+      let safety = 0;
+      while (selections.length < spawnCount && safety < spawnCount * 6) {
+        safety += 1;
+        const edge = {
+          x: Math.floor(Math.random() * state.width),
+          y: Math.random() < 0.5 ? 0 : state.height - 1,
+        };
+        const key = `${edge.x},${edge.y}`;
+        if (occupied.has(key)) continue;
+        occupied.add(key);
+        selections.push(edge);
+      }
+
+      selections.forEach((spawn, index) => {
+        state.zombies.push({
+          x: spawn.x,
+          y: spawn.y,
+          speed: 0.72 + Math.random() * 0.18,
+          cooldown: Math.random() * 0.4,
+        });
+        if (index === 0) {
+          logEvent('A horde of Minecraft zombies claws onto the rails.');
+        }
+      });
+      if (selections.length) {
+        playZombieGroan();
+      }
+      return selections.length;
     }
 
     function updateZombies(delta) {
+      const cycle = getDayNightMetrics();
+      const isNight = cycle.isNight;
       state.zombies.forEach((zombie) => {
         zombie.cooldown -= delta;
         if (zombie.cooldown > 0) return;
-        const dx = Math.sign(state.player.x - zombie.x);
-        const dy = Math.sign(state.player.y - zombie.y);
-        if (Math.abs(dx) > Math.abs(dy)) {
-          if (isWalkable(zombie.x + dx, zombie.y)) zombie.x += dx;
-          else if (isWalkable(zombie.x, zombie.y + dy)) zombie.y += dy;
-        } else {
-          if (isWalkable(zombie.x, zombie.y + dy)) zombie.y += dy;
-          else if (isWalkable(zombie.x + dx, zombie.y)) zombie.x += dx;
+        const dist = Math.abs(zombie.x - state.player.x) + Math.abs(zombie.y - state.player.y);
+        let moved = false;
+        const tryMove = (nx, ny) => {
+          if (!isWalkable(nx, ny)) return false;
+          zombie.x = nx;
+          zombie.y = ny;
+          return true;
+        };
+
+        if (isNight && dist <= ZOMBIE_AGGRO_RANGE) {
+          const dx = Math.sign(state.player.x - zombie.x);
+          const dy = Math.sign(state.player.y - zombie.y);
+          if (Math.abs(dx) >= Math.abs(dy)) {
+            moved = (dx !== 0 && tryMove(zombie.x + dx, zombie.y)) || (dy !== 0 && tryMove(zombie.x, zombie.y + dy));
+          } else {
+            moved = (dy !== 0 && tryMove(zombie.x, zombie.y + dy)) || (dx !== 0 && tryMove(zombie.x + dx, zombie.y));
+          }
+        } else if (isNight) {
+          const directions = [
+            { x: 1, y: 0 },
+            { x: -1, y: 0 },
+            { x: 0, y: 1 },
+            { x: 0, y: -1 },
+          ];
+          const offset = Math.floor(Math.random() * directions.length);
+          for (let i = 0; i < directions.length; i++) {
+            const dir = directions[(offset + i) % directions.length];
+            const nx = zombie.x + dir.x;
+            const ny = zombie.y + dir.y;
+            if (tryMove(nx, ny)) {
+              moved = true;
+              break;
+            }
+          }
         }
-        zombie.cooldown = 0.5;
+
+        const baseCooldown = 0.55 + Math.random() * 0.2;
+        const speedModifier = zombie.speed ? THREE.MathUtils.clamp(1.1 - zombie.speed * 0.35, 0.6, 1.35) : 1;
+        zombie.cooldown = baseCooldown * speedModifier;
+        if (!isNight) {
+          zombie.cooldown += 0.25;
+        }
         if (zombie.x === state.player.x && zombie.y === state.player.y) {
           handleZombieHit();
         }
