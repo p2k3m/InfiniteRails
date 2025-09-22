@@ -46,6 +46,16 @@
         <button type="button" id="openGuide" class="ghost">Game Guide</button>
         <button
           type="button"
+          id="openSettings"
+          class="ghost"
+          aria-haspopup="dialog"
+          aria-controls="settingsModal"
+          aria-expanded="false"
+        >
+          Settings
+        </button>
+        <button
+          type="button"
           id="toggleSidebar"
           class="ghost mobile-sidebar-toggle"
           aria-expanded="false"
@@ -208,6 +218,76 @@
           <li>Survive nightly assaults while protecting villagers and rails.</li>
         </ul>
         <button id="startButton" class="primary">Enter the Rails</button>
+      </div>
+    </div>
+
+    <div
+      class="modal settings-modal"
+      id="settingsModal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="settingsTitle"
+      hidden
+    >
+      <div class="modal-content settings-modal__content">
+        <header class="settings-modal__header">
+          <h2 id="settingsTitle">Audio Settings</h2>
+          <p>Balance the ambience of the rails before you depart.</p>
+        </header>
+        <form class="settings-modal__form" data-settings-form>
+          <fieldset class="settings-modal__fieldset">
+            <legend class="sr-only">Volume levels</legend>
+            <div class="settings-modal__field">
+              <div class="settings-modal__label-row">
+                <label for="masterVolume">Master Volume</label>
+                <span class="settings-modal__value" data-volume-label="master">80%</span>
+              </div>
+              <input
+                type="range"
+                id="masterVolume"
+                name="master"
+                min="0"
+                max="100"
+                value="80"
+                class="settings-modal__range"
+              />
+            </div>
+            <div class="settings-modal__field">
+              <div class="settings-modal__label-row">
+                <label for="musicVolume">Music</label>
+                <span class="settings-modal__value" data-volume-label="music">60%</span>
+              </div>
+              <input
+                type="range"
+                id="musicVolume"
+                name="music"
+                min="0"
+                max="100"
+                value="60"
+                class="settings-modal__range"
+              />
+            </div>
+            <div class="settings-modal__field">
+              <div class="settings-modal__label-row">
+                <label for="effectsVolume">Effects</label>
+                <span class="settings-modal__value" data-volume-label="effects">85%</span>
+              </div>
+              <input
+                type="range"
+                id="effectsVolume"
+                name="effects"
+                min="0"
+                max="100"
+                value="85"
+                class="settings-modal__range"
+              />
+            </div>
+          </fieldset>
+          <p class="settings-modal__hint">Changes apply instantly and are saved for your next expedition.</p>
+          <div class="settings-modal__actions">
+            <button type="button" class="ghost" id="closeSettings">Close</button>
+          </div>
+        </form>
       </div>
     </div>
 
@@ -434,6 +514,13 @@
     </div>
 
     <script src="https://accounts.google.com/gsi/client" async defer></script>
+    <script
+      src="https://cdnjs.cloudflare.com/ajax/libs/howler/2.2.4/howler.min.js"
+      integrity="sha512-Vt8k8RbR9QAv+fH5794y+efI0D6QSqcDB8ocfeMjuHYUoWkMcIXPlTLxySPsa+7Mj0DsIUJTXYIpCkV0GMG5ow=="
+      crossorigin="anonymous"
+      referrerpolicy="no-referrer"
+      defer
+    ></script>
     <script src="vendor/three.min.js" defer></script>
     <script src="scoreboard-utils.js" defer></script>
     <script src="script.js" defer></script>

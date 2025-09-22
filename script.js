@@ -88,6 +88,19 @@
     const eventLogEl = document.getElementById('eventLog');
     const codexListEl = document.getElementById('dimensionCodex');
     const openGuideButton = document.getElementById('openGuide');
+    const openSettingsButton = document.getElementById('openSettings');
+    const settingsModal = document.getElementById('settingsModal');
+    const closeSettingsButton = document.getElementById('closeSettings');
+    const settingsVolumeInputs = {
+      master: document.getElementById('masterVolume'),
+      music: document.getElementById('musicVolume'),
+      effects: document.getElementById('effectsVolume'),
+    };
+    const settingsVolumeLabels = {
+      master: document.querySelector('[data-volume-label="master"]'),
+      music: document.querySelector('[data-volume-label="music"]'),
+      effects: document.querySelector('[data-volume-label="effects"]'),
+    };
     const portalProgressLabel = portalProgressEl.querySelector('.label');
     const portalProgressBar = portalProgressEl.querySelector('.bar');
     const headerUserNameEl = document.getElementById('headerUserName');
@@ -385,9 +398,241 @@
       dimension: 5,
     };
 
+    const AUDIO_SETTINGS_KEY = 'infinite-dimension-audio-settings';
+    const AUDIO_SAMPLE_URL = 'assets/audio-samples.json';
+    const CRUNCH_RESOURCES = new Set(['wood', 'tar']);
+
     const audioState = {
       context: null,
+      masterVolume: 0.8,
+      musicVolume: 0.6,
+      effectsVolume: 0.85,
+      registry: [],
+      effects: {},
+      ready: false,
+      initialized: false,
+      loadingSamples: false,
+      lastHarvestAt: 0,
     };
+
+    function clampVolume(value) {
+      if (!Number.isFinite(value)) return 0;
+      return Math.min(1, Math.max(0, value));
+    }
+
+    function formatVolumePercent(value) {
+      return `${Math.round(clampVolume(value) * 100)}%`;
+    }
+
+    function updateVolumeLabels() {
+      Object.entries(settingsVolumeLabels).forEach(([key, label]) => {
+        if (!label) return;
+        const stateKey = `${key}Volume`;
+        label.textContent = formatVolumePercent(audioState[stateKey]);
+      });
+    }
+
+    function persistAudioSettings() {
+      try {
+        if (!window.localStorage) return;
+        const payload = {
+          master: audioState.masterVolume,
+          music: audioState.musicVolume,
+          effects: audioState.effectsVolume,
+        };
+        window.localStorage.setItem(AUDIO_SETTINGS_KEY, JSON.stringify(payload));
+      } catch (error) {
+        console.warn('Unable to persist audio settings.', error);
+      }
+    }
+
+    function loadStoredAudioSettings() {
+      try {
+        if (!window.localStorage) return;
+        const raw = window.localStorage.getItem(AUDIO_SETTINGS_KEY);
+        if (!raw) return;
+        const parsed = JSON.parse(raw);
+        if (typeof parsed.master === 'number') {
+          audioState.masterVolume = clampVolume(parsed.master);
+        }
+        if (typeof parsed.music === 'number') {
+          audioState.musicVolume = clampVolume(parsed.music);
+        }
+        if (typeof parsed.effects === 'number') {
+          audioState.effectsVolume = clampVolume(parsed.effects);
+        }
+      } catch (error) {
+        console.warn('Unable to load stored audio settings.', error);
+      }
+    }
+
+    function applyAudioSettingsToInputs() {
+      Object.entries(settingsVolumeInputs).forEach(([key, input]) => {
+        if (!input) return;
+        const stateKey = `${key}Volume`;
+        const value = clampVolume(audioState[stateKey]);
+        input.value = Math.round(value * 100);
+      });
+    }
+
+    function updateHowlVolumeEntry(entry) {
+      if (!entry?.howl) return;
+      const channelVolume = entry.channel === 'music' ? audioState.musicVolume : audioState.effectsVolume;
+      entry.howl.volume(audioState.masterVolume * channelVolume * entry.baseVolume);
+    }
+
+    function refreshHowlVolumes() {
+      audioState.registry.forEach((entry) => updateHowlVolumeEntry(entry));
+    }
+
+    function registerHowl(options, channel = 'effects', baseVolume = 1) {
+      if (typeof window.Howl !== 'function') return null;
+      const howl = new window.Howl({ ...options, volume: 0 });
+      const entry = { howl, channel, baseVolume };
+      audioState.registry.push(entry);
+      updateHowlVolumeEntry(entry);
+      return howl;
+    }
+
+    function handleVolumeChange(channel, normalizedValue) {
+      const clamped = clampVolume(normalizedValue);
+      if (channel === 'master') {
+        audioState.masterVolume = clamped;
+      } else if (channel === 'music') {
+        audioState.musicVolume = clamped;
+      } else {
+        audioState.effectsVolume = clamped;
+      }
+      updateVolumeLabels();
+      refreshHowlVolumes();
+      persistAudioSettings();
+    }
+
+    function initializeAudioControls() {
+      loadStoredAudioSettings();
+      applyAudioSettingsToInputs();
+      updateVolumeLabels();
+      Object.entries(settingsVolumeInputs).forEach(([channel, input]) => {
+        if (!input) return;
+        input.addEventListener('input', (event) => {
+          const value = Number(event.target.value) / 100;
+          handleVolumeChange(channel, value);
+        });
+      });
+      initializeAudioEngine();
+    }
+
+    async function initializeAudioEngine() {
+      if (audioState.initialized || audioState.loadingSamples) {
+        refreshHowlVolumes();
+        return;
+      }
+      if (typeof window.Howl !== 'function') {
+        console.warn('Howler.js is unavailable. Audio cues will fall back to basic tones.');
+        return;
+      }
+      audioState.loadingSamples = true;
+      try {
+        const response = await fetch(AUDIO_SAMPLE_URL, { cache: 'no-cache' });
+        if (!response.ok) {
+          throw new Error(`Failed to load audio samples: ${response.status}`);
+        }
+        const samples = await response.json();
+        const miningSources = [samples?.miningA, samples?.miningB]
+          .filter((value) => typeof value === 'string' && value.length > 0)
+          .map((value) => `data:audio/wav;base64,${value}`);
+        audioState.effects.mining = miningSources
+          .map((src) => registerHowl({ src: [src], preload: true }, 'effects', 0.9))
+          .filter(Boolean);
+        if (typeof samples?.crunch === 'string' && samples.crunch.length > 0) {
+          audioState.effects.crunch = registerHowl(
+            { src: [`data:audio/wav;base64,${samples.crunch}`], preload: true },
+            'effects',
+            0.92,
+          );
+        }
+        if (typeof samples?.bubble === 'string' && samples.bubble.length > 0) {
+          audioState.effects.bubble = registerHowl(
+            { src: [`data:audio/wav;base64,${samples.bubble}`], preload: true },
+            'effects',
+            0.7,
+          );
+        }
+        audioState.initialized = true;
+        audioState.ready = true;
+        refreshHowlVolumes();
+      } catch (error) {
+        console.warn('Unable to initialise audio engine.', error);
+      } finally {
+        audioState.loadingSamples = false;
+      }
+    }
+
+    function playHowlInstance(howl) {
+      if (!howl) return;
+      try {
+        if (window.Howler?.ctx?.state === 'suspended') {
+          window.Howler.ctx.resume().catch(() => {});
+        }
+        howl.play();
+      } catch (error) {
+        console.warn('Unable to play Howler effect.', error);
+      }
+    }
+
+    function playFallbackEffect({ startFreq, endFreq, duration, type = 'triangle', peak = 0.2 }) {
+      const context = ensureAudioContext();
+      if (!context) return;
+      if (context.state === 'suspended') {
+        context.resume().catch(() => {});
+      }
+      const now = context.currentTime;
+      try {
+        const oscillator = context.createOscillator();
+        const gain = context.createGain();
+        oscillator.type = type;
+        oscillator.frequency.setValueAtTime(Math.max(20, startFreq), now);
+        if (endFreq && endFreq !== startFreq) {
+          oscillator.frequency.exponentialRampToValueAtTime(Math.max(20, endFreq), now + duration);
+        }
+        gain.gain.setValueAtTime(0.0001, now);
+        gain.gain.exponentialRampToValueAtTime(Math.max(0.001, peak), now + Math.min(0.05, duration * 0.35));
+        gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+        oscillator.connect(gain);
+        gain.connect(context.destination);
+        oscillator.start(now);
+        oscillator.stop(now + duration + 0.05);
+      } catch (error) {
+        console.warn('Unable to play fallback effect.', error);
+      }
+    }
+
+    function playHarvestAudio(resourceId) {
+      if (typeof state?.elapsed === 'number') {
+        if (state.elapsed - audioState.lastHarvestAt < 0.12) {
+          return;
+        }
+        audioState.lastHarvestAt = state.elapsed;
+      }
+      const isCrunch = CRUNCH_RESOURCES.has(resourceId);
+      if (isCrunch && audioState.effects?.crunch) {
+        playHowlInstance(audioState.effects.crunch);
+        return;
+      }
+      if (!isCrunch && Array.isArray(audioState.effects?.mining) && audioState.effects.mining.length > 0) {
+        const index = Math.floor(Math.random() * audioState.effects.mining.length);
+        const howl = audioState.effects.mining[index];
+        playHowlInstance(howl);
+        return;
+      }
+      if (isCrunch) {
+        const base = 180 + Math.random() * 40;
+        playFallbackEffect({ startFreq: base, endFreq: base * 0.55, duration: 0.22, type: 'square', peak: 0.18 });
+      } else {
+        const base = 320 + Math.random() * 60;
+        playFallbackEffect({ startFreq: base, endFreq: base * 0.45, duration: 0.2, type: 'sawtooth', peak: 0.2 });
+      }
+    }
 
     const MAX_CRAFT_SLOTS = 7;
     const craftSlots = [];
@@ -3716,6 +3961,9 @@
       if (state.isRunning) return;
       const context = ensureAudioContext();
       context?.resume?.().catch(() => {});
+      if (window.Howler?.ctx?.state === 'suspended') {
+        window.Howler.ctx.resume().catch(() => {});
+      }
       setDimensionTransitionOverlay(false);
       state.ui.dimensionTransition = null;
       clearMarbleGhosts();
@@ -3963,29 +4211,12 @@
 
     function playBubblePop() {
       if (state.elapsed - state.ui.lastBubblePopAt < 0.45) return;
-      const context = ensureAudioContext();
-      if (!context) return;
-      if (context.state === 'suspended') {
-        context.resume().catch(() => {});
+      state.ui.lastBubblePopAt = state.elapsed;
+      if (audioState.effects?.bubble) {
+        playHowlInstance(audioState.effects.bubble);
+        return;
       }
-      const now = context.currentTime;
-      try {
-        const oscillator = context.createOscillator();
-        const gain = context.createGain();
-        oscillator.type = 'triangle';
-        oscillator.frequency.setValueAtTime(720, now);
-        oscillator.frequency.exponentialRampToValueAtTime(240, now + 0.28);
-        gain.gain.setValueAtTime(0.0001, now);
-        gain.gain.exponentialRampToValueAtTime(0.22, now + 0.04);
-        gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.45);
-        oscillator.connect(gain);
-        gain.connect(context.destination);
-        oscillator.start(now);
-        oscillator.stop(now + 0.46);
-        state.ui.lastBubblePopAt = state.elapsed;
-      } catch (error) {
-        console.warn('Unable to play drowning cue.', error);
-      }
+      playFallbackEffect({ startFreq: 720, endFreq: 240, duration: 0.45, type: 'triangle', peak: 0.18 });
     }
 
     function deployIronGolems() {
@@ -4421,6 +4652,7 @@
       logEvent(`Gathered ${ITEM_DEFS[itemId]?.name ?? itemId}.`);
       const accentColor = TILE_TYPES[originalType]?.accent ?? '#ffffff';
       spawnHarvestParticles(x, y, accentColor);
+      playHarvestAudio(itemId);
       if (tile.data.yield <= 0 && tile.type !== 'tar') {
         tile.type = 'grass';
         tile.resource = null;
@@ -5221,6 +5453,7 @@
         button.addEventListener('click', () => updateFromMobile(button.dataset.action));
       });
       openGuideButton?.addEventListener('click', openGuideModal);
+      openSettingsButton?.addEventListener('click', openSettingsModal);
       toggleSidebarButton?.addEventListener('click', toggleSidebar);
       sidePanelScrim?.addEventListener('click', () => closeSidebar(true));
       document.querySelectorAll('[data-close-sidebar]').forEach((button) => {
@@ -5230,6 +5463,11 @@
         if (event.key !== 'Escape') return;
         if (sidePanelEl?.classList.contains('open')) {
           closeSidebar(true);
+          event.preventDefault();
+          return;
+        }
+        if (settingsModal && !settingsModal.hidden) {
+          closeSettingsModal(true);
           event.preventDefault();
           return;
         }
@@ -6010,15 +6248,55 @@
     updateRecipesList();
     updateAutocompleteSuggestions();
 
+    initializeAudioControls();
+
     startButton.addEventListener('click', startGame);
     initEventListeners();
 
+    setupSettingsModal();
     setupCraftingModal();
     setupGuideModal();
     setupLeaderboardModal();
     initializeIdentityLayer();
     updateLayoutMetrics();
     syncSidebarForViewport();
+
+    function openSettingsModal() {
+      if (!settingsModal) return;
+      applyAudioSettingsToInputs();
+      updateVolumeLabels();
+      settingsModal.hidden = false;
+      settingsModal.setAttribute('aria-hidden', 'false');
+      openSettingsButton?.setAttribute('aria-expanded', 'true');
+      initializeAudioEngine();
+      window.setTimeout(() => {
+        const firstInput = settingsModal.querySelector('input[type="range"]');
+        firstInput?.focus();
+      }, 0);
+    }
+
+    function closeSettingsModal(shouldFocusTrigger = false) {
+      if (!settingsModal) return;
+      settingsModal.hidden = true;
+      settingsModal.setAttribute('aria-hidden', 'true');
+      openSettingsButton?.setAttribute('aria-expanded', 'false');
+      if (shouldFocusTrigger) {
+        openSettingsButton?.focus();
+      }
+    }
+
+    function setupSettingsModal() {
+      if (!settingsModal) return;
+      settingsModal.hidden = true;
+      settingsModal.setAttribute('aria-hidden', 'true');
+      openSettingsButton?.setAttribute('aria-expanded', 'false');
+      settingsModal.addEventListener('click', (event) => {
+        if (event.target === settingsModal) {
+          closeSettingsModal(true);
+        }
+      });
+      closeSettingsButton?.addEventListener('click', () => closeSettingsModal(true));
+    }
 
     function openCraftingModal() {
       if (!craftingModal) return;
