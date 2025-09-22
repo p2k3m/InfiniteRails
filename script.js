@@ -6775,6 +6775,169 @@
       });
     }
 
+    const GUIDE_SLIDES = [
+      {
+        id: 'rail-surfing',
+        category: 'Movement',
+        icon: '🛤️',
+        iconLabel: 'Rail icon',
+        title: 'Rail Surfing 101',
+        description: 'Glide across energy rails to outrun the collapsing void and gather momentum bonuses.',
+        desktopControls: [
+          {
+            keys: ['A', 'D'],
+            description: 'Strafe between parallel rails to align with the glowing conduit.',
+          },
+          {
+            keys: ['Space'],
+            description: 'Hop short gaps or falling track segments before they disintegrate.',
+          },
+          {
+            keys: ['Shift'],
+            description: 'Feather your landing for precision alignment and combo preservation.',
+          },
+        ],
+        mobileControls: [
+          {
+            keys: ['Swipe ⟷'],
+            description: 'Swap to the adjacent rail instantly as the cadence lights change.',
+          },
+          {
+            keys: ['Tap Jump'],
+            description: 'Vault crumbled sections of track the moment the warning rune flashes.',
+          },
+        ],
+        demoSequence: [
+          {
+            label: 'Align',
+            keys: ['D'],
+            caption: 'Lean into the highlighted rail before the void surge reaches it.',
+          },
+          {
+            label: 'Leap',
+            keys: ['Space'],
+            caption: 'Tap jump to clear the missing section and keep your combo streak alive.',
+          },
+          {
+            label: 'Stabilise',
+            keys: ['Shift'],
+            caption: 'Feather the landing so magnetised boots lock onto the rail.',
+          },
+        ],
+        tip: 'Watch the blue cadence lights — they foreshadow which rail collapses next.',
+      },
+      {
+        id: 'portal-forging',
+        category: 'Construction',
+        icon: '⧉',
+        iconLabel: 'Portal glyph',
+        title: 'Forge a Portal Frame',
+        description: 'Sequence materials in the crafting circle, then place a perfect 4×3 gate.',
+        desktopControls: [
+          {
+            keys: ['R'],
+            description: 'Open the portal planner overlay to preview the frame footprint.',
+          },
+          {
+            keys: ['Mouse Drag'],
+            description: 'Trace each block of the frame in order until the lattice hums.',
+          },
+          {
+            keys: ['F'],
+            description: 'Ignite the core once the matrix stabilises and the runes align.',
+          },
+        ],
+        mobileControls: [
+          {
+            keys: ['Portal Button'],
+            description: 'Open the holographic build overlay for the selected material.',
+          },
+          {
+            keys: ['Drag Blocks'],
+            description: 'Place segments by tracing the glowing outline with your finger.',
+          },
+          {
+            keys: ['Tap Ignite'],
+            description: 'Stabilise the portal when the inner matrix shifts to azure.',
+          },
+        ],
+        demoSequence: [
+          {
+            label: 'Plan',
+            keys: ['R'],
+            caption: 'Call up the blueprint to lock the frame dimensions.',
+          },
+          {
+            label: 'Place',
+            keys: ['Mouse Drag'],
+            caption: 'Drag to set each block until the lattice sings in resonance.',
+          },
+          {
+            label: 'Ignite',
+            keys: ['F'],
+            caption: 'Trigger the ignition rune to activate the gateway.',
+          },
+        ],
+        tip: 'Mixed materials destabilise the portal — keep every segment identical.',
+      },
+      {
+        id: 'survival-kit',
+        category: 'Survival',
+        icon: '🛡️',
+        iconLabel: 'Shield icon',
+        title: 'Emergency Toolkit',
+        description: 'React fast when night raids hit the rails and villagers call for help.',
+        desktopControls: [
+          {
+            keys: ['Q'],
+            description: 'Quick-cycle the hotbar to grab barricades or traps.',
+          },
+          {
+            keys: ['1', '2', '3'],
+            description: 'Deploy beacons, barricades, and decoys instantly.',
+          },
+          {
+            keys: ['Mouse Hold'],
+            description: 'Channel repair beams to mend damaged rails in place.',
+          },
+        ],
+        mobileControls: [
+          {
+            keys: ['Hotbar Tap'],
+            description: 'Equip barricades or drones straight from the quick slots.',
+          },
+          {
+            keys: ['Press & Hold'],
+            description: 'Maintain pressure to flood the rail with stabilising energy.',
+          },
+        ],
+        demoSequence: [
+          {
+            label: 'Select',
+            keys: ['Q'],
+            caption: 'Swap to your emergency slot with a quick-cycle.',
+          },
+          {
+            label: 'Deploy',
+            keys: ['1'],
+            caption: 'Drop a barricade to slow the raid advance.',
+          },
+          {
+            label: 'Repair',
+            keys: ['Mouse Hold'],
+            caption: 'Hold to flood the rail with stabilising energy.',
+          },
+        ],
+        tip: 'Repair beams work fastest on glowing rails — lure mobs away with decoys first.',
+      },
+    ];
+
+    const guideCarouselState = {
+      currentIndex: 0,
+      timeouts: [],
+      goToSlide: null,
+    };
+
     function openGuideModal() {
       if (!guideModal) return;
       guideModal.hidden = false;
@@ -6786,6 +6949,7 @@
       }
       const closeButton = guideModal.querySelector('[data-close-guide]');
       closeButton?.focus();
+      guideCarouselState.goToSlide?.(0, { forceRender: true });
     }
 
     function closeGuideModal() {
@@ -6793,6 +6957,10 @@
       guideModal.hidden = true;
       guideModal.setAttribute('data-open', 'false');
       guideModal.setAttribute('aria-hidden', 'true');
+      clearGuideDemoTimers();
+      guideModal.querySelectorAll('.guide-card__step').forEach((step) => {
+        step.classList.remove('is-animating');
+      });
     }
 
     function setupGuideModal() {
@@ -6812,6 +6980,252 @@
           closeGuideModal();
         }
       });
+      initializeGuideCarousel();
+    }
+
+    function clearGuideDemoTimers() {
+      guideCarouselState.timeouts.forEach((timeoutId) => {
+        window.clearTimeout(timeoutId);
+      });
+      guideCarouselState.timeouts.length = 0;
+    }
+
+    function renderGuideControlsColumn(label, controls = []) {
+      if (!controls.length) {
+        return '';
+      }
+      const itemsMarkup = controls
+        .map((control) => {
+          const keysMarkup = (control.keys ?? [])
+            .map((key) => `<kbd>${key}</kbd>`)
+            .join('');
+          return `
+            <li>
+              <div class="guide-card__control">
+                <div class="guide-card__control-keys">${keysMarkup}</div>
+                <p>${control.description}</p>
+              </div>
+            </li>
+          `;
+        })
+        .join('');
+      return `
+        <div class="guide-card__list">
+          <h4>${label}</h4>
+          <ul>
+            ${itemsMarkup}
+          </ul>
+        </div>
+      `;
+    }
+
+    function createGuideCardMarkup(slide) {
+      const captionId = `guideDemoCaption-${slide.id}`;
+      const stepsMarkup = (slide.demoSequence ?? [])
+        .map((step, index) => {
+          const keysMarkup = (step.keys ?? [])
+            .map((key) => `<kbd>${key}</kbd>`)
+            .join('');
+          return `
+            <button type="button" class="guide-card__step" data-demo-step="${index}">
+              <span class="guide-card__step-label">${step.label}</span>
+              <span class="guide-card__step-keys">${keysMarkup}</span>
+            </button>
+          `;
+        })
+        .join('');
+      const desktopColumn = renderGuideControlsColumn('Desktop', slide.desktopControls);
+      const mobileColumn = renderGuideControlsColumn('Mobile', slide.mobileControls);
+      const columnsMarkup = [desktopColumn, mobileColumn].filter(Boolean).join('');
+      return `
+        <header class="guide-card__header">
+          <div class="guide-card__icon" role="img" aria-label="${slide.iconLabel}">
+            <span aria-hidden="true">${slide.icon}</span>
+          </div>
+          <p class="guide-card__label">${slide.category}</p>
+          <h3 class="guide-card__title">${slide.title}</h3>
+          <p class="guide-card__description">${slide.description}</p>
+        </header>
+        <div class="guide-card__demo" data-guide-demo>
+          <div class="guide-card__steps" data-guide-steps>
+            ${stepsMarkup}
+          </div>
+          <button type="button" class="guide-card__play" data-guide-play aria-describedby="${captionId}">
+            Play Demo
+          </button>
+          <p class="guide-card__caption" id="${captionId}" data-demo-caption>
+            ${(slide.demoSequence && slide.demoSequence[0]?.caption) || ''}
+          </p>
+        </div>
+        <div class="guide-card__columns">
+          ${columnsMarkup}
+        </div>
+        <p class="guide-card__tip">${slide.tip}</p>
+      `;
+    }
+
+    function animateGuideDemoSequence(stepButtons, captionEl, slide) {
+      if (!stepButtons.length) return;
+      clearGuideDemoTimers();
+      (slide.demoSequence ?? []).forEach((step, index) => {
+        const timeoutId = window.setTimeout(() => {
+          stepButtons.forEach((button, buttonIndex) => {
+            const isTarget = buttonIndex === index;
+            button.classList.toggle('is-active', isTarget);
+            if (isTarget) {
+              button.classList.add('is-animating');
+              captionEl.textContent = step.caption;
+              const animationTimeout = window.setTimeout(() => {
+                button.classList.remove('is-animating');
+              }, 620);
+              guideCarouselState.timeouts.push(animationTimeout);
+            } else {
+              button.classList.remove('is-animating');
+            }
+          });
+        }, index * 900);
+        guideCarouselState.timeouts.push(timeoutId);
+      });
+      const resetTimeout = window.setTimeout(() => {
+        captionEl.textContent = slide.tip;
+      }, (slide.demoSequence?.length ?? 0) * 900 + 720);
+      guideCarouselState.timeouts.push(resetTimeout);
+    }
+
+    function attachGuideDemoHandlers(cardEl, slide) {
+      const demoHost = cardEl.querySelector('[data-guide-demo]');
+      if (!demoHost) return;
+      const captionEl = demoHost.querySelector('[data-demo-caption]');
+      const stepButtons = Array.from(demoHost.querySelectorAll('[data-demo-step]'));
+      const playButton = demoHost.querySelector('[data-guide-play]');
+      if (!captionEl || !stepButtons.length) {
+        return;
+      }
+
+      function activateStep(stepIndex, { animate } = { animate: false }) {
+        clearGuideDemoTimers();
+        stepButtons.forEach((button, index) => {
+          const isActive = index === stepIndex;
+          button.classList.toggle('is-active', isActive);
+          button.classList.remove('is-animating');
+        });
+        const step = slide.demoSequence?.[stepIndex];
+        if (!step) return;
+        captionEl.textContent = step.caption;
+        if (animate) {
+          const target = stepButtons[stepIndex];
+          target.classList.add('is-animating');
+          const timeoutId = window.setTimeout(() => {
+            target.classList.remove('is-animating');
+          }, 420);
+          guideCarouselState.timeouts.push(timeoutId);
+        }
+      }
+
+      stepButtons.forEach((button) => {
+        const index = Number.parseInt(button.getAttribute('data-demo-step') || '0', 10);
+        button.addEventListener('click', () => activateStep(index, { animate: true }));
+        button.addEventListener('mouseenter', () => activateStep(index));
+        button.addEventListener('focus', () => activateStep(index));
+      });
+
+      playButton?.addEventListener('click', () => {
+        animateGuideDemoSequence(stepButtons, captionEl, slide);
+      });
+
+      activateStep(0);
+    }
+
+    function initializeGuideCarousel() {
+      if (!guideModal || guideModal.dataset.carouselInitialized === 'true') {
+        return;
+      }
+      const carouselEl = guideModal.querySelector('[data-guide-carousel]');
+      if (!carouselEl) return;
+      const cardEl = carouselEl.querySelector('[data-guide-card]');
+      const prevButton = carouselEl.querySelector('[data-guide-prev]');
+      const nextButton = carouselEl.querySelector('[data-guide-next]');
+      const dotsContainer = carouselEl.querySelector('[data-guide-dots]');
+      if (!cardEl || !prevButton || !nextButton || !dotsContainer) {
+        return;
+      }
+
+      prevButton.setAttribute('aria-controls', 'guideCarouselCard');
+      nextButton.setAttribute('aria-controls', 'guideCarouselCard');
+
+      function updateDots() {
+        const dots = dotsContainer.querySelectorAll('button');
+        dots.forEach((dot, index) => {
+          const isActive = index === guideCarouselState.currentIndex;
+          dot.dataset.active = isActive ? 'true' : 'false';
+          dot.setAttribute('aria-selected', isActive ? 'true' : 'false');
+        });
+      }
+
+      function renderSlide() {
+        const slide = GUIDE_SLIDES[guideCarouselState.currentIndex];
+        if (!slide) return;
+        cardEl.setAttribute('data-current-slide', slide.id);
+        cardEl.innerHTML = createGuideCardMarkup(slide);
+        attachGuideDemoHandlers(cardEl, slide);
+      }
+
+      function goToSlide(index, { focusDot = false, forceRender = false } = {}) {
+        if (!GUIDE_SLIDES.length) return;
+        const total = GUIDE_SLIDES.length;
+        const targetIndex = ((index % total) + total) % total;
+        const didChange = guideCarouselState.currentIndex !== targetIndex;
+        guideCarouselState.currentIndex = targetIndex;
+        clearGuideDemoTimers();
+        if (didChange || forceRender || !cardEl.childElementCount) {
+          renderSlide();
+        } else {
+          const slide = GUIDE_SLIDES[targetIndex];
+          attachGuideDemoHandlers(cardEl, slide);
+        }
+        updateDots();
+        if (focusDot) {
+          const activeDot = dotsContainer.querySelector("button[data-active='true']");
+          activeDot?.focus();
+        }
+      }
+
+      dotsContainer.innerHTML = '';
+      GUIDE_SLIDES.forEach((slide, index) => {
+        const dotButton = document.createElement('button');
+        dotButton.type = 'button';
+        dotButton.className = 'guide-carousel__dot';
+        dotButton.dataset.index = String(index);
+        dotButton.setAttribute('aria-label', `Show ${slide.title}`);
+        dotButton.setAttribute('aria-controls', 'guideCarouselCard');
+        dotButton.addEventListener('click', () => goToSlide(index, { focusDot: true }));
+        dotsContainer.appendChild(dotButton);
+      });
+
+      carouselEl.addEventListener('keydown', (event) => {
+        if (event.key === 'ArrowLeft') {
+          event.preventDefault();
+          goToSlide(guideCarouselState.currentIndex - 1);
+        }
+        if (event.key === 'ArrowRight') {
+          event.preventDefault();
+          goToSlide(guideCarouselState.currentIndex + 1);
+        }
+      });
+
+      prevButton.addEventListener('click', () => {
+        goToSlide(guideCarouselState.currentIndex - 1);
+      });
+      nextButton.addEventListener('click', () => {
+        goToSlide(guideCarouselState.currentIndex + 1);
+      });
+
+      guideCarouselState.goToSlide = (index, options = {}) => {
+        goToSlide(index, { ...options, forceRender: options.forceRender ?? false });
+      };
+
+      goToSlide(guideCarouselState.currentIndex, { forceRender: true });
+      guideModal.dataset.carouselInitialized = 'true';
     }
 
   }
