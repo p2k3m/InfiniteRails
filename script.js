@@ -3699,7 +3699,7 @@
           groundDay: '#2f1f19',
           groundNight: '#120909',
           fogColor: '#251611',
-          fogDensity: 0.082,
+          fogDensity: 0.01,
         },
         rules: {
           moveDelay: 0.18,
