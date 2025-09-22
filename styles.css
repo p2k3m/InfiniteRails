@@ -1855,11 +1855,13 @@ body.sidebar-open .player-hint {
 }
 
 .crafting-modal__content {
-  max-width: min(920px, 95vw);
+  max-width: min(1180px, calc(100vw - 3rem));
+  min-height: min(680px, calc(100vh - 3rem));
   width: 100%;
   text-align: left;
   padding: clamp(1.75rem, 2.5vw, 2.5rem);
   display: grid;
+  grid-template-rows: auto 1fr;
   gap: clamp(1.5rem, 2vw, 2.25rem);
   position: relative;
   overflow: hidden;
@@ -1943,9 +1945,88 @@ body.sidebar-open .player-hint {
 
 .crafting-modal__grid {
   display: grid;
-  gap: clamp(1.25rem, 2vw, 2rem);
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: clamp(1.5rem, 2vw, 2.25rem);
+  grid-template-columns: minmax(220px, 1fr) minmax(280px, 1fr) minmax(280px, 1.05fr);
   align-items: start;
+}
+
+.crafting-modal__inventory {
+  display: grid;
+  gap: 0.75rem;
+  align-content: start;
+}
+
+.crafting-modal__inventory-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.crafting-modal__inventory-header h3 {
+  font-size: 0.85rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: rgba(73, 242, 255, 0.75);
+}
+
+.crafting-inventory {
+  display: grid;
+  gap: 0.5rem;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+}
+
+.crafting-inventory__item {
+  border-radius: 14px;
+  border: 1px solid rgba(73, 242, 255, 0.2);
+  background: rgba(6, 14, 28, 0.78);
+  color: var(--text-primary);
+  padding: 0.6rem 0.65rem;
+  display: grid;
+  gap: 0.35rem;
+  text-align: left;
+  position: relative;
+  cursor: grab;
+  transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.crafting-inventory__item:focus-visible {
+  outline: 2px solid rgba(73, 242, 255, 0.6);
+  outline-offset: 3px;
+}
+
+.crafting-inventory__item:hover,
+.crafting-inventory__item[data-active='true'] {
+  border-color: rgba(73, 242, 255, 0.6);
+  box-shadow: 0 12px 28px rgba(73, 242, 255, 0.16);
+  transform: translateY(-2px);
+}
+
+.crafting-inventory__item-title {
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.crafting-inventory__item-quantity {
+  font-size: 0.7rem;
+  color: rgba(73, 242, 255, 0.75);
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+}
+
+.crafting-inventory__hint {
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
+.crafting-inventory__empty {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  border: 1px dashed rgba(73, 242, 255, 0.25);
+  padding: 0.85rem 0.9rem;
+  border-radius: 14px;
+  text-align: center;
 }
 
 .crafting-modal__sequence {
@@ -1992,6 +2073,12 @@ body.sidebar-open .player-hint {
   transform: translateY(-1px);
 }
 
+.craft-slot--target {
+  border-color: rgba(73, 242, 255, 0.85);
+  box-shadow: 0 0 0 2px rgba(73, 242, 255, 0.35);
+  background: rgba(6, 22, 44, 0.82);
+}
+
 .craft-slot:focus-visible {
   outline: 2px solid rgba(73, 242, 255, 0.45);
   outline-offset: 3px;
@@ -2017,6 +2104,15 @@ body.sidebar-open .player-hint {
   border-color: rgba(255, 73, 118, 0.45);
 }
 
+.crafting-sequence--error {
+  border-radius: 18px;
+  box-shadow: 0 0 0 2px rgba(255, 73, 118, 0.35);
+}
+
+.crafting-sequence--shake {
+  animation: crafting-shake 0.4s ease both;
+}
+
 .crafting-actions {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
@@ -2036,6 +2132,30 @@ body.sidebar-open .player-hint {
 @media (max-width: 720px) {
   .crafting-sequence {
     grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  }
+}
+
+@media (max-width: 1100px) {
+  .crafting-modal__grid {
+    grid-template-columns: minmax(220px, 1fr) minmax(260px, 1fr);
+    grid-template-areas:
+      'inventory inventory'
+      'sequence recipes';
+  }
+
+  .crafting-modal__inventory {
+    grid-area: inventory;
+  }
+}
+
+@media (max-width: 860px) {
+  .crafting-modal__grid {
+    grid-template-columns: 1fr;
+    grid-template-areas: none;
+  }
+
+  .crafting-search-panel {
+    padding: 1.25rem;
   }
 }
 
@@ -2084,6 +2204,196 @@ body.sidebar-open .player-hint {
 .crafting-suggestions button:hover,
 .crafting-suggestions button:focus-visible {
   background: rgba(73, 242, 255, 0.25);
+}
+
+.crafting-search-panel {
+  position: absolute;
+  inset: 0;
+  display: none;
+  place-items: center;
+  background: rgba(1, 4, 10, 0.82);
+  backdrop-filter: blur(12px);
+  z-index: 5;
+  padding: clamp(1.5rem, 4vw, 3rem);
+}
+
+.crafting-search-panel[data-open='true'] {
+  display: grid;
+}
+
+.crafting-search-panel__content {
+  background: rgba(6, 14, 28, 0.95);
+  border-radius: 24px;
+  border: 1px solid rgba(73, 242, 255, 0.25);
+  padding: clamp(1.5rem, 3vw, 2.5rem);
+  width: min(520px, 100%);
+  display: grid;
+  gap: 1.25rem;
+  position: relative;
+  text-align: left;
+}
+
+.crafting-search-panel__header {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.crafting-search-panel__eyebrow {
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+  color: rgba(73, 242, 255, 0.75);
+  font-size: 0.7rem;
+}
+
+.crafting-search-panel__content h3 {
+  color: var(--text-primary);
+  font-size: clamp(1.1rem, 2vw, 1.35rem);
+}
+
+.crafting-search-panel__content p {
+  margin: 0;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+.crafting-search-panel__input input {
+  background: rgba(6, 22, 44, 0.9);
+}
+
+.crafting-search-panel__results {
+  list-style: none;
+  display: grid;
+  gap: 0.65rem;
+  max-height: min(320px, 50vh);
+  overflow: auto;
+}
+
+.crafting-search-panel__results button {
+  width: 100%;
+  text-align: left;
+  padding: 0.65rem 0.85rem;
+  border-radius: 14px;
+  border: 1px solid rgba(73, 242, 255, 0.2);
+  background: rgba(73, 242, 255, 0.12);
+  color: var(--text-primary);
+}
+
+.crafting-search-panel__results button:hover,
+.crafting-search-panel__results button:focus-visible {
+  border-color: rgba(73, 242, 255, 0.45);
+  background: rgba(73, 242, 255, 0.22);
+}
+
+.crafting-search-panel__result-subtitle {
+  display: block;
+  font-size: 0.72rem;
+  margin-top: 0.15rem;
+  color: rgba(73, 242, 255, 0.75);
+}
+
+.crafting-search-panel__result-output {
+  display: block;
+  font-size: 0.7rem;
+  margin-top: 0.1rem;
+  color: var(--text-secondary);
+}
+
+.crafting-search-panel__actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.crafting-search-panel__empty {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+}
+
+.crafting-drag-ghost {
+  position: fixed;
+  pointer-events: none;
+  z-index: 160;
+  padding: 0.65rem 0.85rem;
+  border-radius: 14px;
+  border: 1px solid rgba(73, 242, 255, 0.55);
+  background: rgba(6, 14, 28, 0.95);
+  color: var(--text-primary);
+  box-shadow: 0 18px 38px rgba(0, 0, 0, 0.45);
+  transform: translate(-50%, -50%);
+  min-width: 160px;
+  display: grid;
+  gap: 0.25rem;
+  opacity: 0;
+  transition: opacity 0.1s ease;
+}
+
+.crafting-drag-ghost[data-visible='true'] {
+  opacity: 1;
+}
+
+.crafting-drag-ghost__title {
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+
+.crafting-drag-ghost__quantity {
+  font-size: 0.68rem;
+  letter-spacing: 0.25em;
+  text-transform: uppercase;
+  color: rgba(73, 242, 255, 0.75);
+}
+
+.crafting-drag-trail {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 150;
+}
+
+.crafting-drag-trail__particle {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  background: rgba(73, 242, 255, 0.45);
+  box-shadow: 0 0 12px rgba(73, 242, 255, 0.65);
+  transform: translate(-50%, -50%);
+  animation: drag-trail-fade 0.4s ease-out forwards;
+}
+
+body[data-crafting-drag='true'] {
+  cursor: grabbing;
+}
+
+@keyframes drag-trail-fade {
+  from {
+    opacity: 0.9;
+    transform: translate(-50%, -50%) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.3);
+  }
+}
+
+@keyframes crafting-shake {
+  0% {
+    transform: translateX(0);
+  }
+  20% {
+    transform: translateX(-6px);
+  }
+  40% {
+    transform: translateX(6px);
+  }
+  60% {
+    transform: translateX(-4px);
+  }
+  80% {
+    transform: translateX(4px);
+  }
+  100% {
+    transform: translateX(0);
+  }
 }
 
 .recipe-list {
