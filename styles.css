@@ -18,6 +18,19 @@
     linear-gradient(160deg, #050912, #0b1230 60%, #05131f 100%);
   --time-phase: 0;
   --dimension-glow: rgba(73, 242, 255, 0.45);
+  --hud-panel-border: rgba(73, 242, 255, 0.28);
+  --hud-panel-shadow: 0 18px 36px rgba(0, 0, 0, 0.5);
+  --hud-panel-bg: rgba(6, 14, 28, 0.82);
+  --hud-panel-bg-alt: rgba(10, 22, 40, 0.72);
+  --hud-heart-color: #ff3b6b;
+  --hud-heart-glow: rgba(255, 77, 109, 0.55);
+  --hud-bubble-color: #2ec7ff;
+  --hud-bubble-color-rgb: 46, 199, 255;
+  --hud-bubble-highlight: rgba(255, 255, 255, 0.88);
+  --hud-score-gradient: linear-gradient(160deg, rgba(0, 0, 0, 0.92), rgba(51, 51, 51, 0.88));
+  --hud-score-text: #ffffff;
+  --hud-progress-track: rgba(0, 156, 204, 0.25);
+  --hud-progress-glow: rgba(73, 242, 255, 0.45);
   font-size: 16px;
 }
 
@@ -52,6 +65,31 @@ body {
   grid-template-rows: 1fr auto;
   transition: background 1s ease;
   overflow-x: hidden;
+}
+
+body.theme-grassland {
+  --hud-panel-border: rgba(74, 222, 128, 0.45);
+  --hud-panel-shadow: 0 22px 46px rgba(74, 222, 128, 0.18);
+  --hud-panel-bg: rgba(8, 28, 16, 0.85);
+  --hud-panel-bg-alt: rgba(12, 36, 22, 0.88);
+  --hud-bubble-color: #35c8ff;
+  --hud-bubble-color-rgb: 53, 200, 255;
+  --hud-progress-track: rgba(58, 190, 122, 0.26);
+  --hud-progress-glow: rgba(74, 222, 128, 0.45);
+}
+
+body.theme-netherite {
+  --hud-panel-border: rgba(255, 118, 70, 0.48);
+  --hud-panel-shadow: 0 24px 54px rgba(255, 118, 70, 0.22);
+  --hud-panel-bg: rgba(28, 10, 10, 0.9);
+  --hud-panel-bg-alt: rgba(40, 12, 10, 0.9);
+  --hud-heart-glow: rgba(255, 102, 82, 0.75);
+  --hud-bubble-color: #ff8249;
+  --hud-bubble-color-rgb: 255, 130, 73;
+  --hud-bubble-highlight: rgba(255, 196, 150, 0.9);
+  --hud-score-gradient: linear-gradient(160deg, rgba(24, 4, 4, 0.95), rgba(63, 14, 0, 0.92));
+  --hud-progress-track: rgba(255, 118, 70, 0.24);
+  --hud-progress-glow: rgba(255, 118, 70, 0.48);
 }
 
 body.game-active {
@@ -777,51 +815,177 @@ body::after {
 }
 
 
-.heart,
-.bubble {
-  display: inline-block;
+.hud-hearts {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  align-items: flex-start;
+}
+
+.hud-hearts__row {
+  display: flex;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}
+
+.hud-hearts .heart-icon {
+  width: 24px;
+  height: 24px;
+  filter: drop-shadow(0 0 6px var(--hud-heart-glow));
+  transition: transform 0.3s ease, filter 0.3s ease;
+}
+
+.hud-hearts .heart-icon.is-empty {
+  filter: none;
+  opacity: 0.28;
+}
+
+.hud-hearts .heart-icon.is-partial {
+  opacity: 0.7;
+}
+
+.heart-icon__outline {
+  fill: rgba(255, 255, 255, 0.1);
+  stroke: rgba(255, 255, 255, 0.45);
+  stroke-width: 1.05;
+}
+
+.heart-icon__fill {
+  fill: var(--hud-heart-color);
+  transition: fill-opacity 0.3s ease;
+}
+
+.hud-hearts.is-damaged .heart-icon {
+  animation: heart-hit 0.6s ease;
+  animation-delay: calc(var(--heart-index, 0) * 45ms);
+}
+
+.hud-hearts.is-healing .heart-icon {
+  animation: heart-regen 0.8s ease;
+  animation-delay: calc(var(--heart-index, 0) * 45ms);
+}
+
+.hud-hearts.is-critical .heart-icon__fill {
+  filter: drop-shadow(0 0 8px rgba(255, 84, 84, 0.75));
+}
+
+@keyframes heart-hit {
+  0% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.22);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+@keyframes heart-regen {
+  0% {
+    transform: scale(0.92);
+  }
+  50% {
+    transform: scale(1.08);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.hud-bubbles {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.hud-bubbles__frame {
+  display: inline-flex;
+  padding: 0.55rem 0.65rem;
+  border-radius: 6px;
+  background: linear-gradient(180deg, rgba(8, 34, 54, 0.55), rgba(4, 22, 38, 0.6));
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06), 0 0 16px rgba(0, 188, 255, 0.16);
+}
+
+.hud-bubbles__stack {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  align-items: center;
+}
+
+.bubble-indicator {
   width: 18px;
   height: 18px;
-  border-radius: 6px;
-  box-shadow: 0 0 6px rgba(73, 242, 255, 0.25);
-  position: relative;
-  transition: transform 0.25s ease, filter 0.25s ease, opacity 0.2s ease;
-}
-
-.heart::after {
-  content: '';
-  position: absolute;
-  inset: 3px;
-  border-radius: 5px;
-  background: radial-gradient(circle at 50% 30%, #ff6b9a, #b02245 75%);
-  opacity: clamp(var(--fill, 1), 0, 1);
-  transition: opacity 0.25s ease;
-}
-
-.heart.empty::after {
-  opacity: 0.15;
-}
-
-.heart.partial::after {
-  opacity: calc(0.35 + clamp(var(--fill, 0.5), 0, 1) * 0.65);
-}
-
-.bubble::after {
-  content: '';
-  position: absolute;
-  inset: 3px;
   border-radius: 50%;
-  background: radial-gradient(circle at 35% 35%, rgba(255, 255, 255, 0.85), rgba(73, 242, 255, 0.4));
-  opacity: clamp(var(--fill, 1), 0, 1);
-  transition: opacity 0.25s ease;
+  background: radial-gradient(circle at 35% 35%, var(--hud-bubble-highlight), rgba(var(--hud-bubble-color-rgb, 46, 199, 255), 0.35));
+  box-shadow: 0 0 12px rgba(46, 199, 255, 0.45);
+  opacity: var(--opacity-level, 1);
+  transition: opacity 0.3s ease, transform 0.3s ease, box-shadow 0.3s ease;
+  will-change: transform, opacity;
 }
 
-.bubble.empty::after {
-  opacity: 0.08;
+.bubble-indicator.is-empty {
+  opacity: 0.18;
+  box-shadow: none;
+  filter: saturate(0.4);
 }
 
-.bubble.partial::after {
-  opacity: calc(0.2 + clamp(var(--fill, 0.5), 0, 1) * 0.7);
+.bubble-indicator.is-partial {
+  opacity: 0.45;
+}
+
+.hud-bubbles.is-losing .bubble-indicator:not(.is-empty) {
+  animation: bubble-pop 0.45s ease;
+  animation-delay: calc(var(--bubble-index, 0) * 40ms);
+}
+
+.hud-bubbles.is-low .bubble-indicator:not(.is-empty) {
+  box-shadow: 0 0 14px rgba(255, 189, 92, 0.45);
+  filter: saturate(1.1);
+}
+
+.hud-bubbles.is-gaining .bubble-indicator:not(.is-empty) {
+  animation: bubble-rise 0.6s ease;
+  animation-delay: calc(var(--bubble-index, 0) * 40ms);
+}
+
+.hud-bubbles.is-drowning .bubble-indicator {
+  animation: bubble-alert 0.8s ease-in-out infinite alternate;
+}
+
+@keyframes bubble-pop {
+  0% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.25);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+@keyframes bubble-rise {
+  0% {
+    transform: translateY(8px);
+    opacity: 0;
+  }
+  100% {
+    transform: translateY(0);
+    opacity: var(--opacity-level, 1);
+  }
+}
+
+@keyframes bubble-alert {
+  0% {
+    box-shadow: 0 0 10px rgba(46, 199, 255, 0.35);
+  }
+  100% {
+    box-shadow: 0 0 14px rgba(255, 92, 92, 0.55);
+  }
 }
 
 .time-track {
@@ -865,6 +1029,12 @@ body::after {
   background: rgba(73, 242, 255, 0.18);
   border: 1px solid rgba(73, 242, 255, 0.35);
   box-shadow: inset 0 0 10px rgba(73, 242, 255, 0.3);
+}
+
+#hearts::before,
+#bubbles::before,
+#timeOfDay::before {
+  display: none;
 }
 
 .status-item.hearts::before {
@@ -997,19 +1167,17 @@ body.game-active #gameCanvas {
 }
 
 .score-overlay {
-  position: absolute;
-  top: 1.5rem;
-  right: 1.5rem;
+  position: relative;
   display: grid;
-  gap: 0.35rem;
-  padding: 0.9rem 1.1rem;
-  border-radius: 18px;
-  background: linear-gradient(145deg, rgba(5, 12, 26, 0.82), rgba(7, 16, 32, 0.58));
-  border: 1px solid rgba(73, 242, 255, 0.2);
-  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.35);
-  backdrop-filter: blur(10px);
-  color: var(--text-secondary);
-  min-width: 220px;
+  gap: 0.4rem;
+  padding: 1rem 1.25rem;
+  border-radius: 8px;
+  background: var(--hud-score-gradient);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 22px 46px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(12px);
+  color: var(--hud-score-text);
+  min-width: 240px;
   z-index: 6;
   pointer-events: none;
   transition: transform 0.3s ease, box-shadow 0.3s ease, opacity 0.3s ease;
@@ -1018,15 +1186,15 @@ body.game-active #gameCanvas {
 .score-overlay__label {
   text-transform: uppercase;
   letter-spacing: 0.32em;
-  font-size: 0.7rem;
-  color: rgba(242, 245, 250, 0.65);
+  font-size: 0.72rem;
+  color: rgba(255, 255, 255, 0.7);
 }
 
 .score-overlay__value {
-  font-size: clamp(1.6rem, 2.6vw, 2rem);
+  font-size: clamp(1.6rem, 3vw, 1.75rem);
   font-weight: 700;
-  color: var(--accent);
-  text-shadow: 0 8px 24px rgba(73, 242, 255, 0.35);
+  color: var(--hud-score-text);
+  text-shadow: 0 10px 24px rgba(0, 0, 0, 0.55);
   font-variant-numeric: tabular-nums;
   line-height: 1;
 }
@@ -1114,7 +1282,7 @@ body.game-active #gameCanvas {
   font-size: 0.78rem;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: rgba(242, 245, 250, 0.62);
+  color: rgba(255, 255, 255, 0.6);
 }
 
 .score-overlay__metric-label::after {
@@ -1125,7 +1293,7 @@ body.game-active #gameCanvas {
 
 .score-overlay__metric-value {
   font-weight: 600;
-  color: rgba(242, 245, 250, 0.9);
+  color: rgba(255, 255, 255, 0.92);
   white-space: nowrap;
   display: inline-block;
   will-change: transform, opacity;
@@ -1138,29 +1306,31 @@ body.game-active #gameCanvas {
 @keyframes score-overlay-flash {
   0% {
     transform: scale(1);
-    box-shadow: 0 18px 40px rgba(0, 0, 0, 0.35);
+    box-shadow: var(--hud-panel-shadow);
   }
   35% {
     transform: scale(1.04);
-    box-shadow: 0 24px 60px rgba(73, 242, 255, 0.4);
+    box-shadow: 0 26px 60px rgba(0, 196, 255, 0.28);
   }
   100% {
     transform: scale(1);
-    box-shadow: 0 18px 40px rgba(0, 0, 0, 0.35);
+    box-shadow: var(--hud-panel-shadow);
   }
 }
 
 .portal-progress {
   position: relative;
   width: min(720px, 82%);
-  padding: 0.65rem 1.25rem;
-  background: linear-gradient(135deg, rgba(5, 12, 25, 0.88), rgba(5, 12, 25, 0.55));
-  border-radius: 999px;
-  border: 1px solid rgba(73, 242, 255, 0.18);
+  padding: 0.9rem 1.4rem;
+  background: linear-gradient(160deg, rgba(2, 22, 34, 0.78), rgba(0, 14, 26, 0.68));
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
   display: none;
   align-items: center;
   gap: 1rem;
-  box-shadow: 0 16px 45px rgba(0, 0, 0, 0.35);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.45), 0 0 24px rgba(0, 196, 255, 0.18);
+  backdrop-filter: blur(10px);
+  overflow: hidden;
 }
 
 .portal-progress.visible {
@@ -1169,20 +1339,20 @@ body.game-active #gameCanvas {
 }
 
 .portal-progress .label {
-  font-size: 0.78rem;
+  font-size: 0.82rem;
   letter-spacing: 0.32em;
   text-transform: uppercase;
-  color: var(--text-secondary);
+  color: rgba(255, 255, 255, 0.72);
   white-space: nowrap;
 }
 
 .portal-progress .bar {
   position: relative;
   display: block;
-  height: 8px;
+  height: 10px;
   width: 100%;
   border-radius: 999px;
-  background: rgba(73, 242, 255, 0.15);
+  background: var(--hud-progress-track);
   overflow: hidden;
 }
 
@@ -1192,10 +1362,10 @@ body.game-active #gameCanvas {
   inset: 0;
   transform-origin: left;
   transform: scaleX(var(--progress, 0));
-  background: linear-gradient(90deg, var(--accent), var(--accent-strong));
-  transition: transform 0.4s ease;
+  background: linear-gradient(90deg, rgba(0, 212, 255, 0.95), rgba(0, 132, 230, 0.95));
+  transition: transform 0.45s ease;
   border-radius: inherit;
-  box-shadow: 0 0 14px rgba(73, 242, 255, 0.45);
+  box-shadow: 0 0 18px var(--hud-progress-glow);
 }
 
 #gameHud {
@@ -1203,6 +1373,13 @@ body.game-active #gameCanvas {
   inset: 0;
   pointer-events: none;
   z-index: 12;
+}
+
+.hud-layer {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  transition: transform 0.35s ease;
 }
 
 .hud-layer__corner {
@@ -1235,17 +1412,47 @@ body.game-active #gameCanvas {
   pointer-events: none;
 }
 
+@media (max-width: 768px) {
+  .hud-layer {
+    transform: scale(0.8);
+    transform-origin: top center;
+  }
+
+  .hud-layer__corner {
+    gap: 0.6rem;
+  }
+
+  .hud-layer__corner--top-left,
+  .hud-layer__corner--top-right {
+    top: 0.85rem;
+  }
+
+  .hud-layer__corner--top-left {
+    left: 0.85rem;
+  }
+
+  .hud-layer__corner--top-right {
+    right: 0.85rem;
+  }
+
+  .hud-layer__bottom {
+    bottom: 0.85rem;
+  }
+}
+
 .hud-card {
   display: grid;
-  gap: 0.85rem;
-  padding: 1rem 1.25rem;
-  border-radius: 20px;
-  background: linear-gradient(150deg, rgba(6, 14, 28, 0.82), rgba(6, 14, 28, 0.6));
-  border: 1px solid rgba(73, 242, 255, 0.18);
-  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.38);
-  backdrop-filter: blur(12px);
+  gap: 0.75rem;
+  padding: 0.9rem 1.1rem;
+  border-radius: 8px;
+  background: linear-gradient(160deg, var(--hud-panel-bg), var(--hud-panel-bg-alt));
+  border: 1px solid var(--hud-panel-border);
+  box-shadow: var(--hud-panel-shadow);
+  backdrop-filter: blur(10px);
   pointer-events: auto;
   min-width: clamp(220px, 24vw, 320px);
+  position: relative;
+  isolation: isolate;
 }
 
 .hud-card--status {
@@ -1254,8 +1461,11 @@ body.game-active #gameCanvas {
 }
 
 .hud-card--status .hud-status {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 0.75rem;
+  align-items: flex-start;
+  width: 100%;
 }
 
 .hud-card--status .craft-launcher {
