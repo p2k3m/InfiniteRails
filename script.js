@@ -1520,31 +1520,44 @@
     let previewGroup;
     let previewCamera;
     let previewAnimationFrame = null;
+    let previewHandModel = null;
+    let previewHandTemplate = null;
+    let previewHandPromise = null;
     const PREVIEW_VIEW_SIZE = 3.8;
-    const PREVIEW_CAMERA_DISTANCE = 5;
-    const PREVIEW_CAMERA_EYE_HEIGHT = 1.6;
-    const PREVIEW_CAMERA_TARGET_HEIGHT = 1.2;
     const PREVIEW_MOUSE_SENSITIVITY = 0.0032;
     const PREVIEW_TOUCH_SENSITIVITY = 0.0052;
     const PREVIEW_KEY_YAW_DELTA = THREE.MathUtils.degToRad(6);
-    const PREVIEW_MAX_YAW = THREE.MathUtils.degToRad(45);
-    const PREVIEW_ISLAND_SIZE = 10;
+    const PREVIEW_MAX_YAW = THREE.MathUtils.degToRad(60);
+    const PREVIEW_MAX_PITCH = THREE.MathUtils.degToRad(50);
+    const PREVIEW_ISLAND_SIZE = 20;
     const PREVIEW_BLOCK_SIZE = 1;
     const PREVIEW_BOB_HEIGHT = 0.08;
+    const PREVIEW_PLAYER_EYE_HEIGHT = 1.6;
+    const PREVIEW_PLAYER_STAND_OFFSET = 2.6;
+    const PREVIEW_LOOK_DISTANCE = 8;
+    const PREVIEW_DAY_LENGTH = 20000;
+    const PREVIEW_FOV = 75;
 
     const previewState = {
       active: false,
       yaw: 0,
+      pitch: -0.12,
       frameTimes: [],
       lastTimestamp: null,
       wireframe: false,
       seed: 0,
+      spawnHeight: 0,
     };
 
     const previewAssets = {
       textures: {},
       materials: {},
     };
+
+    const previewPlayerPosition = new THREE.Vector3(0, PREVIEW_PLAYER_EYE_HEIGHT, PREVIEW_PLAYER_STAND_OFFSET);
+    const tmpPreviewForward = new THREE.Vector3(0, 0, -1);
+    const tmpPreviewTarget = new THREE.Vector3();
+    const previewHandOffset = new THREE.Vector3(0.32, -0.42, -0.65);
 
     function getNowMs() {
       return typeof performance !== 'undefined' ? performance.now() : Date.now();
@@ -1672,8 +1685,16 @@
     const accentMaterialCache = new Map();
     const textureVariantCache = new Map();
     const spriteTextureCache = new Map();
+    let treeLeavesMaterial = null;
 
     const textureLoader = new THREE.TextureLoader();
+    textureLoader.setCrossOrigin?.('anonymous');
+
+    const REMOTE_TEXTURE_URLS = {
+      grass: 'https://images-13-sept-2025.s3.ap-south-1.amazonaws.com/grass.avif',
+      leaves: 'https://images-13-sept-2025.s3.ap-south-1.amazonaws.com/leaves.png',
+      wood: 'https://images-13-sept-2025.s3.ap-south-1.amazonaws.com/wood.jpeg',
+    };
 
     const particleSystems = [];
 
@@ -1816,6 +1837,35 @@
       return texture;
     }
 
+    function clonePreviewTexture(baseTexture, options = {}) {
+      if (!baseTexture) {
+        return null;
+      }
+      const texture = baseTexture.clone();
+      texture.image = baseTexture.image;
+      texture.needsUpdate = true;
+      texture.wrapS = options.wrapS ?? baseTexture.wrapS ?? THREE.RepeatWrapping;
+      texture.wrapT = options.wrapT ?? baseTexture.wrapT ?? THREE.RepeatWrapping;
+      const repeat = options.repeat;
+      if (typeof repeat === 'number') {
+        texture.repeat.set(repeat, repeat);
+      } else if (repeat) {
+        texture.repeat.set(repeat.x ?? texture.repeat.x, repeat.y ?? texture.repeat.y);
+      } else if (baseTexture.repeat) {
+        texture.repeat.copy(baseTexture.repeat);
+      }
+      texture.magFilter = options.magFilter ?? baseTexture.magFilter ?? THREE.LinearFilter;
+      texture.minFilter = options.minFilter ?? baseTexture.minFilter ?? THREE.LinearMipmapLinearFilter;
+      texture.colorSpace = options.colorSpace ?? baseTexture.colorSpace ?? THREE.SRGBColorSpace;
+      texture.generateMipmaps = baseTexture.generateMipmaps ?? true;
+      const maxAnisotropy = renderer?.capabilities?.getMaxAnisotropy?.() ?? 1;
+      texture.anisotropy = options.anisotropy ?? baseTexture.anisotropy ?? maxAnisotropy;
+      if (options.transparent || baseTexture.format === THREE.RGBAFormat) {
+        texture.format = THREE.RGBAFormat;
+      }
+      return texture;
+    }
+
     function addNoise(ctx, size, variance = 0.15) {
       const image = ctx.getImageData(0, 0, size, size);
       for (let i = 0; i < image.data.length; i += 4) {
@@ -1828,26 +1878,31 @@
     }
 
     function createDewTextureSet() {
+      ensurePreviewTextures();
+      const baseGrass = previewAssets.textures.grass;
+      let grassTexture = clonePreviewTexture(baseGrass, { repeat: { x: 4, y: 4 } });
       const size = 256;
-      const albedoUrl = createProceduralTextureDataUrl(size, (ctx, dimension) => {
-        const gradient = ctx.createLinearGradient(0, 0, dimension, dimension);
-        gradient.addColorStop(0, '#1d7a46');
-        gradient.addColorStop(1, '#2aa35a');
-        ctx.fillStyle = gradient;
-        ctx.fillRect(0, 0, dimension, dimension);
-        for (let i = 0; i < 220; i++) {
-          const radius = Math.random() * 6 + 2;
-          const x = Math.random() * dimension;
-          const y = Math.random() * dimension;
-          const droplet = ctx.createRadialGradient(x, y, 0, x, y, radius);
-          droplet.addColorStop(0, 'rgba(255, 255, 255, 0.75)');
-          droplet.addColorStop(1, 'rgba(255, 255, 255, 0)');
-          ctx.fillStyle = droplet;
-          ctx.fillRect(x - radius, y - radius, radius * 2, radius * 2);
-        }
-        addNoise(ctx, dimension, 0.05);
-      });
-
+      if (!grassTexture) {
+        const fallbackUrl = createProceduralTextureDataUrl(size, (ctx, dimension) => {
+          const gradient = ctx.createLinearGradient(0, 0, dimension, dimension);
+          gradient.addColorStop(0, '#1d7a46');
+          gradient.addColorStop(1, '#2aa35a');
+          ctx.fillStyle = gradient;
+          ctx.fillRect(0, 0, dimension, dimension);
+          for (let i = 0; i < 220; i++) {
+            const radius = Math.random() * 6 + 2;
+            const x = Math.random() * dimension;
+            const y = Math.random() * dimension;
+            const droplet = ctx.createRadialGradient(x, y, 0, x, y, radius);
+            droplet.addColorStop(0, 'rgba(255, 255, 255, 0.75)');
+            droplet.addColorStop(1, 'rgba(255, 255, 255, 0)');
+            ctx.fillStyle = droplet;
+            ctx.fillRect(x - radius, y - radius, radius * 2, radius * 2);
+          }
+          addNoise(ctx, dimension, 0.05);
+        });
+        grassTexture = createTexture(fallbackUrl, { repeat: { x: 4, y: 4 }, colorSpace: THREE.SRGBColorSpace });
+      }
       const normalUrl = createProceduralTextureDataUrl(size, (ctx, dimension) => {
         ctx.fillStyle = 'rgb(128,128,255)';
         ctx.fillRect(0, 0, dimension, dimension);
@@ -1880,9 +1935,9 @@
       });
 
       return {
-        map: createTexture(albedoUrl, { repeat: { x: 3, y: 3 }, colorSpace: THREE.SRGBColorSpace }),
-        normalMap: createTexture(normalUrl, { repeat: { x: 3, y: 3 }, colorSpace: THREE.NoColorSpace }),
-        roughnessMap: createTexture(roughnessUrl, { repeat: { x: 3, y: 3 }, colorSpace: THREE.NoColorSpace }),
+        map: grassTexture,
+        normalMap: createTexture(normalUrl, { repeat: { x: 4, y: 4 }, colorSpace: THREE.NoColorSpace }),
+        roughnessMap: createTexture(roughnessUrl, { repeat: { x: 4, y: 4 }, colorSpace: THREE.NoColorSpace }),
       };
     }
 
@@ -1943,32 +1998,37 @@
     }
 
     function createBarkTextureSet() {
+      ensurePreviewTextures();
+      const baseWood = previewAssets.textures.wood;
+      let woodTexture = clonePreviewTexture(baseWood, { repeat: { x: 1.4, y: 1.4 } });
       const size = 256;
-      const albedoUrl = createProceduralTextureDataUrl(size, (ctx, dimension) => {
-        const gradient = ctx.createLinearGradient(0, 0, dimension, dimension);
-        gradient.addColorStop(0, '#4f3418');
-        gradient.addColorStop(1, '#3a2412');
-        ctx.fillStyle = gradient;
-        ctx.fillRect(0, 0, dimension, dimension);
-        ctx.strokeStyle = 'rgba(255, 210, 150, 0.22)';
-        ctx.lineWidth = 4;
-        for (let i = 0; i < 12; i++) {
-          const x = (dimension / 12) * i + Math.random() * 6;
-          ctx.beginPath();
-          ctx.moveTo(x, 0);
-          ctx.bezierCurveTo(
-            x + Math.random() * 10 - 5,
-            dimension * 0.25,
-            x + Math.random() * 10 - 5,
-            dimension * 0.75,
-            x + Math.random() * 8 - 4,
-            dimension
-          );
-          ctx.stroke();
-        }
-        addNoise(ctx, dimension, 0.18);
-      });
-
+      if (!woodTexture) {
+        const fallbackUrl = createProceduralTextureDataUrl(size, (ctx, dimension) => {
+          const gradient = ctx.createLinearGradient(0, 0, dimension, dimension);
+          gradient.addColorStop(0, '#4f3418');
+          gradient.addColorStop(1, '#3a2412');
+          ctx.fillStyle = gradient;
+          ctx.fillRect(0, 0, dimension, dimension);
+          ctx.strokeStyle = 'rgba(255, 210, 150, 0.22)';
+          ctx.lineWidth = 4;
+          for (let i = 0; i < 12; i++) {
+            const x = (dimension / 12) * i + Math.random() * 6;
+            ctx.beginPath();
+            ctx.moveTo(x, 0);
+            ctx.bezierCurveTo(
+              x + Math.random() * 10 - 5,
+              dimension * 0.25,
+              x + Math.random() * 10 - 5,
+              dimension * 0.75,
+              x + Math.random() * 8 - 4,
+              dimension
+            );
+            ctx.stroke();
+          }
+          addNoise(ctx, dimension, 0.18);
+        });
+        woodTexture = createTexture(fallbackUrl, { repeat: { x: 1.4, y: 1.4 }, colorSpace: THREE.SRGBColorSpace });
+      }
       const normalUrl = createProceduralTextureDataUrl(size, (ctx, dimension) => {
         ctx.fillStyle = 'rgb(128,128,255)';
         ctx.fillRect(0, 0, dimension, dimension);
@@ -2006,7 +2066,7 @@
       });
 
       return {
-        map: createTexture(albedoUrl, { repeat: { x: 1.4, y: 1.4 }, colorSpace: THREE.SRGBColorSpace }),
+        map: woodTexture,
         normalMap: createTexture(normalUrl, { repeat: { x: 1.4, y: 1.4 }, colorSpace: THREE.NoColorSpace }),
         roughnessMap: createTexture(roughnessUrl, { repeat: { x: 1.4, y: 1.4 }, colorSpace: THREE.NoColorSpace }),
       };
@@ -2487,6 +2547,10 @@
             setPreviewYaw(previewState.yaw - dx * previewSensitivity);
             pointer.moved = true;
           }
+          if (Math.abs(dy) > 0.0001 && previewSensitivity > 0) {
+            setPreviewPitch(previewState.pitch - dy * previewSensitivity * 0.6);
+            pointer.moved = true;
+          }
           if (pointer.pointerType === 'touch') {
             event.preventDefault();
           }
@@ -2770,17 +2834,17 @@
     }
 
     function ensurePreviewTextures() {
-      if (previewAssets.textures.grass && previewAssets.textures.dirt && previewAssets.textures.wood) {
+      if (
+        previewAssets.textures.grass &&
+        previewAssets.textures.dirt &&
+        previewAssets.textures.wood &&
+        previewAssets.textures.leaves
+      ) {
         return;
       }
       const maxAnisotropy = renderer?.capabilities?.getMaxAnisotropy?.() ?? 1;
-      const createTexture = (size, draw) => {
-        const canvasEl = document.createElement('canvas');
-        canvasEl.width = size;
-        canvasEl.height = size;
-        const ctx = canvasEl.getContext('2d');
-        draw(ctx, size);
-        const texture = new THREE.CanvasTexture(canvasEl);
+      const configureTexture = (texture, options = {}) => {
+        if (!texture) return texture;
         texture.wrapS = THREE.RepeatWrapping;
         texture.wrapT = THREE.RepeatWrapping;
         texture.anisotropy = maxAnisotropy;
@@ -2788,33 +2852,50 @@
         texture.magFilter = THREE.LinearFilter;
         texture.minFilter = THREE.LinearMipmapLinearFilter;
         texture.generateMipmaps = true;
+        if (options.transparent) {
+          texture.format = THREE.RGBAFormat;
+        }
         texture.needsUpdate = true;
         return texture;
       };
-      const grass = createTexture(128, (ctx, size) => {
-        const gradient = ctx.createLinearGradient(0, 0, 0, size);
-        gradient.addColorStop(0, '#6fd86f');
-        gradient.addColorStop(1, '#2e7d32');
-        ctx.fillStyle = gradient;
-        ctx.fillRect(0, 0, size, size);
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.08)';
-        for (let i = 0; i < 320; i += 1) {
-          const x = Math.random() * size;
-          const y = Math.random() * size;
-          const w = Math.random() * 3 + 1;
-          const h = Math.random() * 3 + 1;
-          ctx.fillRect(x, y, w, h);
+      const createProceduralTexture = (size, draw, options = {}) => {
+        const canvasEl = document.createElement('canvas');
+        canvasEl.width = size;
+        canvasEl.height = size;
+        const ctx = canvasEl.getContext('2d');
+        if (options.transparent) {
+          ctx.clearRect(0, 0, size, size);
         }
-        ctx.fillStyle = 'rgba(0, 60, 0, 0.12)';
-        for (let i = 0; i < 220; i += 1) {
-          const x = Math.random() * size;
-          const y = Math.random() * size;
-          const w = Math.random() * 2 + 1;
-          const h = Math.random() * 5 + 1;
-          ctx.fillRect(x, y, w, h);
+        draw(ctx, size);
+        const texture = new THREE.CanvasTexture(canvasEl);
+        return configureTexture(texture, options);
+      };
+      const loadTexture = (path, options = {}, fallbackDraw = null) => {
+        const fallbackTexture = fallbackDraw ? createProceduralTexture(128, fallbackDraw, options) : null;
+        let texture = null;
+        try {
+          texture = textureLoader.load(
+            path,
+            (loaded) => configureTexture(loaded, options),
+            undefined,
+            (error) => {
+              console.warn(`Failed to load preview texture: ${path}`, error);
+              if (fallbackTexture && texture) {
+                texture.image = fallbackTexture.image;
+                configureTexture(texture, options);
+              }
+            },
+          );
+        } catch (error) {
+          console.warn(`Failed to initialise preview texture: ${path}`, error);
+          texture = fallbackTexture;
         }
-      });
-      const dirt = createTexture(128, (ctx, size) => {
+        if (!texture) {
+          texture = fallbackTexture;
+        }
+        return configureTexture(texture, options);
+      };
+      const dirt = createProceduralTexture(128, (ctx, size) => {
         ctx.fillStyle = '#8b5a2b';
         ctx.fillRect(0, 0, size, size);
         ctx.fillStyle = '#6d4620';
@@ -2838,7 +2919,30 @@
           ctx.fill();
         }
       });
-      const wood = createTexture(128, (ctx, size) => {
+      const grass = loadTexture(REMOTE_TEXTURE_URLS.grass, {}, (ctx, size) => {
+        const gradient = ctx.createLinearGradient(0, 0, 0, size);
+        gradient.addColorStop(0, '#6fd86f');
+        gradient.addColorStop(1, '#2e7d32');
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, size, size);
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.08)';
+        for (let i = 0; i < 320; i += 1) {
+          const x = Math.random() * size;
+          const y = Math.random() * size;
+          const w = Math.random() * 3 + 1;
+          const h = Math.random() * 3 + 1;
+          ctx.fillRect(x, y, w, h);
+        }
+        ctx.fillStyle = 'rgba(0, 60, 0, 0.12)';
+        for (let i = 0; i < 220; i += 1) {
+          const x = Math.random() * size;
+          const y = Math.random() * size;
+          const w = Math.random() * 2 + 1;
+          const h = Math.random() * 5 + 1;
+          ctx.fillRect(x, y, w, h);
+        }
+      });
+      const wood = loadTexture(REMOTE_TEXTURE_URLS.wood, {}, (ctx, size) => {
         const gradient = ctx.createLinearGradient(0, 0, size, 0);
         gradient.addColorStop(0, '#b07943');
         gradient.addColorStop(0.5, '#d2a574');
@@ -2874,19 +2978,41 @@
           ctx.fill();
         }
       });
-      previewAssets.textures = { grass, dirt, wood };
+      const leaves = loadTexture(REMOTE_TEXTURE_URLS.leaves, { transparent: true }, (ctx, size) => {
+        ctx.clearRect(0, 0, size, size);
+        for (let i = 0; i < 420; i += 1) {
+          const radius = Math.random() * 8 + 6;
+          const x = Math.random() * size;
+          const y = Math.random() * size;
+          const green = Math.floor(120 + Math.random() * 80);
+          ctx.fillStyle = `rgba(34, ${green}, 34, ${0.55 + Math.random() * 0.35})`;
+          ctx.beginPath();
+          ctx.arc(x, y, radius, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      });
+      previewAssets.textures = { grass, dirt, wood, leaves };
     }
 
     function ensurePreviewMaterials() {
       if (previewAssets.materials.grassTop) return;
       ensurePreviewTextures();
-      const { grass, dirt, wood } = previewAssets.textures;
+      const { grass, dirt, wood, leaves } = previewAssets.textures;
       previewAssets.materials = {
         grassTop: new THREE.MeshStandardMaterial({ map: grass, roughness: 0.7, metalness: 0.12 }),
         dirt: new THREE.MeshStandardMaterial({ map: dirt, roughness: 0.85, metalness: 0.08, color: new THREE.Color('#9a7347') }),
         dirtBottom: new THREE.MeshStandardMaterial({ map: dirt, roughness: 0.9, metalness: 0.05, color: new THREE.Color('#6c4a28') }),
         woodBark: new THREE.MeshStandardMaterial({ map: wood, roughness: 0.75, metalness: 0.18 }),
-        leaves: new THREE.MeshStandardMaterial({ color: new THREE.Color('#2e8b57'), roughness: 0.55, metalness: 0.08, transparent: true, opacity: 0.95 }),
+        leaves: new THREE.MeshStandardMaterial({
+          map: leaves,
+          color: new THREE.Color('#2e8b57'),
+          roughness: 0.55,
+          metalness: 0.08,
+          transparent: true,
+          opacity: 0.96,
+          alphaTest: 0.25,
+          side: THREE.DoubleSide,
+        }),
         rail: new THREE.MeshStandardMaterial({ color: new THREE.Color('#a7adb3'), metalness: 0.78, roughness: 0.32 }),
         sleeper: new THREE.MeshStandardMaterial({ color: new THREE.Color('#3a424f'), metalness: 0.42, roughness: 0.6 }),
       };
@@ -2933,7 +3059,8 @@
       if (!previewGroup) return null;
       const size = PREVIEW_ISLAND_SIZE;
       const blockSize = PREVIEW_BLOCK_SIZE;
-      const half = (size - 1) / 2;
+      const half = size / 2;
+      const spawnTarget = { x: 0, z: PREVIEW_PLAYER_STAND_OFFSET };
       const topMaterials = [
         previewAssets.materials.dirt,
         previewAssets.materials.dirt,
@@ -2953,6 +3080,7 @@
       const cubeGeometry = new THREE.BoxGeometry(blockSize, blockSize, blockSize);
       const heights = Array.from({ length: size }, () => Array(size).fill(0));
       const topTiles = [];
+      let spawnTileInfo = null;
       for (let gx = 0; gx < size; gx += 1) {
         for (let gz = 0; gz < size; gz += 1) {
           const worldX = (gx - half) * blockSize;
@@ -2963,7 +3091,16 @@
             continue;
           }
           const noise = previewPerlin(gx, gz);
-          const height = Math.max(1, Math.round(1 + noise * 2.4 + falloff * 1.4));
+          const spawnDistance = Math.hypot(worldX - spawnTarget.x, worldZ - spawnTarget.z);
+          let height = Math.max(1, Math.round(1 + noise * 2.4 + falloff * 1.4));
+          if (spawnDistance < PREVIEW_BLOCK_SIZE * 1.6) {
+            height = 1;
+          } else if (spawnDistance < PREVIEW_BLOCK_SIZE * 3.2) {
+            height = Math.max(1, Math.round(1 + noise * 1.6));
+          }
+          if (Math.abs(worldX) < PREVIEW_BLOCK_SIZE * 1.2 && worldZ < spawnTarget.z && worldZ > -PREVIEW_BLOCK_SIZE * 2.6) {
+            height = Math.max(1, Math.min(height, 2));
+          }
           heights[gx][gz] = height;
           for (let gy = 0; gy < height; gy += 1) {
             const isTop = gy === height - 1;
@@ -2979,22 +3116,40 @@
             worldX,
             worldZ,
             height,
+            spawnDistance,
           });
+          if (!spawnTileInfo || spawnDistance < spawnTileInfo.distance) {
+            spawnTileInfo = { tile: topTiles[topTiles.length - 1], distance: spawnDistance };
+          }
         }
       }
-      return { size, blockSize, heights, topTiles, half };
+      const spawnReference = spawnTileInfo?.tile ?? null;
+      const spawn = spawnReference
+        ? {
+            worldX: spawnReference.worldX,
+            worldZ: spawnReference.worldZ,
+            height: spawnReference.height,
+          }
+        : { worldX: spawnTarget.x, worldZ: spawnTarget.z, height: 1 };
+      return { size, blockSize, heights, topTiles, half, spawn };
     }
 
     function buildPreviewTrees(island) {
       if (!island) return;
-      const { topTiles, blockSize } = island;
+      const { topTiles, blockSize, size, spawn } = island;
+      const spawnPoint = spawn ?? { worldX: 0, worldZ: PREVIEW_PLAYER_STAND_OFFSET };
+      const spawnRadius = PREVIEW_BLOCK_SIZE * 2.8;
+      const islandHalfExtent = (size ?? PREVIEW_ISLAND_SIZE) * PREVIEW_BLOCK_SIZE * 0.5;
       const candidates = topTiles.filter((tile) => {
         const margin = PREVIEW_BLOCK_SIZE * 1.5;
-        return Math.abs(tile.worldX) <= (PREVIEW_ISLAND_SIZE * PREVIEW_BLOCK_SIZE) / 2 - margin &&
-          Math.abs(tile.worldZ) <= (PREVIEW_ISLAND_SIZE * PREVIEW_BLOCK_SIZE) / 2 - margin;
+        const withinBounds =
+          Math.abs(tile.worldX) <= islandHalfExtent - margin && Math.abs(tile.worldZ) <= islandHalfExtent - margin;
+        const farFromSpawn = Math.hypot(tile.worldX - spawnPoint.worldX, tile.worldZ - spawnPoint.worldZ) > spawnRadius;
+        return withinBounds && farFromSpawn && tile.height >= 1;
       });
       if (!candidates.length) return;
-      const desired = Math.min(candidates.length, Math.floor(5 + previewRandom(12.4, 7.8) * 5));
+      const treeNoise = previewRandom(size ?? PREVIEW_ISLAND_SIZE, candidates.length + 17);
+      const desired = Math.min(candidates.length, Math.max(8, Math.round(THREE.MathUtils.lerp(8, 12, treeNoise))));
       const used = new Set();
       let attempts = 0;
       let spawned = 0;
@@ -3059,15 +3214,16 @@
         maxEdgeHeight = Math.max(maxEdgeHeight, heights[0][i] || 0, heights[size - 1][i] || 0);
       }
       const railY = maxEdgeHeight * blockSize + 0.55;
-      const halfSpan = ((size - 1) / 2) * blockSize;
-      const railLength = size * blockSize + blockSize;
+      const halfSpan = (size * blockSize) / 2;
+      const edgeOffset = blockSize * 0.6;
+      const railLength = size * blockSize + blockSize * 2;
       const railWidth = 0.16;
       const railThickness = 0.06;
       const positions = [
-        { x: 0, z: halfSpan + blockSize * 0.5, rotation: 0 },
-        { x: 0, z: -halfSpan - blockSize * 0.5, rotation: 0 },
-        { x: halfSpan + blockSize * 0.5, z: 0, rotation: Math.PI / 2 },
-        { x: -halfSpan - blockSize * 0.5, z: 0, rotation: Math.PI / 2 },
+        { x: 0, z: halfSpan + edgeOffset, rotation: 0 },
+        { x: 0, z: -halfSpan - edgeOffset, rotation: 0 },
+        { x: halfSpan + edgeOffset, z: 0, rotation: Math.PI / 2 },
+        { x: -halfSpan - edgeOffset, z: 0, rotation: Math.PI / 2 },
       ];
       const railGeometry = new THREE.BoxGeometry(railLength, railThickness, railWidth);
       positions.forEach((entry, index) => {
@@ -3104,6 +3260,11 @@
       const width = canvas?.clientWidth || window.innerWidth || 1;
       const height = canvas?.clientHeight || window.innerHeight || 1;
       const aspect = width / Math.max(height, 1);
+      if (previewCamera.isPerspectiveCamera) {
+        previewCamera.aspect = aspect;
+        previewCamera.updateProjectionMatrix();
+        return;
+      }
       previewCamera.left = -PREVIEW_VIEW_SIZE * aspect;
       previewCamera.right = PREVIEW_VIEW_SIZE * aspect;
       previewCamera.top = PREVIEW_VIEW_SIZE;
@@ -3113,16 +3274,28 @@
       previewCamera.updateProjectionMatrix();
     }
 
-    function updatePreviewCameraPosition() {
+    function updatePreviewCameraPosition(timestamp = performance?.now ? performance.now() : Date.now()) {
       if (!previewCamera) return;
       const yaw = THREE.MathUtils.clamp(previewState.yaw ?? 0, -PREVIEW_MAX_YAW, PREVIEW_MAX_YAW);
+      const pitch = THREE.MathUtils.clamp(previewState.pitch ?? 0, -PREVIEW_MAX_PITCH, PREVIEW_MAX_PITCH);
       previewState.yaw = yaw;
-      const distance = PREVIEW_CAMERA_DISTANCE;
-      const eyeY = PREVIEW_CAMERA_EYE_HEIGHT;
-      const targetY = PREVIEW_CAMERA_TARGET_HEIGHT;
-      previewCamera.position.set(Math.sin(yaw) * distance, eyeY, Math.cos(yaw) * distance);
+      previewState.pitch = pitch;
+      tmpPreviewForward.set(
+        Math.sin(yaw) * Math.cos(pitch),
+        Math.sin(pitch),
+        -Math.cos(yaw) * Math.cos(pitch),
+      );
+      if (tmpPreviewForward.lengthSq() < 0.0001) {
+        tmpPreviewForward.set(0, 0, -1);
+      } else {
+        tmpPreviewForward.normalize();
+      }
+      const bob = Math.sin(timestamp / 520) * 0.028;
+      previewCamera.position.copy(previewPlayerPosition);
+      previewCamera.position.y = previewPlayerPosition.y + bob;
+      tmpPreviewTarget.copy(previewCamera.position).addScaledVector(tmpPreviewForward, PREVIEW_LOOK_DISTANCE);
       previewCamera.up.copy(WORLD_UP);
-      previewCamera.lookAt(0, targetY, 0);
+      previewCamera.lookAt(tmpPreviewTarget);
     }
 
     function setPreviewYaw(yaw) {
@@ -3130,9 +3303,116 @@
       updatePreviewCameraPosition();
     }
 
+    function setPreviewPitch(pitch) {
+      previewState.pitch = pitch;
+      updatePreviewCameraPosition();
+    }
+
+    function createFallbackHand() {
+      const group = new THREE.Group();
+      const armMaterial = new THREE.MeshStandardMaterial({
+        color: new THREE.Color('#e4c9a7'),
+        roughness: 0.58,
+        metalness: 0.05,
+      });
+      const armMesh = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.22, 0.6), armMaterial);
+      armMesh.position.set(0, -0.05, -0.3);
+      armMesh.castShadow = false;
+      armMesh.receiveShadow = false;
+      group.add(armMesh);
+      const gloveMaterial = new THREE.MeshStandardMaterial({
+        color: new THREE.Color('#c46b3d'),
+        roughness: 0.45,
+        metalness: 0.08,
+      });
+      const gloveMesh = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.14, 0.18), gloveMaterial);
+      gloveMesh.position.set(0, -0.09, -0.66);
+      gloveMesh.castShadow = false;
+      gloveMesh.receiveShadow = false;
+      group.add(gloveMesh);
+      return group;
+    }
+
+    function loadPreviewHandTemplate() {
+      if (previewHandTemplate) {
+        return Promise.resolve(previewHandTemplate);
+      }
+      if (!THREE.GLTFLoader) {
+        previewHandTemplate = createFallbackHand();
+        return Promise.resolve(previewHandTemplate);
+      }
+      if (!gltfLoader) {
+        gltfLoader = new THREE.GLTFLoader();
+      }
+      if (!previewHandPromise) {
+        previewHandPromise = new Promise((resolve) => {
+          gltfLoader.load(
+            'assets/arm.gltf',
+            (gltf) => {
+              const template = gltf.scene || gltf.scenes?.[0] || createFallbackHand();
+              previewHandTemplate = template;
+              resolve(template);
+            },
+            undefined,
+            (error) => {
+              console.warn('Failed to load first-person hand model.', error);
+              const fallback = createFallbackHand();
+              previewHandTemplate = fallback;
+              resolve(fallback);
+            },
+          );
+        }).finally(() => {
+          previewHandPromise = null;
+        });
+      }
+      return previewHandPromise.then((template) => {
+        previewHandTemplate = template || previewHandTemplate || createFallbackHand();
+        return previewHandTemplate;
+      });
+    }
+
+    function attachPreviewHandOverlay() {
+      if (previewHandModel || !previewCamera) return;
+      loadPreviewHandTemplate()
+        .then((template) => {
+          if (!previewCamera) return;
+          if (previewHandModel) return;
+          const source = template || createFallbackHand();
+          const instance = source.clone(true);
+          instance.name = 'preview-hand-overlay';
+          instance.traverse((child) => {
+            if (child.isMesh) {
+              child.castShadow = false;
+              child.receiveShadow = false;
+              if (child.material) {
+                const cloned = child.material.clone();
+                cloned.depthTest = false;
+                cloned.depthWrite = false;
+                cloned.transparent = true;
+                cloned.opacity = (cloned.opacity ?? 1) * 0.96;
+                cloned.side = THREE.DoubleSide;
+                child.material = cloned;
+              }
+            }
+          });
+          previewHandModel = instance;
+          previewCamera.add(previewHandModel);
+          previewHandModel.position.copy(previewHandOffset);
+          previewHandModel.rotation.set(
+            THREE.MathUtils.degToRad(-25),
+            THREE.MathUtils.degToRad(25),
+            THREE.MathUtils.degToRad(5),
+          );
+        })
+        .catch((error) => {
+          console.warn('Unable to attach preview hand overlay.', error);
+        });
+    }
+
     function renderPreviewScene(timestamp) {
       if (!previewState.active || !renderer || !previewCamera) return;
       previewAnimationFrame = requestAnimationFrame(renderPreviewScene);
+      updatePreviewCameraPosition(timestamp);
       if (previewGroup) {
         previewGroup.position.y = Math.sin(timestamp / 1200) * PREVIEW_BOB_HEIGHT;
       }
@@ -3152,6 +3432,49 @@
         }
       }
       previewState.lastTimestamp = timestamp;
+      const cycleRatio = PREVIEW_DAY_LENGTH > 0 ? (timestamp % PREVIEW_DAY_LENGTH) / PREVIEW_DAY_LENGTH : 0;
+      const nightStrength = 1 - (0.5 + 0.5 * Math.sin(cycleRatio * Math.PI * 2));
+      if (scene?.fog) {
+        tmpColorA.set('#87ceeb');
+        tmpColorB.set('#0b1d36');
+        tmpColorC.copy(tmpColorA).lerp(tmpColorB, nightStrength);
+        scene.fog.color.copy(tmpColorC);
+        scene.fog.density = THREE.MathUtils.lerp(0.012, 0.028, nightStrength);
+        renderer.setClearColor(tmpColorC, 1);
+      }
+      if (hemiLight) {
+        tmpColorA.set('#fff3d4');
+        tmpColorB.set('#314b6b');
+        hemiLight.color.copy(tmpColorA).lerp(tmpColorB, nightStrength);
+        tmpColorC.set('#4c6b3b');
+        tmpColorD.set('#1e2a2f');
+        hemiLight.groundColor.copy(tmpColorC).lerp(tmpColorD, nightStrength * 0.6);
+        hemiLight.intensity = THREE.MathUtils.lerp(1.15, 0.45, nightStrength);
+      }
+      const sunAngle = cycleRatio * Math.PI * 2;
+      if (sunLight) {
+        sunLight.intensity = THREE.MathUtils.lerp(1.2, 0.15, nightStrength);
+        sunLight.position.set(Math.sin(sunAngle) * 10, THREE.MathUtils.lerp(14, 6, nightStrength), Math.cos(sunAngle) * 6);
+      }
+      if (moonLight) {
+        const moonAngle = sunAngle + Math.PI;
+        moonLight.intensity = THREE.MathUtils.lerp(0.08, 0.6, nightStrength);
+        moonLight.position.set(Math.sin(moonAngle) * 10, 8, Math.cos(moonAngle) * 6);
+      }
+      if (previewHandModel) {
+        const sway = Math.sin(timestamp / 620) * 0.06;
+        const bob = Math.sin(timestamp / 460) * 0.045;
+        previewHandModel.position.set(
+          previewHandOffset.x + sway * 0.4,
+          previewHandOffset.y + bob,
+          previewHandOffset.z,
+        );
+        previewHandModel.rotation.set(
+          THREE.MathUtils.degToRad(-25 + bob * -40),
+          THREE.MathUtils.degToRad(25 + sway * 18),
+          THREE.MathUtils.degToRad(5),
+        );
+      }
       renderer.render(scene, previewCamera);
     }
 
@@ -3187,6 +3510,10 @@
       if (worldGroup) worldGroup.visible = true;
       if (entityGroup) entityGroup.visible = true;
       if (particleGroup) particleGroup.visible = true;
+      if (previewHandModel && previewHandModel.parent) {
+        previewHandModel.parent.remove(previewHandModel);
+      }
+      previewHandModel = null;
       previewCamera = null;
       applyPreviewWireframe(false);
       if (scene?.fog) {
@@ -3204,6 +3531,7 @@
       if (previewState.active) return;
       previewState.seed = Math.random() * 1000 + 1;
       previewState.yaw = 0;
+      previewState.pitch = -0.18;
       previewState.frameTimes = [];
       previewState.lastTimestamp = null;
       previewState.wireframe = false;
@@ -3218,6 +3546,7 @@
         scene.fog.color.set('#87ceeb');
         scene.fog.density = 0.018;
       }
+      renderer?.setClearColor?.('#87ceeb', 1);
       if (hemiLight) {
         hemiLight.color.set('#87ceeb');
         hemiLight.groundColor.set('#98fb98');
@@ -3231,9 +3560,23 @@
       const island = buildPreviewIsland();
       buildPreviewTrees(island);
       buildPreviewRails(island);
-      previewCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 100);
+      if (island?.spawn) {
+        const spawnHeight = (island.spawn.height ?? 1) * (island.blockSize ?? PREVIEW_BLOCK_SIZE);
+        previewState.spawnHeight = spawnHeight;
+        previewPlayerPosition.set(
+          island.spawn.worldX ?? 0,
+          spawnHeight + PREVIEW_PLAYER_EYE_HEIGHT,
+          (island.spawn.worldZ ?? PREVIEW_PLAYER_STAND_OFFSET) + 0.05,
+        );
+      } else {
+        const fallbackHeight = PREVIEW_BLOCK_SIZE;
+        previewState.spawnHeight = fallbackHeight;
+        previewPlayerPosition.set(0, fallbackHeight + PREVIEW_PLAYER_EYE_HEIGHT, PREVIEW_PLAYER_STAND_OFFSET);
+      }
+      previewCamera = new THREE.PerspectiveCamera(PREVIEW_FOV, 1, 0.1, 200);
       updatePreviewCameraFrustum();
       updatePreviewCameraPosition();
+      attachPreviewHandOverlay();
       previewState.active = true;
       renderPreviewScene(performance?.now ? performance.now() : Date.now());
     }
@@ -3403,6 +3746,42 @@
       }
     }
 
+    function getTreeLeavesMaterial() {
+      if (treeLeavesMaterial) {
+        return treeLeavesMaterial;
+      }
+      ensurePreviewTextures();
+      const baseLeaves = previewAssets.textures.leaves;
+      if (!baseLeaves) {
+        treeLeavesMaterial = new THREE.MeshStandardMaterial({
+          color: new THREE.Color('#2e8b57'),
+          roughness: 0.55,
+          metalness: 0.08,
+          transparent: true,
+          opacity: 0.95,
+          alphaTest: 0.25,
+          side: THREE.DoubleSide,
+        });
+        return treeLeavesMaterial;
+      }
+      const leavesTexture = clonePreviewTexture(baseLeaves, {
+        repeat: { x: 2, y: 2 },
+        transparent: true,
+      });
+      leavesTexture.needsUpdate = true;
+      treeLeavesMaterial = new THREE.MeshStandardMaterial({
+        map: leavesTexture,
+        color: new THREE.Color('#2e8b57'),
+        roughness: 0.55,
+        metalness: 0.08,
+        transparent: true,
+        opacity: 0.95,
+        alphaTest: 0.25,
+        side: THREE.DoubleSide,
+      });
+      return treeLeavesMaterial;
+    }
+
     function rebuildTileGroup(renderInfo, tile) {
       const { group } = renderInfo;
       while (group.children.length) {
@@ -3498,10 +3877,10 @@
             y: 0.9 + 0.7,
           });
           addBlock(group, {
-            color: accentColor,
-            width: 1.1,
-            depth: 1.1,
-            height: 1.1,
+            material: getTreeLeavesMaterial(),
+            width: 1.3,
+            depth: 1.3,
+            height: 1.2,
             y: 0.9 + 1.4,
           });
           break;
@@ -8939,6 +9318,14 @@
         if (leftKeys.includes(key) || rightKeys.includes(key)) {
           const delta = rightKeys.includes(key) ? PREVIEW_KEY_YAW_DELTA : -PREVIEW_KEY_YAW_DELTA;
           setPreviewYaw(previewState.yaw + delta);
+          event.preventDefault();
+          return;
+        }
+        const upKeys = ['arrowup'];
+        const downKeys = ['arrowdown'];
+        if (upKeys.includes(key) || downKeys.includes(key)) {
+          const delta = upKeys.includes(key) ? PREVIEW_KEY_YAW_DELTA * 0.5 : -PREVIEW_KEY_YAW_DELTA * 0.5;
+          setPreviewPitch(previewState.pitch + delta);
           event.preventDefault();
           return;
         }
