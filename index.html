@@ -17,105 +17,129 @@
     <div class="manu-logo" aria-hidden="false">
       <img src="assets/manu-logo.svg" alt="Created by Manu" class="manu-logo__image" />
     </div>
-    <header class="top-bar">
-      <div class="logo-area">
-        <img src="assets/infinite-dimension-logo.svg" alt="Infinite Dimension logo" class="brand-logo" />
-        <div class="brand-copy">
-          <h1>Infinite Dimension</h1>
-          <span class="subtitle">Portals Reimagined</span>
-        </div>
-      </div>
-      <div class="top-bar__center">
-        <button
-          type="button"
-          id="openLeaderboard"
-          class="leaderboard-toggle"
-          aria-haspopup="dialog"
-          aria-controls="leaderboardModal"
-          aria-expanded="false"
-        >
-          <span class="leaderboard-toggle__icon" aria-hidden="true">
-            <span></span>
-            <span></span>
-            <span></span>
-          </span>
-          <span class="leaderboard-toggle__label">Leaderboard</span>
-        </button>
-      </div>
-      <div class="top-actions">
-        <button type="button" id="openGuide" class="ghost">Game Guide</button>
-        <button
-          type="button"
-          id="openSettings"
-          class="ghost"
-          aria-haspopup="dialog"
-          aria-controls="settingsModal"
-          aria-expanded="false"
-        >
-          Settings
-        </button>
-        <button
-          type="button"
-          id="toggleSidebar"
-          class="ghost mobile-sidebar-toggle"
-          aria-expanded="false"
-          aria-controls="sidePanel"
-        >
-          Player Panels
-        </button>
-        <div class="status-area">
-          <div class="status-item hearts" id="hearts"></div>
-          <div class="status-item bubbles" id="bubbles"></div>
-          <div class="status-item time" id="timeOfDay"></div>
-          <button
-            type="button"
-            class="craft-launcher"
-            id="openCrafting"
-            aria-label="Open crafting interface"
-            aria-haspopup="dialog"
-            aria-controls="craftingModal"
-          >
-            <span aria-hidden="true" class="craft-launcher__icon"></span>
-            <span class="sr-only">Open crafting interface</span>
-          </button>
-        </div>
-        <div class="user-identity" aria-live="polite">
-          <span class="user-name" id="headerUserName">Guest Explorer</span>
-          <span class="user-location" id="headerUserLocation">Location unavailable</span>
-        </div>
-      </div>
-    </header>
     <main class="main-layout">
+      <aside class="objectives-panel" id="objectivesPanel" aria-label="Mission objectives">
+        <div class="logo-area objectives-panel__brand">
+          <img src="assets/infinite-dimension-logo.svg" alt="Infinite Dimension logo" class="brand-logo" />
+          <div class="brand-copy">
+            <h1>Infinite Dimension</h1>
+            <span class="subtitle">Portals Reimagined</span>
+          </div>
+        </div>
+        <section class="objectives-panel__section" aria-live="polite">
+          <header class="objectives-panel__header">
+            <h2>Current Objectives</h2>
+          </header>
+          <div class="objectives-panel__card">
+            <div class="overlay-panel" id="dimensionInfo"></div>
+          </div>
+        </section>
+        <section class="objectives-panel__section objectives-panel__section--hint" aria-live="polite">
+          <header class="objectives-panel__header objectives-panel__header--hint">
+            <h2>Guidance</h2>
+          </header>
+          <div class="objectives-panel__card objectives-panel__card--hint">
+            <div class="player-hint" id="playerHint" role="status" aria-live="assertive" tabindex="0"></div>
+          </div>
+        </section>
+      </aside>
       <section class="primary-panel">
         <canvas id="gameCanvas" width="960" height="600" aria-label="Game world"></canvas>
-        <div class="overlay-panel" id="dimensionInfo" aria-live="polite"></div>
-        <div
-          class="portal-progress"
-          id="portalProgress"
-          role="progressbar"
-          aria-valuemin="0"
-          aria-valuemax="100"
-          aria-valuenow="0"
-        >
-          <span class="label"></span>
-          <span class="bar"></span>
-        </div>
-        <div class="score-overlay" id="scorePanel" role="status" aria-live="polite">
-          <span class="score-overlay__label">Score</span>
-          <span class="score-overlay__value" id="scoreTotal">0</span>
-          <ul class="score-overlay__breakdown">
-            <li>
-              <span class="score-overlay__metric-label">Recipes</span>
-              <span class="score-overlay__metric-value" id="scoreRecipes">0 (+0 pts)</span>
-            </li>
-            <li>
-              <span class="score-overlay__metric-label">Dimensions</span>
-              <span class="score-overlay__metric-value" id="scoreDimensions">0 (+0 pts)</span>
-            </li>
-          </ul>
+        <div class="hud-layer" id="gameHud">
+          <div class="hud-layer__corner hud-layer__corner--top-left">
+            <div class="hud-card hud-card--status">
+              <div class="hud-status" aria-label="Player vitals" role="group">
+                <div class="status-item hearts" id="hearts"></div>
+                <div class="status-item bubbles" id="bubbles"></div>
+                <div class="status-item time" id="timeOfDay"></div>
+              </div>
+              <button
+                type="button"
+                class="craft-launcher"
+                id="openCrafting"
+                aria-label="Open crafting interface"
+                aria-haspopup="dialog"
+                aria-controls="craftingModal"
+              >
+                <span aria-hidden="true" class="craft-launcher__icon"></span>
+                <span class="sr-only">Open crafting interface</span>
+              </button>
+            </div>
+          </div>
+          <div class="hud-layer__corner hud-layer__corner--top-right">
+            <div class="score-overlay" id="scorePanel" role="status" aria-live="polite">
+              <span class="score-overlay__label">Score</span>
+              <span class="score-overlay__value" id="scoreTotal">0</span>
+              <ul class="score-overlay__breakdown">
+                <li>
+                  <span class="score-overlay__metric-label">Recipes</span>
+                  <span class="score-overlay__metric-value" id="scoreRecipes">0 (+0 pts)</span>
+                </li>
+                <li>
+                  <span class="score-overlay__metric-label">Dimensions</span>
+                  <span class="score-overlay__metric-value" id="scoreDimensions">0 (+0 pts)</span>
+                </li>
+              </ul>
+            </div>
+            <div class="hud-card hud-card--actions">
+              <div class="hud-actions" role="group" aria-label="HUD controls">
+                <button
+                  type="button"
+                  id="openLeaderboard"
+                  class="leaderboard-toggle"
+                  aria-haspopup="dialog"
+                  aria-controls="leaderboardModal"
+                  aria-expanded="false"
+                >
+                  <span class="leaderboard-toggle__icon" aria-hidden="true">
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                  </span>
+                  <span class="leaderboard-toggle__label">Leaderboard</span>
+                </button>
+                <button type="button" id="openGuide" class="ghost">Game Guide</button>
+                <button
+                  type="button"
+                  id="openSettings"
+                  class="ghost"
+                  aria-haspopup="dialog"
+                  aria-controls="settingsModal"
+                  aria-expanded="false"
+                >
+                  Settings
+                </button>
+                <button
+                  type="button"
+                  id="toggleSidebar"
+                  class="ghost mobile-sidebar-toggle"
+                  aria-expanded="false"
+                  aria-controls="sidePanel"
+                >
+                  Player Panels
+                </button>
+              </div>
+              <div class="user-identity" aria-live="polite">
+                <span class="user-name" id="headerUserName">Guest Explorer</span>
+                <span class="user-location" id="headerUserLocation">Location unavailable</span>
+              </div>
+            </div>
+          </div>
+          <div class="hud-layer__bottom">
+            <div
+              class="portal-progress"
+              id="portalProgress"
+              role="progressbar"
+              aria-valuemin="0"
+              aria-valuemax="100"
+              aria-valuenow="0"
+            >
+              <span class="label"></span>
+              <span class="bar"></span>
+            </div>
+          </div>
         </div>
         <div class="victory-banner" id="victoryBanner" role="status" aria-live="assertive"></div>
-        <div class="player-hint" id="playerHint" role="status" aria-live="assertive" tabindex="0"></div>
         <div class="drowning-vignette" id="drowningVignette" aria-hidden="true"></div>
         <div class="dimension-transition" id="dimensionTransition" aria-hidden="true"></div>
         <div
@@ -132,7 +156,7 @@
           </div>
         </div>
       </section>
-      <aside class="side-panel" id="sidePanel" tabindex="-1">
+      <aside class="side-panel" id="sidePanel" tabindex="-1" aria-hidden="true">
         <section class="player-panel" aria-label="Player profile">
           <header class="player-panel__header">
             <h2>Player Hub</h2>

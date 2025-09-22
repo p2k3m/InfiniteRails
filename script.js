@@ -71,6 +71,8 @@
     const timeEl = document.getElementById('timeOfDay');
     const dimensionInfoEl = document.getElementById('dimensionInfo');
     const portalProgressEl = document.getElementById('portalProgress');
+    const hudRootEl = document.getElementById('gameHud');
+    const objectivesPanelEl = document.getElementById('objectivesPanel');
     const victoryBannerEl = document.getElementById('victoryBanner');
     const hotbarEl = document.getElementById('hotbar');
     const extendedInventoryEl = document.getElementById('extendedInventory');
@@ -127,6 +129,46 @@
     const scoreRecipesEl = document.getElementById('scoreRecipes');
     const scoreDimensionsEl = document.getElementById('scoreDimensions');
     let scoreOverlayInitialized = false;
+
+    const HUD_INACTIVITY_TIMEOUT = 12000;
+    let hudInactivityTimer = null;
+
+    function hasActiveBlockingOverlay() {
+      if (document.body.classList.contains('sidebar-open')) return true;
+      return Boolean(document.querySelector('.modal[aria-modal="true"]:not([hidden])'));
+    }
+
+    function applyHudInactiveState() {
+      if (!hudRootEl && !objectivesPanelEl) return;
+      if (!document.body.classList.contains('game-active')) return;
+      if (hasActiveBlockingOverlay()) return;
+      document.body.classList.add('hud-inactive');
+    }
+
+    function resetHudInactivityTimer() {
+      if (!hudRootEl && !objectivesPanelEl) return;
+      document.body.classList.remove('hud-inactive');
+      if (hudInactivityTimer) {
+        window.clearTimeout(hudInactivityTimer);
+        hudInactivityTimer = null;
+      }
+      if (!document.body.classList.contains('game-active')) return;
+      hudInactivityTimer = window.setTimeout(applyHudInactiveState, HUD_INACTIVITY_TIMEOUT);
+    }
+
+    const hudActivityEvents = ['pointerdown', 'pointermove', 'keydown', 'wheel', 'touchstart'];
+    hudActivityEvents.forEach((eventName) => {
+      const listenerOptions = eventName === 'keydown' ? false : { passive: true };
+      window.addEventListener(eventName, resetHudInactivityTimer, listenerOptions);
+    });
+
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) {
+        resetHudInactivityTimer();
+      }
+    });
+
+    resetHudInactivityTimer();
 
     const leaderboardDefaultSortDirection = {
       score: 'desc',
@@ -1095,14 +1137,21 @@
     function syncSidebarForViewport() {
       if (!sidePanelEl) return;
       const isMobile = window.innerWidth <= 860;
-      if (!isMobile) {
-        sidePanelEl.classList.remove('open');
-        sidePanelEl.removeAttribute('aria-hidden');
-        document.body.classList.remove('sidebar-open');
-        toggleSidebarButton?.setAttribute('aria-expanded', 'false');
-        if (sidePanelScrim) sidePanelScrim.hidden = true;
-        return;
-      }
+        if (!isMobile) {
+          if (sidePanelEl.classList.contains('open')) {
+            sidePanelEl.setAttribute('aria-hidden', 'false');
+            document.body.classList.add('sidebar-open');
+            toggleSidebarButton?.setAttribute('aria-expanded', 'true');
+            if (sidePanelScrim) sidePanelScrim.hidden = false;
+          } else {
+            sidePanelEl.setAttribute('aria-hidden', 'true');
+            document.body.classList.remove('sidebar-open');
+            toggleSidebarButton?.setAttribute('aria-expanded', 'false');
+            if (sidePanelScrim) sidePanelScrim.hidden = true;
+          }
+          resetHudInactivityTimer();
+          return;
+        }
       if (sidePanelEl.classList.contains('open')) {
         sidePanelEl.setAttribute('aria-hidden', 'false');
         if (sidePanelScrim) sidePanelScrim.hidden = false;
@@ -1110,6 +1159,7 @@
         sidePanelEl.setAttribute('aria-hidden', 'true');
         if (sidePanelScrim) sidePanelScrim.hidden = true;
       }
+      resetHudInactivityTimer();
     }
 
     function openSidebar() {
@@ -1122,6 +1172,7 @@
       if (typeof sidePanelEl.focus === 'function') {
         sidePanelEl.focus();
       }
+      resetHudInactivityTimer();
     }
 
     function closeSidebar(shouldFocusToggle = false) {
@@ -1136,6 +1187,7 @@
       toggleSidebarButton?.setAttribute('aria-expanded', 'false');
       if (sidePanelScrim) sidePanelScrim.hidden = true;
       if (shouldFocusToggle) toggleSidebarButton?.focus();
+      resetHudInactivityTimer();
     }
 
     function toggleSidebar() {
@@ -3981,6 +4033,7 @@
       }
       canvas?.focus();
       document.body?.classList.add('game-active');
+      resetHudInactivityTimer();
       updateLayoutMetrics();
       state.isRunning = true;
       state.player.effects = {};
