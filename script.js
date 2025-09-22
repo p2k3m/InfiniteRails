@@ -4439,6 +4439,7 @@
           bgTertiary: 'rgba(21, 40, 72, 0.85)',
           pageBackground: `radial-gradient(circle at 20% 20%, rgba(73, 242, 255, 0.2), transparent 45%), radial-gradient(circle at 80% 10%, rgba(247, 183, 51, 0.2), transparent 55%), linear-gradient(160deg, #050912, #0b1230 60%, #05131f 100%)`,
           dimensionGlow: 'rgba(73, 242, 255, 0.45)',
+          class: 'theme-grassland',
         },
         atmosphere: {
           daySky: '#bcd7ff',
@@ -4630,6 +4631,7 @@
           bgTertiary: 'rgba(63, 22, 18, 0.82)',
           pageBackground: `radial-gradient(circle at 18% 22%, rgba(255, 118, 70, 0.18), transparent 45%), radial-gradient(circle at 80% 15%, rgba(255, 208, 95, 0.16), transparent 60%), linear-gradient(160deg, #180909, #2c1110 55%, #12070e 100%)`,
           dimensionGlow: 'rgba(255, 118, 70, 0.4)',
+          class: 'theme-netherite',
         },
         atmosphere: {
           daySky: '#ff9d73',
@@ -4666,6 +4668,10 @@
       },
     };
 
+    const DIMENSION_THEME_CLASSES = Object.values(DIMENSIONS)
+      .map((dimension) => dimension.theme?.class)
+      .filter(Boolean);
+
     function applyDimensionTheme(dimension) {
       if (!dimension) return;
       const theme = { ...BASE_THEME, ...(dimension.theme ?? {}) };
@@ -4679,6 +4685,14 @@
       style.setProperty('--page-background', theme.pageBackground);
       style.setProperty('--dimension-glow', theme.dimensionGlow);
       document.body.dataset.dimension = dimension.id;
+      DIMENSION_THEME_CLASSES.forEach((className) => {
+        if (className) {
+          document.body.classList.remove(className);
+        }
+      });
+      if (dimension.theme?.class) {
+        document.body.classList.add(dimension.theme.class);
+      }
     }
 
     function applyDimensionAtmosphere(dimension) {
@@ -5252,6 +5266,57 @@
       state.ui.lastAirUnits = Math.ceil(state.player.air);
     }
 
+    const SVG_NS = 'http://www.w3.org/2000/svg';
+    const HEART_ICON_PATH =
+      'M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5C2 5.42 4.42 3 7.5 3c1.74 0 3.41 0.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3C19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z';
+    let heartClipIdCounter = 0;
+
+    function createHeartIcon(fill, index) {
+      const clampedFill = clamp(fill, 0, 1);
+      const svg = document.createElementNS(SVG_NS, 'svg');
+      svg.setAttribute('viewBox', '0 0 24 24');
+      svg.setAttribute('width', '24');
+      svg.setAttribute('height', '24');
+      svg.setAttribute('aria-hidden', 'true');
+      svg.classList.add('heart-icon');
+      svg.style.setProperty('--heart-index', index.toString());
+
+      const defs = document.createElementNS(SVG_NS, 'defs');
+      const clipPath = document.createElementNS(SVG_NS, 'clipPath');
+      const clipId = `heart-clip-${heartClipIdCounter++}`;
+      clipPath.setAttribute('id', clipId);
+      clipPath.setAttribute('clipPathUnits', 'userSpaceOnUse');
+      const rect = document.createElementNS(SVG_NS, 'rect');
+      rect.setAttribute('x', '0');
+      rect.setAttribute('y', '0');
+      rect.setAttribute('width', (24 * clampedFill).toFixed(2));
+      rect.setAttribute('height', '24');
+      clipPath.appendChild(rect);
+      defs.appendChild(clipPath);
+      svg.appendChild(defs);
+
+      const fillPath = document.createElementNS(SVG_NS, 'path');
+      fillPath.setAttribute('class', 'heart-icon__fill');
+      fillPath.setAttribute('d', HEART_ICON_PATH);
+      fillPath.setAttribute('clip-path', `url(#${clipId})`);
+      const fillOpacity = clampedFill <= 0 ? 0.2 : clampedFill >= 1 ? 1 : 0.35 + clampedFill * 0.65;
+      fillPath.setAttribute('fill-opacity', fillOpacity.toFixed(2));
+      svg.appendChild(fillPath);
+
+      const outlinePath = document.createElementNS(SVG_NS, 'path');
+      outlinePath.setAttribute('class', 'heart-icon__outline');
+      outlinePath.setAttribute('d', HEART_ICON_PATH);
+      svg.appendChild(outlinePath);
+
+      if (clampedFill <= 0) {
+        svg.classList.add('is-empty');
+      } else if (clampedFill < 1) {
+        svg.classList.add('is-partial');
+      }
+
+      return svg;
+    }
+
     function resetTarOverlay() {
       state.ui.tarOverlayLevel = 0;
       if (!tarOverlayEl) return;
@@ -5265,62 +5330,63 @@
       const previousHearts = state.ui.heartsValue ?? state.player.maxHearts;
       const previousAir = state.ui.airValue ?? state.player.maxAir;
 
+      heartClipIdCounter = 0;
+
       heartsEl.innerHTML = '';
-      const hearts = document.createElement('div');
-      hearts.className = 'meter meter--stacked';
+      heartsEl.classList.add('hud-hearts');
+      heartsEl.setAttribute('data-max-hearts', state.player.maxHearts.toString());
       const heartDelta = state.player.hearts - previousHearts;
-      if (heartDelta < -0.01) {
-        hearts.classList.add('meter--damage');
-      } else if (heartDelta > 0.01) {
-        hearts.classList.add('meter--regen');
-      }
+      heartsEl.classList.toggle('is-damaged', heartDelta < -0.01);
+      heartsEl.classList.toggle('is-healing', heartDelta > 0.01);
       const heartCriticalThreshold = Math.max(2, state.player.maxHearts * 0.2);
-      if (state.player.hearts <= heartCriticalThreshold) {
-        hearts.classList.add('meter--critical');
-      }
+      heartsEl.classList.toggle('is-critical', state.player.hearts <= heartCriticalThreshold);
+
+      const heartsRow = document.createElement('div');
+      heartsRow.className = 'hud-hearts__row';
       for (let i = 0; i < state.player.maxHearts; i++) {
-        const el = document.createElement('span');
-        el.className = 'heart';
         const fill = clamp(state.player.hearts - i, 0, 1);
-        el.style.setProperty('--fill', fill.toFixed(2));
-        if (fill <= 0) {
-          el.classList.add('empty');
-        } else if (fill < 1) {
-          el.classList.add('partial');
-        }
-        hearts.appendChild(el);
+        const heartIcon = createHeartIcon(fill, i);
+        heartsRow.appendChild(heartIcon);
       }
-      heartsEl.appendChild(hearts);
+      heartsEl.appendChild(heartsRow);
+      const heartLabelValue = Math.max(0, state.player.hearts);
+      const heartLabel = Number.isInteger(heartLabelValue)
+        ? heartLabelValue.toString()
+        : heartLabelValue.toFixed(1);
+      heartsEl.setAttribute('aria-label', `${heartLabel} hearts remaining`);
 
       bubblesEl.innerHTML = '';
-      const bubbles = document.createElement('div');
-      bubbles.className = 'meter meter--stacked';
+      bubblesEl.classList.add('hud-bubbles');
+      bubblesEl.setAttribute('data-max-air', state.player.maxAir.toString());
       const airDelta = state.player.air - previousAir;
-      if (airDelta < -0.05) {
-        bubbles.classList.add('meter--damage');
-      } else if (airDelta > 0.05) {
-        bubbles.classList.add('meter--regen');
-      }
+      bubblesEl.classList.toggle('is-losing', airDelta < -0.05);
+      bubblesEl.classList.toggle('is-gaining', airDelta > 0.05);
       const airLowThreshold = Math.max(2, state.player.maxAir * 0.2);
-      if (state.player.air <= airLowThreshold) {
-        bubbles.classList.add('meter--low');
-      }
-      if (state.player.air <= 0) {
-        bubbles.classList.add('meter--drowning');
-      }
+      bubblesEl.classList.toggle('is-low', state.player.air <= airLowThreshold);
+      bubblesEl.classList.toggle('is-drowning', state.player.air <= 0);
+
+      const bubbleFrame = document.createElement('div');
+      bubbleFrame.className = 'hud-bubbles__frame';
+      const bubbleStack = document.createElement('div');
+      bubbleStack.className = 'hud-bubbles__stack';
       for (let i = 0; i < state.player.maxAir; i++) {
-        const el = document.createElement('span');
-        el.className = 'bubble';
         const fill = clamp(state.player.air - i, 0, 1);
-        el.style.setProperty('--fill', fill.toFixed(2));
+        const bubble = document.createElement('span');
+        bubble.className = 'bubble-indicator';
+        bubble.style.setProperty('--bubble-index', i.toString());
+        const opacityLevel = fill <= 0 ? 0.18 : fill >= 1 ? 1 : 0.3 + fill * 0.7;
+        bubble.style.setProperty('--opacity-level', opacityLevel.toFixed(2));
         if (fill <= 0) {
-          el.classList.add('empty');
+          bubble.classList.add('is-empty');
         } else if (fill < 1) {
-          el.classList.add('partial');
+          bubble.classList.add('is-partial');
         }
-        bubbles.appendChild(el);
+        bubbleStack.appendChild(bubble);
       }
-      bubblesEl.appendChild(bubbles);
+      bubbleFrame.appendChild(bubbleStack);
+      bubblesEl.appendChild(bubbleFrame);
+      const airRemaining = Math.max(0, Math.ceil(state.player.air));
+      bubblesEl.setAttribute('aria-label', `${airRemaining} bubbles of air remaining`);
 
       const ratio = (state.elapsed % state.dayLength) / state.dayLength;
       rootElement.style.setProperty('--time-phase', ratio.toFixed(3));
