@@ -1,8 +1,9 @@
 (function () {
   const THREE_FALLBACK_SRC = 'https://unpkg.com/three@0.161.0/build/three.min.js';
-  const GLTF_MODULE_URLS = [
-    'https://unpkg.com/three@0.161.0/examples/jsm/loaders/GLTFLoader.js?module',
-    'https://cdn.jsdelivr.net/npm/three@0.161.0/examples/jsm/loaders/GLTFLoader.js?module',
+  const GLTF_SCRIPT_URLS = [
+    'vendor/GLTFLoader.js',
+    'https://unpkg.com/three@0.161.0/examples/js/loaders/GLTFLoader.js',
+    'https://cdn.jsdelivr.net/npm/three@0.161.0/examples/js/loaders/GLTFLoader.js',
   ];
   let gltfLoaderPromise = null;
 
@@ -10513,44 +10514,33 @@
   }
 
   function ensureThree() {
-    const existing = window.THREE_GLOBAL || window.THREE;
+    const scope =
+      typeof window !== 'undefined'
+        ? window
+        : typeof globalThis !== 'undefined'
+          ? globalThis
+          : typeof global !== 'undefined'
+            ? global
+            : {};
+    const existing = scope.THREE_GLOBAL || scope.THREE;
     if (existing) {
+      scope.THREE_GLOBAL = existing;
+      scope.THREE = existing;
       return Promise.resolve(existing);
     }
-    if (document.querySelector('script[data-three-fallback]')) {
+    if (typeof document !== 'undefined' && document.querySelector('script[data-three-fallback]')) {
       return Promise.reject(new Error('Three.js failed to initialise.'));
     }
     return loadScript(THREE_FALLBACK_SRC, { 'data-three-fallback': 'true' })
-      .then(() => window.THREE_GLOBAL || window.THREE)
-      .then((instance) => {
+      .then(() => {
+        const instance = scope.THREE_GLOBAL || scope.THREE;
         if (!instance) {
           throw new Error('Three.js failed to load even after attempting fallback.');
         }
+        scope.THREE_GLOBAL = instance;
+        scope.THREE = instance;
         return instance;
       });
-  }
-
-  function canUseDynamicImport() {
-    if (typeof document === 'undefined') {
-      return false;
-    }
-    const probe = document.createElement('script');
-    return 'noModule' in probe;
-  }
-
-  function attachGLTFLoader(THREE, module) {
-    const LoaderClass = module?.GLTFLoader || module?.default;
-    if (!LoaderClass) {
-      throw new Error('GLTFLoader module did not provide a loader class.');
-    }
-    if (!THREE.GLTFLoader) {
-      THREE.GLTFLoader = LoaderClass;
-    }
-    return THREE.GLTFLoader;
-  }
-
-  function importGLTFLoaderFrom(url, THREE) {
-    return import(url).then((module) => attachGLTFLoader(THREE, module));
   }
 
   function ensureGLTFLoader(THREE) {
@@ -10562,24 +10552,52 @@
       return gltfLoaderPromise;
     }
 
-    if (!canUseDynamicImport()) {
-      return Promise.reject(new Error('This browser does not support dynamic import required for GLTF assets.'));
-    }
+    const scope =
+      typeof window !== 'undefined'
+        ? window
+        : typeof globalThis !== 'undefined'
+          ? globalThis
+          : typeof global !== 'undefined'
+            ? global
+            : {};
 
-    const tryImport = (index = 0, lastError = null) => {
-      if (index >= GLTF_MODULE_URLS.length) {
-        const error = new Error('Failed to load GLTFLoader module.');
+    const resolveLoader = () => {
+      if (!THREE.GLTFLoader && scope.GLTFLoaderModule?.GLTFLoader) {
+        THREE.GLTFLoader = scope.GLTFLoaderModule.GLTFLoader;
+        try {
+          delete scope.GLTFLoaderModule;
+        } catch (error) {
+          scope.GLTFLoaderModule = undefined;
+        }
+      }
+      return THREE.GLTFLoader || null;
+    };
+
+    const tryLoad = (index = 0, lastError = null) => {
+      if (resolveLoader()) {
+        return Promise.resolve(THREE.GLTFLoader);
+      }
+      if (index >= GLTF_SCRIPT_URLS.length) {
+        const error = new Error('Failed to load GLTFLoader script.');
         if (lastError) {
           error.cause = lastError;
         }
         throw error;
       }
 
-      const url = GLTF_MODULE_URLS[index];
-      return importGLTFLoaderFrom(url, THREE).catch((error) => tryImport(index + 1, error));
+      const url = GLTF_SCRIPT_URLS[index];
+      return loadScript(url, { 'data-gltf-loader': index === 0 ? 'local' : 'cdn' })
+        .then(() => {
+          const loader = resolveLoader();
+          if (!loader) {
+            throw new Error('GLTFLoader script loaded but did not register the loader.');
+          }
+          return loader;
+        })
+        .catch((error) => tryLoad(index + 1, error));
     };
 
-    gltfLoaderPromise = tryImport().catch((error) => {
+    gltfLoaderPromise = tryLoad().catch((error) => {
       gltfLoaderPromise = null;
       throw error;
     });
