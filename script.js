@@ -1025,6 +1025,20 @@
     const tmpColorB = new THREE.Color();
     const tmpColorC = new THREE.Color();
     const tmpColorD = new THREE.Color();
+    const raycastPointer = new THREE.Vector2();
+    const tmpRaycastBox = new THREE.Box3();
+    const hoverState = { tile: null, entity: null };
+    let tileHighlightHelper = null;
+    let enemyHighlightHelper = null;
+    const HOVER_OUTLINE_COLORS = {
+      placeable: '#3cff9a',
+      interactable: '#49f2ff',
+      enemy: '#ff5a7a',
+    };
+    let miningState = null;
+    const MINING_DURATION_MS = 3000;
+    const MINING_OVERLAY_SIZE = 256;
+    const MINING_OVERLAY_CRACK_COUNT = 7;
 
     const ZOMBIE_OUTLINE_COLOR = new THREE.Color('#ff5a7a');
     const GOLEM_OUTLINE_COLOR = new THREE.Color('#58b7ff');
@@ -1724,46 +1738,57 @@
         };
       };
 
-      const handlePointerClick = (event) => {
+      const handlePointerClick = (event, button = 0) => {
         if (!state.isRunning) {
           return;
         }
         if (!camera || !worldGroup) {
-          interact();
+          if (button === 2) {
+            placeBlock();
+          } else {
+            interact();
+          }
           return;
         }
-        const rect = canvas.getBoundingClientRect();
-        const ndcX = ((event.clientX - rect.left) / rect.width) * 2 - 1;
-        const ndcY = -((event.clientY - rect.top) / rect.height) * 2 + 1;
-        raycaster.setFromCamera({ x: ndcX, y: ndcY }, camera);
-        const intersections = raycaster.intersectObjects(worldGroup.children, true);
-        if (!intersections.length) {
-          interact();
+        const { tile: tileTarget, entity: entityTarget } = getCenterTarget();
+        if (button === 2) {
+          if (!tileTarget) {
+            placeBlock();
+            return;
+          }
+          const diffX = tileTarget.tileX - state.player.x;
+          const diffY = tileTarget.tileY - state.player.y;
+          const adjacent = Math.max(Math.abs(diffX), Math.abs(diffY)) <= 1;
+          const nextFacing = computeFacingFromDelta(diffX, diffY);
+          state.player.facing = nextFacing;
+          if (!adjacent) {
+            logEvent('Move closer to place that block.');
+            return;
+          }
+          placeBlock({ x: tileTarget.tileX, y: tileTarget.tileY });
           return;
         }
-        let target = intersections[0].object;
-        while (target.parent && target.parent !== worldGroup) {
-          target = target.parent;
+        if (tileTarget && (!entityTarget || tileTarget.distance <= entityTarget.distance)) {
+          const tile = getTile(tileTarget.tileX, tileTarget.tileY);
+          if (!tile) {
+            interact();
+            return;
+          }
+          const diffX = tileTarget.tileX - state.player.x;
+          const diffY = tileTarget.tileY - state.player.y;
+          const adjacent = Math.max(Math.abs(diffX), Math.abs(diffY)) <= 1;
+          const nextFacing = computeFacingFromDelta(diffX, diffY);
+          state.player.facing = nextFacing;
+          if (!adjacent) {
+            logEvent('Move closer to interact with that block.');
+            return;
+          }
+          if (tile.resource && (tile.type === 'tree' || tile.type === 'stone' || tile.type === 'rock')) {
+            beginMining(tile, tileTarget.tileX, tileTarget.tileY);
+            return;
+          }
         }
-        if (!target || target.parent !== worldGroup) {
-          interact();
-          return;
-        }
-        const { x: tileX, y: tileY } = sceneToWorld(target.position.x, target.position.z);
-        if (!isWithinBounds(tileX, tileY)) {
-          interact();
-          return;
-        }
-        const diffX = tileX - state.player.x;
-        const diffY = tileY - state.player.y;
-        const adjacent = Math.abs(diffX) <= 1 && Math.abs(diffY) <= 1;
-        const nextFacing = computeFacingFromDelta(diffX, diffY);
-        state.player.facing = nextFacing;
-        if (adjacent) {
-          interact(false);
-          return;
-        }
-        logEvent('Move closer to interact with that block.');
+        interact(false);
       };
 
       const resetPointerState = () => {
@@ -1786,7 +1811,7 @@
       };
 
       canvas.addEventListener('pointerdown', (event) => {
-        if (event.pointerType === 'mouse' && event.button !== 0) {
+        if (event.pointerType === 'mouse' && event.button !== 0 && event.button !== 2) {
           return;
         }
         pointer.active = true;
@@ -1867,17 +1892,14 @@
 
       canvas.addEventListener('pointerup', (event) => {
         if (!pointer.active) return;
-        const isPrimaryPointer =
-          pointer.pointerType === 'touch' ||
-          pointer.pointerType === 'pen' ||
-          pointer.button === 0 ||
-          event.button === 0;
-        if (isPrimaryPointer && state.isRunning) {
-          if (pointer.pointerType === 'touch' || pointer.pointerType === 'pen') {
+        const wasTouch = pointer.pointerType === 'touch' || pointer.pointerType === 'pen';
+        const releasedButton = event.button ?? pointer.button ?? 0;
+        if (state.isRunning && !pointer.moved) {
+          if (wasTouch) {
             suppressNextClick = true;
-            if (!pointer.moved) {
-              handlePointerClick(event);
-            }
+            handlePointerClick(event, pointer.button ?? 0);
+          } else if (pointer.pointerType === 'mouse' && (pointer.button === 2 || releasedButton === 2)) {
+            handlePointerClick(event, 2);
           }
         }
         if (pointer.pointerType === 'mouse' && pointer.moved) {
@@ -1894,14 +1916,124 @@
 
       canvas.addEventListener('pointerleave', cancelPointer);
       canvas.addEventListener('pointercancel', cancelPointer);
+      canvas.addEventListener('contextmenu', (event) => {
+        event.preventDefault();
+      });
       canvas.addEventListener('click', (event) => {
         if (suppressNextClick) {
           suppressNextClick = false;
           return;
         }
         if (!state.isRunning) return;
-        handlePointerClick(event);
+        handlePointerClick(event, event.button ?? 0);
       });
+    }
+
+    function getCenterTarget() {
+      if (!camera) {
+        hoverState.tile = null;
+        hoverState.entity = null;
+        return { tile: null, entity: null };
+      }
+      raycastPointer.set(0, 0);
+      raycaster.setFromCamera(raycastPointer, camera);
+      let tileTarget = null;
+      if (worldGroup) {
+        const intersections = raycaster.intersectObjects(worldGroup.children, true);
+        for (const intersection of intersections) {
+          let current = intersection.object;
+          while (current.parent && current.parent !== worldGroup) {
+            current = current.parent;
+          }
+          if (!current || current.parent !== worldGroup) continue;
+          const coords = sceneToWorld(current.position.x, current.position.z);
+          if (!isWithinBounds(coords.x, coords.y)) continue;
+          tileTarget = {
+            object: current,
+            tileX: coords.x,
+            tileY: coords.y,
+            distance: intersection.distance,
+          };
+          break;
+        }
+      }
+      let entityTarget = null;
+      if (entityGroup) {
+        const intersections = raycaster.intersectObjects(entityGroup.children, true);
+        for (const intersection of intersections) {
+          let current = intersection.object;
+          while (current.parent && current.parent !== entityGroup) {
+            current = current.parent;
+          }
+          if (!current || current.parent !== entityGroup) continue;
+          if (current === playerMesh || current === playerLocator) continue;
+          const name = current.name || current.parent?.name || '';
+          if (name !== 'minecraft-zombie') continue;
+          entityTarget = {
+            object: current,
+            distance: intersection.distance,
+          };
+          break;
+        }
+      }
+      hoverState.tile = tileTarget;
+      hoverState.entity = entityTarget;
+      return { tile: tileTarget, entity: entityTarget };
+    }
+
+    function hideHoverHighlights() {
+      if (tileHighlightHelper) {
+        tileHighlightHelper.visible = false;
+      }
+      if (enemyHighlightHelper) {
+        enemyHighlightHelper.visible = false;
+      }
+    }
+
+    function updateHoverHighlight() {
+      if (!state.isRunning || !scene || !camera) {
+        hoverState.tile = null;
+        hoverState.entity = null;
+        hideHoverHighlights();
+        return;
+      }
+      const { tile: tileTarget, entity: entityTarget } = getCenterTarget();
+      const highlightEnemy = Boolean(entityTarget && (!tileTarget || entityTarget.distance < tileTarget.distance));
+      if (tileHighlightHelper) {
+        if (tileTarget && (!highlightEnemy || !entityTarget || tileTarget.distance <= entityTarget.distance)) {
+          tmpRaycastBox.setFromObject(tileTarget.object);
+          tmpRaycastBox.expandByScalar(0.03);
+          tileHighlightHelper.box.copy(tmpRaycastBox);
+          const tile = getTile(tileTarget.tileX, tileTarget.tileY);
+          let color = HOVER_OUTLINE_COLORS.interactable;
+          if (tile?.type === 'grass') {
+            color = HOVER_OUTLINE_COLORS.placeable;
+          }
+          tileHighlightHelper.material.color.set(color);
+          tileHighlightHelper.visible = true;
+          if (tileHighlightHelper.geometry?.attributes?.position) {
+            tileHighlightHelper.geometry.attributes.position.needsUpdate = true;
+          }
+          tileHighlightHelper.updateMatrixWorld(true);
+        } else {
+          tileHighlightHelper.visible = false;
+        }
+      }
+      if (enemyHighlightHelper) {
+        if (highlightEnemy && entityTarget) {
+          tmpRaycastBox.setFromObject(entityTarget.object);
+          tmpRaycastBox.expandByScalar(0.05);
+          enemyHighlightHelper.box.copy(tmpRaycastBox);
+          enemyHighlightHelper.material.color.set(HOVER_OUTLINE_COLORS.enemy);
+          enemyHighlightHelper.visible = true;
+          if (enemyHighlightHelper.geometry?.attributes?.position) {
+            enemyHighlightHelper.geometry.attributes.position.needsUpdate = true;
+          }
+          enemyHighlightHelper.updateMatrixWorld(true);
+        } else {
+          enemyHighlightHelper.visible = false;
+        }
+      }
     }
 
     function initRenderer() {
@@ -1946,6 +2078,12 @@
       scene.add(worldGroup);
       scene.add(entityGroup);
       scene.add(particleGroup);
+      tileHighlightHelper = new THREE.Box3Helper(new THREE.Box3(), new THREE.Color(HOVER_OUTLINE_COLORS.placeable));
+      tileHighlightHelper.visible = false;
+      scene.add(tileHighlightHelper);
+      enemyHighlightHelper = new THREE.Box3Helper(new THREE.Box3(), new THREE.Color(HOVER_OUTLINE_COLORS.enemy));
+      enemyHighlightHelper.visible = false;
+      scene.add(enemyHighlightHelper);
 
       hemiLight = new THREE.HemisphereLight(0xffffff, 0xa0a0ff, 1.05);
       scene.add(hemiLight);
@@ -2472,6 +2610,8 @@
 
     function resetWorldMeshes() {
       tileRenderState = [];
+      clearMiningState();
+      hideHoverHighlights();
       if (!worldGroup) return;
       while (worldGroup.children.length) {
         worldGroup.remove(worldGroup.children[0]);
@@ -3947,6 +4087,51 @@
       });
     }
 
+    function spawnBlockDustParticles(x, y, color) {
+      if (!particleGroup) return;
+      const count = 20;
+      const positions = new Float32Array(count * 3);
+      const velocities = new Float32Array(count * 3);
+      for (let i = 0; i < count; i += 1) {
+        const baseIndex = i * 3;
+        positions[baseIndex] = (Math.random() - 0.5) * 0.28;
+        positions[baseIndex + 1] = Math.random() * 0.22 + 0.08;
+        positions[baseIndex + 2] = (Math.random() - 0.5) * 0.28;
+        const angle = Math.random() * Math.PI * 2;
+        const speed = 0.7 + Math.random() * 0.6;
+        velocities[baseIndex] = Math.cos(angle) * speed;
+        velocities[baseIndex + 1] = Math.random() * 1.2 + 0.5;
+        velocities[baseIndex + 2] = Math.sin(angle) * speed;
+      }
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      const material = new THREE.PointsMaterial({
+        size: 0.16,
+        transparent: true,
+        depthWrite: false,
+        opacity: 0.95,
+        blending: THREE.AdditiveBlending,
+        map: getParticleTexture(),
+        color: new THREE.Color(color ?? '#f4c766'),
+        sizeAttenuation: true,
+      });
+      const points = new THREE.Points(geometry, material);
+      const { x: sx, z: sz } = worldToScene(x, y);
+      points.position.set(sx, tileSurfaceHeight(x, y) + 0.38, sz);
+      particleGroup.add(points);
+      particleSystems.push({
+        points,
+        positions,
+        velocities,
+        life: 0,
+        maxLife: 0.85,
+        count,
+        gravityScale: 0.55,
+        swirlStrength: 0,
+        fadePower: 1.4,
+      });
+    }
+
     function spawnRailCrumbleParticles(x, y, accentColor) {
       if (!particleGroup) return;
       const count = 34;
@@ -4029,6 +4214,29 @@
           points.material.dispose();
           particleSystems.splice(i, 1);
         }
+      }
+    }
+
+    function updateMiningState(delta) {
+      if (!miningState) return;
+      const tile = getTile(miningState.tileX, miningState.tileY);
+      if (!tile || tile.type === 'grass' || !tile.resource) {
+        clearMiningState();
+        return;
+      }
+      const now = performance?.now ? performance.now() : Date.now();
+      const duration = miningState.duration || MINING_DURATION_MS;
+      const elapsed = now - (miningState.startTime ?? now);
+      const progress = duration > 0 ? Math.min(1, elapsed / duration) : 1;
+      updateMiningOverlayVisual(miningState, progress);
+      if (progress >= 1) {
+        spawnBlockDustParticles(miningState.tileX, miningState.tileY, miningState.dustColor);
+        harvestResource(tile, miningState.tileX, miningState.tileY, false, {
+          skipParticles: true,
+          skipAudio: false,
+          skipAnimation: true,
+        });
+        clearMiningState();
       }
     }
 
@@ -5837,6 +6045,7 @@
       updatePortalActivation();
       updateStatusBars();
       updatePortalProgress();
+      updateMiningState(delta);
       updateLighting(delta);
       advanceParticles(delta);
       if (playerMixer) {
@@ -5844,6 +6053,7 @@
       }
       updateTarOverlay(delta);
       updateDimensionTransition(delta);
+      updateHoverHighlight();
     }
 
     function processEchoQueue() {
@@ -6418,6 +6628,119 @@
       }
     }
 
+    function createMiningOverlay(tileX, tileY) {
+      const canvas = document.createElement('canvas');
+      canvas.width = MINING_OVERLAY_SIZE;
+      canvas.height = MINING_OVERLAY_SIZE;
+      const ctx = canvas.getContext('2d');
+      ctx.lineCap = 'round';
+      const texture = new THREE.CanvasTexture(canvas);
+      texture.colorSpace = THREE.SRGBColorSpace;
+      texture.minFilter = THREE.LinearFilter;
+      texture.magFilter = THREE.LinearFilter;
+      texture.needsUpdate = true;
+      const material = new THREE.SpriteMaterial({ map: texture, transparent: true, depthWrite: false });
+      material.opacity = 0.92;
+      const sprite = new THREE.Sprite(material);
+      sprite.scale.set(1.08, 1.08, 1);
+      sprite.position.set(0, tileSurfaceHeight(tileX, tileY) + 0.9, 0);
+      sprite.renderOrder = 5;
+      const crackAngles = Array.from({ length: MINING_OVERLAY_CRACK_COUNT }, () => Math.random() * Math.PI * 2);
+      return { sprite, texture, ctx, crackAngles, lastProgress: -1 };
+    }
+
+    function updateMiningOverlayVisual(state, progress) {
+      if (!state?.overlay) return;
+      const overlay = state.overlay;
+      const { sprite, ctx, texture, crackAngles } = overlay;
+      const size = MINING_OVERLAY_SIZE;
+      const center = size / 2;
+      overlay.lastProgress = progress;
+      ctx.clearRect(0, 0, size, size);
+      const baseAlpha = 0.22 + progress * 0.28;
+      ctx.fillStyle = `rgba(18, 12, 8, ${baseAlpha})`;
+      ctx.fillRect(0, 0, size, size);
+      ctx.strokeStyle = `rgba(34, 26, 20, ${0.45 + progress * 0.4})`;
+      ctx.lineWidth = 2.2;
+      crackAngles.forEach((angle, index) => {
+        const length = center * (0.38 + progress * 0.48 + (index % 3) * 0.05);
+        ctx.beginPath();
+        ctx.moveTo(center, center);
+        ctx.lineTo(center + Math.cos(angle) * length, center + Math.sin(angle) * length);
+        ctx.stroke();
+      });
+      ctx.strokeStyle = `rgba(255, 240, 210, ${0.16 + progress * 0.28})`;
+      ctx.lineWidth = 1.1;
+      crackAngles.forEach((angle, index) => {
+        if (index % 2 !== 0) return;
+        const length = center * (0.24 + progress * 0.35);
+        ctx.beginPath();
+        ctx.moveTo(center, center);
+        ctx.lineTo(center + Math.cos(angle + 0.18) * length, center + Math.sin(angle + 0.18) * length);
+        ctx.stroke();
+      });
+      const barWidth = size * 0.62;
+      const barHeight = size * 0.08;
+      const barX = (size - barWidth) / 2;
+      const barY = size * 0.82;
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
+      ctx.fillRect(barX, barY, barWidth, barHeight);
+      ctx.fillStyle = 'rgba(255, 220, 160, 0.85)';
+      ctx.fillRect(barX, barY, barWidth * THREE.MathUtils.clamp(progress, 0, 1), barHeight);
+      texture.needsUpdate = true;
+      sprite.position.y = tileSurfaceHeight(state.tileX, state.tileY) + 0.9;
+    }
+
+    function clearMiningState() {
+      if (!miningState) return;
+      const overlay = miningState.overlay;
+      if (overlay?.sprite) {
+        overlay.sprite.parent?.remove(overlay.sprite);
+        overlay.sprite.material?.map?.dispose?.();
+        overlay.sprite.material?.dispose?.();
+      }
+      miningState = null;
+    }
+
+    function beginMining(tile, tileX, tileY) {
+      if (!tile?.resource) return;
+      if (tile.data?.yield !== undefined && tile.data.yield <= 0) {
+        logEvent('Resource depleted.');
+        return;
+      }
+      if (tile.resource === 'stone' && !hasItem('stone-pickaxe')) {
+        logEvent('You need a Stone Pickaxe.');
+        return;
+      }
+      const now = performance?.now ? performance.now() : Date.now();
+      const dustColor = tile.resource === 'wood' ? '#f6c766' : '#b7bbc4';
+      if (!miningState || miningState.tileX !== tileX || miningState.tileY !== tileY) {
+        clearMiningState();
+        const renderInfo = tileRenderState?.[tileY]?.[tileX];
+        if (!renderInfo?.group) return;
+        const overlay = createMiningOverlay(tileX, tileY);
+        renderInfo.group.add(overlay.sprite);
+        miningState = {
+          tileX,
+          tileY,
+          resource: tile.resource,
+          overlay,
+          startTime: now,
+          duration: MINING_DURATION_MS,
+          dustColor,
+        };
+      } else {
+        miningState.startTime = now;
+        miningState.overlay.lastProgress = -1;
+        miningState.dustColor = dustColor;
+      }
+      spawnBlockDustParticles(tileX, tileY, dustColor);
+      triggerPlayerActionAnimation('mine', {
+        direction: state.player?.facing,
+        strength: tile.resource === 'stone' ? 1.25 : 1,
+      });
+    }
+
     function interact(useAlt = false, echoed = false) {
       if (state.ui.respawnActive) return;
       if (state.ui.dimensionTransition) return;
@@ -6456,7 +6779,8 @@
       }
     }
 
-    function harvestResource(tile, x, y, echoed) {
+    function harvestResource(tile, x, y, echoed, options = {}) {
+      const { skipParticles = false, skipAudio = false, skipAnimation = false } = options;
       if (tile.data?.yield === undefined) tile.data.yield = 1;
       if (tile.data.yield <= 0) {
         logEvent('Resource depleted.');
@@ -6472,16 +6796,22 @@
         logEvent('You need a Stone Pickaxe.');
         return;
       }
-      triggerPlayerActionAnimation('mine', {
-        direction: state.player?.facing,
-        strength: itemId === 'stone' ? 1.25 : 1,
-      });
+      if (!skipAnimation) {
+        triggerPlayerActionAnimation('mine', {
+          direction: state.player?.facing,
+          strength: itemId === 'stone' ? 1.25 : 1,
+        });
+      }
       tile.data.yield -= 1;
       addItemToInventory(itemId, 1);
       logEvent(`Gathered ${ITEM_DEFS[itemId]?.name ?? itemId}.`);
       const accentColor = TILE_TYPES[originalType]?.accent ?? '#ffffff';
-      spawnHarvestParticles(x, y, accentColor);
-      playHarvestAudio(itemId);
+      if (!skipParticles) {
+        spawnHarvestParticles(x, y, accentColor);
+      }
+      if (!skipAudio) {
+        playHarvestAudio(itemId);
+      }
       if (tile.data.yield <= 0 && tile.type !== 'tar') {
         tile.type = 'grass';
         tile.resource = null;
@@ -7502,28 +7832,36 @@
       }
     }
 
-    function placeBlock() {
+    function placeBlock(targetTile = null) {
       const slot = state.player.inventory[state.player.selectedSlot];
       if (!slot) {
         logEvent('Select a block to place.');
-        return;
+        return false;
       }
       const blockItems = ['wood', 'stone', 'rock', 'tar', 'marble', 'netherite'];
       if (!blockItems.includes(slot.item)) {
         logEvent('Cannot place this item.');
-        return;
+        return false;
       }
-      const tx = state.player.x + state.player.facing.x;
-      const ty = state.player.y + state.player.facing.y;
-      if (!isWithinBounds(tx, ty)) return;
+      const tx = targetTile?.x ?? state.player.x + state.player.facing.x;
+      const ty = targetTile?.y ?? state.player.y + state.player.facing.y;
+      if (!isWithinBounds(tx, ty)) return false;
       const tile = getTile(tx, ty);
       if (!tile || tile.type !== 'grass') {
         logEvent('Need an empty tile to place.');
-        return;
+        return false;
+      }
+      const distance = Math.max(Math.abs(tx - state.player.x), Math.abs(ty - state.player.y));
+      if (distance > 1) {
+        logEvent('Move closer to place that block.');
+        return false;
       }
       tile.type = blockItems.includes(slot.item) ? slot.item : 'grass';
+      tile.resource = null;
+      if (!tile.data) tile.data = {};
       removeItem(slot.item, 1);
       logEvent(`${ITEM_DEFS[slot.item].name} placed.`);
+      return true;
     }
 
     function promptPortalBuild() {
