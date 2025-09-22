@@ -1,5 +1,10 @@
 (function () {
   const THREE_FALLBACK_SRC = 'https://unpkg.com/three@0.161.0/build/three.min.js';
+  const GLTF_MODULE_URLS = [
+    'https://unpkg.com/three@0.161.0/examples/jsm/loaders/GLTFLoader.js?module',
+    'https://cdn.jsdelivr.net/npm/three@0.161.0/examples/jsm/loaders/GLTFLoader.js?module',
+  ];
+  let gltfLoaderPromise = null;
 
   const originalConsoleWarn = console.warn?.bind(console);
   if (originalConsoleWarn) {
@@ -10072,34 +10077,61 @@
       });
   }
 
+  function canUseDynamicImport() {
+    if (typeof document === 'undefined') {
+      return false;
+    }
+    const probe = document.createElement('script');
+    return 'noModule' in probe;
+  }
+
+  function attachGLTFLoader(THREE, module) {
+    const LoaderClass = module?.GLTFLoader || module?.default;
+    if (!LoaderClass) {
+      throw new Error('GLTFLoader module did not provide a loader class.');
+    }
+    if (!THREE.GLTFLoader) {
+      THREE.GLTFLoader = LoaderClass;
+    }
+    return THREE.GLTFLoader;
+  }
+
+  function importGLTFLoaderFrom(url, THREE) {
+    return import(url).then((module) => attachGLTFLoader(THREE, module));
+  }
+
   function ensureGLTFLoader(THREE) {
     if (THREE?.GLTFLoader) {
       return Promise.resolve(THREE.GLTFLoader);
     }
-    const existingScript = document.querySelector('script[data-three-gltf]');
-    if (existingScript) {
-      return new Promise((resolve, reject) => {
-        const handleLoad = () => {
-          if (THREE.GLTFLoader) {
-            resolve(THREE.GLTFLoader);
-          } else {
-            reject(new Error('GLTFLoader failed to initialise.'));
-          }
-        };
-        existingScript.addEventListener('load', handleLoad, { once: true });
-        existingScript.addEventListener('error', () => reject(new Error('Failed to load GLTFLoader.')), {
-          once: true,
-        });
-      });
+
+    if (gltfLoaderPromise) {
+      return gltfLoaderPromise;
     }
-    return loadScript('https://unpkg.com/three@0.161.0/examples/js/loaders/GLTFLoader.js', {
-      'data-three-gltf': 'true',
-    }).then(() => {
-      if (!THREE.GLTFLoader) {
-        throw new Error('GLTFLoader failed to initialise.');
+
+    if (!canUseDynamicImport()) {
+      return Promise.reject(new Error('This browser does not support dynamic import required for GLTF assets.'));
+    }
+
+    const tryImport = (index = 0, lastError = null) => {
+      if (index >= GLTF_MODULE_URLS.length) {
+        const error = new Error('Failed to load GLTFLoader module.');
+        if (lastError) {
+          error.cause = lastError;
+        }
+        throw error;
       }
-      return THREE.GLTFLoader;
+
+      const url = GLTF_MODULE_URLS[index];
+      return importGLTFLoaderFrom(url, THREE).catch((error) => tryImport(index + 1, error));
+    };
+
+    gltfLoaderPromise = tryImport().catch((error) => {
+      gltfLoaderPromise = null;
+      throw error;
     });
+
+    return gltfLoaderPromise;
   }
 
   ensureThree()
