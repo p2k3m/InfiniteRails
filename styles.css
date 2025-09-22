@@ -4557,3 +4557,138 @@ body.colorblind-assist .subtitle-overlay {
     display: none;
   }
 }
+
+
+.crosshair {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 38px;
+  height: 38px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.18s ease;
+  z-index: 35;
+}
+
+.crosshair__horizontal,
+.crosshair__vertical {
+  position: absolute;
+  background: rgba(255, 255, 255, 0.85);
+  box-shadow: 0 0 6px rgba(255, 255, 255, 0.45);
+}
+
+.crosshair__horizontal {
+  top: 50%;
+  left: 0;
+  width: 100%;
+  height: 2px;
+  transform: translateY(-50%);
+}
+
+.crosshair__vertical {
+  left: 50%;
+  top: 0;
+  width: 2px;
+  height: 100%;
+  transform: translateX(-50%);
+}
+
+body.game-active .crosshair {
+  opacity: 0.9;
+}
+
+body.game-active #gameCanvas {
+  cursor: none !important;
+}
+
+.hand-overlay {
+  position: absolute;
+  right: clamp(1.8rem, 6vw, 3.5rem);
+  bottom: clamp(1.5rem, 6vw, 3rem);
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.65rem;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(12px);
+  transition: opacity 0.25s ease, transform 0.25s ease;
+  z-index: 40;
+}
+
+body.game-active .hand-overlay {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.hand-overlay__icon {
+  position: relative;
+  width: clamp(54px, 10vw, 72px);
+  height: clamp(54px, 10vw, 72px);
+  border-radius: 22px;
+  background: linear-gradient(135deg, #f4c999, #c58e64);
+  box-shadow: 0 18px 35px rgba(0, 0, 0, 0.45), 0 0 25px rgba(255, 255, 255, 0.15);
+  transform: rotate(-6deg);
+}
+
+.hand-overlay__icon::before,
+.hand-overlay__icon::after {
+  content: '';
+  position: absolute;
+  background: rgba(0, 0, 0, 0.18);
+  border-radius: 12px;
+}
+
+.hand-overlay__icon::before {
+  inset: 18% 22% 52% 22%;
+  border-radius: 18px 18px 8px 8px;
+}
+
+.hand-overlay__icon::after {
+  width: 32%;
+  height: 36%;
+  right: 18%;
+  bottom: 16%;
+  border-radius: 12px 12px 18px 18px;
+}
+
+.hand-overlay[data-item='torch'] .hand-overlay__icon {
+  background: linear-gradient(135deg, #ffcf6d, #ff6d1f);
+  box-shadow: 0 18px 30px rgba(255, 109, 31, 0.32), 0 0 25px rgba(255, 203, 109, 0.35);
+}
+
+.hand-overlay[data-item='stone'] .hand-overlay__icon,
+.hand-overlay[data-item='rock'] .hand-overlay__icon {
+  background: linear-gradient(135deg, #7b8796, #3f4a57);
+}
+
+.hand-overlay[data-item='wood'] .hand-overlay__icon,
+.hand-overlay[data-item='stick'] .hand-overlay__icon {
+  background: linear-gradient(135deg, #d6a46a, #8b5a2b);
+}
+
+.hand-overlay[data-item='eternal-ingot'] .hand-overlay__icon {
+  background: linear-gradient(135deg, #ffd27f, #ff9249);
+  box-shadow: 0 18px 36px rgba(255, 146, 73, 0.32), 0 0 30px rgba(255, 210, 127, 0.35);
+}
+
+.hand-overlay__label {
+  font-size: clamp(0.75rem, 1.6vw, 0.9rem);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.85);
+  text-shadow: 0 0 8px rgba(0, 0, 0, 0.5);
+}
+
+@media (max-width: 720px) {
+  .hand-overlay {
+    right: clamp(1rem, 5vw, 1.8rem);
+    bottom: clamp(1rem, 5vw, 2rem);
+  }
+
+  .hand-overlay__icon {
+    transform: rotate(-4deg) scale(0.88);
+  }
+}

@@ -131,6 +131,10 @@
     const settingsModal = document.getElementById('settingsModal');
     const closeSettingsButton = document.getElementById('closeSettings');
     const subtitleOverlay = document.getElementById('subtitleOverlay');
+    const crosshairEl = document.getElementById('crosshair');
+    const handOverlayEl = document.getElementById('handOverlay');
+    const handOverlayLabel = document.getElementById('handOverlayLabel');
+    const handOverlayIcon = document.getElementById('handOverlayIcon');
     const colorBlindToggle = document.getElementById('colorBlindMode');
     const subtitleToggle = document.getElementById('subtitleToggle');
     const settingsVolumeInputs = {
@@ -901,6 +905,10 @@
     let playerMesh;
     let playerMeshParts;
     let playerActionAnimation = null;
+    let gltfLoader;
+    let playerMixer = null;
+    const playerAnimationActions = {};
+    const playerAnimationBlend = { idle: 1, walk: 0 };
     let tileRenderState = [];
     const zombieMeshes = [];
     const ironGolemMeshes = [];
@@ -964,6 +972,9 @@
         direction: normalizeDirectionVector(options.direction),
         strength: THREE.MathUtils.clamp(options.strength ?? 1, 0, 2),
       };
+      if (type === 'mine') {
+        startPlayerMineAnimation(playerActionAnimation);
+      }
     }
 
     function triggerGolemPunchAnimation(golem, options = {}) {
@@ -988,8 +999,8 @@
       }
     });
 
-    const CAMERA_EYE_OFFSET = 0.76;
-    const CAMERA_FORWARD_OFFSET = 5;
+    const CAMERA_EYE_OFFSET = 1.6;
+    const CAMERA_FORWARD_OFFSET = 3.6;
     const CAMERA_LOOK_DISTANCE = 6.5;
     const CAMERA_FRUSTUM_HEIGHT = 9.2;
     const CAMERA_BASE_ZOOM = 1.18;
@@ -998,6 +1009,7 @@
     const CAMERA_TOUCH_SENSITIVITY = 0.0055;
     const CAMERA_DRAG_SUPPRESS_THRESHOLD = 5;
     const WORLD_UP = new THREE.Vector3(0, 1, 0);
+    const CAMERA_VERTICAL_OFFSET = 0.35;
     const cameraState = {
       lastFacing: new THREE.Vector3(0, 0, 1),
       lastPlayerFacing: new THREE.Vector3(0, 0, 1),
@@ -1651,12 +1663,14 @@
       const bobOffset = idleBob * 0.35 + walkBob * 0.22;
       const bounceOffset =
         movementStrength > 0.01 ? Math.sin(timestamp / 320) * 0.05 * movementStrength : 0;
-      const eyeY = baseHeight + CAMERA_EYE_OFFSET + bobOffset + bounceOffset;
+      const headY = baseHeight + CAMERA_EYE_OFFSET + bobOffset + bounceOffset;
 
-      camera.position.set(x, eyeY, z);
-      camera.position.addScaledVector(cameraState.lastFacing, CAMERA_FORWARD_OFFSET);
+      tmpCameraTarget.set(x, headY, z);
 
-      tmpCameraTarget.set(x, eyeY, z);
+      camera.position.copy(tmpCameraTarget);
+      camera.position.addScaledVector(cameraState.lastFacing, -CAMERA_FORWARD_OFFSET);
+      camera.position.y += CAMERA_VERTICAL_OFFSET;
+
       tmpCameraTarget.addScaledVector(cameraState.lastFacing, CAMERA_LOOK_DISTANCE);
 
       if (movementStrength > 0.01) {
@@ -2872,204 +2886,157 @@
       }
     }
 
+    function resetPlayerAnimationState() {
+      if (playerMixer) {
+        try {
+          playerMixer.stopAllAction();
+          if (playerMesh) {
+            playerMixer.uncacheRoot(playerMesh);
+          }
+        } catch (error) {
+          console.warn('Unable to reset player animation state.', error);
+        }
+      }
+      playerMixer = null;
+      for (const key of Object.keys(playerAnimationActions)) {
+        delete playerAnimationActions[key];
+      }
+      playerAnimationBlend.idle = 1;
+      playerAnimationBlend.walk = 0;
+    }
+
     function createPlayerMesh() {
       if (!entityGroup) return;
       if (playerMesh) {
         entityGroup.remove(playerMesh);
       }
+      playerMesh = null;
       playerMeshParts = null;
-      const colors = {
-        skin: '#c58e64',
-        shirt: '#3aa7c9',
-        shirtHighlight: '#6fd4e0',
-        pants: '#2b3b90',
-        boots: '#1a243c',
-        hair: '#3a2a1b',
-        eye: '#1f3554',
-        eyeHighlight: '#cdeaff',
-        beard: '#8f5f3a',
-      };
-      const group = new THREE.Group();
-      group.name = 'player-avatar';
+      resetPlayerAnimationState();
 
-      const legHeight = 0.58;
-      const torsoHeight = 0.72;
-      const headHeight = 0.5;
-      const faceZ = 0.26;
+      if (!THREE.GLTFLoader) {
+        console.error('GLTFLoader is unavailable; cannot create the Steve model.');
+        return;
+      }
+      if (!gltfLoader) {
+        gltfLoader = new THREE.GLTFLoader();
+      }
 
-      const hipsY = legHeight;
-      const shoulderY = legHeight + torsoHeight;
+      gltfLoader.load(
+        'assets/steve.gltf',
+        (gltf) => {
+          const steveScene = gltf.scene || gltf.scenes?.[0];
+          if (!steveScene) {
+            console.error('Steve model did not include a scene.');
+            return;
+          }
 
-      const buildLeg = (offsetX) => {
-        const leg = new THREE.Group();
-        leg.position.set(offsetX, hipsY, 0);
-        addBlock(leg, {
-          color: colors.pants,
-          width: 0.26,
-          depth: 0.34,
-          height: legHeight,
-          y: -legHeight / 2,
-        });
-        const boot = addBlock(leg, {
-          color: colors.boots,
-          width: 0.26,
-          depth: 0.34,
-          height: 0.16,
-          y: -legHeight + 0.08,
-        });
-        boot.material.roughness = 0.5;
-        return leg;
-      };
+          playerMesh = steveScene;
+          playerMesh.name = 'player-steve';
+          playerMesh.position.set(0, 0, 0);
+          playerMesh.rotation.set(0, 0, 0);
+          playerMesh.traverse((child) => {
+            if (child.isMesh) {
+              child.castShadow = true;
+              child.receiveShadow = true;
+              if (child.material?.color?.isColor) {
+                child.material.color.convertSRGBToLinear?.();
+              }
+            }
+          });
 
-      const leftLeg = buildLeg(-0.18);
-      const rightLeg = buildLeg(0.18);
-      group.add(leftLeg);
-      group.add(rightLeg);
+          entityGroup.add(playerMesh);
 
-      const torso = addBlock(group, {
-        color: colors.shirt,
-        width: 0.7,
-        depth: 0.38,
-        height: torsoHeight,
-        y: hipsY + torsoHeight / 2,
+          const hairNode = playerMesh.getObjectByName('Hair') ?? null;
+          const fringeNode = playerMesh.getObjectByName('Fringe') ?? null;
+
+          playerMeshParts = {
+            leftArm: playerMesh.getObjectByName('LeftArm') ?? null,
+            rightArm: playerMesh.getObjectByName('RightArm') ?? null,
+            leftLeg: playerMesh.getObjectByName('LeftLeg') ?? null,
+            rightLeg: playerMesh.getObjectByName('RightLeg') ?? null,
+            head: playerMesh.getObjectByName('HeadPivot') ?? null,
+            hair: hairNode,
+            fringe: fringeNode,
+            hairBasePosition: hairNode ? hairNode.position.clone() : null,
+            fringeBasePosition: fringeNode ? fringeNode.position.clone() : null,
+          };
+
+          initializePlayerAnimations();
+        },
+        undefined,
+        (error) => {
+          console.error('Failed to load Steve model.', error);
+        }
+      );
+    }
+
+    function initializePlayerAnimations() {
+      if (!playerMesh) return;
+      resetPlayerAnimationState();
+      playerMixer = new THREE.AnimationMixer(playerMesh);
+
+      const idleClip = new THREE.AnimationClip('steve-idle', -1, [
+        new THREE.NumberKeyframeTrack('Torso.rotation[z]', [0, 1.5, 3], [0.02, -0.02, 0.02]),
+        new THREE.NumberKeyframeTrack('HeadPivot.rotation[y]', [0, 1.5, 3], [0.05, -0.05, 0.05]),
+        new THREE.NumberKeyframeTrack('HeadPivot.rotation[x]', [0, 1.5, 3], [0.015, -0.02, 0.015]),
+      ]);
+
+      const walkClip = new THREE.AnimationClip('steve-walk', 0.8, [
+        new THREE.NumberKeyframeTrack('LeftArm.rotation[x]', [0, 0.4, 0.8], [0.65, -0.65, 0.65]),
+        new THREE.NumberKeyframeTrack('RightArm.rotation[x]', [0, 0.4, 0.8], [-0.65, 0.65, -0.65]),
+        new THREE.NumberKeyframeTrack('LeftLeg.rotation[x]', [0, 0.4, 0.8], [-0.6, 0.6, -0.6]),
+        new THREE.NumberKeyframeTrack('RightLeg.rotation[x]', [0, 0.4, 0.8], [0.6, -0.6, 0.6]),
+        new THREE.NumberKeyframeTrack('Torso.rotation[x]', [0, 0.4, 0.8], [0.04, -0.04, 0.04]),
+      ]);
+
+      const mineClip = new THREE.AnimationClip('steve-mine', 0.8, [
+        new THREE.NumberKeyframeTrack('RightArm.rotation[x]', [0, 0.2, 0.45, 0.8], [0, -1.4, 0.3, 0]),
+        new THREE.NumberKeyframeTrack('RightArm.rotation[y]', [0, 0.2, 0.45, 0.8], [0, 0.25, -0.05, 0]),
+        new THREE.NumberKeyframeTrack('LeftArm.rotation[x]', [0, 0.2, 0.45, 0.8], [0.2, 0.4, -0.1, 0.2]),
+        new THREE.NumberKeyframeTrack('Torso.rotation[x]', [0, 0.2, 0.45, 0.8], [0, -0.25, 0.08, 0]),
+      ]);
+
+      playerAnimationActions.idle = playerMixer.clipAction(idleClip);
+      playerAnimationActions.walk = playerMixer.clipAction(walkClip);
+      playerAnimationActions.mine = playerMixer.clipAction(mineClip);
+
+      playerAnimationActions.idle.play();
+      playerAnimationActions.idle.enabled = true;
+      playerAnimationActions.idle.setEffectiveWeight(1);
+
+      playerAnimationActions.walk.play();
+      playerAnimationActions.walk.enabled = true;
+      playerAnimationActions.walk.setEffectiveWeight(0);
+
+      const mineAction = playerAnimationActions.mine;
+      mineAction.setLoop(THREE.LoopOnce, 1);
+      mineAction.clampWhenFinished = true;
+      mineAction.enabled = false;
+      mineAction.setEffectiveWeight(0);
+
+      playerMixer.addEventListener('finished', (event) => {
+        if (event.action === mineAction) {
+          playerActionAnimation = null;
+          mineAction.enabled = false;
+          mineAction.setEffectiveWeight(0);
+        }
       });
-      torso.material.roughness = 0.5;
+    }
 
-      const shirtHighlight = addBlock(group, {
-        color: colors.shirtHighlight,
-        width: 0.32,
-        depth: 0.04,
-        height: 0.24,
-        y: shoulderY - 0.14,
-      });
-      shirtHighlight.position.z = 0.2;
+    function startPlayerMineAnimation(action) {
+      if (!action || !playerAnimationActions.mine || !playerMixer) return;
+      const mineAction = playerAnimationActions.mine;
+      const clipDuration = mineAction.getClip()?.duration || 0.8;
+      const durationFactor = THREE.MathUtils.clamp((action.duration ?? 520) / 520, 0.6, 1.6);
+      const targetDuration = clipDuration * durationFactor;
+      const strength = THREE.MathUtils.clamp(action.strength ?? 1, 0.2, 1.5);
 
-      const belt = addBlock(group, {
-        color: '#1f273a',
-        width: 0.72,
-        depth: 0.39,
-        height: 0.12,
-        y: hipsY + 0.06,
-      });
-      belt.material.metalness = 0.1;
-
-      const buildArm = (offsetX) => {
-        const arm = new THREE.Group();
-        arm.position.set(offsetX, shoulderY, 0);
-        addBlock(arm, {
-          color: colors.shirt,
-          width: 0.22,
-          depth: 0.28,
-          height: 0.52,
-          y: -0.26,
-        });
-        addBlock(arm, {
-          color: colors.skin,
-          width: 0.22,
-          depth: 0.28,
-          height: 0.22,
-          y: -0.62,
-        });
-        return arm;
-      };
-
-      const leftArm = buildArm(-0.46);
-      const rightArm = buildArm(0.46);
-      group.add(leftArm);
-      group.add(rightArm);
-
-      addBlock(group, {
-        color: colors.skin,
-        width: 0.24,
-        depth: 0.28,
-        height: 0.14,
-        y: shoulderY + 0.07,
-      });
-
-      const headGroup = new THREE.Group();
-      headGroup.position.set(0, shoulderY + 0.14, 0);
-      const head = addBlock(headGroup, {
-        color: colors.skin,
-        width: 0.52,
-        depth: 0.5,
-        height: headHeight,
-        y: headHeight / 2,
-      });
-      head.material.roughness = 0.6;
-
-      const hair = addBlock(headGroup, {
-        color: colors.hair,
-        width: 0.54,
-        depth: 0.52,
-        height: 0.2,
-        y: headHeight + 0.1,
-      });
-      hair.position.z = -0.02;
-
-      const fringe = addBlock(headGroup, {
-        color: colors.hair,
-        width: 0.5,
-        depth: 0.08,
-        height: 0.22,
-        y: headHeight * 0.92,
-      });
-      fringe.position.z = faceZ - 0.18;
-
-      const hairBasePosition = hair.position.clone();
-      const fringeBasePosition = fringe.position.clone();
-
-      const eyeMaterial = new THREE.MeshBasicMaterial({ color: colors.eye });
-      const eyeGeometry = new THREE.PlaneGeometry(0.09, 0.12);
-      const leftEye = new THREE.Mesh(eyeGeometry, eyeMaterial);
-      leftEye.position.set(-0.12, headHeight * 0.65, faceZ);
-      headGroup.add(leftEye);
-
-      const rightEye = leftEye.clone();
-      rightEye.position.x = 0.12;
-      headGroup.add(rightEye);
-
-      const eyeShineMaterial = new THREE.MeshBasicMaterial({ color: colors.eyeHighlight });
-      const eyeShineGeometry = new THREE.PlaneGeometry(0.04, 0.05);
-      const leftShine = new THREE.Mesh(eyeShineGeometry, eyeShineMaterial);
-      leftShine.position.set(-0.14, headHeight * 0.72, faceZ + 0.002);
-      headGroup.add(leftShine);
-      const rightShine = leftShine.clone();
-      rightShine.position.x = 0.1;
-      headGroup.add(rightShine);
-
-      const nose = addBlock(headGroup, {
-        color: colors.skin,
-        width: 0.12,
-        depth: 0.12,
-        height: 0.16,
-        y: headHeight * 0.55,
-      });
-      nose.position.z = faceZ + 0.04;
-
-      const beard = addBlock(headGroup, {
-        color: colors.beard,
-        width: 0.44,
-        depth: 0.06,
-        height: 0.2,
-        y: headHeight * 0.38,
-      });
-      beard.position.z = faceZ - 0.02;
-
-      group.add(headGroup);
-
-      entityGroup.add(group);
-      playerMesh = group;
-      playerMeshParts = {
-        leftArm,
-        rightArm,
-        leftLeg,
-        rightLeg,
-        head: headGroup,
-        hair,
-        fringe,
-        hairBasePosition,
-        fringeBasePosition,
-      };
+      mineAction.reset();
+      mineAction.enabled = true;
+      mineAction.setEffectiveWeight(Math.min(1, strength));
+      mineAction.timeScale = clipDuration / targetDuration;
+      mineAction.play();
     }
 
     function createPlayerLocator() {
@@ -3437,7 +3404,32 @@
         let playerBodyPitch = 0;
         let playerBodyRoll = 0;
 
-        if (playerMeshParts) {
+        if (playerMixer && playerAnimationActions.idle && playerAnimationActions.walk) {
+          const targetWalk = THREE.MathUtils.clamp(movementStrength, 0, 1);
+          const blendLerp = 0.15;
+          playerAnimationBlend.walk = THREE.MathUtils.lerp(playerAnimationBlend.walk, targetWalk, blendLerp);
+          playerAnimationBlend.idle = THREE.MathUtils.lerp(playerAnimationBlend.idle, 1 - targetWalk, blendLerp);
+
+          const idleAction = playerAnimationActions.idle;
+          if (idleAction) {
+            idleAction.enabled = true;
+            idleAction.setEffectiveWeight(THREE.MathUtils.clamp(playerAnimationBlend.idle, 0, 1));
+          }
+
+          const walkAction = playerAnimationActions.walk;
+          if (walkAction) {
+            walkAction.enabled = true;
+            walkAction.setEffectiveWeight(THREE.MathUtils.clamp(playerAnimationBlend.walk, 0, 1));
+            walkAction.timeScale = THREE.MathUtils.lerp(0.8, 1.5, THREE.MathUtils.clamp(movementStrength, 0, 1));
+          }
+
+          if (playerAnimationActions.mine && !playerAnimationActions.mine.isRunning()) {
+            playerAnimationActions.mine.setEffectiveWeight(0);
+            playerAnimationActions.mine.enabled = false;
+          }
+
+          playerBodyHeightOffset = Math.sin(walkCycle) * 0.05 * movementStrength;
+        } else if (playerMeshParts) {
           const swing = Math.sin(walkCycle) * 0.35 * movementStrength;
           const stride = Math.sin(walkCycle) * 0.4 * movementStrength;
           const idleYaw = Math.sin(now / 1800) * 0.03;
@@ -4899,6 +4891,30 @@
       updateCraftingInventoryOverlay(combined);
       updateInventoryModalGrid(combined);
       updateInventorySortButtonState();
+      updateHandOverlay();
+    }
+
+    function updateHandOverlay() {
+      if (!handOverlayEl) return;
+      const slot = state.player.inventory[state.player.selectedSlot];
+      if (!slot) {
+        handOverlayEl.dataset.item = 'fist';
+        if (handOverlayIcon) {
+          handOverlayIcon.setAttribute('data-item', 'fist');
+        }
+        if (handOverlayLabel) {
+          handOverlayLabel.textContent = 'Fist';
+        }
+        return;
+      }
+      const itemId = slot.item;
+      handOverlayEl.dataset.item = itemId;
+      if (handOverlayIcon) {
+        handOverlayIcon.setAttribute('data-item', itemId);
+      }
+      if (handOverlayLabel) {
+        handOverlayLabel.textContent = ITEM_DEFS[itemId]?.name ?? itemId;
+      }
     }
 
     function mergeInventory() {
@@ -5823,6 +5839,9 @@
       updatePortalProgress();
       updateLighting(delta);
       advanceParticles(delta);
+      if (playerMixer) {
+        playerMixer.update(delta);
+      }
       updateTarOverlay(delta);
       updateDimensionTransition(delta);
     }
@@ -9166,7 +9185,38 @@
       });
   }
 
+  function ensureGLTFLoader(THREE) {
+    if (THREE?.GLTFLoader) {
+      return Promise.resolve(THREE.GLTFLoader);
+    }
+    const existingScript = document.querySelector('script[data-three-gltf]');
+    if (existingScript) {
+      return new Promise((resolve, reject) => {
+        const handleLoad = () => {
+          if (THREE.GLTFLoader) {
+            resolve(THREE.GLTFLoader);
+          } else {
+            reject(new Error('GLTFLoader failed to initialise.'));
+          }
+        };
+        existingScript.addEventListener('load', handleLoad, { once: true });
+        existingScript.addEventListener('error', () => reject(new Error('Failed to load GLTFLoader.')), {
+          once: true,
+        });
+      });
+    }
+    return loadScript('https://unpkg.com/three@0.161.0/examples/js/loaders/GLTFLoader.js', {
+      'data-three-gltf': 'true',
+    }).then(() => {
+      if (!THREE.GLTFLoader) {
+        throw new Error('GLTFLoader failed to initialise.');
+      }
+      return THREE.GLTFLoader;
+    });
+  }
+
   ensureThree()
+    .then((THREEInstance) => ensureGLTFLoader(THREEInstance).then(() => THREEInstance))
     .then(() => {
       bootstrap();
     })
