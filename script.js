@@ -1661,6 +1661,15 @@
     const tmpCameraForward = new THREE.Vector3();
     const tmpCameraTarget = new THREE.Vector3();
     const tmpCameraRight = new THREE.Vector3();
+    const MOVEMENT_CARDINAL_DIRECTIONS = [
+      { dx: 0, dy: -1, vector: new THREE.Vector3(0, 0, -1) },
+      { dx: 1, dy: 0, vector: new THREE.Vector3(1, 0, 0) },
+      { dx: 0, dy: 1, vector: new THREE.Vector3(0, 0, 1) },
+      { dx: -1, dy: 0, vector: new THREE.Vector3(-1, 0, 0) },
+    ];
+    const tmpMovementForward = new THREE.Vector3();
+    const tmpMovementRight = new THREE.Vector3();
+    const tmpMovementVector = new THREE.Vector3();
     const tmpColorA = new THREE.Color();
     const tmpColorB = new THREE.Color();
     const tmpColorC = new THREE.Color();
@@ -2247,6 +2256,17 @@
           hidePlayerHint();
         }, Math.max(1000, duration));
       }
+    }
+
+    function dismissMovementHint() {
+      if (typeof state === 'undefined' || !state || !state.ui) {
+        return;
+      }
+      if (state.ui.movementHintDismissed) {
+        return;
+      }
+      state.ui.movementHintDismissed = true;
+      hidePlayerHint();
     }
 
     const coarsePointerQuery =
@@ -6062,6 +6082,7 @@
         victoryCelebrationShown: false,
         inventorySortMode: 'default',
         tarOverlayLevel: 0,
+        movementHintDismissed: false,
       },
       persistence: {
         autoSaveAccumulator: 0,
@@ -7564,6 +7585,9 @@
       resetHudInactivityTimer();
       updateLayoutMetrics();
       state.isRunning = true;
+      if (state.ui) {
+        state.ui.movementHintDismissed = false;
+      }
       state.player.effects = {};
       state.victory = false;
       state.scoreSubmitted = false;
@@ -7724,6 +7748,7 @@
 
     function update(delta) {
       state.elapsed += delta;
+      handleMovementInput();
       for (const hook of state.hooks.update) {
         hook(state, delta);
       }
@@ -8433,6 +8458,199 @@
       return true;
     }
 
+    function getCameraRelativeBasis() {
+      if (camera?.isCamera) {
+        tmpMovementForward.set(0, 0, -1).applyQuaternion(camera.quaternion);
+        tmpMovementRight.set(1, 0, 0).applyQuaternion(camera.quaternion);
+      } else if (cameraState?.lastFacing) {
+        tmpMovementForward.copy(cameraState.lastFacing);
+        tmpMovementRight.set(tmpMovementForward.z, 0, -tmpMovementForward.x);
+      } else if (state?.player?.facing) {
+        tmpMovementForward.set(state.player.facing.x, 0, state.player.facing.y);
+        tmpMovementRight.set(tmpMovementForward.z, 0, -tmpMovementForward.x);
+      } else {
+        tmpMovementForward.set(0, 0, -1);
+        tmpMovementRight.set(1, 0, 0);
+      }
+      tmpMovementForward.y = 0;
+      tmpMovementRight.y = 0;
+      if (tmpMovementForward.lengthSq() < 0.0001) {
+        tmpMovementForward.set(0, 0, -1);
+      }
+      tmpMovementForward.normalize();
+      if (tmpMovementRight.lengthSq() < 0.0001) {
+        tmpMovementRight.set(tmpMovementForward.z, 0, -tmpMovementForward.x);
+      }
+      tmpMovementRight.normalize();
+    }
+
+    function snapDirectionToRail(dx, dy, moveVector, baseDot = null) {
+      if (!state?.player) {
+        return { dx, dy };
+      }
+      const { x, y } = state.player;
+      if (!Number.isFinite(x) || !Number.isFinite(y)) {
+        return { dx, dy };
+      }
+      const currentOption = MOVEMENT_CARDINAL_DIRECTIONS.find(
+        (option) => option.dx === dx && option.dy === dy,
+      );
+      const currentDot = baseDot ?? (currentOption ? moveVector.dot(currentOption.vector) : -Infinity);
+      let bestRail = null;
+      let bestRailDot = -Infinity;
+      for (const option of MOVEMENT_CARDINAL_DIRECTIONS) {
+        const tile = getTile(x + option.dx, y + option.dy);
+        if (!tile || tile.type !== 'rail') continue;
+        const dot = moveVector.dot(option.vector);
+        if (dot > bestRailDot) {
+          bestRailDot = dot;
+          bestRail = option;
+        }
+      }
+      if (!bestRail) {
+        return { dx, dy };
+      }
+      const baseWalkable = isWalkable(x + dx, y + dy);
+      if (!baseWalkable && bestRailDot >= 0.1) {
+        return { dx: bestRail.dx, dy: bestRail.dy };
+      }
+      if (bestRailDot > currentDot + 0.15) {
+        return { dx: bestRail.dx, dy: bestRail.dy };
+      }
+      return { dx, dy };
+    }
+
+    function resolveCameraRelativeDirection(forwardInput, strafeInput, options = {}) {
+      const { snapToRails = false } = options;
+      const forward = Number.isFinite(forwardInput) ? forwardInput : 0;
+      const strafe = Number.isFinite(strafeInput) ? strafeInput : 0;
+      if (Math.abs(forward) < 0.0001 && Math.abs(strafe) < 0.0001) {
+        return null;
+      }
+      getCameraRelativeBasis();
+      tmpMovementVector.set(0, 0, 0);
+      if (Math.abs(forward) > 0.0001) {
+        tmpMovementVector.addScaledVector(tmpMovementForward, forward);
+      }
+      if (Math.abs(strafe) > 0.0001) {
+        tmpMovementVector.addScaledVector(tmpMovementRight, strafe);
+      }
+      if (tmpMovementVector.lengthSq() < 0.0001) {
+        return null;
+      }
+      tmpMovementVector.normalize();
+      let bestDirection = MOVEMENT_CARDINAL_DIRECTIONS[0];
+      let bestDot = -Infinity;
+      for (const option of MOVEMENT_CARDINAL_DIRECTIONS) {
+        const dot = tmpMovementVector.dot(option.vector);
+        if (dot > bestDot) {
+          bestDot = dot;
+          bestDirection = option;
+        }
+      }
+      let { dx, dy } = bestDirection;
+      if (snapToRails) {
+        const snapped = snapDirectionToRail(dx, dy, tmpMovementVector, bestDot);
+        dx = snapped.dx;
+        dy = snapped.dy;
+      }
+      return { dx, dy };
+    }
+
+    function attemptCameraAlignedMove(forwardInput, strafeInput, options = {}) {
+      if (!state?.isRunning) {
+        return false;
+      }
+      const direction = resolveCameraRelativeDirection(forwardInput, strafeInput, options);
+      if (!direction) {
+        return false;
+      }
+      const { dx, dy } = direction;
+      if (dx === 0 && dy === 0) {
+        return false;
+      }
+      const previousMove = state.lastMoveAt;
+      attemptMove(dx, dy);
+      return state.lastMoveAt !== previousMove;
+    }
+
+    function handleMovementInput() {
+      if (!state?.isRunning) {
+        return;
+      }
+      if (!state?.pressedKeys || state.pressedKeys.size === 0) {
+        return;
+      }
+      const forwardInput =
+        (state.pressedKeys.has('forward') ? 1 : 0) - (state.pressedKeys.has('backward') ? 1 : 0);
+      const strafeInput =
+        (state.pressedKeys.has('right') ? 1 : 0) - (state.pressedKeys.has('left') ? 1 : 0);
+      if (forwardInput === 0 && strafeInput === 0) {
+        return;
+      }
+      attemptCameraAlignedMove(forwardInput, strafeInput, { snapToRails: true });
+    }
+
+    function attemptJump() {
+      if (!state?.isRunning) {
+        return false;
+      }
+      if (state.ui?.respawnActive || state.ui?.dimensionTransition) {
+        return false;
+      }
+      const now = performance?.now ? performance.now() : Date.now();
+      const delay = (state.baseMoveDelay ?? 0.18) + (state.player.tarStacks || 0) * 0.04;
+      if (now - state.lastMoveAt < delay * 1000) {
+        return false;
+      }
+      let forwardInput =
+        (state.pressedKeys?.has('forward') ? 1 : 0) - (state.pressedKeys?.has('backward') ? 1 : 0);
+      let strafeInput =
+        (state.pressedKeys?.has('right') ? 1 : 0) - (state.pressedKeys?.has('left') ? 1 : 0);
+      if (forwardInput === 0 && strafeInput === 0) {
+        forwardInput = 1;
+      }
+      const direction = resolveCameraRelativeDirection(forwardInput, strafeInput, { snapToRails: false });
+      if (!direction) {
+        return false;
+      }
+      const { dx, dy } = direction;
+      if (dx === 0 && dy === 0) {
+        return false;
+      }
+      const startX = state.player.x;
+      const startY = state.player.y;
+      const midX = startX + dx;
+      const midY = startY + dy;
+      const landingX = startX + dx * 2;
+      const landingY = startY + dy * 2;
+      if (!isWithinBounds(midX, midY) || !isWithinBounds(landingX, landingY)) {
+        return false;
+      }
+      if (isWalkable(midX, midY)) {
+        return false;
+      }
+      if (!isWalkable(landingX, landingY)) {
+        return false;
+      }
+      state.player.x = landingX;
+      state.player.y = landingY;
+      state.player.facing = { x: dx, y: dy };
+      state.lastMoveAt = now;
+      playFootstepSound();
+      const landingTile = getTile(landingX, landingY);
+      if (landingTile?.hazard) {
+        applyDamage(0.5);
+        logEvent('Hazard burns you!');
+      }
+      const from = { x: startX, y: startY };
+      for (const hook of state.hooks.onMove) {
+        hook(state, from, { x: landingX, y: landingY }, { dx, dy });
+      }
+      dismissMovementHint();
+      return true;
+    }
+
     function attemptMove(dx, dy, ignoreCooldown = false) {
       if (state.ui.respawnActive) return;
       if (state.ui.dimensionTransition) return;
@@ -8450,6 +8668,7 @@
       state.player.y = ny;
       state.player.facing = { x: dx, y: dy };
       state.lastMoveAt = now;
+      dismissMovementHint();
       playFootstepSound();
       const tile = getTile(nx, ny);
       if (tile?.hazard) {
@@ -9593,9 +9812,64 @@
       renderScene();
     }
 
+    function handleMovementKey(code, pressed, keyFallback = '') {
+      let direction = null;
+      switch (code) {
+        case 'KeyW':
+        case 'ArrowUp':
+          direction = 'forward';
+          break;
+        case 'KeyS':
+        case 'ArrowDown':
+          direction = 'backward';
+          break;
+        case 'KeyA':
+        case 'ArrowLeft':
+          direction = 'left';
+          break;
+        case 'KeyD':
+        case 'ArrowRight':
+          direction = 'right';
+          break;
+        default:
+          break;
+      }
+      if (!direction && keyFallback) {
+        switch (keyFallback.toLowerCase()) {
+          case 'w':
+            direction = 'forward';
+            break;
+          case 's':
+            direction = 'backward';
+            break;
+          case 'a':
+            direction = 'left';
+            break;
+          case 'd':
+            direction = 'right';
+            break;
+          default:
+            break;
+        }
+      }
+      if (!direction) {
+        return false;
+      }
+      if (!state?.pressedKeys) {
+        state.pressedKeys = new Set();
+      }
+      if (pressed) {
+        state.pressedKeys.add(direction);
+      } else {
+        state.pressedKeys.delete(direction);
+      }
+      return true;
+    }
+
     function handleKeyDown(event) {
       if (event.repeat) return;
-      const key = event.key.toLowerCase();
+      const key = (event.key || '').toLowerCase();
+      const code = event.code || '';
       const target = event.target;
       if (!state.isRunning && previewState.active) {
         const leftKeys = ['a', 'arrowleft'];
@@ -9625,25 +9899,15 @@
         event.preventDefault();
         return;
       }
+      if (state.isRunning && handleMovementKey(code, true, key)) {
+        event.preventDefault();
+        return;
+      }
       switch (key) {
-        case 'w':
-        case 'arrowup':
-          attemptMove(0, -1);
-          break;
-        case 'a':
-        case 'arrowleft':
-          attemptMove(-1, 0);
-          break;
-        case 's':
-        case 'arrowdown':
-          attemptMove(0, 1);
-          break;
-        case 'd':
-        case 'arrowright':
-          attemptMove(1, 0);
-          break;
         case ' ':
-          interact();
+          if (!attemptJump()) {
+            interact();
+          }
           break;
         case 'q':
           placeBlock();
@@ -9676,6 +9940,10 @@
         default:
           break;
       }
+    }
+
+    function handleKeyUp(event) {
+      handleMovementKey(event.code || '', false, event.key);
     }
 
     function placeBlock(targetTile = null) {
@@ -9775,16 +10043,16 @@
     function updateFromMobile(action) {
       switch (action) {
         case 'up':
-          attemptMove(0, -1);
+          attemptCameraAlignedMove(1, 0, { snapToRails: true });
           break;
         case 'down':
-          attemptMove(0, 1);
+          attemptCameraAlignedMove(-1, 0, { snapToRails: true });
           break;
         case 'left':
-          attemptMove(-1, 0);
+          attemptCameraAlignedMove(0, -1, { snapToRails: true });
           break;
         case 'right':
-          attemptMove(1, 0);
+          attemptCameraAlignedMove(0, 1, { snapToRails: true });
           break;
         case 'action':
           interact();
@@ -9814,6 +10082,7 @@
 
     function initEventListeners() {
       document.addEventListener('keydown', handleKeyDown);
+      document.addEventListener('keyup', handleKeyUp);
       document.addEventListener('keydown', (event) => {
         if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
           if (!craftingModal?.hidden) {
