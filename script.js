@@ -9158,6 +9158,7 @@
     const guideCarouselState = {
       currentIndex: 0,
       timeouts: [],
+      cleanups: [],
       goToSlide: null,
     };
 
@@ -9293,12 +9294,24 @@
       guideCarouselState.goToSlide?.(0, { forceRender: true });
     }
 
+    function runGuideDemoCleanups() {
+      guideCarouselState.cleanups.forEach((cleanup) => {
+        try {
+          cleanup?.();
+        } catch (error) {
+          console.error('Failed to clean up guide demo', error);
+        }
+      });
+      guideCarouselState.cleanups.length = 0;
+    }
+
     function closeGuideModal() {
       if (!guideModal) return;
       guideModal.hidden = true;
       guideModal.setAttribute('data-open', 'false');
       guideModal.setAttribute('aria-hidden', 'true');
       clearGuideDemoTimers();
+      runGuideDemoCleanups();
       guideModal.querySelectorAll('.guide-card__step').forEach((step) => {
         step.classList.remove('is-animating');
       });
@@ -9329,6 +9342,12 @@
         window.clearTimeout(timeoutId);
       });
       guideCarouselState.timeouts.length = 0;
+    }
+
+    function registerGuideDemoCleanup(cleanup) {
+      if (typeof cleanup === 'function') {
+        guideCarouselState.cleanups.push(cleanup);
+      }
     }
 
     function renderGuideControlsColumn(label, controls = []) {
@@ -9433,17 +9452,52 @@
       guideCarouselState.timeouts.push(resetTimeout);
     }
 
+    function startGuideInteractiveDemo(slide, demoContainer, captionEl, stepButtons, activateStep) {
+      if (!demoContainer) {
+        return;
+      }
+      demoContainer.dataset.active = 'true';
+      demoContainer.innerHTML = '';
+      runGuideDemoCleanups();
+      let cleanup;
+      const context = { captionEl, stepButtons, activateStep };
+      switch (slide.id) {
+        case 'rail-surfing':
+          cleanup = createRailSurfingDemo(demoContainer, context);
+          break;
+        case 'portal-forging':
+          cleanup = createPortalForgingDemo(demoContainer, context);
+          break;
+        case 'survival-kit':
+          cleanup = createSurvivalKitDemo(demoContainer, context);
+          break;
+        default:
+          demoContainer.textContent = 'Interactive demo coming soon for this guide card.';
+      }
+      registerGuideDemoCleanup(cleanup);
+    }
+
     function attachGuideDemoHandlers(cardEl, slide) {
       const demoHost = cardEl.querySelector('[data-guide-demo]');
       if (!demoHost) return;
       const captionEl = demoHost.querySelector('[data-demo-caption]');
       const stepButtons = Array.from(demoHost.querySelectorAll('[data-demo-step]'));
       const playButton = demoHost.querySelector('[data-guide-play]');
+      let demoContainer = demoHost.querySelector('[data-demo-canvas-container]');
+      if (!demoContainer) {
+        demoContainer = document.createElement('div');
+        demoContainer.className = 'guide-card__canvas';
+        demoContainer.setAttribute('data-demo-canvas-container', 'true');
+        demoContainer.setAttribute('aria-live', 'polite');
+        demoHost.appendChild(demoContainer);
+      }
       if (!captionEl || !stepButtons.length) {
         return;
       }
 
-      function activateStep(stepIndex, { animate } = { animate: false }) {
+      playButton?.setAttribute('aria-expanded', demoContainer?.dataset.active === 'true' ? 'true' : 'false');
+
+      function activateStep(stepIndex, { animate = false, captionOverride } = {}) {
         clearGuideDemoTimers();
         stepButtons.forEach((button, index) => {
           const isActive = index === stepIndex;
@@ -9452,7 +9506,7 @@
         });
         const step = slide.demoSequence?.[stepIndex];
         if (!step) return;
-        captionEl.textContent = step.caption;
+        captionEl.textContent = captionOverride ?? step.caption;
         if (animate) {
           const target = stepButtons[stepIndex];
           target.classList.add('is-animating');
@@ -9471,10 +9525,438 @@
       });
 
       playButton?.addEventListener('click', () => {
+        playButton.setAttribute('aria-expanded', 'true');
+        startGuideInteractiveDemo(slide, demoContainer, captionEl, stepButtons, activateStep);
         animateGuideDemoSequence(stepButtons, captionEl, slide);
       });
 
       activateStep(0);
+    }
+
+    function createGuideCanvas(container) {
+      const canvas = document.createElement('canvas');
+      canvas.width = 200;
+      canvas.height = 200;
+      canvas.className = 'guide-demo-surface';
+      canvas.setAttribute('role', 'img');
+      canvas.setAttribute('aria-label', 'Interactive guide demonstration area');
+      canvas.tabIndex = 0;
+      container.appendChild(canvas);
+      window.setTimeout(() => {
+        try {
+          canvas.focus();
+        } catch (error) {
+          console.warn('Unable to focus guide canvas', error);
+        }
+      }, 0);
+      return canvas;
+    }
+
+    function createRailSurfingDemo(container, { captionEl, activateStep }) {
+      const canvas = createGuideCanvas(container);
+      const ctx = canvas.getContext('2d');
+      const railsY = [60, 100, 140];
+      const character = { x: 96, y: railsY[1], size: 18, vx: 0, vy: 0, jumpTimer: 0 };
+      const keys = new Set();
+      let rafId = null;
+
+      captionEl.textContent = 'Use WASD or the arrow keys to move, Space to jump, Shift to stabilise.';
+      activateStep(0, { animate: true, captionOverride: 'Lean into the highlighted rail before the void surge reaches it.' });
+
+      function drawRails() {
+        ctx.strokeStyle = 'rgba(73, 242, 255, 0.4)';
+        ctx.lineWidth = 4;
+        railsY.forEach((y) => {
+          ctx.beginPath();
+          ctx.moveTo(20, y);
+          ctx.lineTo(180, y);
+          ctx.stroke();
+        });
+      }
+
+      function drawCharacter() {
+        const bounce = character.jumpTimer > 0 ? Math.sin((character.jumpTimer / 18) * Math.PI) * 16 : 0;
+        const y = character.y - bounce;
+        ctx.fillStyle = '#49f2ff';
+        ctx.fillRect(character.x - character.size / 2, y - character.size / 2, character.size, character.size);
+        ctx.fillStyle = '#081226';
+        ctx.fillRect(character.x - 6, y - 4, 4, 4);
+        ctx.fillRect(character.x + 2, y - 4, 4, 4);
+      }
+
+      function drawBackdrop() {
+        const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
+        gradient.addColorStop(0, '#050d1e');
+        gradient.addColorStop(1, '#0a213f');
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+      }
+
+      function updateCharacterPosition() {
+        const speed = 2.5;
+        character.vx = 0;
+        character.vy = 0;
+        if (keys.has('a') || keys.has('arrowleft')) {
+          character.vx -= speed;
+        }
+        if (keys.has('d') || keys.has('arrowright')) {
+          character.vx += speed;
+        }
+        if (keys.has('w') || keys.has('arrowup')) {
+          character.vy -= speed;
+        }
+        if (keys.has('s') || keys.has('arrowdown')) {
+          character.vy += speed;
+        }
+        character.x = Math.min(Math.max(character.x + character.vx, 26), 174);
+        character.y = Math.min(Math.max(character.y + character.vy, 40), 160);
+        if (character.jumpTimer > 0) {
+          character.jumpTimer -= 1;
+        }
+      }
+
+      function render() {
+        updateCharacterPosition();
+        drawBackdrop();
+        drawRails();
+        drawCharacter();
+        rafId = window.requestAnimationFrame(render);
+      }
+
+      function handleKeyDown(event) {
+        keys.add(event.key.toLowerCase());
+        if (event.key === ' ' || event.key === 'Spacebar') {
+          character.jumpTimer = 18;
+          activateStep(1, { animate: true });
+          captionEl.textContent = 'Tap jump to clear the missing section and keep your combo streak alive.';
+        }
+        if (event.key.toLowerCase() === 'shift') {
+          activateStep(2, { animate: true });
+          captionEl.textContent = 'Feather the landing so magnetised boots lock onto the rail.';
+        }
+        if (event.key.toLowerCase() === 'd' || event.key === 'ArrowRight') {
+          activateStep(0, { animate: true });
+        }
+      }
+
+      function handleKeyUp(event) {
+        keys.delete(event.key.toLowerCase());
+      }
+
+      window.addEventListener('keydown', handleKeyDown);
+      window.addEventListener('keyup', handleKeyUp);
+      render();
+
+      return () => {
+        window.cancelAnimationFrame(rafId);
+        window.removeEventListener('keydown', handleKeyDown);
+        window.removeEventListener('keyup', handleKeyUp);
+      };
+    }
+
+    function createPortalForgingDemo(container, { captionEl, activateStep }) {
+      const canvas = createGuideCanvas(container);
+      const ctx = canvas.getContext('2d');
+      const slots = [
+        { x: 60, y: 40, width: 30, height: 30, id: 'focus-crystal', filled: false },
+        { x: 100, y: 40, width: 30, height: 30, id: 'frame-segment', filled: false },
+        { x: 140, y: 40, width: 30, height: 30, id: 'igniter', filled: false },
+      ];
+      const items = [
+        { id: 'focus-crystal', color: '#49f2ff', x: 50, y: 150, radius: 14, grabbed: false },
+        { id: 'frame-segment', color: '#f7b733', x: 100, y: 150, radius: 14, grabbed: false },
+        { id: 'igniter', color: '#ff4e50', x: 150, y: 150, radius: 14, grabbed: false },
+      ];
+      let draggingItem = null;
+      let pointerOffset = { x: 0, y: 0 };
+      let blueprintVisible = true;
+      let igniteReady = false;
+      let rafId = null;
+      let confettiPieces = [];
+
+      captionEl.textContent = 'Drag the glowing components into the sequence slots, then press F to ignite.';
+      activateStep(0, { animate: true, captionOverride: 'Call up the blueprint to lock the frame dimensions.' });
+
+      function drawBackground() {
+        ctx.fillStyle = '#081226';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+      }
+
+      function drawPortalFrame() {
+        ctx.strokeStyle = 'rgba(73, 242, 255, 0.55)';
+        ctx.lineWidth = 4;
+        ctx.strokeRect(40, 80, 120, 90);
+        ctx.strokeStyle = 'rgba(73, 242, 255, 0.25)';
+        ctx.setLineDash([6, 6]);
+        ctx.strokeRect(46, 86, 108, 78);
+        ctx.setLineDash([]);
+      }
+
+      function drawSlots() {
+        slots.forEach((slot) => {
+          ctx.strokeStyle = slot.filled ? '#49f2ff' : 'rgba(73, 242, 255, 0.35)';
+          ctx.lineWidth = 2;
+          ctx.strokeRect(slot.x - slot.width / 2, slot.y - slot.height / 2, slot.width, slot.height);
+        });
+      }
+
+      function drawItems() {
+        items.forEach((item) => {
+          ctx.fillStyle = item.color;
+          ctx.beginPath();
+          ctx.arc(item.x, item.y, item.radius, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = 'rgba(8, 18, 38, 0.6)';
+          ctx.font = '10px "Chakra Petch", sans-serif';
+          ctx.textAlign = 'center';
+          ctx.fillText(item.id === 'focus-crystal' ? 'Focus' : item.id === 'frame-segment' ? 'Frame' : 'Ignite', item.x, item.y + 24);
+        });
+      }
+
+      function drawBlueprintGlow() {
+        if (!blueprintVisible) return;
+        ctx.fillStyle = 'rgba(73, 242, 255, 0.1)';
+        ctx.fillRect(36, 36, 128, 56);
+      }
+
+      function drawConfetti() {
+        confettiPieces.forEach((piece) => {
+          piece.x += piece.vx;
+          piece.y += piece.vy;
+          piece.vy += 0.1;
+          ctx.fillStyle = piece.color;
+          ctx.fillRect(piece.x, piece.y, piece.size, piece.size);
+        });
+        confettiPieces = confettiPieces.filter((piece) => piece.y < canvas.height + 10);
+      }
+
+      function render() {
+        drawBackground();
+        drawBlueprintGlow();
+        drawPortalFrame();
+        drawSlots();
+        drawItems();
+        drawConfetti();
+        rafId = window.requestAnimationFrame(render);
+      }
+
+      function pointerPosition(event) {
+        const rect = canvas.getBoundingClientRect();
+        return {
+          x: event.clientX - rect.left,
+          y: event.clientY - rect.top,
+        };
+      }
+
+      function findItemAtPosition(pos) {
+        return items.find((item) => {
+          const distance = Math.hypot(item.x - pos.x, item.y - pos.y);
+          return distance <= item.radius + 4;
+        });
+      }
+
+      function findSlotForItem(item, pos) {
+        return slots.find((slot) => {
+          if (slot.id !== item.id || slot.filled) {
+            return false;
+          }
+          return (
+            pos.x >= slot.x - slot.width / 2 &&
+            pos.x <= slot.x + slot.width / 2 &&
+            pos.y >= slot.y - slot.height / 2 &&
+            pos.y <= slot.y + slot.height / 2
+          );
+        });
+      }
+
+      function handlePointerDown(event) {
+        const pos = pointerPosition(event);
+        const targetItem = findItemAtPosition(pos);
+        if (!targetItem) return;
+        draggingItem = targetItem;
+        draggingItem.grabbed = true;
+        pointerOffset = { x: pos.x - targetItem.x, y: pos.y - targetItem.y };
+        blueprintVisible = false;
+        activateStep(1, { animate: true, captionOverride: 'Drag to set each block until the lattice sings in resonance.' });
+        canvas.setPointerCapture(event.pointerId);
+      }
+
+      function handlePointerMove(event) {
+        if (!draggingItem) return;
+        const pos = pointerPosition(event);
+        draggingItem.x = pos.x - pointerOffset.x;
+        draggingItem.y = pos.y - pointerOffset.y;
+      }
+
+      function handlePointerUp(event) {
+        if (!draggingItem) return;
+        const pos = pointerPosition(event);
+        const slot = findSlotForItem(draggingItem, pos);
+        if (slot) {
+          draggingItem.x = slot.x;
+          draggingItem.y = slot.y;
+          slot.filled = true;
+        }
+        draggingItem.grabbed = false;
+        draggingItem = null;
+        if (canvas.hasPointerCapture?.(event.pointerId)) {
+          canvas.releasePointerCapture(event.pointerId);
+        }
+        igniteReady = slots.every((slot) => slot.filled);
+        if (igniteReady) {
+          captionEl.textContent = 'Press F to ignite the portal matrix.';
+        }
+      }
+
+      function handleKeyDown(event) {
+        if (igniteReady && event.key.toLowerCase() === 'f') {
+          activateStep(2, { animate: true });
+          captionEl.textContent = 'Gateway stabilised! Sequence stored in your crafting circle.';
+          igniteReady = false;
+          confettiPieces = Array.from({ length: 18 }).map(() => ({
+            x: canvas.width / 2,
+            y: 84,
+            vx: (Math.random() - 0.5) * 2.2,
+            vy: -Math.random() * 2.8 - 1.5,
+            size: Math.random() * 4 + 2,
+            color: Math.random() > 0.5 ? '#49f2ff' : '#f7b733',
+          }));
+        }
+      }
+
+      canvas.addEventListener('pointerdown', handlePointerDown);
+      canvas.addEventListener('pointermove', handlePointerMove);
+      canvas.addEventListener('pointerup', handlePointerUp);
+      canvas.addEventListener('pointerleave', handlePointerUp);
+      window.addEventListener('keydown', handleKeyDown);
+      render();
+
+      return () => {
+        window.cancelAnimationFrame(rafId);
+        canvas.removeEventListener('pointerdown', handlePointerDown);
+        canvas.removeEventListener('pointermove', handlePointerMove);
+        canvas.removeEventListener('pointerup', handlePointerUp);
+        canvas.removeEventListener('pointerleave', handlePointerUp);
+        window.removeEventListener('keydown', handleKeyDown);
+      };
+    }
+
+    function createSurvivalKitDemo(container, { captionEl, activateStep }) {
+      const canvas = createGuideCanvas(container);
+      const ctx = canvas.getContext('2d');
+      let rafId = null;
+      let barricadePlaced = false;
+      let repairProgress = 0;
+      let repairing = false;
+      let hazardX = 0;
+      let hotbarIndex = 0;
+
+      captionEl.textContent = 'Cycle your hotbar, deploy a barricade, then hold to repair damaged rails.';
+      activateStep(0, { animate: true, captionOverride: 'Swap to your emergency slot with a quick-cycle.' });
+
+      function drawBackground() {
+        ctx.fillStyle = '#061428';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = '#112f4f';
+        ctx.fillRect(20, 120, 160, 12);
+      }
+
+      function drawHazard() {
+        ctx.fillStyle = '#ff4e50';
+        ctx.beginPath();
+        ctx.arc(hazardX, 126, 10, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      function drawBarricade() {
+        if (!barricadePlaced) return;
+        ctx.fillStyle = '#f7b733';
+        ctx.fillRect(110, 114, 16, 24);
+      }
+
+      function drawRepairBeam() {
+        if (!repairing) return;
+        ctx.fillStyle = 'rgba(73, 242, 255, 0.45)';
+        ctx.fillRect(90, 90, 4, 40 + repairProgress * 0.25);
+      }
+
+      function drawHotbar() {
+        const slotWidth = 34;
+        for (let index = 0; index < 3; index += 1) {
+          ctx.strokeStyle = index === hotbarIndex ? '#49f2ff' : 'rgba(73, 242, 255, 0.25)';
+          ctx.strokeRect(32 + index * (slotWidth + 6), 160, slotWidth, 22);
+        }
+      }
+
+      function drawRepairProgress() {
+        ctx.strokeStyle = 'rgba(73, 242, 255, 0.25)';
+        ctx.strokeRect(60, 40, 80, 12);
+        ctx.fillStyle = '#49f2ff';
+        ctx.fillRect(60, 40, repairProgress, 12);
+      }
+
+      function render() {
+        drawBackground();
+        drawHazard();
+        drawBarricade();
+        drawRepairBeam();
+        drawHotbar();
+        drawRepairProgress();
+        hazardX += 0.6;
+        if (hazardX > 200) {
+          hazardX = -20;
+        }
+        if (repairing) {
+          repairProgress = Math.min(repairProgress + 1.5, 80);
+          if (repairProgress >= 80) {
+            activateStep(2, { animate: true });
+            captionEl.textContent = 'Rails restabilised — you are ready for the next raid.';
+            repairing = false;
+          }
+        }
+        rafId = window.requestAnimationFrame(render);
+      }
+
+      function handleKeyDown(event) {
+        if (event.key.toLowerCase() === 'q') {
+          hotbarIndex = (hotbarIndex + 1) % 3;
+          activateStep(0, { animate: true });
+          captionEl.textContent = 'Emergency slot armed. Deploy a barricade next!';
+        }
+        if (event.key === '1' || event.key === '2' || event.key === '3') {
+          hotbarIndex = Number(event.key) - 1;
+          barricadePlaced = true;
+          activateStep(1, { animate: true });
+          captionEl.textContent = 'Barricade deployed. Hold to channel repairs.';
+        }
+      }
+
+      function handlePointerDown() {
+        if (!barricadePlaced) {
+          captionEl.textContent = 'Drop a barricade before repairing to slow the raid.';
+          return;
+        }
+        repairing = true;
+        activateStep(2, { animate: true });
+      }
+
+      function handlePointerUp() {
+        repairing = false;
+      }
+
+      canvas.addEventListener('pointerdown', handlePointerDown);
+      canvas.addEventListener('pointerup', handlePointerUp);
+      canvas.addEventListener('pointerleave', handlePointerUp);
+      window.addEventListener('keydown', handleKeyDown);
+      render();
+
+      return () => {
+        window.cancelAnimationFrame(rafId);
+        canvas.removeEventListener('pointerdown', handlePointerDown);
+        canvas.removeEventListener('pointerup', handlePointerUp);
+        canvas.removeEventListener('pointerleave', handlePointerUp);
+        window.removeEventListener('keydown', handleKeyDown);
+      };
     }
 
     function initializeGuideCarousel() {
@@ -9518,6 +10000,7 @@
         const didChange = guideCarouselState.currentIndex !== targetIndex;
         guideCarouselState.currentIndex = targetIndex;
         clearGuideDemoTimers();
+        runGuideDemoCleanups();
         if (didChange || forceRender || !cardEl.childElementCount) {
           renderSlide();
         } else {
