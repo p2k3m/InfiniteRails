@@ -3866,6 +3866,9 @@
       }
     }
 
+    const HEALTH_REGEN_IDLE_DELAY = 5;
+    const HEALTH_REGEN_FULL_RESTORE_DURATION = 60;
+
     const state = {
       width: 16,
       height: 12,
@@ -3912,6 +3915,8 @@
         tarStacks: 0,
         tarSlowTimer: 0,
         zombieHits: 0,
+        lastDamageAt: -Infinity,
+        heartsAtLastDamage: null,
       },
       pressedKeys: new Set(),
       isRunning: false,
@@ -3933,6 +3938,8 @@
         victoryCelebrationShown: false,
       },
     };
+
+    state.player.heartsAtLastDamage = state.player.hearts;
 
     resetStatusMeterMemory();
     initRenderer();
@@ -5037,6 +5044,7 @@
       updateIronGolems(delta);
       updateZombies(delta);
       handleAir(delta);
+      handleHealthRegen(delta);
       processEchoQueue();
       updatePortalActivation();
       updateStatusBars();
@@ -5080,6 +5088,40 @@
         }
       }
       state.ui.lastAirUnits = Math.ceil(state.player.air);
+    }
+
+    function handleHealthRegen(delta) {
+      if (state.ui.respawnActive) return;
+      const player = state.player;
+      if (!player) return;
+      if (player.hearts >= player.maxHearts) {
+        player.hearts = player.maxHearts;
+        player.heartsAtLastDamage = clamp(player.hearts, 0, player.maxHearts);
+        return;
+      }
+      const lastDamageAt = Number.isFinite(player.lastDamageAt) ? player.lastDamageAt : -Infinity;
+      const idleDuration = state.elapsed - lastDamageAt;
+      if (idleDuration <= HEALTH_REGEN_IDLE_DELAY) {
+        return;
+      }
+      const baseline = clamp(
+        player.heartsAtLastDamage ?? player.hearts,
+        0,
+        player.maxHearts
+      );
+      if (baseline >= player.maxHearts) {
+        player.heartsAtLastDamage = baseline;
+        return;
+      }
+      const regenWindow = Math.max(
+        HEALTH_REGEN_FULL_RESTORE_DURATION - HEALTH_REGEN_IDLE_DELAY,
+        0.0001
+      );
+      const progress = clamp((idleDuration - HEALTH_REGEN_IDLE_DELAY) / regenWindow, 0, 1);
+      const targetHearts = baseline + (player.maxHearts - baseline) * progress;
+      if (targetHearts > player.hearts) {
+        player.hearts = Math.min(targetHearts, player.maxHearts);
+      }
     }
 
     function triggerDrowningCue() {
@@ -5332,8 +5374,10 @@
       const heartsPerHit = state.player.maxHearts / 5;
       const remainingHearts = state.player.maxHearts - heartsPerHit * hits;
       state.player.hearts = clamp(remainingHearts, 0, state.player.maxHearts);
+      markPlayerDamaged();
       if (hits >= 5) {
         state.player.hearts = 0;
+        markPlayerDamaged();
         updateStatusBars();
         handlePlayerDefeat('The Minecraft zombies overwhelm Steve. You respawn among the rails.');
         return;
@@ -5495,8 +5539,15 @@
       }
     }
 
+    function markPlayerDamaged() {
+      state.player.lastDamageAt = state.elapsed;
+      state.player.heartsAtLastDamage = clamp(state.player.hearts, 0, state.player.maxHearts);
+    }
+
     function applyDamage(amount) {
+      if (amount <= 0) return;
       state.player.hearts = clamp(state.player.hearts - amount, 0, state.player.maxHearts);
+      markPlayerDamaged();
       if (state.player.hearts <= 0 && !state.victory) {
         handlePlayerDefeat('You collapse. Echoes rebuild the realm...');
       }
