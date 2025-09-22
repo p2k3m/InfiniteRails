@@ -3430,6 +3430,52 @@
       });
     }
 
+    function spawnRailCrumbleParticles(x, y, accentColor) {
+      if (!particleGroup) return;
+      const count = 34;
+      const positions = new Float32Array(count * 3);
+      const velocities = new Float32Array(count * 3);
+      for (let i = 0; i < count; i++) {
+        const baseIndex = i * 3;
+        positions[baseIndex] = (Math.random() - 0.5) * 0.32;
+        positions[baseIndex + 1] = Math.random() * 0.22;
+        positions[baseIndex + 2] = (Math.random() - 0.5) * 0.32;
+        const angle = Math.random() * Math.PI * 2;
+        const speed = 0.35 + Math.random() * 0.55;
+        velocities[baseIndex] = Math.cos(angle) * speed;
+        velocities[baseIndex + 1] = Math.random() * 0.8 + 0.25;
+        velocities[baseIndex + 2] = Math.sin(angle) * speed;
+      }
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      const pointsMaterial = new THREE.PointsMaterial({
+        size: 0.12,
+        transparent: true,
+        depthWrite: false,
+        opacity: 0.95,
+        blending: THREE.AdditiveBlending,
+        map: getParticleTexture(),
+        color: new THREE.Color(accentColor ?? '#ff7646'),
+        sizeAttenuation: true,
+      });
+      const points = new THREE.Points(geometry, pointsMaterial);
+      const { x: sx, z: sz } = worldToScene(x, y);
+      points.position.set(sx, tileSurfaceHeight(x, y) + 0.28, sz);
+      particleGroup.add(points);
+      particleSystems.push({
+        points,
+        positions,
+        velocities,
+        life: 0,
+        maxLife: 0.9,
+        count,
+        gravityScale: 0.48,
+        swirlStrength: 0.14,
+        swirlFrequency: 6.5,
+        fadePower: 1.8,
+      });
+    }
+
     function advanceParticles(delta) {
       if (!particleSystems.length) return;
       for (let i = particleSystems.length - 1; i >= 0; i--) {
@@ -3439,10 +3485,15 @@
         const { positions, velocities, points, count } = system;
         for (let j = 0; j < count; j++) {
           const baseIndex = j * 3;
-          velocities[baseIndex + 1] -= 9.81 * delta * 0.35;
-          const swirl = Math.sin((system.life + j) * 9) * 0.25 * delta;
-          velocities[baseIndex] += swirl;
-          velocities[baseIndex + 2] -= swirl;
+          const gravityScale = system.gravityScale ?? 0.35;
+          velocities[baseIndex + 1] -= 9.81 * delta * gravityScale;
+          const swirlFrequency = system.swirlFrequency ?? 9;
+          const swirlStrength = system.swirlStrength ?? 0.25;
+          if (swirlStrength !== 0) {
+            const swirl = Math.sin((system.life + j) * swirlFrequency) * swirlStrength * delta;
+            velocities[baseIndex] += swirl;
+            velocities[baseIndex + 2] -= swirl;
+          }
           positions[baseIndex] += velocities[baseIndex] * delta;
           positions[baseIndex + 1] += velocities[baseIndex + 1] * delta;
           positions[baseIndex + 2] += velocities[baseIndex + 2] * delta;
@@ -3450,7 +3501,8 @@
         points.geometry.attributes.position.needsUpdate = true;
         points.geometry.computeBoundingSphere();
         if (points.material) {
-          const fade = Math.max(0, 1 - ratio * ratio);
+          const fadePower = system.fadePower ?? 2;
+          const fade = Math.max(0, 1 - Math.pow(ratio, fadePower));
           points.material.opacity = fade;
           points.material.needsUpdate = true;
         }
@@ -3870,10 +3922,17 @@
             const tile = getTile(from.x, from.y);
             if (tile && tile.type !== 'void') {
               setTimeout(() => {
+                if (state.dimension?.id !== 'netherite') return;
                 const checkTile = getTile(from.x, from.y);
-                if (checkTile && checkTile.type !== 'portal' && checkTile.type !== 'portalFrame') {
-                  checkTile.type = 'railVoid';
-                }
+                if (!checkTile) return;
+                if (checkTile.type === 'portal' || checkTile.type === 'portalFrame' || checkTile.type === 'railVoid') return;
+                checkTile.type = 'railVoid';
+                checkTile.hazard = false;
+                checkTile.data = {};
+                delete checkTile.resource;
+                const accent =
+                  state.dimension?.theme?.accentStrong ?? state.dimension?.theme?.accent ?? '#ff7646';
+                spawnRailCrumbleParticles(from.x, from.y, accent);
               }, 400);
             }
           },
