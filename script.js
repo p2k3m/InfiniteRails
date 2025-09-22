@@ -6513,7 +6513,13 @@
       if (scoreboardStatusEl) {
         let statusText = '';
         if (!signedIn) {
-          statusText = 'Sign in with Google to view the multiverse scorecard.';
+          if (identityState.scoreboard.length && identityState.scoreboardSource === 'sample') {
+            statusText = 'Showing sample data. Connect the API to DynamoDB for live scores.';
+          } else if (identityState.scoreboard.length && identityState.scoreboardSource === 'local') {
+            statusText = 'Scores are saved locally on this device.';
+          } else {
+            statusText = 'Sign in with Google to view the multiverse scorecard.';
+          }
         } else if (identityState.loadingScores) {
           statusText = 'Loading score data...';
         } else if (!identityState.scoreboard.length) {
@@ -6529,7 +6535,8 @@
 
       if (refreshScoresButton) {
         const loading = identityState.loadingScores;
-        const disabled = !signedIn || loading;
+        const viewingSample = !signedIn && identityState.scoreboardSource === 'sample';
+        const disabled = (!signedIn && !viewingSample) || loading;
         refreshScoresButton.disabled = disabled;
         refreshScoresButton.setAttribute('data-loading', loading ? 'true' : 'false');
         refreshScoresButton.setAttribute('aria-busy', loading ? 'true' : 'false');
@@ -6927,6 +6934,7 @@
       if (window.google?.accounts?.id) {
         google.accounts.id.disableAutoSelect();
       }
+      primeOfflineScoreboard();
       updateIdentityUI();
       identityState.location = await captureLocation();
       updateIdentityUI();
@@ -6980,36 +6988,36 @@
       }
       return {
         entries: [
-        {
-          id: 'sample-aurora',
-          name: 'Aurora',
-          score: 2450,
-          dimensionCount: 4,
-          runTimeSeconds: 1420,
-          inventoryCount: 36,
-          locationLabel: 'Northern Citadel',
-          updatedAt: new Date(Date.now() - 86400000).toISOString(),
-        },
-        {
-          id: 'sample-zenith',
-          name: 'Zenith',
-          score: 1980,
-          dimensionCount: 3,
-          runTimeSeconds: 1185,
-          inventoryCount: 28,
-          locationLabel: 'Lunar Outpost',
-          updatedAt: new Date(Date.now() - 172800000).toISOString(),
-        },
-        {
-          id: 'sample-orbit',
-          name: 'Orbit',
-          score: 1675,
-          dimensionCount: 3,
-          runTimeSeconds: 960,
-          inventoryCount: 24,
-          locationLabel: 'Synthwave Reef',
-          updatedAt: new Date(Date.now() - 259200000).toISOString(),
-        },
+          {
+            id: 'sample-aurora',
+            name: 'Aurora',
+            score: 2450,
+            dimensionCount: 4,
+            runTimeSeconds: 1420,
+            inventoryCount: 36,
+            locationLabel: 'Northern Citadel',
+            updatedAt: new Date(Date.now() - 86400000).toISOString(),
+          },
+          {
+            id: 'sample-zenith',
+            name: 'Zenith',
+            score: 1980,
+            dimensionCount: 3,
+            runTimeSeconds: 1185,
+            inventoryCount: 28,
+            locationLabel: 'Lunar Outpost',
+            updatedAt: new Date(Date.now() - 172800000).toISOString(),
+          },
+          {
+            id: 'sample-orbit',
+            name: 'Orbit',
+            score: 1675,
+            dimensionCount: 3,
+            runTimeSeconds: 960,
+            inventoryCount: 24,
+            locationLabel: 'Synthwave Reef',
+            updatedAt: new Date(Date.now() - 259200000).toISOString(),
+          },
         ],
         source: 'sample',
       };
@@ -7023,10 +7031,31 @@
       }
     }
 
+    function primeOfflineScoreboard() {
+      if (identityState.googleProfile) return;
+      if (identityState.scoreboard.length) return;
+      const localResult = loadLocalScores();
+      const normalizedEntries = normalizeScoreEntries(localResult.entries);
+      identityState.scoreboard = normalizedEntries;
+      identityState.scoreboardSource = localResult.source;
+    }
+
+    function refreshOfflineScoreboard() {
+      identityState.loadingScores = true;
+      updateIdentityUI();
+      const localResult = loadLocalScores();
+      const normalizedEntries = normalizeScoreEntries(localResult.entries);
+      setTimeout(() => {
+        identityState.scoreboard = normalizedEntries;
+        identityState.scoreboardSource = localResult.source;
+        identityState.loadingScores = false;
+        updateIdentityUI();
+      }, 600);
+    }
+
     async function loadScoreboard() {
       if (!identityState.googleProfile) {
-        identityState.scoreboard = [];
-        identityState.scoreboardSource = 'remote';
+        primeOfflineScoreboard();
         identityState.loadingScores = false;
         updateIdentityUI();
         return;
@@ -7162,6 +7191,7 @@
       } catch (error) {
         console.warn('Unable to hydrate cached profile.', error);
       }
+      primeOfflineScoreboard();
       updateIdentityUI();
       attemptGoogleInit();
       googleFallbackButtons.forEach((button) => {
@@ -7178,7 +7208,11 @@
       });
       refreshScoresButton?.addEventListener('click', () => {
         if (!identityState.googleProfile) {
-          updateIdentityUI();
+          if (identityState.scoreboardSource === 'sample' || identityState.scoreboardSource === 'local') {
+            refreshOfflineScoreboard();
+          } else {
+            updateIdentityUI();
+          }
           return;
         }
         loadScoreboard();
