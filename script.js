@@ -907,9 +907,18 @@
     const CAMERA_LOOK_DISTANCE = 6.5;
     const CAMERA_FRUSTUM_HEIGHT = 9.2;
     const CAMERA_BASE_ZOOM = 1.18;
+    const CAMERA_MAX_YAW_OFFSET = THREE.MathUtils.degToRad(45);
+    const CAMERA_MOUSE_SENSITIVITY = 0.0032;
+    const CAMERA_TOUCH_SENSITIVITY = 0.0055;
+    const CAMERA_DRAG_SUPPRESS_THRESHOLD = 5;
     const WORLD_UP = new THREE.Vector3(0, 1, 0);
     const cameraState = {
       lastFacing: new THREE.Vector3(0, 0, 1),
+      lastPlayerFacing: new THREE.Vector3(0, 0, 1),
+      yawOffset: 0,
+      lastIdleBob: 0,
+      lastWalkBob: 0,
+      lastMovementStrength: 0,
     };
     const tmpCameraForward = new THREE.Vector3();
     const tmpCameraTarget = new THREE.Vector3();
@@ -1521,19 +1530,32 @@
     function syncCameraToPlayer(options = {}) {
       if (!camera || !state?.player) return;
       const facing = options.facing ?? state.player?.facing ?? { x: 0, y: 1 };
-      const idleBob = options.idleBob ?? 0;
-      const walkBob = options.walkBob ?? 0;
-      const movementStrength = options.movementStrength ?? 0;
+      const idleBob = options.idleBob ?? cameraState.lastIdleBob ?? 0;
+      const walkBob = options.walkBob ?? cameraState.lastWalkBob ?? 0;
+      const movementStrength = options.movementStrength ?? cameraState.lastMovementStrength ?? 0;
+      cameraState.lastIdleBob = idleBob;
+      cameraState.lastWalkBob = walkBob;
+      cameraState.lastMovementStrength = movementStrength;
       const { x, z } = worldToScene(state.player.x, state.player.y);
       const baseHeight = tileSurfaceHeight(state.player.x, state.player.y) || 0;
 
       tmpCameraForward.set(facing.x, 0, facing.y);
       if (tmpCameraForward.lengthSq() < 0.0001) {
-        tmpCameraForward.copy(cameraState.lastFacing);
+        tmpCameraForward.copy(cameraState.lastPlayerFacing);
       } else {
         tmpCameraForward.normalize();
-        cameraState.lastFacing.copy(tmpCameraForward);
+        cameraState.lastPlayerFacing.copy(tmpCameraForward);
       }
+
+      if (Math.abs(cameraState.yawOffset) > 0.00001) {
+        const sin = Math.sin(cameraState.yawOffset);
+        const cos = Math.cos(cameraState.yawOffset);
+        const baseX = tmpCameraForward.x;
+        const baseZ = tmpCameraForward.z;
+        tmpCameraForward.set(baseX * cos - baseZ * sin, 0, baseX * sin + baseZ * cos);
+      }
+
+      cameraState.lastFacing.copy(tmpCameraForward);
 
       const timestamp = performance?.now ? performance.now() : Date.now();
       const bobOffset = idleBob * 0.35 + walkBob * 0.22;
@@ -1565,6 +1587,11 @@
         id: null,
         pointerType: null,
         button: 0,
+        startX: 0,
+        startY: 0,
+        lastX: 0,
+        lastY: 0,
+        moved: false,
       };
       let suppressNextClick = false;
       canvas.style.cursor = 'pointer';
@@ -1636,10 +1663,22 @@
       };
 
       const resetPointerState = () => {
+        if (pointer.active && pointer.id != null && typeof canvas.releasePointerCapture === 'function') {
+          try {
+            canvas.releasePointerCapture(pointer.id);
+          } catch (error) {
+            // Swallow errors when releasePointerCapture is invoked without a capture.
+          }
+        }
         pointer.active = false;
         pointer.id = null;
         pointer.pointerType = null;
         pointer.button = 0;
+        pointer.startX = 0;
+        pointer.startY = 0;
+        pointer.lastX = 0;
+        pointer.lastY = 0;
+        pointer.moved = false;
       };
 
       canvas.addEventListener('pointerdown', (event) => {
@@ -1650,12 +1689,59 @@
         pointer.id = event.pointerId;
         pointer.pointerType = event.pointerType;
         pointer.button = event.button;
+        pointer.startX = event.clientX;
+        pointer.startY = event.clientY;
+        pointer.lastX = event.clientX;
+        pointer.lastY = event.clientY;
+        pointer.moved = false;
+        if (typeof canvas.setPointerCapture === 'function') {
+          try {
+            canvas.setPointerCapture(event.pointerId);
+          } catch (error) {
+            // Ignore pointer capture failures (e.g., unsupported browsers).
+          }
+        }
       });
 
       canvas.addEventListener('pointermove', (event) => {
-        if (!pointer.active) return;
-        // Pointer move is retained only to keep the listener symmetrical.
-        // No camera orbit updates are performed so the view remains fixed.
+        if (!pointer.active || event.pointerId !== pointer.id) return;
+        const dx = event.clientX - pointer.lastX;
+        const dy = event.clientY - pointer.lastY;
+        pointer.lastX = event.clientX;
+        pointer.lastY = event.clientY;
+
+        if (Math.abs(dx) + Math.abs(dy) > 0) {
+          const totalDelta = Math.hypot(event.clientX - pointer.startX, event.clientY - pointer.startY);
+          if (totalDelta > CAMERA_DRAG_SUPPRESS_THRESHOLD) {
+            pointer.moved = true;
+          }
+        }
+
+        if (!camera) return;
+        const sensitivity =
+          pointer.pointerType === 'mouse'
+            ? CAMERA_MOUSE_SENSITIVITY
+            : pointer.pointerType === 'touch' || pointer.pointerType === 'pen'
+            ? CAMERA_TOUCH_SENSITIVITY
+            : CAMERA_MOUSE_SENSITIVITY;
+        if (Math.abs(dx) > 0.0001 && sensitivity > 0) {
+          const previousOffset = cameraState.yawOffset;
+          cameraState.yawOffset = THREE.MathUtils.clamp(
+            previousOffset - dx * sensitivity,
+            -CAMERA_MAX_YAW_OFFSET,
+            CAMERA_MAX_YAW_OFFSET,
+          );
+          if (Math.abs(cameraState.yawOffset - previousOffset) > 0.00001) {
+            pointer.moved = true;
+            syncCameraToPlayer({
+              facing: state.player?.facing,
+            });
+          }
+        }
+
+        if (pointer.pointerType === 'touch') {
+          event.preventDefault();
+        }
       });
 
       canvas.addEventListener('pointerup', (event) => {
@@ -1668,15 +1754,20 @@
         if (isPrimaryPointer && state.isRunning) {
           if (pointer.pointerType === 'touch' || pointer.pointerType === 'pen') {
             suppressNextClick = true;
-            handlePointerClick(event);
+            if (!pointer.moved) {
+              handlePointerClick(event);
+            }
           }
+        }
+        if (pointer.pointerType === 'mouse' && pointer.moved) {
+          suppressNextClick = true;
         }
         resetPointerState();
       });
 
       const cancelPointer = () => {
         if (!pointer.active) return;
-        suppressNextClick = false;
+        suppressNextClick = pointer.moved || suppressNextClick;
         resetPointerState();
       };
 
