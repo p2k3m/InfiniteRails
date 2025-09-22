@@ -912,6 +912,35 @@
     let playerHintTimer = null;
     let lastDimensionHintKey = null;
 
+    let previewGroup;
+    let previewCamera;
+    let previewAnimationFrame = null;
+    const PREVIEW_VIEW_SIZE = 3.8;
+    const PREVIEW_CAMERA_DISTANCE = 5;
+    const PREVIEW_CAMERA_EYE_HEIGHT = 1.6;
+    const PREVIEW_CAMERA_TARGET_HEIGHT = 1.2;
+    const PREVIEW_MOUSE_SENSITIVITY = 0.0032;
+    const PREVIEW_TOUCH_SENSITIVITY = 0.0052;
+    const PREVIEW_KEY_YAW_DELTA = THREE.MathUtils.degToRad(6);
+    const PREVIEW_MAX_YAW = THREE.MathUtils.degToRad(45);
+    const PREVIEW_ISLAND_SIZE = 10;
+    const PREVIEW_BLOCK_SIZE = 1;
+    const PREVIEW_BOB_HEIGHT = 0.08;
+
+    const previewState = {
+      active: false,
+      yaw: 0,
+      frameTimes: [],
+      lastTimestamp: null,
+      wireframe: false,
+      seed: 0,
+    };
+
+    const previewAssets = {
+      textures: {},
+      materials: {},
+    };
+
     function getNowMs() {
       return typeof performance !== 'undefined' ? performance.now() : Date.now();
     }
@@ -1581,6 +1610,10 @@
         camera.bottom = -halfHeight;
       }
       camera.updateProjectionMatrix();
+      if (previewCamera) {
+        updatePreviewCameraFrustum();
+        updatePreviewCameraPosition();
+      }
       syncCameraToPlayer({ idleBob: 0, walkBob: 0, movementStrength: 0 });
     }
 
@@ -1774,6 +1807,23 @@
           }
         }
 
+        if (!state.isRunning && previewState.active && previewCamera) {
+          const previewSensitivity =
+            pointer.pointerType === 'mouse'
+              ? PREVIEW_MOUSE_SENSITIVITY
+              : pointer.pointerType === 'touch' || pointer.pointerType === 'pen'
+              ? PREVIEW_TOUCH_SENSITIVITY
+              : PREVIEW_MOUSE_SENSITIVITY;
+          if (Math.abs(dx) > 0.0001 && previewSensitivity > 0) {
+            setPreviewYaw(previewState.yaw - dx * previewSensitivity);
+            pointer.moved = true;
+          }
+          if (pointer.pointerType === 'touch') {
+            event.preventDefault();
+          }
+          return;
+        }
+
         if (!camera) return;
         const sensitivity =
           pointer.pointerType === 'mouse'
@@ -1929,6 +1979,481 @@
       syncCameraToPlayer({ idleBob: 0, walkBob: 0, movementStrength: 0 });
       updateLighting(0);
       return true;
+    }
+
+    function previewRandom(x, y, salt = 0) {
+      const seed = previewState.seed || 0;
+      const value = Math.sin((x * 127.1 + y * 311.7 + salt * 53.7 + seed * 0.618) * 43758.5453);
+      return value - Math.floor(value);
+    }
+
+    function ensurePreviewTextures() {
+      if (previewAssets.textures.grass && previewAssets.textures.dirt && previewAssets.textures.wood) {
+        return;
+      }
+      const maxAnisotropy = renderer?.capabilities?.getMaxAnisotropy?.() ?? 1;
+      const createTexture = (size, draw) => {
+        const canvasEl = document.createElement('canvas');
+        canvasEl.width = size;
+        canvasEl.height = size;
+        const ctx = canvasEl.getContext('2d');
+        draw(ctx, size);
+        const texture = new THREE.CanvasTexture(canvasEl);
+        texture.wrapS = THREE.RepeatWrapping;
+        texture.wrapT = THREE.RepeatWrapping;
+        texture.anisotropy = maxAnisotropy;
+        texture.colorSpace = THREE.SRGBColorSpace;
+        texture.magFilter = THREE.LinearFilter;
+        texture.minFilter = THREE.LinearMipmapLinearFilter;
+        texture.generateMipmaps = true;
+        texture.needsUpdate = true;
+        return texture;
+      };
+      const grass = createTexture(128, (ctx, size) => {
+        const gradient = ctx.createLinearGradient(0, 0, 0, size);
+        gradient.addColorStop(0, '#6fd86f');
+        gradient.addColorStop(1, '#2e7d32');
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, size, size);
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.08)';
+        for (let i = 0; i < 320; i += 1) {
+          const x = Math.random() * size;
+          const y = Math.random() * size;
+          const w = Math.random() * 3 + 1;
+          const h = Math.random() * 3 + 1;
+          ctx.fillRect(x, y, w, h);
+        }
+        ctx.fillStyle = 'rgba(0, 60, 0, 0.12)';
+        for (let i = 0; i < 220; i += 1) {
+          const x = Math.random() * size;
+          const y = Math.random() * size;
+          const w = Math.random() * 2 + 1;
+          const h = Math.random() * 5 + 1;
+          ctx.fillRect(x, y, w, h);
+        }
+      });
+      const dirt = createTexture(128, (ctx, size) => {
+        ctx.fillStyle = '#8b5a2b';
+        ctx.fillRect(0, 0, size, size);
+        ctx.fillStyle = '#6d4620';
+        ctx.fillRect(0, size * 0.55, size, size * 0.45);
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.06)';
+        for (let i = 0; i < 180; i += 1) {
+          const x = Math.random() * size;
+          const y = Math.random() * size;
+          const r = Math.random() * 2 + 0.5;
+          ctx.beginPath();
+          ctx.arc(x, y, r, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.16)';
+        for (let i = 0; i < 160; i += 1) {
+          const x = Math.random() * size;
+          const y = Math.random() * size;
+          const r = Math.random() * 2 + 0.5;
+          ctx.beginPath();
+          ctx.arc(x, y, r, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      });
+      const wood = createTexture(128, (ctx, size) => {
+        const gradient = ctx.createLinearGradient(0, 0, size, 0);
+        gradient.addColorStop(0, '#b07943');
+        gradient.addColorStop(0.5, '#d2a574');
+        gradient.addColorStop(1, '#81542c');
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, size, size);
+        ctx.strokeStyle = 'rgba(81, 49, 23, 0.55)';
+        ctx.lineWidth = 4;
+        for (let i = 0; i < 6; i += 1) {
+          const x = (i / 6) * size + Math.random() * 4;
+          ctx.beginPath();
+          ctx.moveTo(x, 0);
+          ctx.lineTo(x, size);
+          ctx.stroke();
+        }
+        ctx.strokeStyle = 'rgba(64, 35, 15, 0.35)';
+        ctx.lineWidth = 2;
+        for (let i = 0; i < 12; i += 1) {
+          const y = Math.random() * size;
+          const length = size * (0.25 + Math.random() * 0.45);
+          ctx.beginPath();
+          ctx.moveTo(Math.random() * size, y);
+          ctx.lineTo(Math.random() * size, y + length);
+          ctx.stroke();
+        }
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.05)';
+        for (let i = 0; i < 20; i += 1) {
+          const radius = Math.random() * 10 + 4;
+          const x = Math.random() * size;
+          const y = Math.random() * size;
+          ctx.beginPath();
+          ctx.arc(x, y, radius, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      });
+      previewAssets.textures = { grass, dirt, wood };
+    }
+
+    function ensurePreviewMaterials() {
+      if (previewAssets.materials.grassTop) return;
+      ensurePreviewTextures();
+      const { grass, dirt, wood } = previewAssets.textures;
+      previewAssets.materials = {
+        grassTop: new THREE.MeshStandardMaterial({ map: grass, roughness: 0.7, metalness: 0.12 }),
+        dirt: new THREE.MeshStandardMaterial({ map: dirt, roughness: 0.85, metalness: 0.08, color: new THREE.Color('#9a7347') }),
+        dirtBottom: new THREE.MeshStandardMaterial({ map: dirt, roughness: 0.9, metalness: 0.05, color: new THREE.Color('#6c4a28') }),
+        woodBark: new THREE.MeshStandardMaterial({ map: wood, roughness: 0.75, metalness: 0.18 }),
+        leaves: new THREE.MeshStandardMaterial({ color: new THREE.Color('#2e8b57'), roughness: 0.55, metalness: 0.08, transparent: true, opacity: 0.95 }),
+        rail: new THREE.MeshStandardMaterial({ color: new THREE.Color('#a7adb3'), metalness: 0.78, roughness: 0.32 }),
+        sleeper: new THREE.MeshStandardMaterial({ color: new THREE.Color('#3a424f'), metalness: 0.42, roughness: 0.6 }),
+      };
+    }
+
+    function applyPreviewWireframe(enabled) {
+      Object.values(previewAssets.materials).forEach((material) => {
+        if (!material) return;
+        material.wireframe = enabled;
+      });
+    }
+
+    function previewSmoothNoise(x, y) {
+      const x0 = Math.floor(x);
+      const y0 = Math.floor(y);
+      const xf = x - x0;
+      const yf = y - y0;
+      const topLeft = previewRandom(x0, y0);
+      const topRight = previewRandom(x0 + 1, y0);
+      const bottomLeft = previewRandom(x0, y0 + 1);
+      const bottomRight = previewRandom(x0 + 1, y0 + 1);
+      const top = THREE.MathUtils.lerp(topLeft, topRight, xf);
+      const bottom = THREE.MathUtils.lerp(bottomLeft, bottomRight, xf);
+      return THREE.MathUtils.lerp(top, bottom, yf);
+    }
+
+    function previewPerlin(x, y) {
+      const scale = 0.18;
+      let amplitude = 1;
+      let frequency = 1;
+      let value = 0;
+      let max = 0;
+      for (let octave = 0; octave < 4; octave += 1) {
+        value += previewSmoothNoise(x * frequency * scale, y * frequency * scale) * amplitude;
+        max += amplitude;
+        amplitude *= 0.5;
+        frequency *= 2;
+      }
+      return max > 0 ? value / max : 0;
+    }
+
+    function buildPreviewIsland() {
+      ensurePreviewMaterials();
+      if (!previewGroup) return null;
+      const size = PREVIEW_ISLAND_SIZE;
+      const blockSize = PREVIEW_BLOCK_SIZE;
+      const half = (size - 1) / 2;
+      const topMaterials = [
+        previewAssets.materials.dirt,
+        previewAssets.materials.dirt,
+        previewAssets.materials.grassTop,
+        previewAssets.materials.dirtBottom,
+        previewAssets.materials.dirt,
+        previewAssets.materials.dirt,
+      ];
+      const innerMaterials = [
+        previewAssets.materials.dirt,
+        previewAssets.materials.dirt,
+        previewAssets.materials.dirt,
+        previewAssets.materials.dirtBottom,
+        previewAssets.materials.dirt,
+        previewAssets.materials.dirt,
+      ];
+      const cubeGeometry = new THREE.BoxGeometry(blockSize, blockSize, blockSize);
+      const heights = Array.from({ length: size }, () => Array(size).fill(0));
+      const topTiles = [];
+      for (let gx = 0; gx < size; gx += 1) {
+        for (let gz = 0; gz < size; gz += 1) {
+          const worldX = (gx - half) * blockSize;
+          const worldZ = (gz - half) * blockSize;
+          const distance = Math.hypot(worldX, worldZ);
+          const falloff = THREE.MathUtils.clamp(1 - distance / (size * blockSize * 0.66), 0, 1);
+          if (falloff <= 0.02) {
+            continue;
+          }
+          const noise = previewPerlin(gx, gz);
+          const height = Math.max(1, Math.round(1 + noise * 2.4 + falloff * 1.4));
+          heights[gx][gz] = height;
+          for (let gy = 0; gy < height; gy += 1) {
+            const isTop = gy === height - 1;
+            const mesh = new THREE.Mesh(cubeGeometry, isTop ? topMaterials : innerMaterials);
+            mesh.castShadow = isTop;
+            mesh.receiveShadow = true;
+            mesh.position.set(worldX, gy * blockSize + blockSize / 2, worldZ);
+            previewGroup.add(mesh);
+          }
+          topTiles.push({
+            gridX: gx,
+            gridZ: gz,
+            worldX,
+            worldZ,
+            height,
+          });
+        }
+      }
+      return { size, blockSize, heights, topTiles, half };
+    }
+
+    function buildPreviewTrees(island) {
+      if (!island) return;
+      const { topTiles, blockSize } = island;
+      const candidates = topTiles.filter((tile) => {
+        const margin = PREVIEW_BLOCK_SIZE * 1.5;
+        return Math.abs(tile.worldX) <= (PREVIEW_ISLAND_SIZE * PREVIEW_BLOCK_SIZE) / 2 - margin &&
+          Math.abs(tile.worldZ) <= (PREVIEW_ISLAND_SIZE * PREVIEW_BLOCK_SIZE) / 2 - margin;
+      });
+      if (!candidates.length) return;
+      const desired = Math.min(candidates.length, Math.floor(5 + previewRandom(12.4, 7.8) * 5));
+      const used = new Set();
+      let attempts = 0;
+      let spawned = 0;
+      while (spawned < desired && attempts < candidates.length * 3) {
+        const sampleIndex = Math.floor(previewRandom(attempts, desired, spawned) * candidates.length);
+        const candidate = candidates[sampleIndex];
+        const key = `${candidate.gridX}|${candidate.gridZ}`;
+        if (used.has(key)) {
+          attempts += 1;
+          continue;
+        }
+        used.add(key);
+        spawned += 1;
+        attempts += 1;
+        const trunkHeight = 3.4 + previewRandom(candidate.gridX, candidate.gridZ) * 1.1;
+        const trunkGeometry = new THREE.CylinderGeometry(0.18, 0.24, trunkHeight, 12);
+        const trunk = new THREE.Mesh(trunkGeometry, previewAssets.materials.woodBark);
+        trunk.castShadow = true;
+        trunk.receiveShadow = true;
+        trunk.position.set(
+          candidate.worldX,
+          candidate.height * blockSize + trunkHeight / 2,
+          candidate.worldZ,
+        );
+        previewGroup.add(trunk);
+        const canopyGroup = new THREE.Group();
+        const canopyBase = candidate.height * blockSize + trunkHeight * 0.92;
+        for (let i = 0; i < 4; i += 1) {
+          const radius = 0.55 + previewRandom(candidate.gridX + i, candidate.gridZ - i) * 0.45;
+          const angle = (i / 4) * Math.PI * 2;
+          const leaf = new THREE.Mesh(
+            new THREE.SphereGeometry(0.75 + previewRandom(i, spawned) * 0.25, 16, 16),
+            previewAssets.materials.leaves,
+          );
+          leaf.position.set(
+            candidate.worldX + Math.cos(angle) * radius,
+            canopyBase + previewRandom(i + 2, spawned + 4) * 0.6,
+            candidate.worldZ + Math.sin(angle) * radius,
+          );
+          leaf.castShadow = true;
+          leaf.receiveShadow = true;
+          canopyGroup.add(leaf);
+        }
+        const crown = new THREE.Mesh(
+          new THREE.SphereGeometry(0.9 + previewRandom(spawned, attempts) * 0.3, 16, 16),
+          previewAssets.materials.leaves,
+        );
+        crown.position.set(candidate.worldX, canopyBase + 0.6, candidate.worldZ);
+        crown.castShadow = true;
+        crown.receiveShadow = true;
+        canopyGroup.add(crown);
+        previewGroup.add(canopyGroup);
+      }
+    }
+
+    function buildPreviewRails(island) {
+      if (!island) return;
+      const { size, blockSize, heights } = island;
+      let maxEdgeHeight = 1;
+      for (let i = 0; i < size; i += 1) {
+        maxEdgeHeight = Math.max(maxEdgeHeight, heights[i][0] || 0, heights[i][size - 1] || 0);
+        maxEdgeHeight = Math.max(maxEdgeHeight, heights[0][i] || 0, heights[size - 1][i] || 0);
+      }
+      const railY = maxEdgeHeight * blockSize + 0.55;
+      const halfSpan = ((size - 1) / 2) * blockSize;
+      const railLength = size * blockSize + blockSize;
+      const railWidth = 0.16;
+      const railThickness = 0.06;
+      const positions = [
+        { x: 0, z: halfSpan + blockSize * 0.5, rotation: 0 },
+        { x: 0, z: -halfSpan - blockSize * 0.5, rotation: 0 },
+        { x: halfSpan + blockSize * 0.5, z: 0, rotation: Math.PI / 2 },
+        { x: -halfSpan - blockSize * 0.5, z: 0, rotation: Math.PI / 2 },
+      ];
+      const railGeometry = new THREE.BoxGeometry(railLength, railThickness, railWidth);
+      positions.forEach((entry, index) => {
+        const rail = new THREE.Mesh(railGeometry, previewAssets.materials.rail);
+        rail.castShadow = true;
+        rail.receiveShadow = true;
+        rail.position.set(entry.x, railY, entry.z);
+        rail.rotation.y = entry.rotation;
+        previewGroup.add(rail);
+        const sleeperCount = Math.max(6, Math.floor(size * 1.5));
+        for (let i = 0; i < sleeperCount; i += 1) {
+          const t = i / (sleeperCount - 1);
+          const offset = (t - 0.5) * (railLength - blockSize);
+          const sleeper = new THREE.Mesh(
+            new THREE.BoxGeometry(0.4, 0.05, railWidth * 2.4),
+            previewAssets.materials.sleeper,
+          );
+          sleeper.receiveShadow = true;
+          sleeper.castShadow = false;
+          if (entry.rotation === 0) {
+            sleeper.position.set(entry.x + offset, railY - railThickness * 0.65, entry.z);
+          } else {
+            sleeper.position.set(entry.x, railY - railThickness * 0.65, entry.z + offset);
+          }
+          sleeper.rotation.y = entry.rotation;
+          sleeper.rotation.z = previewRandom(index, i) * 0.06 - 0.03;
+          previewGroup.add(sleeper);
+        }
+      });
+    }
+
+    function updatePreviewCameraFrustum() {
+      if (!previewCamera) return;
+      const width = canvas?.clientWidth || window.innerWidth || 1;
+      const height = canvas?.clientHeight || window.innerHeight || 1;
+      const aspect = width / Math.max(height, 1);
+      previewCamera.left = -PREVIEW_VIEW_SIZE * aspect;
+      previewCamera.right = PREVIEW_VIEW_SIZE * aspect;
+      previewCamera.top = PREVIEW_VIEW_SIZE;
+      previewCamera.bottom = -PREVIEW_VIEW_SIZE;
+      previewCamera.near = 0.1;
+      previewCamera.far = 100;
+      previewCamera.updateProjectionMatrix();
+    }
+
+    function updatePreviewCameraPosition() {
+      if (!previewCamera) return;
+      const yaw = THREE.MathUtils.clamp(previewState.yaw ?? 0, -PREVIEW_MAX_YAW, PREVIEW_MAX_YAW);
+      previewState.yaw = yaw;
+      const distance = PREVIEW_CAMERA_DISTANCE;
+      const eyeY = PREVIEW_CAMERA_EYE_HEIGHT;
+      const targetY = PREVIEW_CAMERA_TARGET_HEIGHT;
+      previewCamera.position.set(Math.sin(yaw) * distance, eyeY, Math.cos(yaw) * distance);
+      previewCamera.up.copy(WORLD_UP);
+      previewCamera.lookAt(0, targetY, 0);
+    }
+
+    function setPreviewYaw(yaw) {
+      previewState.yaw = yaw;
+      updatePreviewCameraPosition();
+    }
+
+    function renderPreviewScene(timestamp) {
+      if (!previewState.active || !renderer || !previewCamera) return;
+      previewAnimationFrame = requestAnimationFrame(renderPreviewScene);
+      if (previewGroup) {
+        previewGroup.position.y = Math.sin(timestamp / 1200) * PREVIEW_BOB_HEIGHT;
+      }
+      if (previewState.lastTimestamp != null) {
+        const delta = timestamp - previewState.lastTimestamp;
+        previewState.frameTimes.push(delta);
+        if (previewState.frameTimes.length > 90) {
+          previewState.frameTimes.shift();
+        }
+        const average = previewState.frameTimes.reduce((sum, value) => sum + value, 0) / previewState.frameTimes.length;
+        if (!previewState.wireframe && average > 40) {
+          previewState.wireframe = true;
+          applyPreviewWireframe(true);
+        } else if (previewState.wireframe && average < 28) {
+          previewState.wireframe = false;
+          applyPreviewWireframe(false);
+        }
+      }
+      previewState.lastTimestamp = timestamp;
+      renderer.render(scene, previewCamera);
+    }
+
+    function teardownPreviewScene() {
+      if (!previewState.active) return;
+      previewState.active = false;
+      previewState.frameTimes = [];
+      previewState.lastTimestamp = null;
+      if (previewAnimationFrame != null) {
+        cancelAnimationFrame(previewAnimationFrame);
+        previewAnimationFrame = null;
+      }
+      if (previewGroup) {
+        const disposable = new Set();
+        previewGroup.traverse((child) => {
+          if (child.isMesh) {
+            if (child.geometry) disposable.add(child.geometry);
+            if (child.material && !Object.values(previewAssets.materials).includes(child.material)) {
+              disposable.add(child.material);
+            }
+          }
+        });
+        disposable.forEach((resource) => {
+          try {
+            resource.dispose?.();
+          } catch (error) {
+            // Ignore disposal errors for preview assets.
+          }
+        });
+        scene.remove(previewGroup);
+        previewGroup = null;
+      }
+      if (worldGroup) worldGroup.visible = true;
+      if (entityGroup) entityGroup.visible = true;
+      if (particleGroup) particleGroup.visible = true;
+      previewCamera = null;
+      applyPreviewWireframe(false);
+      if (scene?.fog) {
+        scene.fog.color.set(BASE_ATMOSPHERE.fogColor);
+        scene.fog.density = BASE_ATMOSPHERE.fogDensity;
+      }
+    }
+
+    function setupPreviewScene() {
+      if (!renderer || !scene) return;
+      if (state?.isRunning) {
+        teardownPreviewScene();
+        return;
+      }
+      if (previewState.active) return;
+      previewState.seed = Math.random() * 1000 + 1;
+      previewState.yaw = 0;
+      previewState.frameTimes = [];
+      previewState.lastTimestamp = null;
+      previewState.wireframe = false;
+      applyPreviewWireframe(false);
+      previewGroup = new THREE.Group();
+      previewGroup.name = 'preview-island';
+      scene.add(previewGroup);
+      if (worldGroup) worldGroup.visible = false;
+      if (entityGroup) entityGroup.visible = false;
+      if (particleGroup) particleGroup.visible = false;
+      if (scene?.fog) {
+        scene.fog.color.set('#87ceeb');
+        scene.fog.density = 0.018;
+      }
+      if (hemiLight) {
+        hemiLight.color.set('#87ceeb');
+        hemiLight.groundColor.set('#98fb98');
+        hemiLight.intensity = 1.05;
+      }
+      if (sunLight) {
+        sunLight.intensity = 0.85;
+        sunLight.position.set(8, 12, 6);
+        sunLight.castShadow = true;
+      }
+      const island = buildPreviewIsland();
+      buildPreviewTrees(island);
+      buildPreviewRails(island);
+      previewCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 100);
+      updatePreviewCameraFrustum();
+      updatePreviewCameraPosition();
+      previewState.active = true;
+      renderPreviewScene(performance?.now ? performance.now() : Date.now());
     }
 
     function resetWorldMeshes() {
@@ -4049,6 +4574,7 @@
     resetStatusMeterMemory();
     resetTarOverlay();
     initRenderer();
+    setupPreviewScene();
     updateScoreOverlay();
 
     function generateOriginIsland(state) {
@@ -5114,6 +5640,7 @@
 
     function startGame() {
       if (state.isRunning) return;
+      teardownPreviewScene();
       const context = ensureAudioContext();
       context?.resume?.().catch(() => {});
       if (window.Howler?.ctx?.state === 'suspended') {
@@ -6883,6 +7410,16 @@
       if (event.repeat) return;
       const key = event.key.toLowerCase();
       const target = event.target;
+      if (!state.isRunning && previewState.active) {
+        const leftKeys = ['a', 'arrowleft'];
+        const rightKeys = ['d', 'arrowright'];
+        if (leftKeys.includes(key) || rightKeys.includes(key)) {
+          const delta = rightKeys.includes(key) ? PREVIEW_KEY_YAW_DELTA : -PREVIEW_KEY_YAW_DELTA;
+          setPreviewYaw(previewState.yaw + delta);
+          event.preventDefault();
+          return;
+        }
+      }
       if (
         target instanceof HTMLElement &&
         (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)
