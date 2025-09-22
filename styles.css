@@ -1166,6 +1166,157 @@ body.game-active #gameCanvas {
   box-shadow: 0 0 8px rgba(247, 183, 51, 0.6);
 }
 
+.overlay-panel__heading {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.overlay-panel__description {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
+
+.overlay-panel__tasks {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.overlay-panel__subheading {
+  font-size: 0.7rem;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.58);
+}
+
+.overlay-panel__task-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.overlay-panel__task-list li {
+  padding-left: 1.1rem;
+  color: var(--text-primary);
+}
+
+.overlay-panel__task-list li::before {
+  left: 0;
+  top: 0.5rem;
+  width: 0.45rem;
+  height: 0.45rem;
+  background: rgba(73, 242, 255, 0.4);
+  box-shadow: 0 0 10px rgba(73, 242, 255, 0.35);
+}
+
+.objective-checklist {
+  display: grid;
+  gap: 0.55rem;
+  margin-top: 0.45rem;
+}
+
+.objective-checklist__title {
+  font-size: 0.72rem;
+  letter-spacing: 0.26em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.64);
+}
+
+.objective-checklist__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.45rem;
+}
+
+.objective-item {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.55rem 0.75rem;
+  background: rgba(9, 20, 36, 0.45);
+  border-radius: 16px;
+  overflow: visible;
+  transition: background 0.3s ease, transform 0.3s ease, box-shadow 0.3s ease;
+}
+
+.objective-item::before {
+  content: none;
+}
+
+.objective-item__status {
+  display: grid;
+  place-items: center;
+  width: 1.65rem;
+  height: 1.65rem;
+  border-radius: 999px;
+  border: 1px solid rgba(73, 242, 255, 0.45);
+  font-size: 0.95rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--accent);
+  background: rgba(73, 242, 255, 0.12);
+  box-shadow: inset 0 0 12px rgba(73, 242, 255, 0.25);
+  transition: background 0.3s ease, color 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
+}
+
+.objective-item__label {
+  font-size: 0.9rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--text-primary);
+}
+
+.objective-item--complete {
+  background: rgba(73, 242, 255, 0.12);
+  box-shadow: 0 16px 32px rgba(0, 196, 255, 0.16);
+}
+
+.objective-item--complete .objective-item__status {
+  border-color: transparent;
+  background: var(--accent);
+  color: #031222;
+  box-shadow: 0 0 16px rgba(73, 242, 255, 0.4);
+}
+
+.objective-item--complete .objective-item__label {
+  color: var(--accent);
+}
+
+.objective-item--celebrate {
+  transform: translateY(-2px);
+}
+
+.objective-item__confetti-piece {
+  position: absolute;
+  top: 50%;
+  left: 1.4rem;
+  width: 6px;
+  height: 6px;
+  border-radius: 2px;
+  background: hsl(var(--hue, 200), 85%, 62%);
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, -50%) scale(1);
+  animation: objective-confetti-piece 0.8s ease-out forwards;
+}
+
+@keyframes objective-confetti-piece {
+  0% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(calc(-50% + var(--offset-x)), calc(-50% + var(--offset-y))) scale(0.6);
+  }
+}
+
 .score-overlay {
   position: relative;
   display: grid;
@@ -1315,6 +1466,23 @@ body.game-active #gameCanvas {
   100% {
     transform: scale(1);
     box-shadow: var(--hud-panel-shadow);
+  }
+}
+
+.score-overlay.flip {
+  animation: score-overlay-flip 0.5s ease;
+  transform-origin: center top;
+}
+
+@keyframes score-overlay-flip {
+  0% {
+    transform: rotateX(0deg);
+  }
+  40% {
+    transform: rotateX(18deg);
+  }
+  100% {
+    transform: rotateX(0deg);
   }
 }
 

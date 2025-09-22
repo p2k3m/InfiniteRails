@@ -183,6 +183,21 @@
     const scoreTotalEl = document.getElementById('scoreTotal');
     const scoreRecipesEl = document.getElementById('scoreRecipes');
     const scoreDimensionsEl = document.getElementById('scoreDimensions');
+    const scoreState = {
+      score: 0,
+      recipes: new Set(),
+      dimensions: new Set(),
+    };
+    const objectives = [
+      { id: 'gather-wood', label: 'Gather wood' },
+      { id: 'craft-pickaxe', label: 'Craft pickaxe' },
+      { id: 'build-portal', label: 'Build portal' },
+    ];
+    const objectiveState = {
+      completed: new Set(),
+    };
+    let dimensionOverlayState = { info: null, tasks: [] };
+    let scoreFlipTimeout = null;
     let scoreOverlayInitialized = false;
     const inventoryModal = document.getElementById('inventoryModal');
     const closeInventoryButton = document.getElementById('closeInventory');
@@ -405,6 +420,171 @@
             easing: 'cubic-bezier(0.22, 0.61, 0.36, 1)',
           },
         );
+      }
+    }
+
+    function recalculateScoreState() {
+      const recipePoints = scoreState.recipes.size * SCORE_POINTS.recipe;
+      const dimensionPoints = scoreState.dimensions.size * SCORE_POINTS.dimension;
+      const total = recipePoints + dimensionPoints;
+      scoreState.score = total;
+      if (state) {
+        state.score = total;
+      }
+      return { recipePoints, dimensionPoints, total };
+    }
+
+    function updateScore(type, value, options = {}) {
+      if (!value) {
+        updateScoreOverlay(options);
+        return false;
+      }
+      let updated = false;
+      if (type === 'recipe') {
+        if (!scoreState.recipes.has(value)) {
+          scoreState.recipes.add(value);
+          updated = true;
+        }
+      } else if (type === 'dimension') {
+        if (!scoreState.dimensions.has(value)) {
+          scoreState.dimensions.add(value);
+          updated = true;
+        }
+      }
+      const triggerFlip = options.triggerFlip ?? updated;
+      const shouldFlash = options.flash ?? (updated ? !triggerFlip : false);
+      const overlayOptions = {
+        ...options,
+        flash: shouldFlash,
+        triggerFlip,
+      };
+      updateScoreOverlay(overlayOptions);
+      if (updated && type === 'dimension') {
+        updatePortalProgress();
+      }
+      return updated;
+    }
+
+    function renderObjectiveChecklist() {
+      if (!objectives.length) {
+        return '';
+      }
+      const items = objectives
+        .map(({ id, label }) => {
+          const completed = objectiveState.completed.has(id);
+          const statusLabel = completed ? 'Completed' : 'Incomplete';
+          return `
+            <li class="objective-item${completed ? ' objective-item--complete' : ''}" data-objective="${id}">
+              <span class="objective-item__status" aria-hidden="true">${completed ? '&#10003;' : ''}</span>
+              <span class="objective-item__label">${label}</span>
+              <span class="sr-only">${statusLabel}</span>
+            </li>
+          `;
+        })
+        .join('');
+      return `
+        <div class="objective-checklist" aria-live="polite">
+          <span class="objective-checklist__title">Primary Objectives</span>
+          <ul class="objective-checklist__list">
+            ${items}
+          </ul>
+        </div>
+      `;
+    }
+
+    function celebrateObjectiveCompletion(objectiveId) {
+      if (!objectiveId || !dimensionInfoEl) return;
+      const item = dimensionInfoEl.querySelector(`.objective-item[data-objective="${objectiveId}"]`);
+      if (!item) return;
+      item.classList.add('objective-item--celebrate');
+      const fragment = document.createDocumentFragment();
+      for (let i = 0; i < 8; i += 1) {
+        const piece = document.createElement('span');
+        piece.className = 'objective-item__confetti-piece';
+        piece.style.setProperty('--offset-x', `${(Math.random() - 0.5) * 70}px`);
+        piece.style.setProperty('--offset-y', `${Math.random() * -70 - 20}px`);
+        piece.style.setProperty('--hue', `${Math.floor(Math.random() * 60) + (i % 2 === 0 ? 180 : 20)}`);
+        fragment.appendChild(piece);
+      }
+      item.appendChild(fragment);
+      window.setTimeout(() => {
+        item.classList.remove('objective-item--celebrate');
+        item.querySelectorAll('.objective-item__confetti-piece').forEach((piece) => piece.remove());
+      }, 900);
+    }
+
+    function renderDimensionOverlay(context, { animate = true, celebrateObjectiveId = null } = {}) {
+      if (!dimensionInfoEl || !context?.info) return;
+      const { info, tasks = [] } = context;
+      const tasksMarkup = tasks.length
+        ? `
+          <div class="overlay-panel__tasks">
+            <span class="overlay-panel__subheading">Dimension Briefing</span>
+            <ul class="overlay-panel__task-list">
+              ${tasks.map((task) => `<li>${task}</li>`).join('')}
+            </ul>
+          </div>
+        `
+        : '';
+      const objectivesMarkup = renderObjectiveChecklist();
+      dimensionInfoEl.innerHTML = `
+        <div class="overlay-panel__heading">
+          <strong>${info.name}</strong>
+          <p class="overlay-panel__description">${info.description}</p>
+        </div>
+        ${tasksMarkup}
+        ${objectivesMarkup}
+      `;
+      dimensionInfoEl.classList.add('visible');
+      if (animate) {
+        dimensionInfoEl.classList.remove('pop');
+        void dimensionInfoEl.offsetWidth;
+        dimensionInfoEl.classList.add('pop');
+        dimensionInfoEl.addEventListener(
+          'animationend',
+          () => {
+            dimensionInfoEl.classList.remove('pop');
+          },
+          { once: true },
+        );
+      }
+      if (celebrateObjectiveId) {
+        window.requestAnimationFrame(() => celebrateObjectiveCompletion(celebrateObjectiveId));
+      }
+    }
+
+    function markObjectiveComplete(objectiveId, { celebrate = true } = {}) {
+      if (!objectiveId || objectiveState.completed.has(objectiveId)) return;
+      objectiveState.completed.add(objectiveId);
+      if (dimensionOverlayState.info) {
+        renderDimensionOverlay(dimensionOverlayState, {
+          animate: false,
+          celebrateObjectiveId: celebrate ? objectiveId : null,
+        });
+      }
+    }
+
+    function resetObjectiveProgress() {
+      objectiveState.completed.clear();
+      if (dimensionOverlayState.info) {
+        renderDimensionOverlay(dimensionOverlayState, { animate: false });
+      }
+    }
+
+    function evaluateObjectiveProgress({ celebrate = false } = {}) {
+      if (scoreState.recipes.has('stone-pickaxe')) {
+        markObjectiveComplete('craft-pickaxe', { celebrate });
+      }
+      if (scoreState.dimensions.size > 0) {
+        markObjectiveComplete('build-portal', { celebrate });
+      }
+      const hasWood =
+        objectiveState.completed.has('gather-wood') ||
+        hasItem?.('wood', 1) ||
+        scoreState.recipes.size > 0 ||
+        scoreState.dimensions.size > 0;
+      if (hasWood) {
+        markObjectiveComplete('gather-wood', { celebrate });
       }
     }
     const playerHintEl = document.getElementById('playerHint');
@@ -6311,15 +6491,20 @@
     }
 
     function createScoreBreakdown() {
-      return {
+      const breakdown = {
         recipes: new Set(),
         dimensions: new Set(),
       };
+      scoreState.recipes = breakdown.recipes;
+      scoreState.dimensions = breakdown.dimensions;
+      scoreState.score = 0;
+      return breakdown;
     }
 
     function resetScoreTracking(options = {}) {
       state.scoreBreakdown = createScoreBreakdown();
       state.score = 0;
+      resetObjectiveProgress();
       updateScoreOverlay(options);
     }
 
@@ -6576,8 +6761,14 @@
       if (!normalized) return false;
       state.unlockedDimensions = new Set(normalized.dimensions.unlocked);
       state.dimensionHistory = normalized.dimensions.history.slice();
-      state.scoreBreakdown.recipes = new Set(normalized.recipes.mastered);
-      state.scoreBreakdown.dimensions = new Set(normalized.dimensions.documented);
+      state.scoreBreakdown.recipes.clear();
+      normalized.recipes.mastered.forEach((id) => state.scoreBreakdown.recipes.add(id));
+      state.scoreBreakdown.dimensions.clear();
+      normalized.dimensions.documented.forEach((id) => state.scoreBreakdown.dimensions.add(id));
+      scoreState.recipes = state.scoreBreakdown.recipes;
+      scoreState.dimensions = state.scoreBreakdown.dimensions;
+      scoreState.score = normalized.score.total ?? scoreState.score;
+      state.score = scoreState.score;
       state.knownRecipes = new Set(normalized.recipes.known);
       state.craftSequence = Array.isArray(normalized.recipes.active)
         ? normalized.recipes.active.slice(0, MAX_CRAFT_SLOTS)
@@ -6601,7 +6792,9 @@
       updateCraftSequenceDisplay();
       updateAutocompleteSuggestions();
       updateScoreOverlay();
+      updatePortalProgress();
       updateDimensionOverlay();
+      evaluateObjectiveProgress({ celebrate: false });
       if (announce) {
         logEvent(
           source === 'remote'
@@ -7035,17 +7228,27 @@
 
       initializeScoreOverlayUI();
 
-      const recipeCount = state.scoreBreakdown?.recipes?.size ?? 0;
-      const dimensionCount = state.scoreBreakdown?.dimensions?.size ?? 0;
-      const recipePoints = recipeCount * SCORE_POINTS.recipe;
-      const dimensionPoints = dimensionCount * SCORE_POINTS.dimension;
-      state.score = recipePoints + dimensionPoints;
+      const { recipePoints, dimensionPoints, total } = recalculateScoreState();
+      const recipeCount = scoreState.recipes.size;
+      const dimensionCount = scoreState.dimensions.size;
 
-      animateScoreDigits(scoreTotalEl, state.score);
+      animateScoreDigits(scoreTotalEl, total);
       animateMetricUpdate(scoreRecipesEl, `${recipeCount} (+${recipePoints} pts)`);
       animateMetricUpdate(scoreDimensionsEl, `${dimensionCount} (+${dimensionPoints} pts)`);
       if (scorePanelEl) {
-        scorePanelEl.setAttribute('data-score', state.score.toString());
+        scorePanelEl.setAttribute('data-score', total.toString());
+        if (options.triggerFlip) {
+          scorePanelEl.classList.add('flip');
+          if (scoreFlipTimeout) {
+            window.clearTimeout(scoreFlipTimeout);
+          }
+          scoreFlipTimeout = window.setTimeout(() => {
+            scorePanelEl.classList.remove('flip');
+            scoreFlipTimeout = null;
+          }, 500);
+        } else if (!options.triggerFlip && !options.flash) {
+          scorePanelEl.classList.remove('flip');
+        }
         if (options.flash) {
           scorePanelEl.classList.remove('score-overlay--flash');
           void scorePanelEl.offsetWidth;
@@ -7087,29 +7290,15 @@
       if (state.player.effects.hasEternalIngot) {
         tasks.push('Find your way back to the Grassland Threshold to seal your run.');
       }
-      dimensionInfoEl.innerHTML = `
-        <strong>${info.name}</strong>
-        <span>${info.description}</span>
-        ${tasks.length ? `<span>Objectives:</span><ul>${tasks.map((t) => `<li>${t}</li>`).join('')}</ul>` : ''}
-      `;
-      dimensionInfoEl.classList.add('visible');
-      dimensionInfoEl.classList.remove('pop');
-      void dimensionInfoEl.offsetWidth;
-      dimensionInfoEl.classList.add('pop');
-      dimensionInfoEl.addEventListener(
-        'animationend',
-        () => {
-          dimensionInfoEl.classList.remove('pop');
-        },
-        { once: true }
-      );
+      dimensionOverlayState = { info, tasks };
+      renderDimensionOverlay(dimensionOverlayState, { animate: true });
       const hintKey = `${info.id}:${tasks.join('|')}`;
       if (hintKey !== lastDimensionHintKey) {
         const summary = tasks[0] ?? info.description;
         showPlayerHint(`Now entering ${info.name}. ${summary}`);
         lastDimensionHintKey = hintKey;
       }
-      return { info, tasks };
+      return dimensionOverlayState;
     }
 
     function getCodexStatus(dimId) {
@@ -7659,12 +7848,10 @@
         state.dimensionHistory.push(id);
       }
       if (id !== 'origin') {
-        if (!state.scoreBreakdown.dimensions.has(id)) {
-          state.scoreBreakdown.dimensions.add(id);
+        const newlyDocumented = updateScore('dimension', id);
+        if (newlyDocumented) {
           logEvent(`${dim.name} documented as explored (+${SCORE_POINTS.dimension} pts).`);
-          updateScoreOverlay({ flash: true });
-        } else {
-          updateScoreOverlay();
+          markObjectiveComplete('build-portal');
         }
       } else {
         updateScoreOverlay();
@@ -8857,6 +9044,9 @@
       tile.data.yield -= 1;
       addItemToInventory(itemId, 1);
       logEvent(`Gathered ${ITEM_DEFS[itemId]?.name ?? itemId}.`);
+      if (itemId === 'wood') {
+        markObjectiveComplete('gather-wood');
+      }
       const accentColor = TILE_TYPES[originalType]?.accent ?? '#ffffff';
       if (!skipParticles) {
         spawnHarvestParticles(x, y, accentColor);
@@ -9197,19 +9387,25 @@
 
     function updatePortalProgress() {
       if (!state.dimension) return;
-      const currentIndex = DIMENSION_SEQUENCE.indexOf(state.dimension.id);
-      const total = DIMENSION_SEQUENCE.length - 1;
-      const ratio = clamp(currentIndex / total, 0, 1);
+      const totalStages = DIMENSION_SEQUENCE.length;
+      const documentedCount = Math.min(scoreState.dimensions.size, totalStages - 1);
+      const visitedCount = clamp(documentedCount + 1, 1, totalStages);
+      const ratio = clamp(visitedCount / totalStages, 0, 1);
       portalProgressEl.classList.add('visible');
       portalProgressBar.style.setProperty('--progress', ratio.toFixed(3));
-      const stage = currentIndex + 1;
-      const totalStages = DIMENSION_SEQUENCE.length;
-      const nextDim = DIMENSION_SEQUENCE[currentIndex + 1];
-      const nextName = nextDim ? DIMENSIONS[nextDim]?.name ?? nextDim : 'Final Gate';
-      portalProgressLabel.textContent = `${stage}/${totalStages} · ${state.dimension.name.toUpperCase()}`;
-      portalProgressEl.setAttribute('aria-valuenow', Math.round(ratio * 100).toString());
-      portalProgressEl.setAttribute('aria-valuetext', `${Math.round(ratio * 100)}% progress toward ${nextName}.`);
-      portalProgressEl.title = `Next: ${nextName}`;
+      const nextIndex = Math.min(visitedCount, totalStages - 1);
+      const nextDim = DIMENSION_SEQUENCE[nextIndex];
+      const nextName = visitedCount >= totalStages ? 'Multiverse Stabilised' : DIMENSIONS[nextDim]?.name ?? nextDim;
+      portalProgressLabel.textContent = `${visitedCount}/${totalStages} - ${state.dimension.name.toUpperCase()}`;
+      const progressPercent = Math.round(ratio * 100);
+      portalProgressEl.setAttribute('aria-valuenow', progressPercent.toString());
+      portalProgressEl.setAttribute(
+        'aria-valuetext',
+        visitedCount >= totalStages
+          ? 'All dimensions stabilised. The multiverse is secure.'
+          : `${progressPercent}% progress — next objective: ${nextName}.`,
+      );
+      portalProgressEl.title = visitedCount >= totalStages ? 'All portals secure.' : `Next: ${nextName}`;
     }
 
     function updateDimensionTransition(delta) {
@@ -9573,12 +9769,12 @@
       logEvent(`${recipe.name} crafted.`);
       playCraftSuccessChime();
       triggerCraftConfetti();
-      if (!recipePreviouslyKnown && !state.scoreBreakdown.recipes.has(recipe.id)) {
-        state.scoreBreakdown.recipes.add(recipe.id);
+      const newlyMastered = updateScore('recipe', recipe.id);
+      if (!recipePreviouslyKnown && newlyMastered) {
         logEvent(`Recipe mastery recorded (+${SCORE_POINTS.recipe} pts).`);
-        updateScoreOverlay({ flash: true });
-      } else {
-        updateScoreOverlay();
+      }
+      if (recipe.id === 'stone-pickaxe' && newlyMastered) {
+        markObjectiveComplete('craft-pickaxe');
       }
       if (recipe.output.item === 'portal-igniter') {
         state.player.hasIgniter = true;
