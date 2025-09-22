@@ -790,6 +790,13 @@
             0.7,
           );
         }
+        if (typeof samples?.victoryCheer === 'string' && samples.victoryCheer.length > 0) {
+          audioState.effects.victoryCheer = registerHowl(
+            { src: [`data:audio/wav;base64,${samples.victoryCheer}`], preload: true, loop: true },
+            'effects',
+            0.75,
+          );
+        }
         audioState.initialized = true;
         audioState.ready = true;
         refreshHowlVolumes();
@@ -872,6 +879,8 @@
     let victoryConfettiInterval = null;
     let victoryFireworksInterval = null;
     const victoryFireworkTimeouts = new Set();
+    let victoryCheerFallbackInterval = null;
+    const victoryCheerFallbackTimeouts = new Set();
     let victoryHideTimeout = null;
     let previousVictoryFocus = null;
     let latestVictoryShareDetails = null;
@@ -4692,6 +4701,55 @@
       }
     }
 
+    function stopVictoryCheerFallbacks() {
+      if (victoryCheerFallbackInterval) {
+        window.clearInterval(victoryCheerFallbackInterval);
+        victoryCheerFallbackInterval = null;
+      }
+      victoryCheerFallbackTimeouts.forEach((handle) => window.clearTimeout(handle));
+      victoryCheerFallbackTimeouts.clear();
+    }
+
+    function triggerVictoryCheerFallbackSequence() {
+      playFallbackEffect({ startFreq: 680, endFreq: 980, duration: 0.45, type: 'sine', peak: 0.16 });
+      const accentHandle = window.setTimeout(() => {
+        playFallbackEffect({ startFreq: 820, endFreq: 620, duration: 0.42, type: 'triangle', peak: 0.14 });
+        victoryCheerFallbackTimeouts.delete(accentHandle);
+      }, 240);
+      victoryCheerFallbackTimeouts.add(accentHandle);
+    }
+
+    function startVictoryCheer() {
+      stopVictoryCheerFallbacks();
+      if (audioState.effects?.victoryCheer) {
+        try {
+          const howl = audioState.effects.victoryCheer;
+          if (window.Howler?.ctx?.state === 'suspended') {
+            window.Howler.ctx.resume().catch(() => {});
+          }
+          if (!howl.playing()) {
+            howl.play();
+          }
+        } catch (error) {
+          console.warn('Unable to play victory cheer effect.', error);
+        }
+        return;
+      }
+      triggerVictoryCheerFallbackSequence();
+      victoryCheerFallbackInterval = window.setInterval(triggerVictoryCheerFallbackSequence, 760);
+    }
+
+    function stopVictoryCheer() {
+      if (audioState.effects?.victoryCheer) {
+        try {
+          audioState.effects.victoryCheer.stop();
+        } catch (error) {
+          console.warn('Unable to stop victory cheer effect.', error);
+        }
+      }
+      stopVictoryCheerFallbacks();
+    }
+
     function spawnVictoryConfettiBurst(count = 48) {
       if (!victoryConfettiEl) return;
       const colors = ['#49f2ff', '#f7b733', '#2bc26b', '#ff4976', '#d66bff', '#fff072'];
@@ -4817,6 +4875,7 @@
       document.body?.classList.add('victory-celebration-active');
       startVictoryConfetti();
       startVictoryFireworks();
+      startVictoryCheer();
       state.ui.victoryCelebrationVisible = true;
       state.ui.victoryCelebrationShown = true;
       document.addEventListener('keydown', handleVictoryKeydown, true);
@@ -4846,6 +4905,7 @@
       }
       stopVictoryConfetti();
       stopVictoryFireworks();
+      stopVictoryCheer();
       document.body?.classList.remove('victory-celebration-active');
       victoryCelebrationEl.classList.remove('active');
       victoryCelebrationEl.setAttribute('aria-hidden', 'true');
