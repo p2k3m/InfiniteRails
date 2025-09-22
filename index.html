@@ -242,7 +242,15 @@
         <section class="inventory-panel">
           <h2>Inventory</h2>
           <div class="hotbar" id="hotbar"></div>
-          <button class="toggle-extended" id="toggleExtended">Open Satchel</button>
+          <button
+            class="toggle-extended"
+            id="toggleExtended"
+            aria-haspopup="dialog"
+            aria-controls="inventoryModal"
+            aria-expanded="false"
+          >
+            Open Inventory
+          </button>
           <div class="extended" id="extendedInventory"></div>
         </section>
         <section class="codex-panel" aria-label="Dimension codex">
@@ -531,6 +539,49 @@
             </div>
           </div>
         </div>
+    </div>
+  </div>
+
+    <div
+      class="modal inventory-modal"
+      id="inventoryModal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="inventoryTitle"
+      hidden
+    >
+      <div class="modal-content inventory-modal__content">
+        <button
+          type="button"
+          class="inventory-modal__close"
+          id="closeInventory"
+          aria-label="Close inventory overlay"
+        ></button>
+        <header class="inventory-modal__header">
+          <div>
+            <p class="inventory-modal__eyebrow">Field Satchel</p>
+            <h2 id="inventoryTitle">Inventory Overview</h2>
+            <p class="inventory-modal__intro">
+              Review every artifact you carry. Items are mirrored to your crafting library, and dragging leaves an
+              aether trail to confirm the grab.
+            </p>
+          </div>
+          <div class="inventory-modal__actions">
+            <button
+              type="button"
+              class="ghost inventory-modal__sort"
+              id="inventorySortButton"
+              aria-pressed="false"
+            >
+              Sort (A→Z)
+            </button>
+          </div>
+        </header>
+        <div class="inventory-modal__grid" id="inventoryGrid" role="grid" aria-label="Satchel storage grid"></div>
+        <footer class="inventory-modal__footer">
+          <p class="inventory-modal__hint">Drag items to your crafting sequence or rearrange your satchel layout.</p>
+          <p class="inventory-modal__overflow" id="inventoryOverflow" hidden></p>
+        </footer>
       </div>
     </div>
 
