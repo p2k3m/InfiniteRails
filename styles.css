@@ -3535,6 +3535,49 @@ input[type='search'] {
   color: var(--accent-strong);
 }
 
+.defeat-overlay__actions {
+  display: flex;
+  justify-content: center;
+  margin-top: 0.35rem;
+}
+
+.defeat-overlay__respawn-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  padding: 0.75rem 1.8rem;
+  border-radius: 999px;
+  border: none;
+  font-family: inherit;
+  font-size: 0.95rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--bg-primary);
+  background: linear-gradient(120deg, var(--accent), var(--accent-strong));
+  cursor: pointer;
+  box-shadow: 0 14px 32px rgba(73, 242, 255, 0.28);
+  transition: transform 0.25s ease, box-shadow 0.25s ease, opacity 0.2s ease;
+}
+
+.defeat-overlay__respawn-button:hover,
+.defeat-overlay__respawn-button:focus-visible {
+  transform: translateY(-1px);
+  box-shadow: 0 18px 40px rgba(73, 242, 255, 0.34);
+}
+
+.defeat-overlay__respawn-button:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.55);
+  outline-offset: 3px;
+}
+
+.defeat-overlay__respawn-button:disabled {
+  cursor: default;
+  opacity: 0.65;
+  box-shadow: none;
+}
+
 @media (max-width: 1180px) {
   .main-layout {
     grid-template-columns: 1fr;

@@ -340,10 +340,17 @@
     const defeatMessageEl = document.getElementById('defeatMessage');
     const defeatInventoryEl = document.getElementById('defeatInventory');
     const defeatCountdownEl = document.getElementById('defeatCountdown');
+    const defeatRespawnButton = document.getElementById('defeatRespawn');
     const mainLayoutEl = document.querySelector('.main-layout');
     const primaryPanelEl = document.querySelector('.primary-panel');
     const topBarEl = document.querySelector('.top-bar');
     const footerEl = document.querySelector('.footer');
+
+    if (defeatRespawnButton) {
+      defeatRespawnButton.addEventListener('click', () => {
+        completeRespawn();
+      });
+    }
     const toggleSidebarButton = document.getElementById('toggleSidebar');
     const sidePanelEl = document.getElementById('sidePanel');
     const sidePanelScrim = document.getElementById('sidePanelScrim');
@@ -4544,6 +4551,10 @@
       if (defeatCountdownEl) {
         defeatCountdownEl.textContent = '';
       }
+      if (defeatRespawnButton) {
+        defeatRespawnButton.disabled = false;
+        defeatRespawnButton.textContent = 'Respawn Now';
+      }
       window.clearTimeout(state.ui.respawnCountdownTimeout);
       window.requestAnimationFrame(() => {
         defeatOverlayEl?.focus({ preventScroll: true });
@@ -4603,6 +4614,10 @@
 
     function completeRespawn() {
       if (!state.ui.respawnActive) return;
+      if (defeatRespawnButton) {
+        defeatRespawnButton.disabled = true;
+        defeatRespawnButton.textContent = 'Respawning...';
+      }
       if (state.ui.respawnCountdownTimeout) {
         window.clearTimeout(state.ui.respawnCountdownTimeout);
         state.ui.respawnCountdownTimeout = null;
@@ -4636,6 +4651,10 @@
       if (defeatInventoryEl) {
         defeatInventoryEl.innerHTML = '';
         delete defeatInventoryEl.dataset.empty;
+      }
+      if (defeatRespawnButton) {
+        defeatRespawnButton.disabled = true;
+        defeatRespawnButton.textContent = 'Respawn Now';
       }
     }
 
