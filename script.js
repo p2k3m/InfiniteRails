@@ -7059,104 +7059,6 @@
 
     setupSettingsModal();
     setupCraftingModal();
-    setupGuideModal();
-    setupLeaderboardModal();
-    initializeIdentityLayer();
-    updateLayoutMetrics();
-    syncSidebarForViewport();
-
-    function openSettingsModal() {
-      if (!settingsModal) return;
-      applyAudioSettingsToInputs();
-      updateVolumeLabels();
-      settingsModal.hidden = false;
-      settingsModal.setAttribute('aria-hidden', 'false');
-      openSettingsButton?.setAttribute('aria-expanded', 'true');
-      initializeAudioEngine();
-      window.setTimeout(() => {
-        const firstInput = settingsModal.querySelector('input[type="range"]');
-        firstInput?.focus();
-      }, 0);
-    }
-
-    function closeSettingsModal(shouldFocusTrigger = false) {
-      if (!settingsModal) return;
-      settingsModal.hidden = true;
-      settingsModal.setAttribute('aria-hidden', 'true');
-      openSettingsButton?.setAttribute('aria-expanded', 'false');
-      if (shouldFocusTrigger) {
-        openSettingsButton?.focus();
-      }
-    }
-
-    function setupSettingsModal() {
-      if (!settingsModal) return;
-      settingsModal.hidden = true;
-      settingsModal.setAttribute('aria-hidden', 'true');
-      openSettingsButton?.setAttribute('aria-expanded', 'false');
-      settingsModal.addEventListener('click', (event) => {
-        if (event.target === settingsModal) {
-          closeSettingsModal(true);
-        }
-      });
-      closeSettingsButton?.addEventListener('click', () => closeSettingsModal(true));
-    }
-
-    function openCraftingModal() {
-      if (!craftingModal) return;
-      craftingModal.hidden = false;
-      craftingModal.setAttribute('aria-hidden', 'false');
-      craftLauncherButton?.setAttribute('aria-expanded', 'true');
-      updateCraftSequenceDisplay();
-      updateRecipesList();
-      updateAutocompleteSuggestions();
-      updateCraftingInventoryOverlay();
-      recipeSearchEl?.focus();
-    }
-
-    function closeCraftingModal() {
-      if (!craftingModal) return;
-      craftingModal.hidden = true;
-      craftingModal.setAttribute('aria-hidden', 'true');
-      craftSuggestionsEl?.setAttribute('data-visible', 'false');
-      craftLauncherButton?.setAttribute('aria-expanded', 'false');
-      closeCraftingSearchPanel();
-      craftLauncherButton?.focus();
-    }
-
-    function setupCraftingModal() {
-      if (!craftingModal) return;
-      craftingModal.hidden = true;
-      craftingModal.setAttribute('aria-hidden', 'true');
-      craftLauncherButton?.setAttribute('aria-expanded', 'false');
-      craftingModal.addEventListener('click', (event) => {
-        if (event.target === craftingModal) {
-          if (craftingSearchPanel?.getAttribute('data-open') === 'true') {
-            closeCraftingSearchPanel(true);
-            return;
-          }
-          closeCraftingModal();
-        }
-      });
-      closeCraftingButton?.addEventListener('click', closeCraftingModal);
-      if (craftingSearchPanel) {
-        craftingSearchPanel.hidden = true;
-        craftingSearchPanel.setAttribute('data-open', 'false');
-        craftingSearchPanel.setAttribute('aria-hidden', 'true');
-      }
-      document.addEventListener('keydown', (event) => {
-        if (event.key === 'Escape') {
-          if (craftingSearchPanel?.getAttribute('data-open') === 'true') {
-            event.preventDefault();
-            closeCraftingSearchPanel(true);
-            return;
-          }
-          if (!craftingModal.hidden) {
-            closeCraftingModal();
-          }
-        }
-      });
-    }
 
     const GUIDE_SLIDES = [
       {
@@ -7320,6 +7222,105 @@
       timeouts: [],
       goToSlide: null,
     };
+
+    setupGuideModal();
+    setupLeaderboardModal();
+    initializeIdentityLayer();
+    updateLayoutMetrics();
+    syncSidebarForViewport();
+
+    function openSettingsModal() {
+      if (!settingsModal) return;
+      applyAudioSettingsToInputs();
+      updateVolumeLabels();
+      settingsModal.hidden = false;
+      settingsModal.setAttribute('aria-hidden', 'false');
+      openSettingsButton?.setAttribute('aria-expanded', 'true');
+      initializeAudioEngine();
+      window.setTimeout(() => {
+        const firstInput = settingsModal.querySelector('input[type="range"]');
+        firstInput?.focus();
+      }, 0);
+    }
+
+    function closeSettingsModal(shouldFocusTrigger = false) {
+      if (!settingsModal) return;
+      settingsModal.hidden = true;
+      settingsModal.setAttribute('aria-hidden', 'true');
+      openSettingsButton?.setAttribute('aria-expanded', 'false');
+      if (shouldFocusTrigger) {
+        openSettingsButton?.focus();
+      }
+    }
+
+    function setupSettingsModal() {
+      if (!settingsModal) return;
+      settingsModal.hidden = true;
+      settingsModal.setAttribute('aria-hidden', 'true');
+      openSettingsButton?.setAttribute('aria-expanded', 'false');
+      settingsModal.addEventListener('click', (event) => {
+        if (event.target === settingsModal) {
+          closeSettingsModal(true);
+        }
+      });
+      closeSettingsButton?.addEventListener('click', () => closeSettingsModal(true));
+    }
+
+    function openCraftingModal() {
+      if (!craftingModal) return;
+      craftingModal.hidden = false;
+      craftingModal.setAttribute('aria-hidden', 'false');
+      craftLauncherButton?.setAttribute('aria-expanded', 'true');
+      updateCraftSequenceDisplay();
+      updateRecipesList();
+      updateAutocompleteSuggestions();
+      updateCraftingInventoryOverlay();
+      recipeSearchEl?.focus();
+    }
+
+    function closeCraftingModal() {
+      if (!craftingModal) return;
+      craftingModal.hidden = true;
+      craftingModal.setAttribute('aria-hidden', 'true');
+      craftSuggestionsEl?.setAttribute('data-visible', 'false');
+      craftLauncherButton?.setAttribute('aria-expanded', 'false');
+      closeCraftingSearchPanel();
+      craftLauncherButton?.focus();
+    }
+
+    function setupCraftingModal() {
+      if (!craftingModal) return;
+      craftingModal.hidden = true;
+      craftingModal.setAttribute('aria-hidden', 'true');
+      craftLauncherButton?.setAttribute('aria-expanded', 'false');
+      craftingModal.addEventListener('click', (event) => {
+        if (event.target === craftingModal) {
+          if (craftingSearchPanel?.getAttribute('data-open') === 'true') {
+            closeCraftingSearchPanel(true);
+            return;
+          }
+          closeCraftingModal();
+        }
+      });
+      closeCraftingButton?.addEventListener('click', closeCraftingModal);
+      if (craftingSearchPanel) {
+        craftingSearchPanel.hidden = true;
+        craftingSearchPanel.setAttribute('data-open', 'false');
+        craftingSearchPanel.setAttribute('aria-hidden', 'true');
+      }
+      document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') {
+          if (craftingSearchPanel?.getAttribute('data-open') === 'true') {
+            event.preventDefault();
+            closeCraftingSearchPanel(true);
+            return;
+          }
+          if (!craftingModal.hidden) {
+            closeCraftingModal();
+          }
+        }
+      });
+    }
 
     function openGuideModal() {
       if (!guideModal) return;

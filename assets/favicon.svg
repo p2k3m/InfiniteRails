@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title">
+  <title id="title">Infinite Dimension logo mark</title>
+  <defs>
+    <radialGradient id="portalGlow" cx="50%" cy="45%" r="55%">
+      <stop offset="0%" stop-color="#7df9ff" />
+      <stop offset="65%" stop-color="#3c4ac7" />
+      <stop offset="100%" stop-color="#181c3a" />
+    </radialGradient>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="#0d1029" />
+  <circle cx="32" cy="32" r="22" fill="url(#portalGlow)" opacity="0.95" />
+  <path d="M22 32c0-6 4.5-11 10-11s10 5 10 11-4.5 11-10 11S22 38 22 32Zm6.2 0c0 2.8 1.7 5 3.8 5s3.8-2.2 3.8-5-1.7-5-3.8-5-3.8 2.2-3.8 5Z" fill="#f5f7ff" />
+</svg>
