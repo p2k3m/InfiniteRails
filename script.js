@@ -88,6 +88,7 @@
     const eventLogEl = document.getElementById('eventLog');
     const codexListEl = document.getElementById('dimensionCodex');
     const openGuideButton = document.getElementById('openGuide');
+    const landingGuideButton = document.getElementById('landingGuideButton');
     const openSettingsButton = document.getElementById('openSettings');
     const settingsModal = document.getElementById('settingsModal');
     const closeSettingsButton = document.getElementById('closeSettings');
@@ -5453,6 +5454,9 @@
         button.addEventListener('click', () => updateFromMobile(button.dataset.action));
       });
       openGuideButton?.addEventListener('click', openGuideModal);
+      landingGuideButton?.addEventListener('click', () => {
+        openGuideModal();
+      });
       openSettingsButton?.addEventListener('click', openSettingsModal);
       toggleSidebarButton?.addEventListener('click', toggleSidebar);
       sidePanelScrim?.addEventListener('click', () => closeSidebar(true));
