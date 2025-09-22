@@ -360,6 +360,14 @@
           </div>
         </header>
         <div class="crafting-modal__grid">
+          <section class="crafting-modal__inventory" aria-label="Satchel inventory">
+            <header class="crafting-modal__inventory-header">
+              <h3>Satchel</h3>
+              <button type="button" class="ghost small" id="openCraftingSearch">Search Library</button>
+            </header>
+            <div class="crafting-inventory" id="craftingInventory" role="list"></div>
+            <p class="crafting-inventory__hint">Drag resources to the sequence or tap to quick add.</p>
+          </section>
           <section class="crafting-modal__sequence" aria-label="Crafting sequence">
             <div class="crafting-sequence" id="craftSequence" data-slot-count="7"></div>
             <div class="crafting-actions">
@@ -381,6 +389,35 @@
           </section>
         </div>
         <div class="crafting-confetti" id="craftConfetti" aria-hidden="true"></div>
+        <div
+          class="crafting-search-panel"
+          id="craftingSearchPanel"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="craftingSearchTitle"
+          hidden
+        >
+          <div class="crafting-search-panel__content" role="document">
+            <header class="crafting-search-panel__header">
+              <p class="crafting-search-panel__eyebrow">Recipe Library</p>
+              <h3 id="craftingSearchTitle">Search combinations</h3>
+              <p>Filter by ingredient, output, or recipe name to auto-fill the sequence.</p>
+            </header>
+            <div class="crafting-search-panel__input">
+              <label for="craftingSearchInput" class="sr-only">Search recipes</label>
+              <input
+                type="search"
+                id="craftingSearchInput"
+                placeholder="Search for recipes or ingredients"
+                autocomplete="off"
+              />
+            </div>
+            <ul class="crafting-search-panel__results" id="craftingSearchResults" role="listbox" aria-live="polite"></ul>
+            <div class="crafting-search-panel__actions">
+              <button type="button" class="ghost" id="closeCraftingSearch">Close</button>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
 

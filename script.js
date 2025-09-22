@@ -84,6 +84,12 @@
     const craftSequenceEl = document.getElementById('craftSequence');
     const craftSuggestionsEl = document.getElementById('craftSuggestions');
     const craftConfettiEl = document.getElementById('craftConfetti');
+    const craftingInventoryEl = document.getElementById('craftingInventory');
+    const openCraftingSearchButton = document.getElementById('openCraftingSearch');
+    const craftingSearchPanel = document.getElementById('craftingSearchPanel');
+    const craftingSearchInput = document.getElementById('craftingSearchInput');
+    const craftingSearchResultsEl = document.getElementById('craftingSearchResults');
+    const closeCraftingSearchButton = document.getElementById('closeCraftingSearch');
     const craftLauncherButton = document.getElementById('openCrafting');
     const craftingModal = document.getElementById('craftingModal');
     const closeCraftingButton = document.getElementById('closeCrafting');
@@ -680,6 +686,12 @@
     const MAX_CRAFT_SLOTS = 7;
     const craftSlots = [];
     let craftConfettiTimer = null;
+    let craftingDragGhost = null;
+    let craftingDragTrailEl = null;
+    let activeInventoryDrag = null;
+    let dragFallbackSlotIndex = null;
+    let craftSequenceErrorTimeout = null;
+    const inventoryClickBypass = new WeakSet();
 
     let renderer;
     let scene;
@@ -3768,6 +3780,7 @@
         el.addEventListener('click', () => addToCraftSequence(bundle.item));
         extendedInventoryEl.appendChild(el);
       });
+      updateCraftingInventoryOverlay(combined);
     }
 
     function mergeInventory() {
@@ -3777,6 +3790,40 @@
         map.set(entry.item, (map.get(entry.item) ?? 0) + entry.quantity);
       });
       return Array.from(map.entries()).map(([item, quantity]) => ({ item, quantity }));
+    }
+
+    function updateCraftingInventoryOverlay(fromCombined) {
+      if (!craftingInventoryEl) return;
+      const combined = Array.isArray(fromCombined) ? fromCombined : mergeInventory();
+      craftingInventoryEl.innerHTML = '';
+      if (!combined.length) {
+        const empty = document.createElement('p');
+        empty.className = 'crafting-inventory__empty';
+        empty.textContent = 'Gather resources to populate your satchel.';
+        craftingInventoryEl.appendChild(empty);
+        return;
+      }
+      combined.forEach((bundle) => {
+        const { item, quantity } = bundle;
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'crafting-inventory__item';
+        button.setAttribute('data-item-id', item);
+        button.innerHTML = `
+          <span class="crafting-inventory__item-title">${ITEM_DEFS[item]?.name ?? item}</span>
+          <span class="crafting-inventory__item-quantity">Available ×${quantity}</span>
+        `;
+        button.setAttribute('aria-label', `${ITEM_DEFS[item]?.name ?? item} available ×${quantity}. Drag to sequence or click to add.`);
+        button.addEventListener('pointerdown', (event) => beginInventoryDrag(event, item, quantity));
+        button.addEventListener('click', () => {
+          if (inventoryClickBypass.has(button)) {
+            inventoryClickBypass.delete(button);
+            return;
+          }
+          addToCraftSequence(item);
+        });
+        craftingInventoryEl.appendChild(button);
+      });
     }
 
     function resetStatusMeterMemory() {
@@ -5100,16 +5147,228 @@
       }
     }
 
+    function ensureCraftingDragElements() {
+      if (!craftingDragGhost) {
+        craftingDragGhost = document.createElement('div');
+        craftingDragGhost.className = 'crafting-drag-ghost';
+        craftingDragGhost.setAttribute('aria-hidden', 'true');
+        document.body.appendChild(craftingDragGhost);
+      }
+      if (!craftingDragTrailEl) {
+        craftingDragTrailEl = document.createElement('div');
+        craftingDragTrailEl.className = 'crafting-drag-trail';
+        craftingDragTrailEl.setAttribute('aria-hidden', 'true');
+        document.body.appendChild(craftingDragTrailEl);
+      }
+    }
+
+    function showCraftingDragGhost(itemId, available, x, y) {
+      ensureCraftingDragElements();
+      if (!craftingDragGhost) return;
+      const name = ITEM_DEFS[itemId]?.name ?? itemId;
+      craftingDragGhost.innerHTML = '';
+      const title = document.createElement('span');
+      title.className = 'crafting-drag-ghost__title';
+      title.textContent = name;
+      const quantity = document.createElement('span');
+      quantity.className = 'crafting-drag-ghost__quantity';
+      quantity.textContent = `Available ×${available}`;
+      craftingDragGhost.append(title, quantity);
+      craftingDragGhost.dataset.visible = 'true';
+      positionCraftingDragGhost(x, y);
+    }
+
+    function positionCraftingDragGhost(x, y) {
+      if (!craftingDragGhost) return;
+      craftingDragGhost.style.left = `${x}px`;
+      craftingDragGhost.style.top = `${y}px`;
+    }
+
+    function spawnCraftingDragTrail(x, y) {
+      if (!craftingDragTrailEl) return;
+      const particle = document.createElement('span');
+      particle.className = 'crafting-drag-trail__particle';
+      particle.style.left = `${x}px`;
+      particle.style.top = `${y}px`;
+      craftingDragTrailEl.appendChild(particle);
+      window.setTimeout(() => {
+        particle.remove();
+      }, 420);
+    }
+
+    function clearCraftingDragElements() {
+      craftingDragGhost?.removeAttribute('data-visible');
+      craftingDragTrailEl?.replaceChildren();
+      document.body.removeAttribute('data-crafting-drag');
+    }
+
+    function determineFallbackSlotIndex() {
+      const emptyIndex = craftSlots.findIndex(({ button }) => button.classList.contains('empty'));
+      if (emptyIndex !== -1) return emptyIndex;
+      if (state.craftSequence.length > 0) {
+        return Math.min(state.craftSequence.length - 1, MAX_CRAFT_SLOTS - 1);
+      }
+      return 0;
+    }
+
+    function updateCraftSlotDragHighlight(index) {
+      craftSlots.forEach(({ button }) => button.classList.remove('craft-slot--target'));
+      const resolvedIndex = typeof index === 'number' && !Number.isNaN(index) ? index : dragFallbackSlotIndex;
+      if (typeof resolvedIndex === 'number' && resolvedIndex >= 0 && resolvedIndex < craftSlots.length) {
+        craftSlots[resolvedIndex]?.button.classList.add('craft-slot--target');
+      }
+    }
+
+    function clearCraftSlotDragHighlight() {
+      craftSlots.forEach(({ button }) => button.classList.remove('craft-slot--target'));
+      dragFallbackSlotIndex = null;
+    }
+
+    function beginInventoryDrag(event, itemId, availableQuantity) {
+      if (!craftSequenceEl) return;
+      ensureCraftingDragElements();
+      activeInventoryDrag = {
+        pointerId: event.pointerId,
+        itemId,
+        available: availableQuantity,
+        sourceEl: event.currentTarget,
+        startX: event.clientX,
+        startY: event.clientY,
+        moved: false,
+      };
+      if (event.currentTarget instanceof HTMLElement) {
+        event.currentTarget.dataset.active = 'true';
+      }
+      dragFallbackSlotIndex = determineFallbackSlotIndex();
+      showCraftingDragGhost(itemId, availableQuantity, event.clientX, event.clientY);
+      document.body.dataset.craftingDrag = 'true';
+      updateCraftSlotDragHighlight(null);
+      if (typeof event.currentTarget.setPointerCapture === 'function') {
+        try {
+          event.currentTarget.setPointerCapture(event.pointerId);
+        } catch (error) {
+          console.warn('Unable to set pointer capture for crafting drag.', error);
+        }
+      }
+      window.addEventListener('pointermove', handleInventoryDragMove);
+      window.addEventListener('pointerup', handleInventoryDragEnd);
+      window.addEventListener('pointercancel', handleInventoryDragEnd);
+    }
+
+    function handleInventoryDragMove(event) {
+      if (!activeInventoryDrag || event.pointerId !== activeInventoryDrag.pointerId) return;
+      const dx = event.clientX - activeInventoryDrag.startX;
+      const dy = event.clientY - activeInventoryDrag.startY;
+      if (!activeInventoryDrag.moved && Math.hypot(dx, dy) > 6) {
+        activeInventoryDrag.moved = true;
+      }
+      positionCraftingDragGhost(event.clientX, event.clientY);
+      spawnCraftingDragTrail(event.clientX, event.clientY);
+      const hoveredElement = document.elementFromPoint(event.clientX, event.clientY);
+      const slotEl = hoveredElement?.closest('[data-craft-slot]');
+      if (slotEl) {
+        const slotIndex = Number(slotEl.dataset.craftSlot);
+        if (!Number.isNaN(slotIndex)) {
+          updateCraftSlotDragHighlight(slotIndex);
+          return;
+        }
+      }
+      if (hoveredElement?.closest('.crafting-sequence')) {
+        updateCraftSlotDragHighlight(dragFallbackSlotIndex);
+      } else {
+        updateCraftSlotDragHighlight(null);
+      }
+    }
+
+    function handleInventoryDragEnd(event) {
+      if (!activeInventoryDrag || event.pointerId !== activeInventoryDrag.pointerId) return;
+      const dragContext = activeInventoryDrag;
+      activeInventoryDrag = null;
+      window.removeEventListener('pointermove', handleInventoryDragMove);
+      window.removeEventListener('pointerup', handleInventoryDragEnd);
+      window.removeEventListener('pointercancel', handleInventoryDragEnd);
+      if (dragContext.sourceEl && typeof dragContext.sourceEl.releasePointerCapture === 'function') {
+        try {
+          dragContext.sourceEl.releasePointerCapture(event.pointerId);
+        } catch (error) {
+          console.warn('Unable to release pointer capture for crafting drag.', error);
+        }
+      }
+      if (dragContext.sourceEl instanceof HTMLElement) {
+        dragContext.sourceEl.removeAttribute('data-active');
+      }
+      const dropElement = document.elementFromPoint(event.clientX, event.clientY);
+      let dropIndex = null;
+      const slotEl = dropElement?.closest('[data-craft-slot]');
+      if (slotEl) {
+        const slotIndex = Number(slotEl.dataset.craftSlot);
+        if (!Number.isNaN(slotIndex)) {
+          dropIndex = slotIndex;
+        }
+      } else if (dropElement?.closest('.crafting-sequence')) {
+        dropIndex = dragFallbackSlotIndex;
+      }
+      let handled = false;
+      if (typeof dropIndex === 'number' && dropIndex >= 0) {
+        handled = placeItemInCraftSequence(dragContext.itemId, dropIndex);
+      } else if (!dragContext.moved) {
+        addToCraftSequence(dragContext.itemId);
+        handled = true;
+      }
+      if (handled && dragContext.sourceEl) {
+        inventoryClickBypass.add(dragContext.sourceEl);
+      }
+      clearCraftingDragElements();
+      clearCraftSlotDragHighlight();
+    }
+
+    function clearCraftSequenceErrorState() {
+      if (!craftSequenceEl) return;
+      craftSequenceEl.classList.remove('crafting-sequence--error', 'crafting-sequence--shake');
+      if (craftSequenceErrorTimeout) {
+        window.clearTimeout(craftSequenceErrorTimeout);
+        craftSequenceErrorTimeout = null;
+      }
+    }
+
+    function triggerCraftSequenceError() {
+      if (!craftSequenceEl) return;
+      craftSequenceEl.classList.add('crafting-sequence--error', 'crafting-sequence--shake');
+      if (craftSequenceErrorTimeout) {
+        window.clearTimeout(craftSequenceErrorTimeout);
+      }
+      craftSequenceErrorTimeout = window.setTimeout(() => {
+        craftSequenceEl.classList.remove('crafting-sequence--shake');
+      }, 450);
+    }
+
     function addToCraftSequence(itemId) {
       if (!craftSequenceEl) return;
       if (state.craftSequence.length >= MAX_CRAFT_SLOTS) {
         logEvent('Sequence is full. Craft or clear before adding more steps.');
-        craftSequenceEl.classList.add('full');
-        window.setTimeout(() => craftSequenceEl.classList.remove('full'), 800);
+        triggerCraftSequenceError();
         return;
       }
+      clearCraftSequenceErrorState();
       state.craftSequence.push(itemId);
       updateCraftSequenceDisplay();
+    }
+
+    function placeItemInCraftSequence(itemId, slotIndex) {
+      if (!craftSequenceEl) return false;
+      if (slotIndex < 0 || slotIndex >= MAX_CRAFT_SLOTS) return false;
+      clearCraftSequenceErrorState();
+      if (slotIndex < state.craftSequence.length) {
+        state.craftSequence[slotIndex] = itemId;
+      } else {
+        if (state.craftSequence.length >= MAX_CRAFT_SLOTS) {
+          triggerCraftSequenceError();
+          return false;
+        }
+        state.craftSequence.push(itemId);
+      }
+      updateCraftSequenceDisplay();
+      return true;
     }
 
     function initializeCraftSlots() {
@@ -5121,7 +5380,7 @@
         const slotButton = document.createElement('button');
         slotButton.type = 'button';
         slotButton.className = 'craft-slot empty';
-        slotButton.dataset.index = i.toString();
+        slotButton.dataset.craftSlot = i.toString();
         const indexLabel = document.createElement('span');
         indexLabel.className = 'craft-slot__index';
         indexLabel.textContent = String(i + 1);
@@ -5132,6 +5391,7 @@
         slotButton.addEventListener('click', () => {
           if (state.craftSequence.length <= i) return;
           state.craftSequence.splice(i, 1);
+          clearCraftSequenceErrorState();
           updateCraftSequenceDisplay();
         });
         craftSequenceEl.appendChild(slotButton);
@@ -5143,6 +5403,7 @@
     function updateCraftSequenceDisplay() {
       if (!craftSequenceEl || !craftSlots.length) return;
       const sequenceLength = state.craftSequence.length;
+      craftSequenceEl.classList.remove('crafting-sequence--shake');
       craftSlots.forEach(({ button, label }, index) => {
         const itemId = state.craftSequence[index];
         if (itemId) {
@@ -5165,6 +5426,12 @@
       if (craftLauncherButton) {
         craftLauncherButton.setAttribute('data-sequence', sequenceLength > 0 ? 'active' : 'idle');
       }
+      if (activeInventoryDrag) {
+        dragFallbackSlotIndex = determineFallbackSlotIndex();
+        updateCraftSlotDragHighlight(null);
+      } else {
+        clearCraftSlotDragHighlight();
+      }
     }
 
     function attemptCraft() {
@@ -5176,15 +5443,16 @@
       );
       if (!recipe) {
         logEvent('Sequence fizzles. No recipe matched.');
-        state.craftSequence = [];
-        updateCraftSequenceDisplay();
+        triggerCraftSequenceError();
         return;
       }
       const canCraft = recipe.sequence.every((itemId) => hasItem(itemId));
       if (!canCraft) {
         logEvent('Missing ingredients for this recipe.');
+        triggerCraftSequenceError();
         return;
       }
+      clearCraftSequenceErrorState();
       recipe.sequence.forEach((itemId) => removeItem(itemId, 1));
       addItemToInventory(recipe.output.item, recipe.output.quantity);
       const recipePreviouslyKnown = state.knownRecipes.has(recipe.id);
@@ -5258,6 +5526,9 @@
       craftSuggestionsEl.innerHTML = '';
       if (!query) {
         craftSuggestionsEl.setAttribute('data-visible', 'false');
+        if (craftingSearchPanel?.getAttribute('data-open') === 'true') {
+          updateCraftingSearchPanelResults();
+        }
         return;
       }
       const matches = RECIPES.filter((recipe) => {
@@ -5288,6 +5559,82 @@
         craftSuggestionsEl.appendChild(entry);
       });
       craftSuggestionsEl.setAttribute('data-visible', 'true');
+      if (craftingSearchPanel?.getAttribute('data-open') === 'true') {
+        updateCraftingSearchPanelResults();
+      }
+    }
+
+    function openCraftingSearchPanel() {
+      if (!craftingSearchPanel) return;
+      craftingSearchPanel.hidden = false;
+      craftingSearchPanel.setAttribute('data-open', 'true');
+      craftingSearchPanel.setAttribute('aria-hidden', 'false');
+      if (craftingSearchInput) {
+        craftingSearchInput.value = recipeSearchEl?.value ?? '';
+      }
+      updateCraftingSearchPanelResults();
+      window.setTimeout(() => craftingSearchInput?.focus(), 0);
+    }
+
+    function closeCraftingSearchPanel(shouldFocusTrigger = false) {
+      if (!craftingSearchPanel) return;
+      craftingSearchPanel.hidden = true;
+      craftingSearchPanel.setAttribute('data-open', 'false');
+      craftingSearchPanel.setAttribute('aria-hidden', 'true');
+      if (shouldFocusTrigger) {
+        openCraftingSearchButton?.focus();
+      }
+    }
+
+    function updateCraftingSearchPanelResults() {
+      if (!craftingSearchResultsEl) return;
+      const query = craftingSearchInput?.value?.trim().toLowerCase() ?? '';
+      craftingSearchResultsEl.innerHTML = '';
+      const unlockedRecipes = RECIPES.filter((recipe) => state.unlockedDimensions.has(recipe.unlock));
+      const matches = unlockedRecipes.filter((recipe) => {
+        if (!query) return true;
+        const name = recipe.name.toLowerCase();
+        if (name.includes(query)) return true;
+        const outputName = (ITEM_DEFS[recipe.output.item]?.name ?? recipe.output.item).toLowerCase();
+        if (outputName.includes(query)) return true;
+        return recipe.sequence.some((itemId) => (ITEM_DEFS[itemId]?.name ?? itemId).toLowerCase().includes(query));
+      });
+      if (!matches.length) {
+        const empty = document.createElement('li');
+        empty.className = 'crafting-search-panel__empty';
+        empty.textContent = query
+          ? 'No recipes match this search yet.'
+          : 'Unlock more dimensions to expand your library.';
+        craftingSearchResultsEl.appendChild(empty);
+        return;
+      }
+      matches.slice(0, 12).forEach((recipe) => {
+        const entry = document.createElement('li');
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.innerHTML = `
+          <span>${recipe.name}</span>
+          <span class="crafting-search-panel__result-subtitle">${recipe.sequence
+            .map((item) => ITEM_DEFS[item]?.name ?? item)
+            .join(' → ')}</span>
+          <span class="crafting-search-panel__result-output">Creates ${
+            ITEM_DEFS[recipe.output.item]?.name ?? recipe.output.item
+          } ×${recipe.output.quantity}</span>
+        `;
+        button.addEventListener('click', () => {
+          state.craftSequence = [...recipe.sequence];
+          if (recipeSearchEl) {
+            recipeSearchEl.value = recipe.name;
+          }
+          clearCraftSequenceErrorState();
+          updateCraftSequenceDisplay();
+          updateRecipesList();
+          updateAutocompleteSuggestions();
+          closeCraftingSearchPanel(true);
+        });
+        entry.appendChild(button);
+        craftingSearchResultsEl.appendChild(entry);
+      });
     }
 
     function triggerCraftConfetti() {
@@ -5487,9 +5834,18 @@
 
     function initEventListeners() {
       document.addEventListener('keydown', handleKeyDown);
+      document.addEventListener('keydown', (event) => {
+        if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+          if (!craftingModal?.hidden) {
+            event.preventDefault();
+            openCraftingSearchPanel();
+          }
+        }
+      });
       craftButton?.addEventListener('click', attemptCraft);
       clearCraftButton?.addEventListener('click', () => {
         state.craftSequence = [];
+        clearCraftSequenceErrorState();
         updateCraftSequenceDisplay();
         updateAutocompleteSuggestions();
       });
@@ -5501,6 +5857,14 @@
       recipeSearchEl?.addEventListener('blur', () => {
         window.setTimeout(() => craftSuggestionsEl?.setAttribute('data-visible', 'false'), 140);
       });
+      openCraftingSearchButton?.addEventListener('click', openCraftingSearchPanel);
+      closeCraftingSearchButton?.addEventListener('click', () => closeCraftingSearchPanel(true));
+      craftingSearchPanel?.addEventListener('click', (event) => {
+        if (event.target === craftingSearchPanel) {
+          closeCraftingSearchPanel(true);
+        }
+      });
+      craftingSearchInput?.addEventListener('input', updateCraftingSearchPanelResults);
       craftLauncherButton?.addEventListener('click', openCraftingModal);
       toggleExtendedBtn.addEventListener('click', toggleExtended);
       mobileControls.querySelectorAll('button').forEach((button) => {
@@ -6363,6 +6727,7 @@
       updateCraftSequenceDisplay();
       updateRecipesList();
       updateAutocompleteSuggestions();
+      updateCraftingInventoryOverlay();
       recipeSearchEl?.focus();
     }
 
@@ -6372,6 +6737,7 @@
       craftingModal.setAttribute('aria-hidden', 'true');
       craftSuggestionsEl?.setAttribute('data-visible', 'false');
       craftLauncherButton?.setAttribute('aria-expanded', 'false');
+      closeCraftingSearchPanel();
       craftLauncherButton?.focus();
     }
 
@@ -6382,13 +6748,29 @@
       craftLauncherButton?.setAttribute('aria-expanded', 'false');
       craftingModal.addEventListener('click', (event) => {
         if (event.target === craftingModal) {
+          if (craftingSearchPanel?.getAttribute('data-open') === 'true') {
+            closeCraftingSearchPanel(true);
+            return;
+          }
           closeCraftingModal();
         }
       });
       closeCraftingButton?.addEventListener('click', closeCraftingModal);
+      if (craftingSearchPanel) {
+        craftingSearchPanel.hidden = true;
+        craftingSearchPanel.setAttribute('data-open', 'false');
+        craftingSearchPanel.setAttribute('aria-hidden', 'true');
+      }
       document.addEventListener('keydown', (event) => {
-        if (event.key === 'Escape' && !craftingModal.hidden) {
-          closeCraftingModal();
+        if (event.key === 'Escape') {
+          if (craftingSearchPanel?.getAttribute('data-open') === 'true') {
+            event.preventDefault();
+            closeCraftingSearchPanel(true);
+            return;
+          }
+          if (!craftingModal.hidden) {
+            closeCraftingModal();
+          }
         }
       });
     }
