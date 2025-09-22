@@ -1558,6 +1558,14 @@
     const tmpPreviewForward = new THREE.Vector3(0, 0, -1);
     const tmpPreviewTarget = new THREE.Vector3();
     const previewHandOffset = new THREE.Vector3(0.32, -0.42, -0.65);
+    const previewInteractiveTrees = new Set();
+    const previewInteractiveMeshes = new Set();
+    const previewTreeBursts = [];
+    const previewLootDrops = [];
+    const previewRaycaster = new THREE.Raycaster();
+    const previewRayPointer = new THREE.Vector2(0, 0);
+    const tmpPreviewTreePosition = new THREE.Vector3();
+    let previewInteractionCleanup = null;
 
     function getNowMs() {
       return typeof performance !== 'undefined' ? performance.now() : Date.now();
@@ -3135,7 +3143,7 @@
     }
 
     function buildPreviewTrees(island) {
-      if (!island) return;
+      if (!island || !previewGroup) return;
       const { topTiles, blockSize, size, spawn } = island;
       const spawnPoint = spawn ?? { worldX: 0, worldZ: PREVIEW_PLAYER_STAND_OFFSET };
       const spawnRadius = PREVIEW_BLOCK_SIZE * 2.8;
@@ -3164,55 +3172,76 @@
         used.add(key);
         spawned += 1;
         attempts += 1;
+
+        const treeGroup = new THREE.Group();
+        treeGroup.name = 'preview-tree';
+        treeGroup.position.set(
+          candidate.worldX + (previewRandom(candidate.gridX + 19, candidate.gridZ + 7) - 0.5) * 0.6,
+          candidate.height * blockSize,
+          candidate.worldZ + (previewRandom(candidate.gridZ + 11, candidate.gridX + 5) - 0.5) * 0.6,
+        );
+        treeGroup.rotation.y = previewRandom(candidate.gridX + 3, candidate.gridZ + 9) * Math.PI * 2;
+        treeGroup.userData = { type: 'tree', health: 4, meshes: [] };
+        previewInteractiveTrees.add(treeGroup);
+        previewGroup.add(treeGroup);
+
         const trunkHeight = 3.4 + previewRandom(candidate.gridX, candidate.gridZ) * 1.1;
         const trunkGeometry = new THREE.CylinderGeometry(0.18, 0.24, trunkHeight, 12);
         const trunk = new THREE.Mesh(trunkGeometry, previewAssets.materials.woodBark);
         trunk.castShadow = true;
         trunk.receiveShadow = true;
-        trunk.position.set(
-          candidate.worldX,
-          candidate.height * blockSize + trunkHeight / 2,
-          candidate.worldZ,
-        );
-        previewGroup.add(trunk);
+        trunk.position.set(0, trunkHeight / 2, 0);
+        trunk.userData = { type: 'treePart', tree: treeGroup };
+        treeGroup.add(trunk);
+        treeGroup.userData.meshes.push(trunk);
+        treeGroup.userData.trunkHeight = trunkHeight;
+        previewInteractiveMeshes.add(trunk);
+
         const canopyGroup = new THREE.Group();
-        const canopyBase = candidate.height * blockSize + trunkHeight * 0.92;
+        const canopyBase = trunkHeight * 0.92;
+        canopyGroup.position.y = canopyBase;
         for (let i = 0; i < 4; i += 1) {
           const radius = 0.55 + previewRandom(candidate.gridX + i, candidate.gridZ - i) * 0.45;
           const angle = (i / 4) * Math.PI * 2;
-          const leaf = new THREE.Mesh(
-            new THREE.SphereGeometry(0.75 + previewRandom(i, spawned) * 0.25, 16, 16),
-            previewAssets.materials.leaves,
-          );
+          const leafGeometry = new THREE.SphereGeometry(0.75 + previewRandom(i, spawned) * 0.25, 16, 16);
+          const leaf = new THREE.Mesh(leafGeometry, previewAssets.materials.leaves);
           leaf.position.set(
-            candidate.worldX + Math.cos(angle) * radius,
-            canopyBase + previewRandom(i + 2, spawned + 4) * 0.6,
-            candidate.worldZ + Math.sin(angle) * radius,
+            Math.cos(angle) * radius,
+            previewRandom(i + 2, spawned + 4) * 0.6,
+            Math.sin(angle) * radius,
           );
           leaf.castShadow = true;
           leaf.receiveShadow = true;
+          leaf.userData = { type: 'treePart', tree: treeGroup };
           canopyGroup.add(leaf);
+          treeGroup.userData.meshes.push(leaf);
+          previewInteractiveMeshes.add(leaf);
         }
-        const crown = new THREE.Mesh(
-          new THREE.SphereGeometry(0.9 + previewRandom(spawned, attempts) * 0.3, 16, 16),
-          previewAssets.materials.leaves,
-        );
-        crown.position.set(candidate.worldX, canopyBase + 0.6, candidate.worldZ);
+        const crownGeometry = new THREE.SphereGeometry(0.9 + previewRandom(spawned, attempts) * 0.3, 16, 16);
+        const crown = new THREE.Mesh(crownGeometry, previewAssets.materials.leaves);
+        crown.position.set(0, 0.6, 0);
         crown.castShadow = true;
         crown.receiveShadow = true;
+        crown.userData = { type: 'treePart', tree: treeGroup };
         canopyGroup.add(crown);
-        previewGroup.add(canopyGroup);
+        treeGroup.userData.meshes.push(crown);
+        previewInteractiveMeshes.add(crown);
+        treeGroup.add(canopyGroup);
       }
     }
 
     function buildPreviewRails(island) {
-      if (!island) return;
+      if (!island || !previewGroup) return;
       const { size, blockSize, heights } = island;
       let maxEdgeHeight = 1;
       for (let i = 0; i < size; i += 1) {
         maxEdgeHeight = Math.max(maxEdgeHeight, heights[i][0] || 0, heights[i][size - 1] || 0);
         maxEdgeHeight = Math.max(maxEdgeHeight, heights[0][i] || 0, heights[size - 1][i] || 0);
       }
+      const railsGroup = new THREE.Group();
+      railsGroup.name = 'preview-rails';
+      railsGroup.userData = { type: 'rail' };
+      previewGroup.add(railsGroup);
       const railY = maxEdgeHeight * blockSize + 0.55;
       const halfSpan = (size * blockSize) / 2;
       const edgeOffset = blockSize * 0.6;
@@ -3226,21 +3255,26 @@
         { x: -halfSpan - edgeOffset, z: 0, rotation: Math.PI / 2 },
       ];
       const railGeometry = new THREE.BoxGeometry(railLength, railThickness, railWidth);
+      const railMaterial = previewAssets.materials.rail.clone();
+      railMaterial.transparent = true;
+      railMaterial.opacity = 0.8;
+      railMaterial.emissive = new THREE.Color('#8ac8ff');
+      railMaterial.emissiveIntensity = 0.35;
+      const sleeperMaterial = previewAssets.materials.sleeper.clone();
+      sleeperMaterial.emissive = new THREE.Color('#3d4656');
+      sleeperMaterial.emissiveIntensity = 0.12;
       positions.forEach((entry, index) => {
-        const rail = new THREE.Mesh(railGeometry, previewAssets.materials.rail);
+        const rail = new THREE.Mesh(railGeometry, railMaterial);
         rail.castShadow = true;
         rail.receiveShadow = true;
         rail.position.set(entry.x, railY, entry.z);
         rail.rotation.y = entry.rotation;
-        previewGroup.add(rail);
+        railsGroup.add(rail);
         const sleeperCount = Math.max(6, Math.floor(size * 1.5));
         for (let i = 0; i < sleeperCount; i += 1) {
-          const t = i / (sleeperCount - 1);
+          const t = sleeperCount > 1 ? i / (sleeperCount - 1) : 0.5;
           const offset = (t - 0.5) * (railLength - blockSize);
-          const sleeper = new THREE.Mesh(
-            new THREE.BoxGeometry(0.4, 0.05, railWidth * 2.4),
-            previewAssets.materials.sleeper,
-          );
+          const sleeper = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.05, railWidth * 2.4), sleeperMaterial);
           sleeper.receiveShadow = true;
           sleeper.castShadow = false;
           if (entry.rotation === 0) {
@@ -3250,9 +3284,255 @@
           }
           sleeper.rotation.y = entry.rotation;
           sleeper.rotation.z = previewRandom(index, i) * 0.06 - 0.03;
-          previewGroup.add(sleeper);
+          railsGroup.add(sleeper);
         }
       });
+    }
+
+    function clearPreviewInteractiveEffects() {
+      for (let i = previewTreeBursts.length - 1; i >= 0; i -= 1) {
+        const system = previewTreeBursts[i];
+        if (system.points?.parent) {
+          system.points.parent.remove(system.points);
+        }
+        system.points?.geometry?.dispose?.();
+        system.points?.material?.dispose?.();
+        previewTreeBursts.splice(i, 1);
+      }
+      for (let i = previewLootDrops.length - 1; i >= 0; i -= 1) {
+        const drop = previewLootDrops[i];
+        if (drop.mesh?.parent) {
+          drop.mesh.parent.remove(drop.mesh);
+        }
+        drop.mesh?.geometry?.dispose?.();
+        drop.mesh?.material?.dispose?.();
+        previewLootDrops.splice(i, 1);
+      }
+    }
+
+    function attachPreviewInteractionHandlers() {
+      if (previewInteractionCleanup || !canvas) return;
+      const handleClick = (event) => {
+        if (event?.button != null && event.button !== 0) return;
+        if (state?.isRunning) return;
+        if (!previewState.active) return;
+        handlePreviewTreeClick();
+      };
+      canvas.addEventListener('click', handleClick);
+      previewInteractionCleanup = () => {
+        canvas.removeEventListener('click', handleClick);
+        previewInteractionCleanup = null;
+      };
+    }
+
+    function detachPreviewInteractionHandlers() {
+      if (!previewInteractionCleanup) return;
+      previewInteractionCleanup();
+    }
+
+    function handlePreviewTreeClick() {
+      if (!previewCamera || !previewInteractiveMeshes.size) return;
+      previewRayPointer.set(0, 0);
+      previewRaycaster.setFromCamera(previewRayPointer, previewCamera);
+      const interactiveMeshes = Array.from(previewInteractiveMeshes);
+      if (!interactiveMeshes.length) return;
+      const intersections = previewRaycaster.intersectObjects(interactiveMeshes, false);
+      if (!intersections.length) return;
+      const { object, point } = intersections[0];
+      const treeGroup = object?.userData?.tree ?? null;
+      if (!treeGroup) return;
+      const data = treeGroup.userData || { health: 4 };
+      const nextHealth = Math.max(0, (data.health ?? 4) - 1);
+      data.health = nextHealth;
+      treeGroup.userData = data;
+      const finalHit = nextHealth <= 0;
+      spawnPreviewTreeParticles(treeGroup, point, { finalHit });
+      if (!finalHit) {
+        return;
+      }
+      previewInteractiveTrees.delete(treeGroup);
+      if (data.meshes) {
+        data.meshes.forEach((mesh) => {
+          previewInteractiveMeshes.delete(mesh);
+        });
+      }
+      spawnPreviewTreeLoot(treeGroup);
+      if (treeGroup.parent) {
+        treeGroup.parent.remove(treeGroup);
+      }
+      treeGroup.traverse((child) => {
+        if (!child.isMesh) return;
+        child.geometry?.dispose?.();
+        if (child.material && !Object.values(previewAssets.materials).includes(child.material)) {
+          child.material.dispose?.();
+        }
+      });
+    }
+
+    function spawnPreviewTreeParticles(treeGroup, impactPoint, options = {}) {
+      if (!previewGroup) return;
+      const finalHit = Boolean(options.finalHit);
+      const count = finalHit ? 28 : 18;
+      const positions = new Float32Array(count * 3);
+      const velocities = new Float32Array(count * 3);
+      for (let i = 0; i < count; i += 1) {
+        const baseIndex = i * 3;
+        positions[baseIndex] = (Math.random() - 0.5) * 0.35;
+        positions[baseIndex + 1] = Math.random() * 0.4;
+        positions[baseIndex + 2] = (Math.random() - 0.5) * 0.35;
+        const angle = Math.random() * Math.PI * 2;
+        const speed = 0.6 + Math.random() * 0.8;
+        velocities[baseIndex] = Math.cos(angle) * speed * 0.45;
+        velocities[baseIndex + 1] = Math.random() * 1.2 + 0.6;
+        velocities[baseIndex + 2] = Math.sin(angle) * speed * 0.45;
+      }
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      const material = new THREE.PointsMaterial({
+        size: 0.16,
+        transparent: true,
+        opacity: 0.95,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+        color: new THREE.Color(finalHit ? '#ffd27f' : '#f6c068'),
+        sizeAttenuation: true,
+        map: getParticleTexture(),
+      });
+      const points = new THREE.Points(geometry, material);
+      if (impactPoint) {
+        tmpPreviewTreePosition.copy(impactPoint);
+      } else {
+        treeGroup.getWorldPosition(tmpPreviewTreePosition);
+        tmpPreviewTreePosition.y += (treeGroup.userData?.trunkHeight ?? 3.4) * 0.65;
+      }
+      if (previewGroup) {
+        previewGroup.worldToLocal(tmpPreviewTreePosition);
+      }
+      points.position.copy(tmpPreviewTreePosition);
+      previewGroup.add(points);
+      previewTreeBursts.push({
+        points,
+        positions,
+        velocities,
+        life: 0,
+        maxLife: finalHit ? 1.1 : 0.85,
+        gravityScale: 0.6,
+        fadePower: 1.6,
+        swirlStrength: finalHit ? 0.18 : 0.1,
+        swirlFrequency: 5.4,
+        count,
+      });
+    }
+
+    function spawnPreviewTreeLoot(treeGroup) {
+      if (!previewGroup) return;
+      treeGroup.getWorldPosition(tmpPreviewTreePosition);
+      previewGroup.worldToLocal(tmpPreviewTreePosition);
+      const drops = 2 + Math.floor(Math.random() * 2);
+      for (let i = 0; i < drops; i += 1) {
+        const geometry = new THREE.BoxGeometry(0.26, 0.24, 0.26);
+        const material = new THREE.MeshStandardMaterial({
+          color: new THREE.Color('#b4824b'),
+          roughness: 0.58,
+          metalness: 0.14,
+          transparent: true,
+          opacity: 1,
+        });
+        const mesh = new THREE.Mesh(geometry, material);
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+        mesh.position.copy(tmpPreviewTreePosition);
+        mesh.position.x += (Math.random() - 0.5) * 0.8;
+        mesh.position.z += (Math.random() - 0.5) * 0.8;
+        mesh.position.y += (treeGroup.userData?.trunkHeight ?? 3.4) * 0.5 + Math.random() * 0.4;
+        mesh.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI);
+        previewGroup.add(mesh);
+        const velocity = new THREE.Vector3(
+          (Math.random() - 0.5) * 1.1,
+          Math.random() * 1.2 + 0.6,
+          (Math.random() - 0.5) * 1.1,
+        );
+        previewLootDrops.push({ mesh, velocity, life: 0, maxLife: 1.4 });
+      }
+    }
+
+    function updatePreviewInteractiveEffects(deltaSeconds) {
+      if (deltaSeconds <= 0) return;
+      for (let i = previewTreeBursts.length - 1; i >= 0; i -= 1) {
+        const system = previewTreeBursts[i];
+        system.life += deltaSeconds;
+        const ratio = system.maxLife > 0 ? system.life / system.maxLife : 1;
+        const gravityScale = system.gravityScale ?? 0.5;
+        for (let j = 0; j < system.count; j += 1) {
+          const baseIndex = j * 3;
+          system.velocities[baseIndex + 1] -= 9.81 * deltaSeconds * gravityScale;
+          const swirlStrength = system.swirlStrength ?? 0;
+          const swirlFrequency = system.swirlFrequency ?? 6;
+          if (swirlStrength !== 0) {
+            const swirl = Math.sin((system.life + j) * swirlFrequency) * swirlStrength * deltaSeconds;
+            system.velocities[baseIndex] += swirl;
+            system.velocities[baseIndex + 2] -= swirl;
+          }
+          system.positions[baseIndex] += system.velocities[baseIndex] * deltaSeconds;
+          system.positions[baseIndex + 1] += system.velocities[baseIndex + 1] * deltaSeconds;
+          system.positions[baseIndex + 2] += system.velocities[baseIndex + 2] * deltaSeconds;
+        }
+        system.points.geometry.attributes.position.needsUpdate = true;
+        if (system.points.material) {
+          const fadePower = system.fadePower ?? 1.6;
+          const fade = Math.max(0, 1 - Math.pow(ratio, fadePower));
+          system.points.material.opacity = fade;
+          system.points.material.needsUpdate = true;
+        }
+        if (ratio >= 1) {
+          if (system.points.parent) {
+            system.points.parent.remove(system.points);
+          }
+          system.points.geometry.dispose();
+          system.points.material.dispose();
+          previewTreeBursts.splice(i, 1);
+        }
+      }
+
+      for (let i = previewLootDrops.length - 1; i >= 0; i -= 1) {
+        const drop = previewLootDrops[i];
+        drop.life += deltaSeconds;
+        const ratio = drop.maxLife > 0 ? drop.life / drop.maxLife : 1;
+        drop.velocity.y -= 9.81 * deltaSeconds * 0.7;
+        drop.mesh.position.addScaledVector(drop.velocity, deltaSeconds);
+        if (drop.mesh.position.y < 0.05) {
+          drop.mesh.position.y = 0.05;
+          drop.velocity.y *= -0.25;
+          drop.velocity.x *= 0.7;
+          drop.velocity.z *= 0.7;
+        }
+        drop.mesh.rotation.x += deltaSeconds * 1.4;
+        drop.mesh.rotation.y += deltaSeconds * 1.2;
+        if (drop.mesh.material) {
+          const fade = Math.max(0, 1 - Math.pow(ratio, 1.2));
+          drop.mesh.material.opacity = fade;
+          drop.mesh.material.needsUpdate = true;
+        }
+        if (ratio >= 1) {
+          if (drop.mesh.parent) {
+            drop.mesh.parent.remove(drop.mesh);
+          }
+          drop.mesh.geometry.dispose();
+          drop.mesh.material.dispose();
+          previewLootDrops.splice(i, 1);
+        }
+      }
+    }
+
+    function generateIsland() {
+      clearPreviewInteractiveEffects();
+      previewInteractiveTrees.clear();
+      previewInteractiveMeshes.clear();
+      const island = buildPreviewIsland();
+      buildPreviewTrees(island);
+      buildPreviewRails(island);
+      attachPreviewInteractionHandlers();
+      return island;
     }
 
     function updatePreviewCameraFrustum() {
@@ -3416,9 +3696,9 @@
       if (previewGroup) {
         previewGroup.position.y = Math.sin(timestamp / 1200) * PREVIEW_BOB_HEIGHT;
       }
+      const deltaMs = previewState.lastTimestamp != null ? timestamp - previewState.lastTimestamp : 0;
       if (previewState.lastTimestamp != null) {
-        const delta = timestamp - previewState.lastTimestamp;
-        previewState.frameTimes.push(delta);
+        previewState.frameTimes.push(deltaMs);
         if (previewState.frameTimes.length > 90) {
           previewState.frameTimes.shift();
         }
@@ -3432,6 +3712,9 @@
         }
       }
       previewState.lastTimestamp = timestamp;
+      if (deltaMs > 0) {
+        updatePreviewInteractiveEffects(deltaMs / 1000);
+      }
       const cycleRatio = PREVIEW_DAY_LENGTH > 0 ? (timestamp % PREVIEW_DAY_LENGTH) / PREVIEW_DAY_LENGTH : 0;
       const nightStrength = 1 - (0.5 + 0.5 * Math.sin(cycleRatio * Math.PI * 2));
       if (scene?.fog) {
@@ -3483,6 +3766,10 @@
       previewState.active = false;
       previewState.frameTimes = [];
       previewState.lastTimestamp = null;
+      detachPreviewInteractionHandlers();
+      clearPreviewInteractiveEffects();
+      previewInteractiveTrees.clear();
+      previewInteractiveMeshes.clear();
       if (previewAnimationFrame != null) {
         cancelAnimationFrame(previewAnimationFrame);
         previewAnimationFrame = null;
@@ -3557,9 +3844,7 @@
         sunLight.position.set(8, 12, 6);
         sunLight.castShadow = true;
       }
-      const island = buildPreviewIsland();
-      buildPreviewTrees(island);
-      buildPreviewRails(island);
+      const island = generateIsland();
       if (island?.spawn) {
         const spawnHeight = (island.spawn.height ?? 1) * (island.blockSize ?? PREVIEW_BLOCK_SIZE);
         previewState.spawnHeight = spawnHeight;
