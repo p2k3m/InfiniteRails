@@ -1091,6 +1091,11 @@
     const SCOREBOARD_STORAGE_KEY = 'infinite-dimension-scoreboard';
     const PROFILE_STORAGE_KEY = 'infinite-dimension-profile';
     const LOCAL_PROFILE_ID_KEY = 'infinite-dimension-local-id';
+    const PROGRESS_STORAGE_KEY = 'infinite-dimension-progress';
+    const SYNC_PROMPT_STORAGE_KEY = 'infinite-dimension-sync-prompt';
+    const PROGRESS_AUTOSAVE_INTERVAL_SECONDS = 30;
+    let pendingProgressSnapshot = null;
+    let pendingProgressSource = null;
 
     function getBaseMaterial(color, variant = 'default') {
       const key = `${variant}|${color}`;
@@ -4786,6 +4791,13 @@
         inventorySortMode: 'default',
         tarOverlayLevel: 0,
       },
+      persistence: {
+        autoSaveAccumulator: 0,
+        lastSerialized: null,
+        saving: false,
+        pending: false,
+        pendingReason: null,
+      },
     };
 
     state.player.heartsAtLastDamage = state.player.hearts;
@@ -5018,9 +5030,299 @@
       updateScoreOverlay(options);
     }
 
+    function ensureArrayOfStrings(value, { unique = true } = {}) {
+      if (!Array.isArray(value)) return [];
+      const seen = new Set();
+      const output = [];
+      value.forEach((entry) => {
+        if (typeof entry !== 'string') return;
+        const trimmed = entry.trim();
+        if (!trimmed) return;
+        if (unique) {
+          if (seen.has(trimmed)) return;
+          seen.add(trimmed);
+        }
+        output.push(trimmed);
+      });
+      return output;
+    }
+
+    function normalizeProgressSnapshot(snapshot) {
+      if (!snapshot || typeof snapshot !== 'object') {
+        return null;
+      }
+      const normalized = {
+        version: Number.isInteger(snapshot.version) ? snapshot.version : 1,
+        updatedAt: typeof snapshot.updatedAt === 'string' ? snapshot.updatedAt : new Date().toISOString(),
+        score: {},
+        recipes: {},
+        dimensions: {},
+        inventory: {},
+        player: {},
+      };
+
+      const knownRecipes = ensureArrayOfStrings(snapshot.recipes?.known ?? []);
+      if (!knownRecipes.includes('stick')) knownRecipes.push('stick');
+      if (!knownRecipes.includes('stone-pickaxe')) knownRecipes.push('stone-pickaxe');
+      normalized.recipes.known = knownRecipes;
+
+      const masteredRecipes = ensureArrayOfStrings(snapshot.recipes?.mastered ?? []).filter((id) =>
+        knownRecipes.includes(id)
+      );
+      normalized.recipes.mastered = masteredRecipes;
+
+      const activeSequence = ensureArrayOfStrings(snapshot.recipes?.active ?? [], { unique: false });
+      if (activeSequence.length) {
+        normalized.recipes.active = activeSequence.slice(0, MAX_CRAFT_SLOTS);
+      }
+
+      const unlockedDimensions = ensureArrayOfStrings(snapshot.dimensions?.unlocked ?? []);
+      if (!unlockedDimensions.includes('origin')) unlockedDimensions.push('origin');
+      normalized.dimensions.unlocked = unlockedDimensions;
+
+      const documentedDimensions = ensureArrayOfStrings(snapshot.dimensions?.documented ?? []).filter((id) =>
+        unlockedDimensions.includes(id)
+      );
+      normalized.dimensions.documented = documentedDimensions;
+
+      const history = ensureArrayOfStrings(snapshot.dimensions?.history ?? [], { unique: false });
+      if (!history.length) history.push('origin');
+      normalized.dimensions.history = history;
+
+      const currentDimension = snapshot.dimensions?.current;
+      normalized.dimensions.current = typeof currentDimension === 'string' && DIMENSIONS[currentDimension]
+        ? currentDimension
+        : 'origin';
+
+      const slotCount = Array.isArray(state.player?.inventory) ? state.player.inventory.length : 10;
+      const slots = Array.from({ length: slotCount }, (_, index) => {
+        const slot = Array.isArray(snapshot.inventory?.slots) ? snapshot.inventory.slots[index] : null;
+        if (!slot || typeof slot !== 'object') return null;
+        const item = typeof slot.item === 'string' ? slot.item : null;
+        const quantity = Number(slot.quantity);
+        if (!item || !Number.isFinite(quantity) || quantity <= 0) return null;
+        return { item, quantity: Math.max(1, Math.floor(quantity)) };
+      });
+      normalized.inventory.slots = slots;
+
+      const satchel = Array.isArray(snapshot.inventory?.satchel) ? snapshot.inventory.satchel : [];
+      normalized.inventory.satchel = satchel
+        .map((bundle) => {
+          if (!bundle || typeof bundle !== 'object') return null;
+          const item = typeof bundle.item === 'string' ? bundle.item : null;
+          const quantity = Number(bundle.quantity);
+          if (!item || !Number.isFinite(quantity) || quantity <= 0) return null;
+          return { item, quantity: Math.max(1, Math.floor(quantity)) };
+        })
+        .filter(Boolean);
+
+      const selectedSlot = Number(snapshot.inventory?.selectedSlot);
+      normalized.inventory.selectedSlot = Number.isInteger(selectedSlot) && selectedSlot >= 0 ? selectedSlot : 0;
+
+      normalized.player.hasIgniter = Boolean(snapshot.player?.hasIgniter);
+
+      const recipeScore = masteredRecipes.length * SCORE_POINTS.recipe;
+      const dimensionScore = documentedDimensions.length * SCORE_POINTS.dimension;
+      normalized.score = {
+        recipes: recipeScore,
+        dimensions: dimensionScore,
+        total: recipeScore + dimensionScore,
+      };
+
+      return normalized;
+    }
+
+    function createProgressSnapshot() {
+      const snapshot = {
+        version: 1,
+        updatedAt: new Date().toISOString(),
+        recipes: {
+          known: Array.from(state.knownRecipes ?? []),
+          mastered: Array.from(state.scoreBreakdown?.recipes ?? []),
+        },
+        dimensions: {
+          current: state.dimension?.id ?? 'origin',
+          unlocked: Array.from(state.unlockedDimensions ?? []),
+          history: Array.isArray(state.dimensionHistory) ? state.dimensionHistory.slice() : ['origin'],
+          documented: Array.from(state.scoreBreakdown?.dimensions ?? []),
+        },
+        inventory: {
+          slots: Array.isArray(state.player?.inventory)
+            ? state.player.inventory.map((slot) => (slot ? { item: slot.item, quantity: slot.quantity } : null))
+            : [],
+          satchel: Array.isArray(state.player?.satchel)
+            ? state.player.satchel
+                .map((bundle) =>
+                  bundle && bundle.item && Number.isFinite(bundle.quantity)
+                    ? { item: bundle.item, quantity: bundle.quantity }
+                    : null
+                )
+                .filter(Boolean)
+            : [],
+          selectedSlot: state.player?.selectedSlot ?? 0,
+        },
+        player: {
+          hasIgniter: Boolean(state.player?.hasIgniter),
+        },
+      };
+      const craftedCount = snapshot.recipes.mastered.length;
+      const documentedCount = snapshot.dimensions.documented.length;
+      snapshot.score = {
+        recipes: craftedCount * SCORE_POINTS.recipe,
+        dimensions: documentedCount * SCORE_POINTS.dimension,
+        total: craftedCount * SCORE_POINTS.recipe + documentedCount * SCORE_POINTS.dimension,
+      };
+      if (Array.isArray(state.craftSequence) && state.craftSequence.length) {
+        snapshot.recipes.active = state.craftSequence
+          .slice(0, MAX_CRAFT_SLOTS)
+          .map((item) => (typeof item === 'string' ? item : null))
+          .filter(Boolean);
+      }
+      return snapshot;
+    }
+
+    function persistProgressLocally(serialized) {
+      if (!window.localStorage) return;
+      try {
+        if (serialized) {
+          localStorage.setItem(PROGRESS_STORAGE_KEY, serialized);
+        }
+      } catch (error) {
+        console.warn('Unable to persist progress locally.', error);
+      }
+    }
+
+    function readPersistedProgress() {
+      if (!window.localStorage) return null;
+      try {
+        const raw = localStorage.getItem(PROGRESS_STORAGE_KEY);
+        if (!raw) return null;
+        const parsed = JSON.parse(raw);
+        return { snapshot: normalizeProgressSnapshot(parsed), serialized: raw };
+      } catch (error) {
+        console.warn('Unable to load saved progress snapshot.', error);
+        return null;
+      }
+    }
+
+    function setPendingProgressSnapshot(snapshot, source = 'local') {
+      const normalized = normalizeProgressSnapshot(snapshot);
+      if (!normalized) return;
+      pendingProgressSnapshot = normalized;
+      pendingProgressSource = source;
+    }
+
+    function consumePendingProgressSnapshot() {
+      if (!pendingProgressSnapshot) return null;
+      const payload = {
+        snapshot: pendingProgressSnapshot,
+        source: pendingProgressSource || 'local',
+      };
+      pendingProgressSnapshot = null;
+      pendingProgressSource = null;
+      return payload;
+    }
+
+    function flagProgressDirty(reason = 'auto') {
+      if (!state.persistence) return;
+      state.persistence.pendingReason = reason;
+      state.persistence.autoSaveAccumulator = PROGRESS_AUTOSAVE_INTERVAL_SECONDS;
+    }
+
+    function updateAutoSave(delta) {
+      if (!state.persistence) return;
+      state.persistence.autoSaveAccumulator = (state.persistence.autoSaveAccumulator ?? 0) + delta;
+      if (state.persistence.autoSaveAccumulator >= PROGRESS_AUTOSAVE_INTERVAL_SECONDS) {
+        state.persistence.autoSaveAccumulator = 0;
+        const reason = state.persistence.pendingReason || 'auto';
+        state.persistence.pendingReason = null;
+        queueProgressSave(reason);
+      }
+    }
+
+    function queueProgressSave(reason = 'auto') {
+      if (!state.persistence) return;
+      if (state.persistence.saving) {
+        state.persistence.pending = true;
+        state.persistence.pendingReason = reason;
+        return;
+      }
+      state.persistence.saving = true;
+      saveProgress(reason)
+        .catch((error) => {
+          console.warn('Failed to persist progress snapshot.', error);
+        })
+        .finally(() => {
+          state.persistence.saving = false;
+          if (state.persistence.pending) {
+            const nextReason = state.persistence.pendingReason || 'auto';
+            state.persistence.pending = false;
+            state.persistence.pendingReason = null;
+            queueProgressSave(nextReason);
+          }
+        });
+    }
+
+    async function saveProgress(reason = 'auto') {
+      if (!state) return;
+      const snapshot = createProgressSnapshot();
+      const serialized = JSON.stringify(snapshot);
+      if (serialized === state.persistence.lastSerialized) {
+        return;
+      }
+      persistProgressLocally(serialized);
+      state.persistence.lastSerialized = serialized;
+      state.persistence.lastSaveReason = reason;
+      if (identityState.googleProfile) {
+        await syncUserMetadata({ includeProgress: true, progressSnapshot: snapshot, reason });
+      }
+    }
+
+    function applyProgressSnapshotToState(snapshot, { source = 'local', announce = false } = {}) {
+      const normalized = normalizeProgressSnapshot(snapshot);
+      if (!normalized) return false;
+      state.unlockedDimensions = new Set(normalized.dimensions.unlocked);
+      state.dimensionHistory = normalized.dimensions.history.slice();
+      state.scoreBreakdown.recipes = new Set(normalized.recipes.mastered);
+      state.scoreBreakdown.dimensions = new Set(normalized.dimensions.documented);
+      state.knownRecipes = new Set(normalized.recipes.known);
+      state.craftSequence = Array.isArray(normalized.recipes.active)
+        ? normalized.recipes.active.slice(0, MAX_CRAFT_SLOTS)
+        : [];
+      const slotCount = state.player.inventory.length;
+      state.player.inventory = Array.from({ length: slotCount }, (_, index) => {
+        const slot = normalized.inventory.slots[index];
+        return slot ? { item: slot.item, quantity: slot.quantity } : null;
+      });
+      state.player.satchel = normalized.inventory.satchel.map((bundle) => ({
+        item: bundle.item,
+        quantity: bundle.quantity,
+      }));
+      const selectedSlot = normalized.inventory.selectedSlot;
+      state.player.selectedSlot = Number.isInteger(selectedSlot)
+        ? Math.min(Math.max(selectedSlot, 0), slotCount - 1)
+        : 0;
+      state.player.hasIgniter = Boolean(normalized.player.hasIgniter);
+      updateInventoryUI();
+      updateRecipesList();
+      updateCraftSequenceDisplay();
+      updateAutocompleteSuggestions();
+      updateScoreOverlay();
+      updateDimensionOverlay();
+      if (announce) {
+        logEvent(
+          source === 'remote'
+            ? 'Synced your cloud progress. Continue where you left off.'
+            : 'Restored your saved progress.'
+        );
+      }
+      return true;
+    }
+
     function addItemToInventory(itemId, quantity = 1) {
       const def = ITEM_DEFS[itemId];
       if (!def) return false;
+      let changed = false;
       for (let i = 0; i < state.player.inventory.length; i++) {
         const slot = state.player.inventory[i];
         if (slot && slot.item === itemId) {
@@ -5028,6 +5330,7 @@
           if (addable > 0) {
             slot.quantity += addable;
             quantity -= addable;
+            changed = true;
           }
         }
         if (quantity === 0) break;
@@ -5037,16 +5340,22 @@
           const addable = Math.min(quantity, def.stack);
           state.player.inventory[i] = { item: itemId, quantity: addable };
           quantity -= addable;
+          changed = true;
         }
       }
       if (quantity > 0) {
         state.player.satchel.push({ item: itemId, quantity });
+        changed = true;
       }
       updateInventoryUI();
+      if (changed) {
+        flagProgressDirty('inventory');
+      }
       return true;
     }
 
     function removeItem(itemId, quantity = 1) {
+      let changed = false;
       for (let i = 0; i < state.player.inventory.length; i++) {
         const slot = state.player.inventory[i];
         if (!slot || slot.item !== itemId) continue;
@@ -5056,10 +5365,16 @@
         if (slot.quantity <= 0) {
           state.player.inventory[i] = null;
         }
+        if (removable > 0) {
+          changed = true;
+        }
         if (quantity === 0) break;
       }
       if (quantity === 0) {
         updateInventoryUI();
+        if (changed) {
+          flagProgressDirty('inventory');
+        }
         return true;
       }
       for (let i = 0; i < state.player.satchel.length && quantity > 0; i++) {
@@ -5072,8 +5387,14 @@
           state.player.satchel.splice(i, 1);
           i--;
         }
+        if (removable > 0) {
+          changed = true;
+        }
       }
       updateInventoryUI();
+      if (changed) {
+        flagProgressDirty('inventory');
+      }
       return quantity === 0;
     }
 
@@ -5935,6 +6256,13 @@
 
     function startGame() {
       if (state.isRunning) return;
+      const pendingProgress = consumePendingProgressSnapshot();
+      const progressSnapshot = pendingProgress?.snapshot ?? null;
+      const progressSource = pendingProgress?.source ?? null;
+      const startDimensionId =
+        progressSnapshot?.dimensions?.current && DIMENSIONS[progressSnapshot.dimensions.current]
+          ? progressSnapshot.dimensions.current
+          : 'origin';
       teardownPreviewScene();
       const context = ensureAudioContext();
       context?.resume?.().catch(() => {});
@@ -5973,20 +6301,43 @@
       state.player.selectedSlot = 0;
       state.craftSequence = [];
       renderVictoryBanner();
-      loadDimension('origin');
+      loadDimension(startDimensionId);
       resetStatusMeterMemory();
-      updateInventoryUI();
-      updateRecipesList();
-      updateCraftSequenceDisplay();
-      updateAutocompleteSuggestions();
+      if (progressSnapshot) {
+        applyProgressSnapshotToState(progressSnapshot, {
+          source: progressSource || 'local',
+          announce: progressSource === 'remote',
+        });
+      } else {
+        updateInventoryUI();
+        updateRecipesList();
+        updateCraftSequenceDisplay();
+        updateAutocompleteSuggestions();
+        addItemToInventory('wood', 2);
+        addItemToInventory('stone', 1);
+      }
       updateStatusBars();
       updateDimensionOverlay();
       requestAnimationFrame(loop);
-      logEvent('You awaken on a floating island.');
-      addItemToInventory('wood', 2);
-      addItemToInventory('stone', 1);
-      updateInventoryUI();
-      updateDimensionOverlay();
+      if (!progressSnapshot) {
+        logEvent('You awaken on a floating island.');
+      }
+      flagProgressDirty('start');
+      queueProgressSave('start');
+      try {
+        if (!identityState.googleProfile && appConfig.googleClientId) {
+          const promptSeen = localStorage.getItem(SYNC_PROMPT_STORAGE_KEY);
+          if (!promptSeen) {
+            const wantsSync = window.confirm('Sync your progress across devices with Google Sign-In?');
+            localStorage.setItem(SYNC_PROMPT_STORAGE_KEY, 'dismissed');
+            if (wantsSync) {
+              attemptGoogleSignInFlow();
+            }
+          }
+        }
+      } catch (error) {
+        console.warn('Unable to prompt for progress sync.', error);
+      }
       window.setTimeout(() => {
         if (state.isRunning) {
           const preferredScheme = prefersTouchControls() ? 'touch' : 'desktop';
@@ -6075,6 +6426,7 @@
         resetStatusMeterMemory();
       }
       updateStatusBars();
+      flagProgressDirty('dimension');
       logEvent(`Entered ${dim.name}.`);
     }
 
@@ -6125,6 +6477,7 @@
       updateTarOverlay(delta);
       updateDimensionTransition(delta);
       updateHoverHighlight();
+      updateAutoSave(delta);
     }
 
     function processEchoQueue() {
@@ -7481,6 +7834,7 @@
       clearCraftSequenceErrorState();
       state.craftSequence.push(itemId);
       updateCraftSequenceDisplay();
+      flagProgressDirty('craft');
     }
 
     function placeItemInCraftSequence(itemId, slotIndex) {
@@ -7497,6 +7851,7 @@
         state.craftSequence.push(itemId);
       }
       updateCraftSequenceDisplay();
+      flagProgressDirty('craft');
       return true;
     }
 
@@ -7522,6 +7877,7 @@
           state.craftSequence.splice(i, 1);
           clearCraftSequenceErrorState();
           updateCraftSequenceDisplay();
+          flagProgressDirty('craft');
         });
         craftSequenceEl.appendChild(slotButton);
         craftSlots.push({ button: slotButton, label: contentLabel });
@@ -7602,6 +7958,7 @@
       updateCraftSequenceDisplay();
       updateRecipesList();
       updateAutocompleteSuggestions();
+      flagProgressDirty('craft');
     }
 
     function updateRecipesList() {
@@ -8053,6 +8410,7 @@
         clearCraftSequenceErrorState();
         updateCraftSequenceDisplay();
         updateAutocompleteSuggestions();
+        flagProgressDirty('craft');
       });
       recipeSearchEl?.addEventListener('focus', updateAutocompleteSuggestions);
       recipeSearchEl?.addEventListener('input', () => {
@@ -8605,7 +8963,7 @@
         identityState.location = await captureLocation();
         updateIdentityUI();
       }
-      await syncUserMetadata();
+      await syncUserMetadata({ includeProgress: true });
       await loadScoreboard();
     }
 
@@ -8624,7 +8982,13 @@
       identityState.location = await captureLocation();
       updateIdentityUI();
 
-      await syncUserMetadata();
+      const syncedSnapshot = await hydrateProgressForGoogleUser(googleId);
+      let snapshotForSync = syncedSnapshot;
+      if (!snapshotForSync) {
+        const localProgress = readPersistedProgress();
+        snapshotForSync = localProgress?.snapshot ?? createProgressSnapshot();
+      }
+      await syncUserMetadata({ includeProgress: true, progressSnapshot: snapshotForSync });
       await loadScoreboard();
     }
 
@@ -8689,6 +9053,7 @@
     }
 
     async function handleGoogleSignOut() {
+      await saveProgress('sign-out');
       identityState.googleProfile = null;
       identityState.displayName = null;
       identityState.location = null;
@@ -8703,10 +9068,15 @@
       updateIdentityUI();
       identityState.location = await captureLocation();
       updateIdentityUI();
+      const storedProgress = readPersistedProgress();
+      if (storedProgress?.snapshot) {
+        setPendingProgressSnapshot(storedProgress.snapshot, 'local');
+      }
     }
 
-    async function syncUserMetadata() {
+    async function syncUserMetadata(options = {}) {
       if (!identityState.googleProfile) return;
+      const { includeProgress = false, progressSnapshot = null } = options ?? {};
       const payload = {
         googleId: identityState.googleProfile.sub,
         name: identityState.displayName,
@@ -8715,6 +9085,17 @@
         device: identityState.device,
         lastSeenAt: new Date().toISOString(),
       };
+      if (includeProgress) {
+        const normalizedSnapshot = normalizeProgressSnapshot(progressSnapshot ?? createProgressSnapshot());
+        if (normalizedSnapshot) {
+          payload.score = normalizedSnapshot.score;
+          payload.recipes = normalizedSnapshot.recipes;
+          payload.dimensions = normalizedSnapshot.dimensions;
+          payload.inventory = normalizedSnapshot.inventory;
+          payload.progressVersion = normalizedSnapshot.version;
+          payload.progressUpdatedAt = normalizedSnapshot.updatedAt;
+        }
+      }
       try {
         localStorage.setItem(
           PROFILE_STORAGE_KEY,
@@ -8733,6 +9114,65 @@
       } catch (error) {
         console.warn('Failed to sync user metadata with API.', error);
       }
+    }
+
+    async function fetchRemoteUserProfile(googleId) {
+      if (!appConfig.apiBaseUrl || !googleId) return null;
+      try {
+        const response = await fetch(
+          `${appConfig.apiBaseUrl.replace(/\/$/, '')}/users?googleId=${encodeURIComponent(googleId)}`
+        );
+        if (response.status === 404) {
+          return null;
+        }
+        if (!response.ok) {
+          throw new Error(`Request failed with status ${response.status}`);
+        }
+        const payload = await response.json();
+        return payload?.item ?? payload ?? null;
+      } catch (error) {
+        console.warn('Unable to fetch remote user profile.', error);
+        return null;
+      }
+    }
+
+    async function hydrateProgressForGoogleUser(googleId) {
+      const remoteProfile = await fetchRemoteUserProfile(googleId);
+      const remoteSnapshot = remoteProfile?.progress ? normalizeProgressSnapshot(remoteProfile.progress) : null;
+      const localResult = readPersistedProgress();
+      const localSnapshot = localResult?.snapshot ?? null;
+      let chosenSnapshot = null;
+      let chosenSource = null;
+      if (remoteSnapshot && localSnapshot) {
+        const remoteTime = Date.parse(remoteSnapshot.updatedAt ?? '') || 0;
+        const localTime = Date.parse(localSnapshot.updatedAt ?? '') || 0;
+        if (remoteTime > localTime) {
+          chosenSnapshot = remoteSnapshot;
+          chosenSource = 'remote';
+        } else {
+          chosenSnapshot = localSnapshot;
+          chosenSource = 'local';
+        }
+      } else if (remoteSnapshot) {
+        chosenSnapshot = remoteSnapshot;
+        chosenSource = 'remote';
+      } else if (localSnapshot) {
+        chosenSnapshot = localSnapshot;
+        chosenSource = 'local';
+      }
+      if (chosenSnapshot) {
+        const serialized = JSON.stringify(chosenSnapshot);
+        state.persistence.lastSerialized = serialized;
+        persistProgressLocally(serialized);
+        setPendingProgressSnapshot(chosenSnapshot, chosenSource);
+        if (chosenSource === 'local' && identityState.googleProfile) {
+          await syncUserMetadata({ includeProgress: true, progressSnapshot: chosenSnapshot });
+        }
+        if (chosenSource === 'remote' && state.isRunning) {
+          logEvent('Remote progress synced. Respawn to continue from your last checkpoint.');
+        }
+      }
+      return chosenSnapshot;
     }
 
     function loadLocalScores() {
@@ -8884,7 +9324,7 @@
           console.warn('Failed to sync score with API.', error);
         }
       }
-      await syncUserMetadata();
+      await syncUserMetadata({ includeProgress: true });
     }
 
     function computeScoreSnapshot() {
@@ -8955,6 +9395,11 @@
         }
       } catch (error) {
         console.warn('Unable to hydrate cached profile.', error);
+      }
+      const storedProgress = readPersistedProgress();
+      if (storedProgress?.snapshot) {
+        setPendingProgressSnapshot(storedProgress.snapshot, 'local');
+        state.persistence.lastSerialized = storedProgress.serialized;
       }
       primeOfflineScoreboard();
       updateIdentityUI();
@@ -9170,6 +9615,14 @@
     setupGuideModal();
     setupLeaderboardModal();
     initializeIdentityLayer();
+    window.addEventListener('beforeunload', () => {
+      try {
+        const snapshot = createProgressSnapshot();
+        persistProgressLocally(JSON.stringify(snapshot));
+      } catch (error) {
+        console.warn('Unable to persist progress during unload.', error);
+      }
+    });
     updateLayoutMetrics();
     syncSidebarForViewport();
 

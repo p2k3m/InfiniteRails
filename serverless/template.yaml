@@ -78,6 +78,12 @@ Resources:
             RestApiId: !Ref ApiGateway
             Path: /users
             Method: post
+        GetUser:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGateway
+            Path: /users
+            Method: get
         OptionsUser:
           Type: Api
           Properties:
