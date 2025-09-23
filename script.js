@@ -1677,6 +1677,10 @@
     let scene;
     let camera;
     let worldGroup;
+    let worldTilesRoot;
+    let environmentGroup;
+    const voxelIslandAssets = { mesh: null, geometry: null, material: null, texture: null };
+    const voxelIslandDummy = new THREE.Object3D();
     let entityGroup;
     let particleGroup;
     let playerMesh;
@@ -1833,7 +1837,7 @@
     const CAMERA_TOUCH_SENSITIVITY = 0.0055;
     const CAMERA_DRAG_SUPPRESS_THRESHOLD = 5;
     const WORLD_UP = new THREE.Vector3(0, 1, 0);
-    const CAMERA_VERTICAL_OFFSET = 0.35;
+    const CAMERA_VERTICAL_OFFSET = 0;
     const cameraState = {
       lastFacing: new THREE.Vector3(0, 0, 1),
       lastPlayerFacing: new THREE.Vector3(0, 0, 1),
@@ -1875,6 +1879,7 @@
 
     const ZOMBIE_OUTLINE_COLOR = new THREE.Color('#ff5a7a');
     const GOLEM_OUTLINE_COLOR = new THREE.Color('#58b7ff');
+    const DAY_NIGHT_CYCLE_SECONDS = 20 * 60;
     const DAY_PORTION = 0.7;
     const NIGHT_PORTION = 1 - DAY_PORTION;
     const ZOMBIE_WAVE_SIZE = 5;
@@ -1895,6 +1900,16 @@
       grass: 'https://images-13-sept-2025.s3.ap-south-1.amazonaws.com/grass.avif',
       leaves: 'https://images-13-sept-2025.s3.ap-south-1.amazonaws.com/leaves.png',
       wood: 'https://images-13-sept-2025.s3.ap-south-1.amazonaws.com/wood.jpeg',
+    };
+
+    const VOXEL_ISLAND_CONFIG = {
+      size: 64,
+      tileSize: 1,
+      radiusMultiplier: 0.48,
+      minHeight: 0.65,
+      maxHeight: 4.8,
+      noiseScale: 0.65,
+      falloffPower: 1.6,
     };
 
     const particleSystems = [];
@@ -2844,14 +2859,14 @@
       raycastPointer.set(0, 0);
       raycaster.setFromCamera(raycastPointer, camera);
       let tileTarget = null;
-      if (worldGroup) {
-        const intersections = raycaster.intersectObjects(worldGroup.children, true);
+      if (worldTilesRoot) {
+        const intersections = raycaster.intersectObjects(worldTilesRoot.children, true);
         for (const intersection of intersections) {
           let current = intersection.object;
-          while (current.parent && current.parent !== worldGroup) {
+          while (current.parent && current.parent !== worldTilesRoot) {
             current = current.parent;
           }
-          if (!current || current.parent !== worldGroup) continue;
+          if (!current || current.parent !== worldTilesRoot) continue;
           const coords = sceneToWorld(current.position.x, current.position.z);
           if (!isWithinBounds(coords.x, coords.y)) continue;
           tileTarget = {
@@ -2977,8 +2992,19 @@
       camera = new THREE.OrthographicCamera(-halfWidth, halfWidth, halfHeight, -halfHeight, 0.1, 80);
       camera.zoom = CAMERA_BASE_ZOOM;
       camera.updateProjectionMatrix();
+      camera.position.set(0, CAMERA_EYE_OFFSET, CAMERA_FORWARD_OFFSET);
+      camera.up.copy(WORLD_UP);
+      camera.lookAt(0, CAMERA_EYE_OFFSET, 0);
 
       worldGroup = new THREE.Group();
+      worldGroup.name = 'world-root';
+      environmentGroup = new THREE.Group();
+      environmentGroup.name = 'world-environment';
+      environmentGroup.userData.environment = true;
+      worldTilesRoot = new THREE.Group();
+      worldTilesRoot.name = 'world-tiles-root';
+      worldGroup.add(environmentGroup);
+      worldGroup.add(worldTilesRoot);
       entityGroup = new THREE.Group();
       particleGroup = new THREE.Group();
       scene.add(worldGroup);
@@ -3029,6 +3055,7 @@
       torchLight.visible = false;
       scene.add(torchLight);
 
+      buildProceduralIsland();
       initPointerControls();
       window.addEventListener('resize', handleResize);
       handleResize();
@@ -3036,7 +3063,130 @@
       createPlayerLocator();
       syncCameraToPlayer({ idleBob: 0, walkBob: 0, movementStrength: 0 });
       updateLighting(0);
+      console.log('Scene loaded');
       return true;
+    }
+
+    function buildProceduralIsland() {
+      if (!environmentGroup) return;
+      if (voxelIslandAssets.mesh) {
+        environmentGroup.remove(voxelIslandAssets.mesh);
+        if (typeof voxelIslandAssets.mesh.dispose === 'function') {
+          voxelIslandAssets.mesh.dispose();
+        }
+        voxelIslandAssets.mesh = null;
+      }
+
+      const {
+        size,
+        tileSize,
+        radiusMultiplier,
+        minHeight,
+        maxHeight,
+        noiseScale,
+        falloffPower,
+      } = VOXEL_ISLAND_CONFIG;
+      const halfSize = size / 2;
+      const radius = Math.max(tileSize, size * radiusMultiplier);
+
+      let tileCount = 0;
+      for (let z = 0; z < size; z++) {
+        for (let x = 0; x < size; x++) {
+          const offsetX = x - halfSize + 0.5;
+          const offsetZ = z - halfSize + 0.5;
+          const distance = Math.hypot(offsetX, offsetZ);
+          if (distance > radius) continue;
+          tileCount += 1;
+        }
+      }
+
+      if (tileCount === 0) {
+        return;
+      }
+
+      if (!voxelIslandAssets.texture) {
+        try {
+          const texture = textureLoader.load(
+            REMOTE_TEXTURE_URLS.grass,
+            () => {
+              texture.needsUpdate = true;
+            },
+            undefined,
+            (error) => {
+              console.warn('Failed to load grass texture for voxel island.', error);
+            },
+          );
+          texture.wrapS = THREE.RepeatWrapping;
+          texture.wrapT = THREE.RepeatWrapping;
+          texture.colorSpace = THREE.SRGBColorSpace;
+          texture.anisotropy = Math.min(renderer?.capabilities?.getMaxAnisotropy?.() ?? 4, 8);
+          voxelIslandAssets.texture = texture;
+        } catch (error) {
+          console.warn('Unable to initialise voxel island texture.', error);
+        }
+      }
+
+      if (!voxelIslandAssets.geometry) {
+        voxelIslandAssets.geometry = new THREE.BoxGeometry(tileSize, tileSize, tileSize);
+      }
+
+      if (!voxelIslandAssets.material) {
+        voxelIslandAssets.material = new THREE.MeshStandardMaterial({
+          map: voxelIslandAssets.texture ?? null,
+          roughness: 0.72,
+          metalness: 0.08,
+          color: new THREE.Color('#7ecb5c'),
+        });
+      } else if (voxelIslandAssets.texture && voxelIslandAssets.material.map !== voxelIslandAssets.texture) {
+        voxelIslandAssets.material.map = voxelIslandAssets.texture;
+        voxelIslandAssets.material.needsUpdate = true;
+      }
+
+      const islandMesh = new THREE.InstancedMesh(
+        voxelIslandAssets.geometry,
+        voxelIslandAssets.material,
+        tileCount,
+      );
+      islandMesh.name = 'voxel-island';
+      islandMesh.castShadow = true;
+      islandMesh.receiveShadow = true;
+      islandMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+
+      let index = 0;
+      const random = (x, z) => {
+        const value = Math.sin((x * 127.1 + z * 311.7) * 43758.5453);
+        return value - Math.floor(value);
+      };
+
+      for (let z = 0; z < size; z++) {
+        for (let x = 0; x < size; x++) {
+          const offsetX = x - halfSize + 0.5;
+          const offsetZ = z - halfSize + 0.5;
+          const distance = Math.hypot(offsetX, offsetZ);
+          if (distance > radius) continue;
+          const distanceRatio = THREE.MathUtils.clamp(distance / radius, 0, 1);
+          const falloff = Math.pow(1 - distanceRatio, falloffPower);
+          const variation = random(offsetX, offsetZ) * noiseScale;
+          const height = THREE.MathUtils.clamp(
+            minHeight + falloff * (maxHeight - minHeight) + variation,
+            minHeight,
+            maxHeight,
+          );
+          voxelIslandDummy.position.set(
+            offsetX * tileSize,
+            (height * tileSize) / 2,
+            offsetZ * tileSize,
+          );
+          voxelIslandDummy.scale.set(1, height, 1);
+          voxelIslandDummy.rotation.set(0, 0, 0);
+          voxelIslandDummy.updateMatrix();
+          islandMesh.setMatrixAt(index, voxelIslandDummy.matrix);
+          index += 1;
+        }
+      }
+      islandMesh.instanceMatrix.needsUpdate = true;
+      environmentGroup.add(islandMesh);
+      voxelIslandAssets.mesh = islandMesh;
     }
 
     function previewRandom(x, y, salt = 0) {
@@ -4074,9 +4224,10 @@
       tileRenderState = [];
       clearMiningState();
       hideHoverHighlights();
-      if (!worldGroup) return;
-      while (worldGroup.children.length) {
-        worldGroup.remove(worldGroup.children[0]);
+      if (worldTilesRoot) {
+        while (worldTilesRoot.children.length) {
+          worldTilesRoot.remove(worldTilesRoot.children[0]);
+        }
       }
       if (particleGroup) {
         while (particleGroup.children.length) {
@@ -4090,7 +4241,7 @@
     }
 
     function ensureTileGroups() {
-      if (!worldGroup) return;
+      if (!worldTilesRoot) return;
       if (tileRenderState.length === state.height && tileRenderState[0]?.length === state.width) return;
       resetWorldMeshes();
       for (let y = 0; y < state.height; y++) {
@@ -4099,7 +4250,7 @@
           const group = new THREE.Group();
           const { x: sx, z: sz } = worldToScene(x, y);
           group.position.set(sx, 0, sz);
-          worldGroup.add(group);
+          worldTilesRoot.add(group);
           tileRenderState[y][x] = {
             group,
             signature: null,
@@ -6201,7 +6352,7 @@
       dimension: DIMENSIONS.origin,
       dimensionHistory: ['origin'],
       elapsed: 0,
-      dayLength: 180,
+      dayLength: DAY_NIGHT_CYCLE_SECONDS,
       dayCycle: {
         isNight: false,
         spawnTimer: 0,
@@ -7913,13 +8064,28 @@
       logEvent(`Entered ${dim.name}.`);
     }
 
+    const TARGET_FRAME_TIME = 1 / 60;
+    let frameAccumulator = 0;
+
     function loop(timestamp) {
       if (!state.prevTimestamp) state.prevTimestamp = timestamp;
       const delta = (timestamp - state.prevTimestamp) / 1000;
       state.prevTimestamp = timestamp;
+      frameAccumulator += delta;
+      frameAccumulator = Math.min(frameAccumulator, TARGET_FRAME_TIME * 5);
+      while (frameAccumulator >= TARGET_FRAME_TIME) {
+        if (state.isRunning) {
+          update(TARGET_FRAME_TIME);
+        } else {
+          state.elapsed += TARGET_FRAME_TIME;
+          updateLighting(TARGET_FRAME_TIME);
+        }
+        frameAccumulator -= TARGET_FRAME_TIME;
+      }
       if (state.isRunning) {
-        update(delta);
         draw();
+      } else if (renderer && scene && camera && !previewState.active) {
+        renderer.render(scene, camera);
       }
       requestAnimationFrame(loop);
     }
