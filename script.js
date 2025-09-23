@@ -1702,6 +1702,12 @@
     let zombieModelPromise = null;
     let ironGolemModelTemplate = null;
     let ironGolemModelPromise = null;
+    const combatUtils =
+      (typeof window !== 'undefined' && window.CombatUtils) ||
+      (typeof globalThis !== 'undefined' && globalThis.CombatUtils) ||
+      null;
+    let gridPathfinder = null;
+    let zombieIdCounter = 0;
     let hemiLight;
     let sunLight;
     let moonLight;
@@ -1888,7 +1894,8 @@
     const DAY_NIGHT_CYCLE_SECONDS = 20 * 60;
     const DAY_PORTION = 0.7;
     const NIGHT_PORTION = 1 - DAY_PORTION;
-    const ZOMBIE_WAVE_SIZE = 5;
+    const ZOMBIES_PER_CHUNK = 3;
+    const ZOMBIE_CHUNK_SIZE = 16;
     const ZOMBIE_SPAWN_INTERVAL = 10;
     const ZOMBIE_AGGRO_RANGE = 10;
     const MAX_CONCURRENT_ZOMBIES = 30;
@@ -5247,6 +5254,20 @@
     }
 
 
+    function refreshGridPathfinder() {
+      if (!combatUtils?.createGridPathfinder) {
+        gridPathfinder = null;
+        return;
+      }
+      gridPathfinder = combatUtils.createGridPathfinder({
+        getWidth: () => state.width,
+        getHeight: () => state.height,
+        isWalkable: (x, y) => isWalkable(x, y),
+        maxIterations: Math.max(128, state.width * state.height * 6),
+      });
+    }
+
+
     function tileSurfaceHeight(x, y) {
       const tile = getTile(x, y);
       if (!tile) return 0;
@@ -8128,7 +8149,9 @@
       state.player.facing = { x: 0, y: 1 };
       state.portals = [];
       state.zombies = [];
+      zombieIdCounter = 0;
       state.ironGolems = [];
+      refreshGridPathfinder();
       if (state.dayCycle) {
         state.dayCycle.isNight = false;
         state.dayCycle.spawnTimer = 0;
@@ -8445,6 +8468,10 @@
           cooldown: 0,
           facing: { x: 0, y: 1 },
           attackAnimation: null,
+          path: [],
+          pathTargetId: null,
+          pathTarget: null,
+          repathAt: 0,
         });
         return true;
       };
@@ -8478,6 +8505,10 @@
           cooldown: 0,
           facing: { x: 0, y: 1 },
           attackAnimation: null,
+          path: [],
+          pathTargetId: null,
+          pathTarget: null,
+          repathAt: 0,
         });
       }
     }
@@ -8498,45 +8529,106 @@
 
     function updateIronGolems(delta) {
       if (!state.ironGolems?.length) return;
-      state.ironGolems.forEach((golem) => {
+      const now = state.elapsed;
+      const golemPositions = new Set(state.ironGolems.map((g) => `${g.x},${g.y}`));
+
+      for (let i = 0; i < state.ironGolems.length; i++) {
+        const golem = state.ironGolems[i];
         golem.cooldown = (golem.cooldown ?? 0) - delta;
-        if (golem.cooldown > 0) return;
+        if (golem.cooldown > 0) continue;
+
+        const originKey = `${golem.x},${golem.y}`;
+        golemPositions.delete(originKey);
         const target = findNearestZombie(golem);
         if (!target) {
+          golem.path = [];
+          golem.pathTargetId = null;
+          golem.pathTarget = null;
           golem.cooldown = 0.45;
-          return;
+          golemPositions.add(originKey);
+          continue;
         }
-        const dx = Math.sign(target.x - golem.x);
-        const dy = Math.sign(target.y - golem.y);
-        let moved = false;
-        if (Math.abs(dx) >= Math.abs(dy)) {
-          if (dx !== 0 && isWalkable(golem.x + dx, golem.y)) {
-            golem.x += dx;
-            moved = true;
-          } else if (dy !== 0 && isWalkable(golem.x, golem.y + dy)) {
-            golem.y += dy;
-            moved = true;
+
+        let nextStep = null;
+        if (gridPathfinder) {
+          const needsRepath =
+            !Array.isArray(golem.path) ||
+            !golem.path.length ||
+            (golem.pathTargetId ?? null) !== (target.id ?? null) ||
+            !golem.pathTarget ||
+            golem.pathTarget.x !== target.x ||
+            golem.pathTarget.y !== target.y ||
+            now >= (golem.repathAt ?? 0);
+          if (needsRepath) {
+            const path = gridPathfinder.findPath(
+              { x: golem.x, y: golem.y },
+              { x: target.x, y: target.y },
+              { allowGoal: true }
+            );
+            golem.path = path;
+            golem.pathTargetId = target.id ?? null;
+            golem.pathTarget = { x: target.x, y: target.y };
+            golem.repathAt = now + 0.5 + Math.random() * 0.4;
           }
-        } else {
-          if (dy !== 0 && isWalkable(golem.x, golem.y + dy)) {
-            golem.y += dy;
-            moved = true;
-          } else if (dx !== 0 && isWalkable(golem.x + dx, golem.y)) {
-            golem.x += dx;
-            moved = true;
+          if (Array.isArray(golem.path) && golem.path.length) {
+            const candidate = golem.path.shift();
+            if (candidate) {
+              const candidateKey = `${candidate.x},${candidate.y}`;
+              const blockedByGolem = golemPositions.has(candidateKey);
+              const blockedByTerrain =
+                candidate.x !== target.x || candidate.y !== target.y ? !isWalkable(candidate.x, candidate.y) : false;
+              if (!blockedByGolem && !blockedByTerrain) {
+                nextStep = candidate;
+              } else {
+                golem.path = [];
+              }
+            }
           }
         }
-        if (moved && (dx !== 0 || dy !== 0)) {
-          golem.facing = normalizeDirectionVector({ x: dx, y: dy });
-        } else if (target) {
+
+        if (!nextStep) {
+          const dx = Math.sign(target.x - golem.x);
+          const dy = Math.sign(target.y - golem.y);
+          const candidateOrder = Math.abs(dx) >= Math.abs(dy)
+            ? [
+                { x: golem.x + dx, y: golem.y, valid: dx !== 0 },
+                { x: golem.x, y: golem.y + dy, valid: dy !== 0 },
+              ]
+            : [
+                { x: golem.x, y: golem.y + dy, valid: dy !== 0 },
+                { x: golem.x + dx, y: golem.y, valid: dx !== 0 },
+              ];
+          for (const option of candidateOrder) {
+            if (!option.valid) continue;
+            const key = `${option.x},${option.y}`;
+            if (key !== `${target.x},${target.y}` && (!isWalkable(option.x, option.y) || golemPositions.has(key))) {
+              continue;
+            }
+            nextStep = { x: option.x, y: option.y };
+            break;
+          }
+        }
+
+        if (nextStep) {
+          golem.x = nextStep.x;
+          golem.y = nextStep.y;
+          golemPositions.add(`${golem.x},${golem.y}`);
           const lookX = Math.sign(target.x - golem.x);
           const lookY = Math.sign(target.y - golem.y);
           if (lookX !== 0 || lookY !== 0) {
             golem.facing = normalizeDirectionVector({ x: lookX, y: lookY });
           }
+          golem.cooldown = 0.28;
+        } else {
+          golemPositions.add(originKey);
+          const lookX = Math.sign(target.x - golem.x);
+          const lookY = Math.sign(target.y - golem.y);
+          if (lookX !== 0 || lookY !== 0) {
+            golem.facing = normalizeDirectionVector({ x: lookX, y: lookY });
+          }
+          golem.cooldown = 0.35;
         }
-        golem.cooldown = moved ? 0.28 : 0.35;
-      });
+      }
 
       const defeatedIndices = new Set();
       state.ironGolems.forEach((golem) => {
@@ -8583,7 +8675,20 @@
       const cycle = getDayNightMetrics();
       if (!cycle.isNight) return 0;
       const remainingCapacity = Math.max(0, MAX_CONCURRENT_ZOMBIES - state.zombies.length);
-      const spawnCount = Math.min(ZOMBIE_WAVE_SIZE, remainingCapacity);
+      const spawnTarget = combatUtils?.calculateZombieSpawnCount
+        ? combatUtils.calculateZombieSpawnCount({
+            width: state.width,
+            height: state.height,
+            perChunk: ZOMBIES_PER_CHUNK,
+            chunkSize: ZOMBIE_CHUNK_SIZE,
+          })
+        : Math.max(
+            ZOMBIES_PER_CHUNK,
+            Math.ceil(state.width / ZOMBIE_CHUNK_SIZE) *
+              Math.ceil(state.height / ZOMBIE_CHUNK_SIZE) *
+              ZOMBIES_PER_CHUNK
+          );
+      const spawnCount = Math.min(spawnTarget, remainingCapacity);
       if (spawnCount <= 0) return 0;
 
       const playerX = state.player.x;
@@ -8642,11 +8747,16 @@
       }
 
       selections.forEach((spawn, index) => {
+        zombieIdCounter += 1;
         state.zombies.push({
+          id: zombieIdCounter,
           x: spawn.x,
           y: spawn.y,
           speed: 0.72 + Math.random() * 0.18,
           cooldown: Math.random() * 0.4,
+          path: [],
+          pathTarget: null,
+          repathAt: 0,
         });
         if (index === 0) {
           logEvent('A horde of Minecraft zombies claws onto the rails.');
@@ -8661,27 +8771,75 @@
     function updateZombies(delta) {
       const cycle = getDayNightMetrics();
       const isNight = cycle.isNight;
-      state.zombies.forEach((zombie) => {
+      const now = state.elapsed;
+      const golemPositions = new Set((state.ironGolems ?? []).map((g) => `${g.x},${g.y}`));
+      const playerKey = `${state.player.x},${state.player.y}`;
+      const zombiePositions = new Set(state.zombies.map((z) => `${z.x},${z.y}`));
+
+      for (let i = 0; i < state.zombies.length; i++) {
+        const zombie = state.zombies[i];
         zombie.cooldown -= delta;
-        if (zombie.cooldown > 0) return;
+        if (zombie.cooldown > 0) continue;
+        const originKey = `${zombie.x},${zombie.y}`;
+        zombiePositions.delete(originKey);
         const dist = Math.abs(zombie.x - state.player.x) + Math.abs(zombie.y - state.player.y);
         let moved = false;
-        const tryMove = (nx, ny) => {
-          if (!isWalkable(nx, ny)) return false;
+
+        const tryMove = (nx, ny, { allowPlayer = false } = {}) => {
+          const key = `${nx},${ny}`;
+          const isPlayerTile = key === playerKey;
+          if (!allowPlayer && isPlayerTile) {
+            return false;
+          }
+          if (golemPositions.has(key)) return false;
+          if (zombiePositions.has(key)) return false;
+          if (!isPlayerTile && !isWalkable(nx, ny)) return false;
           zombie.x = nx;
           zombie.y = ny;
+          zombiePositions.add(key);
+          moved = true;
           return true;
         };
 
-        if (isNight && dist <= ZOMBIE_AGGRO_RANGE) {
+        if (isNight && dist <= ZOMBIE_AGGRO_RANGE && gridPathfinder) {
+          const needsRepath =
+            !Array.isArray(zombie.path) ||
+            !zombie.path.length ||
+            !zombie.pathTarget ||
+            zombie.pathTarget.x !== state.player.x ||
+            zombie.pathTarget.y !== state.player.y ||
+            now >= (zombie.repathAt ?? 0);
+          if (needsRepath) {
+            const path = gridPathfinder.findPath(
+              { x: zombie.x, y: zombie.y },
+              { x: state.player.x, y: state.player.y },
+              { allowGoal: true }
+            );
+            zombie.path = path;
+            zombie.pathTarget = { x: state.player.x, y: state.player.y };
+            zombie.repathAt = now + 0.9 + Math.random() * 0.5;
+          }
+          if (Array.isArray(zombie.path) && zombie.path.length) {
+            const candidate = zombie.path.shift();
+            if (!candidate || !tryMove(candidate.x, candidate.y, { allowPlayer: true })) {
+              zombie.path = [];
+            }
+          }
+        }
+
+        if (!moved && isNight && dist <= ZOMBIE_AGGRO_RANGE) {
           const dx = Math.sign(state.player.x - zombie.x);
           const dy = Math.sign(state.player.y - zombie.y);
           if (Math.abs(dx) >= Math.abs(dy)) {
-            moved = (dx !== 0 && tryMove(zombie.x + dx, zombie.y)) || (dy !== 0 && tryMove(zombie.x, zombie.y + dy));
+            moved =
+              (dx !== 0 && tryMove(zombie.x + dx, zombie.y, { allowPlayer: true })) ||
+              (dy !== 0 && tryMove(zombie.x, zombie.y + dy, { allowPlayer: true }));
           } else {
-            moved = (dy !== 0 && tryMove(zombie.x, zombie.y + dy)) || (dx !== 0 && tryMove(zombie.x + dx, zombie.y));
+            moved =
+              (dy !== 0 && tryMove(zombie.x, zombie.y + dy, { allowPlayer: true })) ||
+              (dx !== 0 && tryMove(zombie.x + dx, zombie.y, { allowPlayer: true }));
           }
-        } else if (isNight) {
+        } else if (!moved && isNight) {
           const directions = [
             { x: 1, y: 0 },
             { x: -1, y: 0 },
@@ -8689,15 +8847,23 @@
             { x: 0, y: -1 },
           ];
           const offset = Math.floor(Math.random() * directions.length);
-          for (let i = 0; i < directions.length; i++) {
-            const dir = directions[(offset + i) % directions.length];
+          for (let j = 0; j < directions.length; j++) {
+            const dir = directions[(offset + j) % directions.length];
             const nx = zombie.x + dir.x;
             const ny = zombie.y + dir.y;
             if (tryMove(nx, ny)) {
-              moved = true;
               break;
             }
           }
+        }
+
+        if (!isNight || dist > ZOMBIE_AGGRO_RANGE) {
+          zombie.path = [];
+          zombie.pathTarget = null;
+        }
+
+        if (!moved) {
+          zombiePositions.add(originKey);
         }
 
         const baseCooldown = 0.55 + Math.random() * 0.2;
@@ -8709,7 +8875,7 @@
         if (zombie.x === state.player.x && zombie.y === state.player.y) {
           handleZombieHit();
         }
-      });
+      }
       state.zombies = state.zombies.filter((z) => {
         const tile = getTile(z.x, z.y);
         return tile && tile.type !== 'void' && tile.type !== 'railVoid';
@@ -8717,23 +8883,38 @@
     }
 
     function handleZombieHit() {
-      state.player.zombieHits = (state.player.zombieHits ?? 0) + 1;
-      const hits = state.player.zombieHits;
-      const heartsPerHit = state.player.maxHearts / 5;
-      const remainingHearts = state.player.maxHearts - heartsPerHit * hits;
-      state.player.hearts = clamp(remainingHearts, 0, state.player.maxHearts);
+      let outcome = null;
+      if (combatUtils?.applyZombieStrike) {
+        outcome = combatUtils.applyZombieStrike(state, {
+          onStrike: (message) => logEvent(message),
+          onDeath: (message) => logEvent(message),
+        });
+      }
+      if (!outcome) {
+        state.player.zombieHits = (state.player.zombieHits ?? 0) + 1;
+        const hits = state.player.zombieHits;
+        const heartsPerHit = state.player.maxHearts / 5;
+        const remainingHearts = state.player.maxHearts - heartsPerHit * hits;
+        state.player.hearts = clamp(remainingHearts, 0, state.player.maxHearts);
+        if (hits >= 5) {
+          logEvent('Death');
+          outcome = { hits, remainingHearts: state.player.hearts, defeated: true };
+        } else {
+          const remainingHits = 5 - hits;
+          logEvent(
+            `Minecraft zombie strike! ${remainingHits} more hit${remainingHits === 1 ? '' : 's'} before defeat.`
+          );
+          outcome = { hits, remainingHearts: state.player.hearts, defeated: false };
+        }
+      }
       markPlayerDamaged();
-      if (hits >= 5) {
-        state.player.hearts = 0;
+      if (outcome?.defeated) {
+        state.player.hearts = clamp(state.player.hearts, 0, state.player.maxHearts);
         markPlayerDamaged();
         updateStatusBars();
         handlePlayerDefeat('The Minecraft zombies overwhelm Steve. You respawn among the rails.');
         return;
       }
-      const remainingHits = 5 - hits;
-      logEvent(
-        `Minecraft zombie strike! ${remainingHits} more hit${remainingHits === 1 ? '' : 's'} before defeat.`
-      );
       updateStatusBars();
     }
 
@@ -8851,10 +9032,50 @@
         window.clearTimeout(state.ui.respawnCountdownTimeout);
         state.ui.respawnCountdownTimeout = null;
       }
-      state.player.hearts = state.player.maxHearts;
-      state.player.air = state.player.maxAir;
-      state.player.zombieHits = 0;
+      const inventorySnapshot = combatUtils?.snapshotInventory
+        ? combatUtils.snapshotInventory(state.player)
+        : {
+            inventory: Array.isArray(state.player.inventory)
+              ? state.player.inventory.map((slot) =>
+                  slot && slot.item ? { item: slot.item, quantity: slot.quantity } : null
+                )
+              : [],
+            satchel: Array.isArray(state.player.satchel)
+              ? state.player.satchel.map((bundle) => ({ item: bundle.item, quantity: bundle.quantity }))
+              : [],
+            selectedSlot: state.player.selectedSlot ?? 0,
+          };
+      if (combatUtils?.completeRespawnState) {
+        combatUtils.completeRespawnState(state);
+      } else {
+        state.player.hearts = state.player.maxHearts;
+        state.player.air = state.player.maxAir;
+        state.player.zombieHits = 0;
+      }
       loadDimension('origin');
+      if (combatUtils?.restoreInventory) {
+        combatUtils.restoreInventory(state.player, inventorySnapshot);
+      } else {
+        if (Array.isArray(inventorySnapshot.inventory)) {
+          state.player.inventory = inventorySnapshot.inventory.map((slot) =>
+            slot && slot.item ? { item: slot.item, quantity: slot.quantity } : null
+          );
+        }
+        if (Array.isArray(inventorySnapshot.satchel)) {
+          state.player.satchel = inventorySnapshot.satchel.map((bundle) => ({
+            item: bundle.item,
+            quantity: bundle.quantity,
+          }));
+        }
+        if (Number.isInteger(inventorySnapshot.selectedSlot)) {
+          state.player.selectedSlot = Math.min(
+            Math.max(inventorySnapshot.selectedSlot, 0),
+            state.player.inventory.length - 1
+          );
+        }
+      }
+      state.player.zombieHits = 0;
+      updateInventoryUI();
       updateStatusBars();
       if (drowningVignetteEl) {
         drowningVignetteEl.setAttribute('data-active', 'false');
