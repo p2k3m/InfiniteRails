@@ -11495,6 +11495,11 @@
       goToSlide: null,
     };
 
+    const guideSectionDemoState = {
+      initialized: false,
+      activeDemos: new Map(),
+    };
+
     setupGuideModal();
     setupLeaderboardModal();
     initializeIdentityLayer();
@@ -11630,6 +11635,7 @@
       if (scrollHost) {
         scrollHost.scrollTop = 0;
       }
+      initializeGuideSectionDemos();
       const closeButton = guideModal.querySelector('[data-close-guide]');
       closeButton?.focus();
       guideCarouselState.goToSlide?.(0, { forceRender: true });
@@ -11646,6 +11652,473 @@
       guideCarouselState.cleanups.length = 0;
     }
 
+    function initializeGuideSectionDemos() {
+      if (!guideModal || guideSectionDemoState.initialized) {
+        return;
+      }
+      const movementSection = guideModal.querySelector('#movement');
+      if (movementSection) {
+        setupMovementSection(movementSection);
+      }
+      const craftingSection = guideModal.querySelector('#crafting');
+      if (craftingSection) {
+        setupCraftingSection(craftingSection);
+      }
+      guideSectionDemoState.initialized = true;
+    }
+
+    function setupMovementSection(section) {
+      if (section.dataset.demoReady === 'true') {
+        return;
+      }
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'ghost small';
+      button.textContent = 'Play Demo';
+      button.setAttribute('data-demo-button', 'movement');
+      const container = document.createElement('div');
+      container.className = 'guide-section__demo';
+      container.setAttribute('data-demo-container', 'movement');
+      container.hidden = true;
+      container.setAttribute('aria-live', 'polite');
+      button.addEventListener('click', () => {
+        startMovementDemo(container);
+        button.textContent = 'Restart Demo';
+      });
+      section.appendChild(button);
+      section.appendChild(container);
+      section.dataset.demoReady = 'true';
+    }
+
+    function setupCraftingSection(section) {
+      if (section.dataset.demoReady === 'true') {
+        return;
+      }
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'ghost small';
+      button.textContent = 'Play Demo';
+      button.setAttribute('data-demo-button', 'crafting');
+      const container = document.createElement('div');
+      container.className = 'guide-section__demo';
+      container.setAttribute('data-demo-container', 'crafting');
+      container.hidden = true;
+      container.setAttribute('aria-live', 'polite');
+      button.addEventListener('click', () => {
+        startCraftingDemo(container);
+        button.textContent = 'Restart Demo';
+      });
+      section.appendChild(button);
+      section.appendChild(container);
+      section.dataset.demoReady = 'true';
+    }
+
+    function registerGuideSectionDemoCleanup(type, cleanup) {
+      const existingCleanup = guideSectionDemoState.activeDemos.get(type);
+      if (existingCleanup) {
+        try {
+          existingCleanup();
+        } catch (error) {
+          console.error('Failed to clean up guide section demo', error);
+        }
+        guideSectionDemoState.activeDemos.delete(type);
+      }
+      if (typeof cleanup === 'function') {
+        guideSectionDemoState.activeDemos.set(type, cleanup);
+      }
+    }
+
+    function cleanupGuideSectionDemos() {
+      guideSectionDemoState.activeDemos.forEach((cleanup) => {
+        try {
+          cleanup();
+        } catch (error) {
+          console.error('Failed to clean up guide section demo', error);
+        }
+      });
+      guideSectionDemoState.activeDemos.clear();
+    }
+
+    function startMovementDemo(container) {
+      if (!container) {
+        return;
+      }
+      registerGuideSectionDemoCleanup('movement');
+      container.hidden = false;
+      container.innerHTML = '';
+      const wrapper = document.createElement('div');
+      wrapper.className = 'guide-section__demo-surface';
+      wrapper.setAttribute('data-demo-type', 'movement');
+      const canvas = document.createElement('canvas');
+      canvas.width = 250;
+      canvas.height = 250;
+      canvas.className = 'guide-demo-surface';
+      canvas.tabIndex = 0;
+      canvas.setAttribute('role', 'img');
+      canvas.setAttribute('aria-label', 'Movement demo canvas showing a small explorer sprite.');
+      wrapper.appendChild(canvas);
+      container.appendChild(wrapper);
+      const caption = document.createElement('p');
+      caption.className = 'guide-demo-caption';
+      caption.textContent = 'Use WASD or the arrow keys to move the explorer.';
+      container.appendChild(caption);
+
+      const ctx = canvas.getContext('2d');
+      const pressedKeys = new Set();
+      const explorer = { x: 115, y: 115, size: 22, speed: 2.6 };
+      let animationId = null;
+
+      function drawBackground() {
+        const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
+        gradient.addColorStop(0, '#051126');
+        gradient.addColorStop(1, '#0a223f');
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = 'rgba(73, 242, 255, 0.12)';
+        for (let i = 0; i <= canvas.width; i += 25) {
+          ctx.fillRect(i, 0, 1, canvas.height);
+        }
+        for (let j = 0; j <= canvas.height; j += 25) {
+          ctx.fillRect(0, j, canvas.width, 1);
+        }
+      }
+
+      function drawExplorer() {
+        ctx.fillStyle = '#49f2ff';
+        ctx.fillRect(explorer.x, explorer.y, explorer.size, explorer.size);
+        ctx.fillStyle = '#071225';
+        ctx.fillRect(explorer.x + 4, explorer.y + 5, 4, 4);
+        ctx.fillRect(explorer.x + explorer.size - 8, explorer.y + 5, 4, 4);
+        ctx.fillStyle = '#f7b733';
+        ctx.fillRect(explorer.x + 6, explorer.y + explorer.size - 6, explorer.size - 12, 4);
+      }
+
+      function updateExplorerPosition() {
+        let dx = 0;
+        let dy = 0;
+        if (pressedKeys.has('w') || pressedKeys.has('arrowup')) {
+          dy -= explorer.speed;
+        }
+        if (pressedKeys.has('s') || pressedKeys.has('arrowdown')) {
+          dy += explorer.speed;
+        }
+        if (pressedKeys.has('a') || pressedKeys.has('arrowleft')) {
+          dx -= explorer.speed;
+        }
+        if (pressedKeys.has('d') || pressedKeys.has('arrowright')) {
+          dx += explorer.speed;
+        }
+        explorer.x = Math.max(8, Math.min(explorer.x + dx, canvas.width - explorer.size - 8));
+        explorer.y = Math.max(8, Math.min(explorer.y + dy, canvas.height - explorer.size - 8));
+      }
+
+      function render() {
+        updateExplorerPosition();
+        drawBackground();
+        drawExplorer();
+        animationId = window.requestAnimationFrame(render);
+      }
+
+      function handleKeyDown(event) {
+        const key = event.key?.toLowerCase();
+        if (!key) return;
+        if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', 'w', 'a', 's', 'd'].includes(key)) {
+          event.preventDefault();
+          pressedKeys.add(key);
+        }
+      }
+
+      function handleKeyUp(event) {
+        const key = event.key?.toLowerCase();
+        if (!key) return;
+        if (pressedKeys.has(key)) {
+          event.preventDefault();
+          pressedKeys.delete(key);
+        }
+      }
+
+      window.addEventListener('keydown', handleKeyDown);
+      window.addEventListener('keyup', handleKeyUp);
+      render();
+      try {
+        canvas.focus({ preventScroll: true });
+      } catch (error) {
+        try {
+          canvas.focus();
+        } catch (focusError) {
+          console.warn('Unable to focus movement demo canvas', focusError);
+        }
+      }
+
+      registerGuideSectionDemoCleanup('movement', () => {
+        window.removeEventListener('keydown', handleKeyDown);
+        window.removeEventListener('keyup', handleKeyUp);
+        if (animationId !== null) {
+          window.cancelAnimationFrame(animationId);
+        }
+        pressedKeys.clear();
+        container.innerHTML = '';
+        container.hidden = true;
+      });
+    }
+
+    function startCraftingDemo(container) {
+      if (!container) {
+        return;
+      }
+      registerGuideSectionDemoCleanup('crafting');
+      container.hidden = false;
+      container.innerHTML = '';
+      const wrapper = document.createElement('div');
+      wrapper.className = 'guide-section__demo-surface';
+      wrapper.setAttribute('data-demo-type', 'crafting');
+      const canvas = document.createElement('canvas');
+      canvas.width = 250;
+      canvas.height = 250;
+      canvas.className = 'guide-demo-surface';
+      canvas.tabIndex = 0;
+      canvas.setAttribute('role', 'img');
+      canvas.setAttribute('aria-label', 'Crafting demo canvas with draggable components.');
+      wrapper.appendChild(canvas);
+      container.appendChild(wrapper);
+      const caption = document.createElement('p');
+      caption.className = 'guide-demo-caption';
+      caption.textContent = 'Drag the tokens into the slots in order: Wood → Stone → Spark.';
+      container.appendChild(caption);
+      const toast = document.createElement('div');
+      toast.className = 'guide-demo-toast';
+      toast.setAttribute('role', 'status');
+      toast.textContent = 'Success! Sequence stored.';
+      toast.hidden = true;
+      container.appendChild(toast);
+
+      const ctx = canvas.getContext('2d');
+      const slots = [
+        { id: 'wood', label: 'Slot 1', x: 60, y: 180, width: 60, height: 36, filled: false },
+        { id: 'stone', label: 'Slot 2', x: 125, y: 180, width: 60, height: 36, filled: false },
+        { id: 'spark', label: 'Slot 3', x: 190, y: 180, width: 60, height: 36, filled: false },
+      ];
+      const items = [
+        {
+          id: 'wood',
+          label: 'Wood',
+          color: '#c58f52',
+          x: 60,
+          y: 70,
+          radius: 18,
+          order: 0,
+          startX: 60,
+          startY: 70,
+          placed: false,
+        },
+        {
+          id: 'stone',
+          label: 'Stone',
+          color: '#95a8c4',
+          x: 125,
+          y: 70,
+          radius: 18,
+          order: 1,
+          startX: 125,
+          startY: 70,
+          placed: false,
+        },
+        {
+          id: 'spark',
+          label: 'Spark',
+          color: '#f7b733',
+          x: 190,
+          y: 70,
+          radius: 18,
+          order: 2,
+          startX: 190,
+          startY: 70,
+          placed: false,
+        },
+      ];
+      let draggingItem = null;
+      let pointerOffset = { x: 0, y: 0 };
+      let nextSlotIndex = 0;
+
+      function drawBackground() {
+        const gradient = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
+        gradient.addColorStop(0, '#051126');
+        gradient.addColorStop(1, '#0a233f');
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+      }
+
+      function drawSlots() {
+        ctx.lineWidth = 2;
+        ctx.textAlign = 'center';
+        ctx.font = '10px "Chakra Petch", sans-serif';
+        slots.forEach((slot, index) => {
+          const isNext = index === nextSlotIndex;
+          const left = slot.x - slot.width / 2;
+          const top = slot.y - slot.height / 2;
+          ctx.strokeStyle = slot.filled ? 'rgba(73, 242, 255, 0.7)' : isNext ? '#49f2ff' : 'rgba(73, 242, 255, 0.3)';
+          ctx.fillStyle = slot.filled ? 'rgba(73, 242, 255, 0.12)' : 'rgba(8, 18, 38, 0.5)';
+          ctx.fillRect(left, top, slot.width, slot.height);
+          ctx.strokeRect(left, top, slot.width, slot.height);
+          ctx.fillStyle = 'rgba(206, 227, 255, 0.85)';
+          ctx.fillText(slot.label, slot.x, slot.y + slot.height / 2 + 14);
+        });
+      }
+
+      function drawItems() {
+        ctx.font = '11px "Chakra Petch", sans-serif';
+        ctx.textAlign = 'center';
+        items.forEach((item) => {
+          ctx.fillStyle = item.color;
+          ctx.beginPath();
+          ctx.arc(item.x, item.y, item.radius, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = '#071225';
+          ctx.beginPath();
+          ctx.arc(item.x, item.y, item.radius - 8, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = 'rgba(73, 242, 255, 0.8)';
+          ctx.font = '10px "Chakra Petch", sans-serif';
+          ctx.fillText(item.label, item.x, item.y + item.radius + 14);
+        });
+      }
+
+      function renderCraftingDemo() {
+        drawBackground();
+        drawSlots();
+        drawItems();
+      }
+
+      function getPointerPosition(event) {
+        const rect = canvas.getBoundingClientRect();
+        return {
+          x: event.clientX - rect.left,
+          y: event.clientY - rect.top,
+        };
+      }
+
+      function findItemAtPosition(pos) {
+        for (let index = items.length - 1; index >= 0; index -= 1) {
+          const item = items[index];
+          if (item.placed) {
+            continue;
+          }
+          const distance = Math.hypot(pos.x - item.x, pos.y - item.y);
+          if (distance <= item.radius) {
+            return item;
+          }
+        }
+        return null;
+      }
+
+      function findSlotAtPosition(pos) {
+        return slots.find((slot) => {
+          return (
+            pos.x >= slot.x - slot.width / 2 &&
+            pos.x <= slot.x + slot.width / 2 &&
+            pos.y >= slot.y - slot.height / 2 &&
+            pos.y <= slot.y + slot.height / 2
+          );
+        });
+      }
+
+      function resetItemPosition(item) {
+        item.x = item.startX;
+        item.y = item.startY;
+        item.placed = false;
+      }
+
+      function updateCaption() {
+        if (nextSlotIndex >= slots.length) {
+          caption.textContent = 'Sequence complete! Press ignite to craft the portal key.';
+          toast.hidden = false;
+          return;
+        }
+        const nextItem = items.find((item) => item.order === nextSlotIndex);
+        if (nextItem) {
+          caption.textContent = `Next: drag ${nextItem.label} into slot ${nextSlotIndex + 1}.`;
+        }
+      }
+
+      function handlePointerDown(event) {
+        const pos = getPointerPosition(event);
+        const item = findItemAtPosition(pos);
+        if (!item) {
+          return;
+        }
+        if (item.placed) {
+          return;
+        }
+        draggingItem = item;
+        pointerOffset = { x: pos.x - item.x, y: pos.y - item.y };
+        toast.hidden = true;
+        canvas.setPointerCapture(event.pointerId);
+        event.preventDefault();
+      }
+
+      function handlePointerMove(event) {
+        if (!draggingItem) {
+          return;
+        }
+        const pos = getPointerPosition(event);
+        const nextX = pos.x - pointerOffset.x;
+        const nextY = pos.y - pointerOffset.y;
+        draggingItem.x = Math.max(draggingItem.radius, Math.min(nextX, canvas.width - draggingItem.radius));
+        draggingItem.y = Math.max(draggingItem.radius, Math.min(nextY, canvas.height - draggingItem.radius));
+        renderCraftingDemo();
+      }
+
+      function handlePointerUp(event) {
+        if (!draggingItem) {
+          return;
+        }
+        const pos = getPointerPosition(event);
+        const slot = findSlotAtPosition(pos);
+        if (slot && !slot.filled && draggingItem.order === nextSlotIndex && slot.id === draggingItem.id) {
+          draggingItem.x = slot.x;
+          draggingItem.y = slot.y;
+          draggingItem.placed = true;
+          slot.filled = true;
+          nextSlotIndex += 1;
+          updateCaption();
+        } else {
+          resetItemPosition(draggingItem);
+        }
+        draggingItem = null;
+        pointerOffset = { x: 0, y: 0 };
+        if (canvas.hasPointerCapture?.(event.pointerId)) {
+          canvas.releasePointerCapture(event.pointerId);
+        }
+        renderCraftingDemo();
+      }
+
+      canvas.addEventListener('pointerdown', handlePointerDown);
+      canvas.addEventListener('pointermove', handlePointerMove);
+      canvas.addEventListener('pointerup', handlePointerUp);
+      canvas.addEventListener('pointercancel', handlePointerUp);
+      renderCraftingDemo();
+      try {
+        canvas.focus({ preventScroll: true });
+      } catch (error) {
+        try {
+          canvas.focus();
+        } catch (focusError) {
+          console.warn('Unable to focus crafting demo canvas', focusError);
+        }
+      }
+      updateCaption();
+
+      registerGuideSectionDemoCleanup('crafting', () => {
+        canvas.removeEventListener('pointerdown', handlePointerDown);
+        canvas.removeEventListener('pointermove', handlePointerMove);
+        canvas.removeEventListener('pointerup', handlePointerUp);
+        canvas.removeEventListener('pointercancel', handlePointerUp);
+        draggingItem = null;
+        container.innerHTML = '';
+        container.hidden = true;
+      });
+    }
+
     function closeGuideModal() {
       if (!guideModal) return;
       guideModal.hidden = true;
@@ -11653,6 +12126,7 @@
       guideModal.setAttribute('aria-hidden', 'true');
       clearGuideDemoTimers();
       runGuideDemoCleanups();
+      cleanupGuideSectionDemos();
       guideModal.querySelectorAll('.guide-card__step').forEach((step) => {
         step.classList.remove('is-animating');
       });
