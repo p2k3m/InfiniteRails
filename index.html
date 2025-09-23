@@ -958,9 +958,25 @@
       <p>Made by Manu</p>
     </footer>
 
-    <script src="https://apis.google.com/js/api.js" async defer></script>
-    <script src="https://accounts.google.com/gsi/client" async defer></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/howler/2.2.4/howler.min.js" defer></script>
+    <script src="vendor/howler-stub.js" defer></script>
+    <script>
+      (function loadOptionalGoogleScripts() {
+        if (window.location && window.location.protocol === 'file:') {
+          return;
+        }
+        var urls = [
+          'https://apis.google.com/js/api.js',
+          'https://accounts.google.com/gsi/client',
+          'https://cdnjs.cloudflare.com/ajax/libs/howler/2.2.4/howler.min.js',
+        ];
+        urls.forEach(function (src) {
+          var script = document.createElement('script');
+          script.src = src;
+          script.async = false;
+          document.head.appendChild(script);
+        });
+      })();
+    </script>
     <script src="vendor/three.min.js" defer></script>
     <script src="combat-utils.js" defer></script>
     <script src="scoreboard-utils.js" defer></script>
