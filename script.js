@@ -1682,6 +1682,7 @@
     let activeInventoryDrag = null;
     let dragFallbackSlotIndex = null;
     let craftSequenceErrorTimeout = null;
+    let playerMineAudioTimeout = null;
     const inventoryClickBypass = new WeakSet();
 
     let eventListenersBound = false;
@@ -1822,6 +1823,19 @@
       };
       if (type === 'mine') {
         startPlayerMineAnimation(playerActionAnimation);
+        if (playerMineAudioTimeout) {
+          window.clearTimeout(playerMineAudioTimeout);
+          playerMineAudioTimeout = null;
+        }
+        const resourceId = options.audioResourceId;
+        const shouldPlayAudio = options.skipAudio !== true && typeof resourceId === 'string' && resourceId.length > 0;
+        if (shouldPlayAudio) {
+          const delay = Number.isFinite(options.audioDelayMs) ? Math.max(0, options.audioDelayMs) : 120;
+          playerMineAudioTimeout = window.setTimeout(() => {
+            playHarvestAudio(resourceId);
+            playerMineAudioTimeout = null;
+          }, delay);
+        }
       }
     }
 
@@ -8904,6 +8918,7 @@
     }
 
     function handleZombieHit() {
+      playZombieGroan();
       let outcome = null;
       if (combatUtils?.applyZombieStrike) {
         outcome = combatUtils.applyZombieStrike(state, {
@@ -9590,7 +9605,11 @@
         triggerPlayerActionAnimation('mine', {
           direction: state.player?.facing,
           strength: itemId === 'stone' ? 1.25 : 1,
+          audioResourceId: skipAudio ? null : itemId,
+          skipAudio,
         });
+      } else if (!skipAudio) {
+        playHarvestAudio(itemId);
       }
       tile.data.yield -= 1;
       addItemToInventory(itemId, 1);
@@ -9601,9 +9620,6 @@
       const accentColor = TILE_TYPES[originalType]?.accent ?? '#ffffff';
       if (!skipParticles) {
         spawnHarvestParticles(x, y, accentColor);
-      }
-      if (!skipAudio) {
-        playHarvestAudio(itemId);
       }
       if (tile.data.yield <= 0 && tile.type !== 'tar') {
         tile.type = 'grass';
