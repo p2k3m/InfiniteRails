@@ -193,6 +193,10 @@
       score: 0,
       recipes: new Set(),
       dimensions: new Set(),
+      points: {
+        recipe: 0,
+        dimension: 0,
+      },
     };
     const objectives = [
       { id: 'gather-wood', label: 'Gather wood' },
@@ -433,6 +437,8 @@
       const recipePoints = scoreState.recipes.size * SCORE_POINTS.recipe;
       const dimensionPoints = scoreState.dimensions.size * SCORE_POINTS.dimension;
       const total = recipePoints + dimensionPoints;
+      scoreState.points.recipe = SCORE_POINTS.recipe;
+      scoreState.points.dimension = SCORE_POINTS.dimension;
       scoreState.score = total;
       if (state) {
         state.score = total;
@@ -714,6 +720,9 @@
       recipe: 2,
       dimension: 5,
     };
+
+    scoreState.points.recipe = SCORE_POINTS.recipe;
+    scoreState.points.dimension = SCORE_POINTS.dimension;
 
     const AUDIO_SETTINGS_KEY = 'infinite-dimension-audio-settings';
     const ACCESSIBILITY_SETTINGS_KEY = 'infinite-dimension-accessibility';
@@ -11074,22 +11083,28 @@
 
       if (scoreboardStatusEl) {
         let statusText = '';
-        if (!signedIn) {
-          if (identityState.scoreboard.length && identityState.scoreboardSource === 'sample') {
-            statusText = 'Showing sample data. Connect the API to DynamoDB for live scores.';
-          } else if (identityState.scoreboard.length && identityState.scoreboardSource === 'local') {
-            statusText = 'Scores are saved locally on this device.';
-          } else {
-            statusText = 'Sign in with Google to view the multiverse scorecard.';
-          }
-        } else if (identityState.loadingScores) {
+        if (identityState.loadingScores) {
           statusText = 'Loading score data...';
-        } else if (!identityState.scoreboard.length) {
-          statusText = 'No scores recorded yet.';
-        } else if (identityState.scoreboardSource === 'sample') {
-          statusText = 'Showing sample data. Connect the API to DynamoDB for live scores.';
+        } else if (identityState.scoreboardSource === 'remote') {
+          if (!identityState.scoreboard.length) {
+            statusText = signedIn
+              ? 'No scores recorded yet.'
+              : 'No runs recorded yet. Be the first to chart the multiverse.';
+          } else {
+            statusText = signedIn
+              ? 'Live multiverse leaderboard synced with DynamoDB.'
+              : 'Live multiverse rankings. Sign in to submit your run.';
+          }
         } else if (identityState.scoreboardSource === 'local') {
           statusText = 'Scores are saved locally on this device.';
+        } else if (identityState.scoreboardSource === 'sample') {
+          statusText = 'Showing sample data. Connect the API to DynamoDB for live scores.';
+        } else if (!signedIn) {
+          statusText = appConfig.apiBaseUrl
+            ? 'Live rankings unavailable. Try refreshing.'
+            : 'Sign in to publish your victories and see the live rankings.';
+        } else if (!identityState.scoreboard.length) {
+          statusText = 'No scores recorded yet.';
         }
         scoreboardStatusEl.textContent = statusText;
         scoreboardStatusEl.hidden = statusText === '';
@@ -11097,8 +11112,7 @@
 
       if (refreshScoresButton) {
         const loading = identityState.loadingScores;
-        const viewingSample = !signedIn && identityState.scoreboardSource === 'sample';
-        const disabled = (!signedIn && !viewingSample) || loading;
+        const disabled = loading;
         refreshScoresButton.disabled = disabled;
         refreshScoresButton.setAttribute('data-loading', loading ? 'true' : 'false');
         refreshScoresButton.setAttribute('aria-busy', loading ? 'true' : 'false');
@@ -11106,10 +11120,14 @@
       }
 
       if (leaderboardEmptyMessage) {
-        if (!signedIn) {
-          leaderboardEmptyMessage.textContent = 'Sign in to publish your victories and see the live rankings.';
-        } else if (identityState.loadingScores) {
+        if (identityState.loadingScores) {
           leaderboardEmptyMessage.textContent = 'Fetching the latest rankings...';
+        } else if (identityState.scoreboardSource === 'remote') {
+          leaderboardEmptyMessage.textContent = signedIn
+            ? 'No scores recorded yet. Be the first to complete a run!'
+            : 'No runs recorded yet. Be the first to complete a run!';
+        } else if (!signedIn) {
+          leaderboardEmptyMessage.textContent = 'Sign in to publish your victories and see the live rankings.';
         } else {
           leaderboardEmptyMessage.textContent = 'No scores recorded yet. Be the first to complete a run!';
         }
@@ -11182,7 +11200,8 @@
       const nextSnapshot = new Map();
       const allowHighlights = leaderboardHasRenderedOnce;
       scoreboardListEl.innerHTML = '';
-      const hasEntries = Array.isArray(entries) && entries.length > 0;
+      const entriesToDisplay = Array.isArray(entries) ? entries.slice(0, 10) : [];
+      const hasEntries = entriesToDisplay.length > 0;
       if (leaderboardTableContainer) {
         leaderboardTableContainer.dataset.empty = hasEntries ? 'false' : 'true';
       }
@@ -11194,14 +11213,14 @@
       }
 
       const rankMap = new Map();
-      entries
+      entriesToDisplay
         .slice()
         .sort((a, b) => (b.score ?? 0) - (a.score ?? 0))
         .forEach((entry, index) => {
           rankMap.set(entry, index + 1);
         });
 
-      const sortedEntries = entries.slice().sort((a, b) => {
+      const sortedEntries = entriesToDisplay.slice().sort((a, b) => {
         const { key, direction } = leaderboardSortState;
         const multiplier = direction === 'asc' ? 1 : -1;
         const aValue = getLeaderboardSortValue(a, key);
@@ -11357,7 +11376,10 @@
       leaderboardModal.hidden = false;
       leaderboardModal.setAttribute('aria-hidden', 'false');
       openLeaderboardButton?.setAttribute('aria-expanded', 'true');
-      if (identityState.googleProfile && !identityState.scoreboard.length && !identityState.loadingScores) {
+      const shouldRefreshLeaderboard =
+        !identityState.loadingScores &&
+        ((appConfig.apiBaseUrl && identityState.scoreboardSource !== 'remote') || !identityState.scoreboard.length);
+      if (shouldRefreshLeaderboard) {
         loadScoreboard();
       }
       if (closeLeaderboardButton) {
@@ -11673,14 +11695,32 @@
         console.warn('Unable to persist profile preferences locally.', error);
       }
       if (!appConfig.apiBaseUrl) return;
+      let abortController = null;
+      let timeoutId = null;
       try {
-        await fetch(`${appConfig.apiBaseUrl.replace(/\/$/, '')}/users`, {
+        if (typeof AbortController !== 'undefined') {
+          abortController = new AbortController();
+          timeoutId = setTimeout(() => abortController?.abort(), 2000);
+        }
+        const requestOptions = {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
-        });
+        };
+        if (abortController) {
+          requestOptions.signal = abortController.signal;
+        }
+        const response = await fetch(`${appConfig.apiBaseUrl.replace(/\/$/, '')}/users`, requestOptions);
+        if (!response.ok) {
+          throw new Error(`User sync failed with status ${response.status}`);
+        }
+        console.log('State synced');
       } catch (error) {
         console.warn('Failed to sync user metadata with API.', error);
+      } finally {
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+        }
       }
     }
 
@@ -11822,7 +11862,7 @@
       if (identityState.googleProfile) return;
       if (identityState.scoreboard.length) return;
       const localResult = loadLocalScores();
-      const normalizedEntries = normalizeScoreEntries(localResult.entries);
+      const normalizedEntries = normalizeScoreEntries(localResult.entries).slice(0, 10);
       identityState.scoreboard = normalizedEntries;
       identityState.scoreboardSource = localResult.source;
     }
@@ -11831,7 +11871,7 @@
       identityState.loadingScores = true;
       updateIdentityUI();
       const localResult = loadLocalScores();
-      const normalizedEntries = normalizeScoreEntries(localResult.entries);
+      const normalizedEntries = normalizeScoreEntries(localResult.entries).slice(0, 10);
       setTimeout(() => {
         identityState.scoreboard = normalizedEntries;
         identityState.scoreboardSource = localResult.source;
@@ -11841,33 +11881,34 @@
     }
 
     async function loadScoreboard() {
-      if (!identityState.googleProfile) {
-        primeOfflineScoreboard();
-        identityState.loadingScores = false;
-        updateIdentityUI();
-        return;
-      }
       identityState.loadingScores = true;
       updateIdentityUI();
-      let entries = [];
+      let remoteResult = null;
       if (appConfig.apiBaseUrl) {
         try {
           const response = await fetch(`${appConfig.apiBaseUrl.replace(/\/$/, '')}/scores`);
           if (response.ok) {
-            const payload = await response.json();
-            entries = Array.isArray(payload) ? payload : payload?.items ?? [];
-            identityState.scoreboardSource = 'remote';
+            let payload = [];
+            if (response.status !== 204) {
+              payload = await response.json();
+            }
+            remoteResult = {
+              entries: Array.isArray(payload) ? payload : payload?.items ?? [],
+              source: 'remote',
+            };
+          } else if (response.status === 404) {
+            remoteResult = { entries: [], source: 'remote' };
+          } else {
+            console.warn(`Remote scoreboard returned status ${response.status}.`);
           }
         } catch (error) {
           console.warn('Unable to load remote scoreboard.', error);
         }
       }
-      if (!entries.length) {
-        const localResult = loadLocalScores();
-        entries = localResult.entries;
-        identityState.scoreboardSource = localResult.source;
-      }
-      identityState.scoreboard = normalizeScoreEntries(entries);
+      const fallbackResult = remoteResult ?? loadLocalScores();
+      const normalizedEntries = normalizeScoreEntries(fallbackResult.entries).slice(0, 10);
+      identityState.scoreboard = normalizedEntries;
+      identityState.scoreboardSource = remoteResult ? remoteResult.source : fallbackResult.source;
       identityState.loadingScores = false;
       updateIdentityUI();
     }
@@ -11885,7 +11926,8 @@
         locationLabel: identityState.location?.label ?? null,
         updatedAt: new Date().toISOString(),
       };
-      identityState.scoreboard = upsertScoreEntry(identityState.scoreboard, entry);
+      const nextEntries = upsertScoreEntry(identityState.scoreboard, entry).slice(0, 10);
+      identityState.scoreboard = nextEntries;
       if (!appConfig.apiBaseUrl) {
         identityState.scoreboardSource = 'local';
       }
@@ -12003,12 +12045,11 @@
         button.addEventListener('click', handleGoogleSignOut);
       });
       refreshScoresButton?.addEventListener('click', () => {
-        if (!identityState.googleProfile) {
-          if (identityState.scoreboardSource === 'sample' || identityState.scoreboardSource === 'local') {
-            refreshOfflineScoreboard();
-          } else {
-            updateIdentityUI();
-          }
+        if (identityState.loadingScores) {
+          return;
+        }
+        if (!appConfig.apiBaseUrl && (identityState.scoreboardSource === 'sample' || identityState.scoreboardSource === 'local')) {
+          refreshOfflineScoreboard();
           return;
         }
         loadScoreboard();
