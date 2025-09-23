@@ -6243,6 +6243,10 @@
           pageBackground: `radial-gradient(circle at 18% 22%, rgba(242, 178, 102, 0.18), transparent 45%), radial-gradient(circle at 80% 14%, rgba(79, 103, 132, 0.2), transparent 55%), linear-gradient(160deg, #141014, #27190f 55%, #180f1b 100%)`,
           dimensionGlow: 'rgba(242, 178, 102, 0.35)',
         },
+        physics: {
+          gravity: 1.5,
+          shaderProfile: 'rock-grit',
+        },
         atmosphere: {
           daySky: '#9c8b72',
           nightSky: '#1a1111',
@@ -6497,6 +6501,10 @@
         isNight: false,
         spawnTimer: 0,
         waveCount: 0,
+      },
+      physics: {
+        gravity: 1,
+        shaderProfile: 'default',
       },
       railPhase: 0,
       railTimer: 0,
@@ -8143,6 +8151,10 @@
       applyDimensionAtmosphere(dim);
       document.title = `Infinite Dimension · ${dim.name}`;
       state.world = dim.generator(state);
+      state.physics = {
+        gravity: dim.physics?.gravity ?? 1,
+        shaderProfile: dim.physics?.shaderProfile ?? 'default',
+      };
       resetWorldMeshes();
       state.player.x = Math.floor(state.width / 2);
       state.player.y = Math.floor(state.height / 2);
@@ -9720,22 +9732,40 @@
         return;
       }
       frame.active = false;
-      frame.activation = { start: state.elapsed, duration: PORTAL_ACTIVATION_DURATION };
+      let activationMethod = 'igniter';
+      if (hasItem('portal-igniter')) {
+        removeItem('portal-igniter', 1);
+      } else {
+        activationMethod = 'torch';
+        removeItem('torch', 1);
+      }
+      frame.activation = {
+        start: state.elapsed,
+        duration: PORTAL_ACTIVATION_DURATION,
+        method: activationMethod,
+        shaderPrimed: activationMethod === 'torch',
+      };
       frame.announcedActive = false;
-      if (hasItem('portal-igniter')) removeItem('portal-igniter', 1);
-      else removeItem('torch', 1);
       frame.tiles.forEach(({ x: tx, y: ty }) => {
         const tile = getTile(tx, ty);
         if (tile) {
           tile.type = 'portal';
           const portalState = ensurePortalState(tile);
           if (portalState) {
-            portalState.activation = 0;
+            const primedActivation = activationMethod === 'torch' ? 0.35 : 0;
+            portalState.activation = primedActivation;
             portalState.transition = 0;
+            if (activationMethod === 'torch') {
+              portalState.shaderActive = true;
+            }
           }
         }
       });
-      logEvent(`${frame.label} begins to awaken.`);
+      if (activationMethod === 'torch') {
+        logEvent(`${frame.label} drinks in the torchlight.`);
+      } else {
+        logEvent(`${frame.label} begins to awaken.`);
+      }
       updatePortalProgress();
     }
 
@@ -9749,6 +9779,11 @@
       const framePositions = computePortalFrame(state.player.x, state.player.y, state.player.facing);
       if (!framePositions) {
         logEvent('Not enough space for portal frame.');
+        return;
+      }
+      const collisions = detectPortalCollisions(framePositions);
+      if (collisions.length > 0) {
+        logEvent('Portal frame obstructed. Clear the area first.');
         return;
       }
       removeItem(itemId, requirement);
@@ -9786,27 +9821,16 @@
     }
 
     function spawnReturnPortal(targetDimension, currentDimension) {
-      const cx = clamp(Math.floor(state.width / 2), 3, state.width - 4);
-      const cy = clamp(Math.floor(state.height / 2), 2, state.height - 4);
-      const frame = [];
-      const tiles = [];
-      for (let dy = -1; dy <= 2; dy++) {
-        for (let dx = -2; dx <= 2; dx++) {
-          const x = cx + dx;
-          const y = cy + dy;
-          if (!isWithinBounds(x, y)) continue;
-          if (dx === -2 || dx === 2 || dy === -1 || dy === 2) {
-            frame.push({ x, y });
-          } else if (!(dx === 0 && (dy === 0 || dy === 1))) {
-            tiles.push({ x, y });
-          }
-        }
-      }
+      const cx = clamp(Math.floor(state.width / 2), 2, state.width - 3);
+      const cy = clamp(Math.floor(state.height / 2), 2, state.height - 3);
+      const footprint = computePortalFrame(cx, cy, { x: 0, y: 1 });
+      if (!footprint) return;
+      const { frame, portal } = footprint;
       frame.forEach(({ x, y }) => {
         const tile = getTile(x, y);
         if (tile) tile.type = 'portalFrame';
       });
-      tiles.forEach(({ x, y }) => {
+      portal.forEach(({ x, y }) => {
         const tile = getTile(x, y);
         if (tile) {
           tile.type = 'portal';
@@ -9820,7 +9844,7 @@
       state.portals.push({
         material: targetDimension,
         frame,
-        tiles,
+        tiles: portal,
         active: true,
         activation: null,
         announcedActive: true,
@@ -9835,34 +9859,64 @@
       const orientation = Math.abs(facing.x) > Math.abs(facing.y) ? 'vertical' : 'horizontal';
       const frame = [];
       const portal = [];
-      if (orientation === 'vertical') {
-        for (let dy = -1; dy <= 2; dy++) {
-          for (let dx = -2; dx <= 2; dx++) {
-            const x = px + dx;
-            const y = py + dy;
-            if (!isWithinBounds(x, y)) return null;
-            if (dx === -2 || dx === 2 || dy === -1 || dy === 2) {
-              frame.push({ x, y });
-            } else if (!(dx === 0 && (dy === 0 || dy === 1))) {
-              portal.push({ x, y });
-            }
+      const width = orientation === 'vertical' ? 3 : 4;
+      const height = orientation === 'vertical' ? 4 : 3;
+      const offsetX = Math.floor((width - 1) / 2);
+      const offsetY = Math.floor((height - 1) / 2);
+      const startX = px - offsetX;
+      const startY = py - offsetY;
+      for (let dy = 0; dy < height; dy += 1) {
+        for (let dx = 0; dx < width; dx += 1) {
+          const x = startX + dx;
+          const y = startY + dy;
+          if (!isWithinBounds(x, y)) {
+            return null;
           }
-        }
-      } else {
-        for (let dy = -2; dy <= 2; dy++) {
-          for (let dx = -1; dx <= 2; dx++) {
-            const x = px + dx;
-            const y = py + dy;
-            if (!isWithinBounds(x, y)) return null;
-            if (dy === -2 || dy === 2 || dx === -1 || dx === 2) {
-              frame.push({ x, y });
-            } else if (!(dy === 0 && (dx === 0 || dx === 1))) {
-              portal.push({ x, y });
-            }
+          const isBorder = dx === 0 || dx === width - 1 || dy === 0 || dy === height - 1;
+          if (isBorder) {
+            frame.push({ x, y });
+          } else {
+            portal.push({ x, y });
           }
         }
       }
-      return { frame, portal };
+      return { frame, portal, dimensions: { width, height } };
+    }
+
+    function isPortalPlacementBlocked(tile) {
+      if (!tile) return true;
+      if (tile.type === 'portal' || tile.type === 'portalDormant' || tile.type === 'portalFrame') {
+        return true;
+      }
+      if (tile.hazard) {
+        return true;
+      }
+      const def = TILE_TYPES[tile.type];
+      if (def?.walkable === false) {
+        return true;
+      }
+      return false;
+    }
+
+    function detectPortalCollisions(footprint) {
+      if (!footprint) return [{ reason: 'invalid' }];
+      const collisions = [];
+      const positions = [...(footprint.frame ?? []), ...(footprint.portal ?? [])];
+      for (const { x, y } of positions) {
+        const tile = getTile(x, y);
+        if (!tile) {
+          collisions.push({ x, y, reason: 'missing' });
+          continue;
+        }
+        if (state.player && state.player.x === x && state.player.y === y) {
+          collisions.push({ x, y, reason: 'player' });
+          continue;
+        }
+        if (isPortalPlacementBlocked(tile)) {
+          collisions.push({ x, y, reason: tile.type });
+        }
+      }
+      return collisions;
     }
 
     function updatePortalActivation() {
@@ -9873,12 +9927,17 @@
           const duration = portal.activation.duration ?? PORTAL_ACTIVATION_DURATION;
           const progress = duration > 0 ? THREE.MathUtils.clamp((now - portal.activation.start) / duration, 0, 1) : 1;
           portal.activation.progress = progress;
+          const shaderPrimed = Boolean(portal.activation.shaderPrimed);
           portal.tiles.forEach(({ x, y }) => {
             const tile = getTile(x, y);
             if (!tile) return;
             const portalState = ensurePortalState(tile);
             if (portalState) {
-              portalState.activation = progress;
+              const activationLevel = shaderPrimed ? Math.max(progress, 0.35) : progress;
+              portalState.activation = Math.max(portalState.activation ?? 0, activationLevel);
+              if (shaderPrimed) {
+                portalState.shaderActive = true;
+              }
             }
             tile.type = 'portal';
           });
@@ -9891,10 +9950,13 @@
               const portalState = ensurePortalState(tile);
               if (portalState) {
                 portalState.activation = 1;
+                if (shaderPrimed) {
+                  portalState.shaderActive = true;
+                }
               }
             });
             if (!portal.announcedActive) {
-              logEvent(`${portal.label} stabilises.`);
+              logEvent(`Portal active: ${portal.label}.`);
               portal.announcedActive = true;
             }
           }
