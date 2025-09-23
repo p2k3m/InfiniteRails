@@ -4829,36 +4829,6 @@
       return plate;
     }
 
-    function cloneUniformSet(uniforms) {
-      if (!uniforms || typeof uniforms !== 'object') {
-        return uniforms;
-      }
-      if (typeof THREE?.UniformsUtils?.clone === 'function') {
-        return THREE.UniformsUtils.clone(uniforms);
-      }
-      return Object.fromEntries(
-        Object.entries(uniforms).map(([key, uniform]) => {
-          if (!uniform || typeof uniform !== 'object') {
-            return [key, uniform];
-          }
-          const clonedUniform = { ...uniform };
-          const { value } = uniform;
-          if (value && typeof value.clone === 'function') {
-            clonedUniform.value = value.clone();
-          } else if (Array.isArray(value)) {
-            clonedUniform.value = value.map((item) =>
-              item && typeof item.clone === 'function' ? item.clone() : item
-            );
-          } else if (value && typeof value === 'object') {
-            clonedUniform.value = { ...value };
-          } else {
-            clonedUniform.value = value;
-          }
-          return [key, clonedUniform];
-        })
-      );
-    }
-
     function createPortalSurfaceMaterial(accentColor, active = false) {
       const baseUniforms = {
         uTime: { value: 0 },
@@ -4917,8 +4887,7 @@
         frontPlane.renderOrder = 2;
         group.add(frontPlane);
         const sideMaterial = shaderMaterial.clone();
-        const sideUniforms = cloneUniformSet(uniforms);
-        sideMaterial.uniforms = sideUniforms;
+        const sideUniforms = sideMaterial.uniforms;
         const sidePlane = new THREE.Mesh(PORTAL_PLANE_GEOMETRY, sideMaterial);
         sidePlane.position.y = height + 0.85;
         sidePlane.rotation.y = Math.PI / 2;
