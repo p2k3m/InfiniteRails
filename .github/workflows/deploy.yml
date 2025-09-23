@@ -13,6 +13,7 @@ jobs:
     outputs:
       cloudfront_distribution_id: ${{ steps.ensure_distribution.outputs.distribution-id }}
       cloudfront_url: ${{ steps.ensure_distribution.outputs.distribution-domain }}
+      deployment_url: ${{ steps.finalize.outputs.deployment-url }}
     steps:
       - name: Validate AWS secrets
         id: validate
@@ -300,7 +301,20 @@ jobs:
             echo '::error::CloudFront distribution ID is empty. Check the discovery step output.'
             exit 1
           fi
-          aws cloudfront create-invalidation --distribution-id "$DISTRIBUTION_ID" --paths '/*'
+          INVALIDATION_OUTPUT=$(aws cloudfront create-invalidation --distribution-id "$DISTRIBUTION_ID" --paths '/*')
+          INVALIDATION_ID=$(echo "${INVALIDATION_OUTPUT}" | jq -r '.Invalidation.Id // empty')
+          if [ -z "${INVALIDATION_ID}" ]; then
+            echo '::warning::Cache invalidation request completed but no ID was returned.'
+          else
+            echo "::notice::Submitted CloudFront invalidation ${INVALIDATION_ID}"
+            {
+              echo '### 🧹 CloudFront cache invalidated'
+              echo ''
+              echo "- Distribution ID: \`${DISTRIBUTION_ID}\`"
+              echo "- Invalidation ID: \`${INVALIDATION_ID}\`"
+              echo "- Paths: \`/*\`"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Announce deployment URL
         env:
@@ -330,4 +344,29 @@ jobs:
               echo ''
               echo 'Add a CloudFront distribution to get a global CDN URL and automatic cache invalidations.'
             } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Finalize deployment outputs
+        id: finalize
+        env:
+          DISTRIBUTION_DOMAIN: ${{ steps.ensure_distribution.outputs.distribution-domain }}
+          DEPLOY_BUCKET: ${{ secrets.AWS_S3_BUCKET }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+        run: |
+          set -euo pipefail
+          if [ -n "${DISTRIBUTION_DOMAIN:-}" ]; then
+            echo "deployment-url=${DISTRIBUTION_DOMAIN}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ -z "${DEPLOY_BUCKET}" ]; then
+            echo '::warning::Unable to compute deployment URL because the bucket name is empty.'
+            echo 'deployment-url=' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ -n "${AWS_REGION:-}" ]; then
+            echo "deployment-url=https://${DEPLOY_BUCKET}.s3.${AWS_REGION}.amazonaws.com/index.html" >> "$GITHUB_OUTPUT"
+          else
+            echo "deployment-url=https://${DEPLOY_BUCKET}.s3.amazonaws.com/index.html" >> "$GITHUB_OUTPUT"
           fi
