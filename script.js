@@ -159,6 +159,7 @@
       music: document.querySelector('[data-volume-label="music"]'),
       effects: document.querySelector('[data-volume-label="effects"]'),
     };
+    let lastFocusedBeforeGuide = null;
     const portalProgressLabel = portalProgressEl.querySelector('.label');
     const portalProgressBar = portalProgressEl.querySelector('.bar');
     const headerUserNameEl = document.getElementById('headerUserName');
@@ -1932,11 +1933,80 @@
     const textureLoader = new THREE.TextureLoader();
     textureLoader.setCrossOrigin?.('anonymous');
 
-    const REMOTE_TEXTURE_URLS = {
-      grass: 'https://images-13-sept-2025.s3.ap-south-1.amazonaws.com/grass.avif',
-      leaves: 'https://images-13-sept-2025.s3.ap-south-1.amazonaws.com/leaves.png',
-      wood: 'https://images-13-sept-2025.s3.ap-south-1.amazonaws.com/wood.jpeg',
-    };
+    function drawBaseGrassTexture(ctx, size) {
+      const gradient = ctx.createLinearGradient(0, 0, 0, size);
+      gradient.addColorStop(0, '#6fd86f');
+      gradient.addColorStop(1, '#2e7d32');
+      ctx.fillStyle = gradient;
+      ctx.fillRect(0, 0, size, size);
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.08)';
+      for (let i = 0; i < 320; i += 1) {
+        const x = Math.random() * size;
+        const y = Math.random() * size;
+        const w = Math.random() * 3 + 1;
+        const h = Math.random() * 3 + 1;
+        ctx.fillRect(x, y, w, h);
+      }
+      ctx.fillStyle = 'rgba(0, 60, 0, 0.12)';
+      for (let i = 0; i < 220; i += 1) {
+        const x = Math.random() * size;
+        const y = Math.random() * size;
+        const w = Math.random() * 2 + 1;
+        const h = Math.random() * 5 + 1;
+        ctx.fillRect(x, y, w, h);
+      }
+    }
+
+    function drawBaseWoodTexture(ctx, size) {
+      const gradient = ctx.createLinearGradient(0, 0, size, 0);
+      gradient.addColorStop(0, '#b07943');
+      gradient.addColorStop(0.5, '#d2a574');
+      gradient.addColorStop(1, '#81542c');
+      ctx.fillStyle = gradient;
+      ctx.fillRect(0, 0, size, size);
+      ctx.strokeStyle = 'rgba(81, 49, 23, 0.55)';
+      ctx.lineWidth = 4;
+      for (let i = 0; i < 6; i += 1) {
+        const x = (i / 6) * size + Math.random() * 4;
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, size);
+        ctx.stroke();
+      }
+      ctx.strokeStyle = 'rgba(64, 35, 15, 0.35)';
+      ctx.lineWidth = 2;
+      for (let i = 0; i < 12; i += 1) {
+        const y = Math.random() * size;
+        const length = size * (0.25 + Math.random() * 0.45);
+        ctx.beginPath();
+        ctx.moveTo(Math.random() * size, y);
+        ctx.lineTo(Math.random() * size, y + length);
+        ctx.stroke();
+      }
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.05)';
+      for (let i = 0; i < 20; i += 1) {
+        const radius = Math.random() * 10 + 4;
+        const x = Math.random() * size;
+        const y = Math.random() * size;
+        ctx.beginPath();
+        ctx.arc(x, y, radius, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    function drawBaseLeavesTexture(ctx, size) {
+      ctx.clearRect(0, 0, size, size);
+      for (let i = 0; i < 420; i += 1) {
+        const radius = Math.random() * 8 + 6;
+        const x = Math.random() * size;
+        const y = Math.random() * size;
+        const green = Math.floor(120 + Math.random() * 80);
+        ctx.fillStyle = `rgba(34, ${green}, 34, ${0.55 + Math.random() * 0.35})`;
+        ctx.beginPath();
+        ctx.arc(x, y, radius, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
 
     const VOXEL_ISLAND_CONFIG = {
       size: 64,
@@ -2063,6 +2133,15 @@
       draw(ctx, size);
       return canvas.toDataURL('image/png');
     }
+
+    const BASE_TEXTURE_URLS = (() => {
+      const size = 256;
+      return {
+        grass: createProceduralTextureDataUrl(size, drawBaseGrassTexture),
+        wood: createProceduralTextureDataUrl(size, drawBaseWoodTexture),
+        leaves: createProceduralTextureDataUrl(size, drawBaseLeavesTexture),
+      };
+    })();
 
     function applyTextureSettings(texture, options = {}) {
       const repeat = options.repeat ?? { x: 2, y: 2 };
@@ -3254,24 +3333,21 @@
       }
 
       if (!voxelIslandAssets.texture) {
-        try {
-          const texture = textureLoader.load(
-            REMOTE_TEXTURE_URLS.grass,
-            () => {
-              texture.needsUpdate = true;
-            },
-            undefined,
-            (error) => {
-              console.warn('Failed to load grass texture for voxel island.', error);
-            },
-          );
-          texture.wrapS = THREE.RepeatWrapping;
-          texture.wrapT = THREE.RepeatWrapping;
-          texture.colorSpace = THREE.SRGBColorSpace;
-          texture.anisotropy = Math.min(renderer?.capabilities?.getMaxAnisotropy?.() ?? 4, 8);
-          voxelIslandAssets.texture = texture;
-        } catch (error) {
-          console.warn('Unable to initialise voxel island texture.', error);
+        ensurePreviewTextures();
+        const previewGrass = previewAssets.textures.grass;
+        if (previewGrass) {
+          voxelIslandAssets.texture = clonePreviewTexture(previewGrass, {
+            repeat: { x: 4, y: 4 },
+            colorSpace: THREE.SRGBColorSpace,
+          });
+        } else if (BASE_TEXTURE_URLS.grass) {
+          voxelIslandAssets.texture = createTexture(BASE_TEXTURE_URLS.grass, {
+            repeat: { x: 4, y: 4 },
+            colorSpace: THREE.SRGBColorSpace,
+          });
+        }
+        if (!voxelIslandAssets.texture) {
+          console.warn('Unable to initialise voxel island texture. Using flat material.');
         }
       }
 
@@ -3384,6 +3460,9 @@
       const loadTexture = (path, options = {}, fallbackDraw = null) => {
         const fallbackTexture = fallbackDraw ? createProceduralTexture(128, fallbackDraw, options) : null;
         let texture = null;
+        if (!path) {
+          return fallbackTexture ? configureTexture(fallbackTexture, options) : null;
+        }
         try {
           texture = textureLoader.load(
             path,
@@ -3430,78 +3509,9 @@
           ctx.fill();
         }
       });
-      const grass = loadTexture(REMOTE_TEXTURE_URLS.grass, {}, (ctx, size) => {
-        const gradient = ctx.createLinearGradient(0, 0, 0, size);
-        gradient.addColorStop(0, '#6fd86f');
-        gradient.addColorStop(1, '#2e7d32');
-        ctx.fillStyle = gradient;
-        ctx.fillRect(0, 0, size, size);
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.08)';
-        for (let i = 0; i < 320; i += 1) {
-          const x = Math.random() * size;
-          const y = Math.random() * size;
-          const w = Math.random() * 3 + 1;
-          const h = Math.random() * 3 + 1;
-          ctx.fillRect(x, y, w, h);
-        }
-        ctx.fillStyle = 'rgba(0, 60, 0, 0.12)';
-        for (let i = 0; i < 220; i += 1) {
-          const x = Math.random() * size;
-          const y = Math.random() * size;
-          const w = Math.random() * 2 + 1;
-          const h = Math.random() * 5 + 1;
-          ctx.fillRect(x, y, w, h);
-        }
-      });
-      const wood = loadTexture(REMOTE_TEXTURE_URLS.wood, {}, (ctx, size) => {
-        const gradient = ctx.createLinearGradient(0, 0, size, 0);
-        gradient.addColorStop(0, '#b07943');
-        gradient.addColorStop(0.5, '#d2a574');
-        gradient.addColorStop(1, '#81542c');
-        ctx.fillStyle = gradient;
-        ctx.fillRect(0, 0, size, size);
-        ctx.strokeStyle = 'rgba(81, 49, 23, 0.55)';
-        ctx.lineWidth = 4;
-        for (let i = 0; i < 6; i += 1) {
-          const x = (i / 6) * size + Math.random() * 4;
-          ctx.beginPath();
-          ctx.moveTo(x, 0);
-          ctx.lineTo(x, size);
-          ctx.stroke();
-        }
-        ctx.strokeStyle = 'rgba(64, 35, 15, 0.35)';
-        ctx.lineWidth = 2;
-        for (let i = 0; i < 12; i += 1) {
-          const y = Math.random() * size;
-          const length = size * (0.25 + Math.random() * 0.45);
-          ctx.beginPath();
-          ctx.moveTo(Math.random() * size, y);
-          ctx.lineTo(Math.random() * size, y + length);
-          ctx.stroke();
-        }
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.05)';
-        for (let i = 0; i < 20; i += 1) {
-          const radius = Math.random() * 10 + 4;
-          const x = Math.random() * size;
-          const y = Math.random() * size;
-          ctx.beginPath();
-          ctx.arc(x, y, radius, 0, Math.PI * 2);
-          ctx.fill();
-        }
-      });
-      const leaves = loadTexture(REMOTE_TEXTURE_URLS.leaves, { transparent: true }, (ctx, size) => {
-        ctx.clearRect(0, 0, size, size);
-        for (let i = 0; i < 420; i += 1) {
-          const radius = Math.random() * 8 + 6;
-          const x = Math.random() * size;
-          const y = Math.random() * size;
-          const green = Math.floor(120 + Math.random() * 80);
-          ctx.fillStyle = `rgba(34, ${green}, 34, ${0.55 + Math.random() * 0.35})`;
-          ctx.beginPath();
-          ctx.arc(x, y, radius, 0, Math.PI * 2);
-          ctx.fill();
-        }
-      });
+      const grass = loadTexture(BASE_TEXTURE_URLS.grass, {}, drawBaseGrassTexture);
+      const wood = loadTexture(BASE_TEXTURE_URLS.wood, {}, drawBaseWoodTexture);
+      const leaves = loadTexture(BASE_TEXTURE_URLS.leaves, { transparent: true }, drawBaseLeavesTexture);
       previewAssets.textures = { grass, dirt, wood, leaves };
     }
 
@@ -12388,6 +12398,12 @@
 
     function openGuideModal() {
       if (!guideModal) return;
+      const activeElement = document.activeElement;
+      if (activeElement && typeof activeElement.focus === 'function') {
+        lastFocusedBeforeGuide = activeElement;
+      } else {
+        lastFocusedBeforeGuide = openGuideButton ?? null;
+      }
       guideModal.hidden = false;
       guideModal.setAttribute('data-open', 'true');
       guideModal.setAttribute('aria-hidden', 'false');
@@ -12881,6 +12897,10 @@
 
     function closeGuideModal() {
       if (!guideModal) return;
+      const activeElement = document.activeElement;
+      if (activeElement && guideModal.contains(activeElement) && typeof activeElement.blur === 'function') {
+        activeElement.blur();
+      }
       guideModal.hidden = true;
       guideModal.setAttribute('data-open', 'false');
       guideModal.setAttribute('aria-hidden', 'true');
@@ -12890,6 +12910,25 @@
       guideModal.querySelectorAll('.guide-card__step').forEach((step) => {
         step.classList.remove('is-animating');
       });
+      const fallbackFocusTarget = openGuideButton ?? null;
+      const focusTarget =
+        lastFocusedBeforeGuide && typeof lastFocusedBeforeGuide.focus === 'function'
+          ? lastFocusedBeforeGuide
+          : fallbackFocusTarget;
+      lastFocusedBeforeGuide = null;
+      if (focusTarget && typeof focusTarget.focus === 'function') {
+        requestAnimationFrame(() => {
+          try {
+            focusTarget.focus({ preventScroll: true });
+          } catch (error) {
+            try {
+              focusTarget.focus();
+            } catch (focusError) {
+              console.warn('Unable to restore focus after closing guide modal', focusError);
+            }
+          }
+        });
+      }
     }
 
     function setupGuideModal() {
