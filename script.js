@@ -98,6 +98,8 @@
     const introModal = document.getElementById('introModal');
     const guideModal = document.getElementById('guideModal');
     const mobileControls = document.getElementById('mobileControls');
+    const virtualJoystickEl = document.getElementById('virtualJoystick');
+    const virtualJoystickThumb = virtualJoystickEl?.querySelector('.virtual-joystick__thumb') ?? null;
     const heartsEl = document.getElementById('hearts');
     const bubblesEl = document.getElementById('bubbles');
     const timeEl = document.getElementById('timeOfDay');
@@ -1673,6 +1675,9 @@
     let craftSequenceErrorTimeout = null;
     const inventoryClickBypass = new WeakSet();
 
+    let eventListenersBound = false;
+    let virtualJoystickReady = false;
+
     let renderer;
     let scene;
     let camera;
@@ -1855,6 +1860,7 @@
       { dx: 0, dy: 1, vector: new THREE.Vector3(0, 0, 1) },
       { dx: -1, dy: 0, vector: new THREE.Vector3(-1, 0, 0) },
     ];
+    const RAIL_MOVE_DELAY = 1;
     const tmpMovementForward = new THREE.Vector3();
     const tmpMovementRight = new THREE.Vector3();
     const tmpMovementVector = new THREE.Vector3();
@@ -2614,6 +2620,119 @@
 
       camera.up.copy(WORLD_UP);
       camera.lookAt(tmpCameraTarget);
+    }
+
+    const JOYSTICK_DEADZONE = 0.18;
+    const JOYSTICK_MAX_DISTANCE = 60;
+    const joystickState = {
+      active: false,
+      pointerId: null,
+      vector: { x: 0, forward: 0 },
+    };
+
+    function updateJoystickThumb() {
+      if (!virtualJoystickEl || !virtualJoystickThumb) return;
+      const radius = Math.min(virtualJoystickEl.clientWidth, virtualJoystickEl.clientHeight) / 2 || 1;
+      const offsetX = joystickState.vector.x * radius * 0.6;
+      const offsetY = -joystickState.vector.forward * radius * 0.6;
+      virtualJoystickThumb.style.transform = `translate(${offsetX}px, ${offsetY}px)`;
+    }
+
+    function setJoystickVector(rawX, rawForward) {
+      const length = Math.hypot(rawX, rawForward);
+      let x = rawX;
+      let forward = rawForward;
+      if (length > 1) {
+        x /= length;
+        forward /= length;
+      }
+      const magnitude = Math.hypot(x, forward);
+      if (magnitude < JOYSTICK_DEADZONE) {
+        x = 0;
+        forward = 0;
+      }
+      joystickState.vector.x = x;
+      joystickState.vector.forward = forward;
+      if (state.joystickInput) {
+        state.joystickInput.strafe = x;
+        state.joystickInput.forward = forward;
+      }
+      updateJoystickThumb();
+    }
+
+    function resetJoystickVector() {
+      setJoystickVector(0, 0);
+      joystickState.active = false;
+      joystickState.pointerId = null;
+    }
+
+    function handleVirtualJoystickMove(event) {
+      if (!virtualJoystickEl) return;
+      const rect = virtualJoystickEl.getBoundingClientRect();
+      const centerX = rect.left + rect.width / 2;
+      const centerY = rect.top + rect.height / 2;
+      const maxDistance = Math.max(virtualJoystickEl.clientWidth, virtualJoystickEl.clientHeight) / 2 || JOYSTICK_MAX_DISTANCE;
+      const dx = THREE.MathUtils.clamp((event.clientX - centerX) / maxDistance, -1, 1);
+      const dy = THREE.MathUtils.clamp((event.clientY - centerY) / maxDistance, -1, 1);
+      setJoystickVector(dx, THREE.MathUtils.clamp(-dy, -1, 1));
+    }
+
+    function initVirtualJoystick() {
+      if (virtualJoystickReady || !virtualJoystickEl) {
+        return;
+      }
+      virtualJoystickReady = true;
+      setJoystickVector(0, 0);
+
+      virtualJoystickEl.addEventListener(
+        'pointerdown',
+        (event) => {
+          joystickState.active = true;
+          joystickState.pointerId = event.pointerId;
+          handleVirtualJoystickMove(event);
+          if (typeof virtualJoystickEl.setPointerCapture === 'function') {
+            try {
+              virtualJoystickEl.setPointerCapture(event.pointerId);
+            } catch (error) {
+              // Ignore pointer capture failures on unsupported browsers.
+            }
+          }
+          event.preventDefault();
+        },
+        { passive: false },
+      );
+
+      virtualJoystickEl.addEventListener(
+        'pointermove',
+        (event) => {
+          if (!joystickState.active || event.pointerId !== joystickState.pointerId) return;
+          handleVirtualJoystickMove(event);
+          event.preventDefault();
+        },
+        { passive: false },
+      );
+
+      const handleRelease = (event) => {
+        if (joystickState.pointerId != null && event.pointerId !== joystickState.pointerId) {
+          return;
+        }
+        if (
+          virtualJoystickEl &&
+          typeof virtualJoystickEl.releasePointerCapture === 'function' &&
+          joystickState.pointerId != null
+        ) {
+          try {
+            virtualJoystickEl.releasePointerCapture(joystickState.pointerId);
+          } catch (error) {
+            // Ignore release errors when the pointer capture is no longer active.
+          }
+        }
+        resetJoystickVector();
+      };
+
+      virtualJoystickEl.addEventListener('pointerup', handleRelease);
+      virtualJoystickEl.addEventListener('pointercancel', handleRelease);
+      virtualJoystickEl.addEventListener('pointerleave', handleRelease);
     }
 
     function initPointerControls() {
@@ -6398,6 +6517,7 @@
         heartsAtLastDamage: null,
       },
       pressedKeys: new Set(),
+      joystickInput: { forward: 0, strafe: 0 },
       isRunning: false,
       victory: false,
       score: 0,
@@ -8922,14 +9042,23 @@
       if (!state?.isRunning) {
         return;
       }
-      if (!state?.pressedKeys || state.pressedKeys.size === 0) {
+      const pressedKeys = state?.pressedKeys;
+      const joystick = state?.joystickInput;
+      const hasKeyboardInput = pressedKeys instanceof Set && pressedKeys.size > 0;
+      const hasJoystickInput =
+        joystick && (Math.abs(joystick.forward) > 0.0001 || Math.abs(joystick.strafe) > 0.0001);
+      if (!hasKeyboardInput && !hasJoystickInput) {
         return;
       }
-      const forwardInput =
-        (state.pressedKeys.has('forward') ? 1 : 0) - (state.pressedKeys.has('backward') ? 1 : 0);
-      const strafeInput =
-        (state.pressedKeys.has('right') ? 1 : 0) - (state.pressedKeys.has('left') ? 1 : 0);
-      if (forwardInput === 0 && strafeInput === 0) {
+      let forwardInput = (pressedKeys?.has('forward') ? 1 : 0) - (pressedKeys?.has('backward') ? 1 : 0);
+      let strafeInput = (pressedKeys?.has('right') ? 1 : 0) - (pressedKeys?.has('left') ? 1 : 0);
+      if (joystick) {
+        forwardInput += joystick.forward;
+        strafeInput += joystick.strafe;
+      }
+      forwardInput = THREE.MathUtils.clamp(forwardInput, -1, 1);
+      strafeInput = THREE.MathUtils.clamp(strafeInput, -1, 1);
+      if (Math.abs(forwardInput) < 0.0001 && Math.abs(strafeInput) < 0.0001) {
         return;
       }
       attemptCameraAlignedMove(forwardInput, strafeInput, { snapToRails: true });
@@ -8942,15 +9071,16 @@
       if (state.ui?.respawnActive || state.ui?.dimensionTransition) {
         return false;
       }
-      const now = performance?.now ? performance.now() : Date.now();
-      const delay = (state.baseMoveDelay ?? 0.18) + (state.player.tarStacks || 0) * 0.04;
-      if (now - state.lastMoveAt < delay * 1000) {
-        return false;
-      }
       let forwardInput =
         (state.pressedKeys?.has('forward') ? 1 : 0) - (state.pressedKeys?.has('backward') ? 1 : 0);
       let strafeInput =
         (state.pressedKeys?.has('right') ? 1 : 0) - (state.pressedKeys?.has('left') ? 1 : 0);
+      if (state.joystickInput) {
+        forwardInput += state.joystickInput.forward;
+        strafeInput += state.joystickInput.strafe;
+      }
+      forwardInput = THREE.MathUtils.clamp(forwardInput, -1, 1);
+      strafeInput = THREE.MathUtils.clamp(strafeInput, -1, 1);
       if (forwardInput === 0 && strafeInput === 0) {
         forwardInput = 1;
       }
@@ -8960,6 +9090,11 @@
       }
       const { dx, dy } = direction;
       if (dx === 0 && dy === 0) {
+        return false;
+      }
+      const now = performance?.now ? performance.now() : Date.now();
+      const delay = getMovementDelay(dx, dy);
+      if (now - state.lastMoveAt < delay * 1000) {
         return false;
       }
       const startX = state.player.x;
@@ -8995,11 +9130,28 @@
       return true;
     }
 
+    function getMovementDelay(dx = 0, dy = 0) {
+      const baseDelay = state.baseMoveDelay ?? 0.18;
+      const slowPenalty = (state.player?.tarStacks || 0) * 0.04;
+      if (!state?.player) {
+        return baseDelay + slowPenalty;
+      }
+      if (!Number.isFinite(dx) || !Number.isFinite(dy) || (dx === 0 && dy === 0)) {
+        return baseDelay + slowPenalty;
+      }
+      const currentTile = getTile(state.player.x, state.player.y);
+      const nextTile = getTile(state.player.x + dx, state.player.y + dy);
+      if (currentTile?.type === 'rail' && nextTile?.type === 'rail') {
+        return RAIL_MOVE_DELAY + slowPenalty;
+      }
+      return baseDelay + slowPenalty;
+    }
+
     function attemptMove(dx, dy, ignoreCooldown = false) {
       if (state.ui.respawnActive) return;
       if (state.ui.dimensionTransition) return;
       const now = performance.now();
-      const delay = (state.baseMoveDelay ?? 0.18) + (state.player.tarStacks || 0) * 0.04;
+      const delay = getMovementDelay(dx, dy);
       if (!ignoreCooldown && now - state.lastMoveAt < delay * 1000) return;
       const nx = state.player.x + dx;
       const ny = state.player.y + dy;
@@ -10258,6 +10410,7 @@
       }
       switch (key) {
         case ' ':
+          console.log('Jump triggered');
           if (!attemptJump()) {
             interact();
           }
@@ -10434,6 +10587,10 @@
     }
 
     function initEventListeners() {
+      if (eventListenersBound) {
+        return;
+      }
+      eventListenersBound = true;
       document.addEventListener('keydown', handleKeyDown);
       document.addEventListener('keyup', handleKeyUp);
       document.addEventListener('keydown', (event) => {
@@ -10473,9 +10630,12 @@
         toggleInventoryModal({ focusTrigger: true, focusFirstSlot: true })
       );
       inventorySortButton?.addEventListener('click', toggleInventorySortMode);
-      mobileControls.querySelectorAll('button').forEach((button) => {
-        button.addEventListener('click', () => updateFromMobile(button.dataset.action));
-      });
+      initVirtualJoystick();
+      if (mobileControls) {
+        mobileControls.querySelectorAll('button').forEach((button) => {
+          button.addEventListener('click', () => updateFromMobile(button.dataset.action));
+        });
+      }
       openGuideButton?.addEventListener('click', openGuideModal);
       landingGuideButton?.addEventListener('click', () => {
         openGuideModal();
