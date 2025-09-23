@@ -4881,21 +4881,23 @@
         return;
       }
       try {
-        const { material: shaderMaterial, uniforms } = createPortalSurfaceMaterial(accentColor, active);
-        const frontPlane = new THREE.Mesh(PORTAL_PLANE_GEOMETRY, shaderMaterial);
+        const frontSurface = createPortalSurfaceMaterial(accentColor, active);
+        const frontPlane = new THREE.Mesh(PORTAL_PLANE_GEOMETRY, frontSurface.material);
         frontPlane.position.y = height + 0.85;
         frontPlane.renderOrder = 2;
         group.add(frontPlane);
-        const sideMaterial = shaderMaterial.clone();
-        const sideUniforms = sideMaterial.uniforms;
-        const sidePlane = new THREE.Mesh(PORTAL_PLANE_GEOMETRY, sideMaterial);
+
+        const sideSurface = createPortalSurfaceMaterial(accentColor, active);
+        const sidePlane = new THREE.Mesh(PORTAL_PLANE_GEOMETRY, sideSurface.material);
         sidePlane.position.y = height + 0.85;
         sidePlane.rotation.y = Math.PI / 2;
         sidePlane.renderOrder = 2;
         group.add(sidePlane);
+
+        const uniformSets = [frontSurface.uniforms, sideSurface.uniforms].filter(Boolean);
         renderInfo.animations.portalSurface = {
-          uniforms,
-          uniformSets: [uniforms, sideUniforms].filter(Boolean),
+          uniforms: frontSurface.uniforms,
+          uniformSets,
           materials: [frontPlane.material, sidePlane.material],
           accentColor,
           isActive: active,
