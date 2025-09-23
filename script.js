@@ -11,6 +11,324 @@
   let gltfLoaderPromise = null;
   let threeLoaderPromise = null;
 
+  function getGlobalScope() {
+    if (typeof window !== 'undefined') return window;
+    if (typeof globalThis !== 'undefined') return globalThis;
+    if (typeof global !== 'undefined') return global;
+    return {};
+  }
+
+  function createScoreboardUtilsFallback() {
+    function normalizeScoreEntries(entries = []) {
+      return entries
+        .map((entry) => ({
+          id: entry.id ?? entry.googleId ?? entry.playerId ?? `guest-${Math.random().toString(36).slice(2)}`,
+          name: entry.name ?? entry.displayName ?? 'Explorer',
+          score: Number(entry.score ?? entry.points ?? 0),
+          dimensionCount: Number(entry.dimensionCount ?? entry.dimensions ?? entry.realms ?? 0),
+          runTimeSeconds: Number(entry.runTimeSeconds ?? entry.runtimeSeconds ?? entry.runtime ?? 0),
+          inventoryCount: Number(entry.inventoryCount ?? entry.resources ?? entry.items ?? 0),
+          location:
+            entry.location ??
+            (entry.latitude !== undefined && entry.longitude !== undefined
+              ? { latitude: entry.latitude, longitude: entry.longitude }
+              : null),
+          locationLabel: entry.locationLabel ?? entry.location?.label ?? entry.locationName ?? null,
+          updatedAt: entry.updatedAt ?? entry.lastUpdated ?? entry.updated_at ?? null,
+        }))
+        .sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+    }
+
+    function upsertScoreEntry(entries, entry) {
+      const next = entries.slice();
+      const index = next.findIndex((item) => item.id === entry.id);
+      if (index >= 0) {
+        if ((entry.score ?? 0) >= (next[index].score ?? 0)) {
+          next[index] = { ...next[index], ...entry };
+        } else {
+          next[index] = { ...entry, score: next[index].score };
+        }
+      } else {
+        next.push(entry);
+      }
+      return normalizeScoreEntries(next);
+    }
+
+    function formatScoreNumber(score) {
+      return Math.round(score ?? 0).toLocaleString();
+    }
+
+    function formatRunTime(seconds) {
+      if (!seconds) return '—';
+      const totalSeconds = Math.max(0, Math.round(seconds));
+      const minutes = Math.floor(totalSeconds / 60);
+      const secs = totalSeconds % 60;
+      if (minutes >= 60) {
+        const hours = Math.floor(minutes / 60);
+        const remMinutes = minutes % 60;
+        return `${hours}h ${remMinutes}m`;
+      }
+      if (minutes > 0) {
+        return `${minutes}m ${secs}s`;
+      }
+      return `${secs}s`;
+    }
+
+    function formatLocationLabel(entry) {
+      if (entry.locationLabel) return entry.locationLabel;
+      const location = entry.location;
+      if (!location) return 'Location hidden';
+      if (location.error) return location.error;
+      if (location.latitude !== undefined && location.longitude !== undefined) {
+        return `Lat ${Number(location.latitude).toFixed(1)}, Lon ${Number(location.longitude).toFixed(1)}`;
+      }
+      return 'Location hidden';
+    }
+
+    return {
+      normalizeScoreEntries,
+      upsertScoreEntry,
+      formatScoreNumber,
+      formatRunTime,
+      formatLocationLabel,
+    };
+  }
+
+  function createCombatUtilsFallback() {
+    const DEFAULT_CHUNK_SIZE = 16;
+    const DEFAULT_PER_CHUNK = 3;
+
+    function normaliseDimensionAccessor(value) {
+      if (typeof value === 'function') {
+        return value;
+      }
+      if (Number.isFinite(value)) {
+        return () => value;
+      }
+      return () => 0;
+    }
+
+    function key(x, y) {
+      return `${x},${y}`;
+    }
+
+    function calculateZombieSpawnCount(options = {}) {
+      const widthAccessor = normaliseDimensionAccessor(options.width ?? options.getWidth ?? 0);
+      const heightAccessor = normaliseDimensionAccessor(options.height ?? options.getHeight ?? 0);
+      const chunkSize = Math.max(1, Math.floor(options.chunkSize ?? DEFAULT_CHUNK_SIZE));
+      const perChunk = Math.max(1, Math.floor(options.perChunk ?? DEFAULT_PER_CHUNK));
+      const width = Math.max(1, Math.floor(widthAccessor()));
+      const height = Math.max(1, Math.floor(heightAccessor()));
+      const chunkX = Math.max(1, Math.ceil(width / chunkSize));
+      const chunkY = Math.max(1, Math.ceil(height / chunkSize));
+      return chunkX * chunkY * perChunk;
+    }
+
+    function createGridPathfinder({ getWidth, getHeight, isWalkable, maxIterations = 512 } = {}) {
+      if (typeof isWalkable !== 'function') {
+        throw new Error('createGridPathfinder requires an isWalkable function.');
+      }
+      const widthAccessor = normaliseDimensionAccessor(getWidth ?? 0);
+      const heightAccessor = normaliseDimensionAccessor(getHeight ?? 0);
+      const neighborOffsets = [
+        { x: 1, y: 0 },
+        { x: -1, y: 0 },
+        { x: 0, y: 1 },
+        { x: 0, y: -1 },
+      ];
+
+      const heuristic = (a, b) => Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
+
+      function reconstructPath(cameFrom, goalKey, startKey) {
+        const path = [];
+        let currentKey = goalKey;
+        while (currentKey && currentKey !== startKey) {
+          const entry = cameFrom.get(currentKey);
+          if (!entry) {
+            return [];
+          }
+          const [cx, cy] = currentKey.split(',').map((value) => Number.parseInt(value, 10));
+          if (!Number.isFinite(cx) || !Number.isFinite(cy)) {
+            return [];
+          }
+          path.push({ x: cx, y: cy });
+          currentKey = entry;
+        }
+        path.reverse();
+        return path;
+      }
+
+      function findPath(start, goal, options = {}) {
+        if (!start || !goal) return [];
+        const width = Math.max(1, Math.floor(widthAccessor()));
+        const height = Math.max(1, Math.floor(heightAccessor()));
+        const allowGoal = Boolean(options.allowGoal);
+        const iterationLimit = Math.max(1, Math.floor(options.maxIterations ?? maxIterations));
+        const startKey = key(start.x, start.y);
+        const goalKey = key(goal.x, goal.y);
+        if (startKey === goalKey) {
+          return [];
+        }
+
+        const open = [];
+        const cameFrom = new Map();
+        const gScore = new Map();
+        cameFrom.set(startKey, null);
+        gScore.set(startKey, 0);
+        open.push({ x: start.x, y: start.y, g: 0, f: heuristic(start, goal) });
+
+        let iterations = 0;
+        while (open.length && iterations < iterationLimit) {
+          iterations += 1;
+          let bestIndex = 0;
+          for (let i = 1; i < open.length; i++) {
+            if (open[i].f < open[bestIndex].f) {
+              bestIndex = i;
+            }
+          }
+          const current = open.splice(bestIndex, 1)[0];
+          const currentKey = key(current.x, current.y);
+          const expectedScore = gScore.get(currentKey);
+          if (expectedScore !== current.g) {
+            continue;
+          }
+          if (currentKey === goalKey) {
+            return reconstructPath(cameFrom, currentKey, startKey);
+          }
+          for (const offset of neighborOffsets) {
+            const nx = current.x + offset.x;
+            const ny = current.y + offset.y;
+            if (nx < 0 || ny < 0 || nx >= width || ny >= height) {
+              continue;
+            }
+            const neighborKey = key(nx, ny);
+            if (!(allowGoal && neighborKey === goalKey) && !isWalkable(nx, ny)) {
+              continue;
+            }
+            const tentativeScore = current.g + 1;
+            if (tentativeScore >= (gScore.get(neighborKey) ?? Infinity)) {
+              continue;
+            }
+            cameFrom.set(neighborKey, currentKey);
+            gScore.set(neighborKey, tentativeScore);
+            const fScore = tentativeScore + heuristic({ x: nx, y: ny }, goal);
+            open.push({ x: nx, y: ny, g: tentativeScore, f: fScore });
+          }
+        }
+        return [];
+      }
+
+      return { findPath };
+    }
+
+    function applyZombieStrike(state, { onStrike, onDeath } = {}) {
+      if (!state || typeof state !== 'object' || !state.player) {
+        throw new Error('applyZombieStrike requires a state with a player.');
+      }
+      const player = state.player;
+      const maxHearts = Number.isFinite(player.maxHearts) ? player.maxHearts : 10;
+      const heartsPerHit = maxHearts / 5;
+      const hits = (player.zombieHits ?? 0) + 1;
+      player.zombieHits = hits;
+      const remainingHearts = Math.max(0, maxHearts - heartsPerHit * hits);
+      player.hearts = remainingHearts;
+      const result = {
+        hits,
+        remainingHearts,
+        defeated: hits >= 5,
+      };
+      if (result.defeated) {
+        if (typeof onDeath === 'function') {
+          onDeath('Death');
+        }
+      } else {
+        const remainingHits = 5 - hits;
+        if (typeof onStrike === 'function') {
+          onStrike(
+            `Minecraft zombie strike! ${remainingHits} more hit${remainingHits === 1 ? '' : 's'} before defeat.`
+          );
+        }
+      }
+      return result;
+    }
+
+    function snapshotInventory(player) {
+      if (!player || typeof player !== 'object') {
+        return { inventory: [], satchel: [], selectedSlot: 0 };
+      }
+      const inventory = Array.isArray(player.inventory)
+        ? player.inventory.map((slot) =>
+            slot && typeof slot === 'object' && slot.item
+              ? { item: slot.item, quantity: slot.quantity }
+              : null
+          )
+        : [];
+      const satchel = Array.isArray(player.satchel)
+        ? player.satchel
+            .map((bundle) =>
+              bundle && typeof bundle === 'object' && bundle.item
+                ? { item: bundle.item, quantity: bundle.quantity }
+                : null
+            )
+            .filter(Boolean)
+        : [];
+      const selectedSlot = Number.isInteger(player.selectedSlot) ? player.selectedSlot : 0;
+      return { inventory, satchel, selectedSlot };
+    }
+
+    function restoreInventory(player, snapshot) {
+      if (!player || typeof player !== 'object' || !snapshot) return;
+      if (Array.isArray(snapshot.inventory)) {
+        player.inventory = snapshot.inventory.map((slot) =>
+          slot && typeof slot === 'object' && slot.item ? { item: slot.item, quantity: slot.quantity } : null
+        );
+      }
+      if (Array.isArray(snapshot.satchel)) {
+        player.satchel = snapshot.satchel.map((bundle) => ({ item: bundle.item, quantity: bundle.quantity }));
+      }
+      if (Number.isInteger(snapshot.selectedSlot)) {
+        player.selectedSlot = snapshot.selectedSlot;
+      }
+    }
+
+    function completeRespawnState(state) {
+      if (!state || !state.player) return;
+      const player = state.player;
+      if (Number.isFinite(player.maxHearts)) {
+        player.hearts = player.maxHearts;
+      }
+      if (Number.isFinite(player.maxAir)) {
+        player.air = player.maxAir;
+      }
+      player.zombieHits = 0;
+    }
+
+    return {
+      calculateZombieSpawnCount,
+      createGridPathfinder,
+      applyZombieStrike,
+      snapshotInventory,
+      restoreInventory,
+      completeRespawnState,
+    };
+  }
+
+  const SCOREBOARD_UTILS_FALLBACK = createScoreboardUtilsFallback();
+  const COMBAT_UTILS_FALLBACK = createCombatUtilsFallback();
+
+  const globalScope = getGlobalScope();
+  if (globalScope) {
+    if (!globalScope.ScoreboardUtils) {
+      globalScope.ScoreboardUtils = SCOREBOARD_UTILS_FALLBACK;
+    }
+    if (!globalScope.CombatUtils) {
+      globalScope.CombatUtils = COMBAT_UTILS_FALLBACK;
+    }
+  }
+
+  const SUPPORTS_MODEL_ASSETS =
+    typeof window === 'undefined' || (typeof window.location !== 'undefined' && window.location.protocol !== 'file:');
+
   const originalConsoleWarn = console.warn?.bind(console);
   if (originalConsoleWarn) {
     console.warn = (...args) => {
@@ -80,13 +398,12 @@
       throw new Error('Three.js failed to load. Ensure the CDN script is available.');
     }
 
+    let portalShaderSupport = typeof THREE?.ShaderMaterial === 'function';
+
     const scoreboardUtils =
       (typeof window !== 'undefined' && window.ScoreboardUtils) ||
-      (typeof ScoreboardUtils !== 'undefined' ? ScoreboardUtils : null);
-
-    if (!scoreboardUtils) {
-      throw new Error('Scoreboard utilities failed to load.');
-    }
+      (typeof globalThis !== 'undefined' && globalThis.ScoreboardUtils) ||
+      SCOREBOARD_UTILS_FALLBACK;
 
     const { normalizeScoreEntries, upsertScoreEntry, formatScoreNumber, formatRunTime, formatLocationLabel } = scoreboardUtils;
 
@@ -1716,7 +2033,7 @@
     const combatUtils =
       (typeof window !== 'undefined' && window.CombatUtils) ||
       (typeof globalThis !== 'undefined' && globalThis.CombatUtils) ||
-      null;
+      COMBAT_UTILS_FALLBACK;
     let gridPathfinder = null;
     let zombieIdCounter = 0;
     let hemiLight;
@@ -2134,6 +2451,22 @@
       return canvas.toDataURL('image/png');
     }
 
+    function isCrossOriginTextureUrl(url) {
+      if (!url || typeof url !== 'string') return false;
+      if (url.startsWith('data:') || url.startsWith('blob:')) return false;
+      if (typeof window === 'undefined' || !window.location) return false;
+      try {
+        const resolved = new URL(url, window.location.href);
+        const protocol = resolved.protocol.toLowerCase();
+        if (protocol !== 'http:' && protocol !== 'https:') {
+          return false;
+        }
+        return resolved.origin !== window.location.origin;
+      } catch (error) {
+        return false;
+      }
+    }
+
     const BASE_TEXTURE_URLS = (() => {
       const size = 256;
       return {
@@ -2163,8 +2496,23 @@
     }
 
     function createTexture(url, options) {
-      const texture = textureLoader.load(url, (loaded) => applyTextureSettings(loaded, options));
-      applyTextureSettings(texture, options);
+      if (!url) {
+        return null;
+      }
+      if (isCrossOriginTextureUrl(url)) {
+        console.warn(`Skipping cross-origin texture due to CORS restrictions: ${url}`);
+        return null;
+      }
+      let texture = null;
+      try {
+        texture = textureLoader.load(url, (loaded) => applyTextureSettings(loaded, options));
+      } catch (error) {
+        console.warn(`Failed to load texture: ${url}`, error);
+        texture = null;
+      }
+      if (texture) {
+        applyTextureSettings(texture, options);
+      }
       return texture;
     }
 
@@ -3463,6 +3811,10 @@
         if (!path) {
           return fallbackTexture ? configureTexture(fallbackTexture, options) : null;
         }
+        if (isCrossOriginTextureUrl(path)) {
+          console.warn(`Skipping cross-origin preview texture due to CORS restrictions: ${path}`);
+          return fallbackTexture ? configureTexture(fallbackTexture, options) : null;
+        }
         try {
           texture = textureLoader.load(
             path,
@@ -4130,6 +4482,10 @@
       if (previewHandTemplate) {
         return Promise.resolve(previewHandTemplate);
       }
+      if (!SUPPORTS_MODEL_ASSETS) {
+        previewHandTemplate = createFallbackHand();
+        return Promise.resolve(previewHandTemplate);
+      }
       if (!THREE.GLTFLoader) {
         previewHandTemplate = createFallbackHand();
         return Promise.resolve(previewHandTemplate);
@@ -4493,6 +4849,63 @@
       return { material, uniforms };
     }
 
+    function createPortalFallbackMaterial(accentColor, active = false) {
+      const accent = new THREE.Color(accentColor ?? '#7b6bff');
+      const baseColor = new THREE.Color('#1a1f39').lerp(accent, active ? 0.65 : 0.5);
+      return new THREE.MeshStandardMaterial({
+        color: baseColor,
+        emissive: accent,
+        emissiveIntensity: active ? 0.6 : 0.35,
+        transparent: true,
+        opacity: active ? 0.7 : 0.45,
+        metalness: 0.35,
+        roughness: 0.4,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      });
+    }
+
+    function addPortalSurface(group, renderInfo, accentColor, height, active) {
+      if (!portalShaderSupport || typeof THREE.ShaderMaterial !== 'function') {
+        const frontMaterial = createPortalFallbackMaterial(accentColor, active);
+        const sideMaterial = createPortalFallbackMaterial(accentColor, active);
+        const frontPlane = new THREE.Mesh(PORTAL_PLANE_GEOMETRY, frontMaterial);
+        frontPlane.position.y = height + 0.85;
+        frontPlane.renderOrder = 2;
+        group.add(frontPlane);
+        const sidePlane = new THREE.Mesh(PORTAL_PLANE_GEOMETRY, sideMaterial);
+        sidePlane.position.y = height + 0.85;
+        sidePlane.rotation.y = Math.PI / 2;
+        sidePlane.renderOrder = 2;
+        group.add(sidePlane);
+        return;
+      }
+      try {
+        const { material: shaderMaterial, uniforms } = createPortalSurfaceMaterial(accentColor, active);
+        const frontPlane = new THREE.Mesh(PORTAL_PLANE_GEOMETRY, shaderMaterial);
+        frontPlane.position.y = height + 0.85;
+        frontPlane.renderOrder = 2;
+        group.add(frontPlane);
+        const sideMaterial = shaderMaterial.clone();
+        sideMaterial.uniforms = uniforms;
+        const sidePlane = new THREE.Mesh(PORTAL_PLANE_GEOMETRY, sideMaterial);
+        sidePlane.position.y = height + 0.85;
+        sidePlane.rotation.y = Math.PI / 2;
+        sidePlane.renderOrder = 2;
+        group.add(sidePlane);
+        renderInfo.animations.portalSurface = {
+          uniforms,
+          materials: [frontPlane.material, sidePlane.material],
+          accentColor,
+          isActive: active,
+        };
+      } catch (error) {
+        console.warn('Portal shader initialisation failed; switching to emissive fallback material.', error);
+        portalShaderSupport = false;
+        addPortalSurface(group, renderInfo, accentColor, height, active);
+      }
+    }
+
     function getTileSignature(tile) {
       if (!tile) return 'void';
       const entries = tile.data
@@ -4717,25 +5130,7 @@
             roughness: 0.45,
             metalness: 0.35,
           });
-          const { material: shaderMaterial, uniforms } = createPortalSurfaceMaterial(
-            accentColor,
-            tile.type === 'portal'
-          );
-          const plane = new THREE.Mesh(PORTAL_PLANE_GEOMETRY, shaderMaterial);
-          plane.position.y = height + 0.85;
-          plane.renderOrder = 2;
-          group.add(plane);
-          const planeBMaterial = shaderMaterial.clone();
-          planeBMaterial.uniforms = uniforms;
-          const planeB = new THREE.Mesh(PORTAL_PLANE_GEOMETRY, planeBMaterial);
-          planeB.position.y = height + 0.85;
-          planeB.rotation.y = Math.PI / 2;
-          planeB.renderOrder = 2;
-          group.add(planeB);
-          renderInfo.animations.portalSurface = {
-            uniforms,
-            materials: [plane.material, planeB.material],
-          };
+          addPortalSurface(group, renderInfo, accentColor, height, tile.type === 'portal');
           break;
         }
         case 'crystal': {
@@ -4815,6 +5210,44 @@
       }
     }
 
+    function disablePortalSurfaceShaders(error) {
+      if (!portalShaderSupport) {
+        return false;
+      }
+      portalShaderSupport = false;
+      let disabled = false;
+      for (let y = 0; y < tileRenderState.length; y += 1) {
+        const row = tileRenderState[y];
+        if (!row) continue;
+        for (let x = 0; x < row.length; x += 1) {
+          const renderInfo = row[x];
+          const portalSurface = renderInfo?.animations?.portalSurface;
+          if (!portalSurface || !renderInfo?.group) continue;
+          const accentColor = portalSurface.accentColor ?? '#7b6bff';
+          const isActive = portalSurface.isActive ?? false;
+          portalSurface.materials?.forEach((material) => {
+            if (!material) return;
+            const host = renderInfo.group.children?.find((child) => child.material === material);
+            material.dispose?.();
+            if (host) {
+              const fallback = createPortalFallbackMaterial(accentColor, isActive);
+              fallback.renderOrder = host.renderOrder ?? 2;
+              host.material = fallback;
+            }
+          });
+          delete renderInfo.animations.portalSurface;
+          disabled = true;
+        }
+      }
+      if (disabled) {
+        console.warn(
+          'Portal shaders disabled after renderer failure; continuing with emissive fallback materials.',
+          error
+        );
+      }
+      return disabled;
+    }
+
     function updateWorldMeshes() {
       ensureTileGroups();
       for (let y = 0; y < state.height; y++) {
@@ -4853,6 +5286,47 @@
       playerAnimationBlend.walk = 0;
     }
 
+    function createPlaceholderHumanoid({
+      bodyColor = '#4e8cff',
+      headColor = '#f2d7b4',
+      bodyWidth = 0.6,
+      bodyDepth = 0.4,
+      bodyHeight = 1.2,
+      headSize = 0.42,
+      accentColor = null,
+      name = 'placeholder-character',
+    } = {}) {
+      const group = new THREE.Group();
+      group.name = name;
+      const bodyMaterial = new THREE.MeshStandardMaterial({
+        color: new THREE.Color(bodyColor),
+        metalness: 0.16,
+        roughness: 0.72,
+      });
+      const body = new THREE.Mesh(new THREE.BoxGeometry(bodyWidth, bodyHeight, bodyDepth), bodyMaterial);
+      body.position.y = bodyHeight / 2;
+      body.castShadow = true;
+      body.receiveShadow = true;
+      group.add(body);
+      if (headColor) {
+        const headMaterial = new THREE.MeshStandardMaterial({
+          color: new THREE.Color(headColor),
+          metalness: 0.12,
+          roughness: 0.68,
+        });
+        if (accentColor) {
+          headMaterial.emissive = new THREE.Color(accentColor).multiplyScalar(0.25);
+          headMaterial.emissiveIntensity = 0.6;
+        }
+        const head = new THREE.Mesh(new THREE.BoxGeometry(headSize, headSize, headSize), headMaterial);
+        head.position.y = bodyHeight + headSize / 2;
+        head.castShadow = true;
+        head.receiveShadow = true;
+        group.add(head);
+      }
+      return group;
+    }
+
     function createPlayerMesh() {
       if (!entityGroup) return;
       if (playerMesh) {
@@ -4861,6 +5335,23 @@
       playerMesh = null;
       playerMeshParts = null;
       resetPlayerAnimationState();
+
+      if (!SUPPORTS_MODEL_ASSETS) {
+        const placeholder = createPlaceholderHumanoid({
+          bodyColor: '#5b8cff',
+          headColor: '#f4d7b2',
+          bodyWidth: 0.62,
+          bodyDepth: 0.46,
+          bodyHeight: 1.4,
+          headSize: 0.44,
+          name: 'player-fallback',
+        });
+        placeholder.position.y = 0;
+        entityGroup.add(placeholder);
+        playerMesh = placeholder;
+        playerMeshParts = null;
+        return;
+      }
 
       if (!THREE.GLTFLoader) {
         console.error('GLTFLoader is unavailable; cannot create the Steve model.');
@@ -5008,8 +5499,34 @@
       entityGroup.add(playerLocator);
     }
 
+    function createFallbackZombieTemplate() {
+      const group = createPlaceholderHumanoid({
+        bodyColor: '#3d7c42',
+        headColor: '#83c27a',
+        accentColor: '#a8ffa2',
+        bodyWidth: 0.56,
+        bodyDepth: 0.44,
+        bodyHeight: 1.18,
+        headSize: 0.4,
+        name: 'zombie-fallback-template',
+      });
+      group.traverse((child) => {
+        if (child.isMesh && child.material) {
+          child.material.roughness = 0.78;
+          child.material.metalness = 0.08;
+        }
+      });
+      group.updateMatrixWorld(true);
+      return { scene: group, groundOffset: 0, defaultScale: 1 };
+    }
+
     function ensureZombieModelTemplate() {
       if (zombieModelTemplate || zombieModelPromise) return zombieModelPromise;
+      if (!SUPPORTS_MODEL_ASSETS) {
+        zombieModelTemplate = createFallbackZombieTemplate();
+        zombieModelPromise = Promise.resolve(zombieModelTemplate);
+        return zombieModelPromise;
+      }
       if (!THREE.GLTFLoader) {
         console.error('GLTFLoader is unavailable; cannot create the zombie model.');
         return null;
@@ -5148,8 +5665,56 @@
       }
     }
 
+    function createFallbackGolemTemplate() {
+      const group = new THREE.Group();
+      group.name = 'iron-golem-fallback-template';
+      const bodyMaterial = new THREE.MeshStandardMaterial({
+        color: new THREE.Color('#b9b3a4'),
+        metalness: 0.26,
+        roughness: 0.58,
+      });
+      const body = new THREE.Mesh(new THREE.BoxGeometry(0.98, 1.8, 0.72), bodyMaterial);
+      body.position.y = 0.9;
+      body.castShadow = true;
+      body.receiveShadow = true;
+      group.add(body);
+      const headMaterial = new THREE.MeshStandardMaterial({
+        color: new THREE.Color('#e5dfd0'),
+        metalness: 0.18,
+        roughness: 0.64,
+        emissive: new THREE.Color('#ffa96d').multiplyScalar(0.2),
+        emissiveIntensity: 0.6,
+      });
+      const head = new THREE.Mesh(new THREE.BoxGeometry(0.58, 0.52, 0.58), headMaterial);
+      head.position.y = 1.65;
+      head.castShadow = true;
+      head.receiveShadow = true;
+      group.add(head);
+      const armMaterial = new THREE.MeshStandardMaterial({
+        color: new THREE.Color('#d2ccbd'),
+        metalness: 0.22,
+        roughness: 0.6,
+      });
+      const leftArm = new THREE.Mesh(new THREE.BoxGeometry(0.26, 1.2, 0.26), armMaterial);
+      leftArm.position.set(-0.72, 0.9, 0);
+      const rightArm = leftArm.clone();
+      rightArm.position.x = 0.72;
+      [leftArm, rightArm].forEach((arm) => {
+        arm.castShadow = true;
+        arm.receiveShadow = true;
+        group.add(arm);
+      });
+      group.updateMatrixWorld(true);
+      return { scene: group, groundOffset: 0, defaultScale: 1 };
+    }
+
     function ensureIronGolemModelTemplate() {
       if (ironGolemModelTemplate || ironGolemModelPromise) return ironGolemModelPromise;
+      if (!SUPPORTS_MODEL_ASSETS) {
+        ironGolemModelTemplate = createFallbackGolemTemplate();
+        ironGolemModelPromise = Promise.resolve(ironGolemModelTemplate);
+        return ironGolemModelPromise;
+      }
       if (!THREE.GLTFLoader) {
         console.error('GLTFLoader is unavailable; cannot create the iron golem model.');
         return null;
@@ -6118,7 +6683,13 @@
       updateWorldMeshes();
       updateEntities();
       if (renderer && scene && camera) {
-        renderer.render(scene, camera);
+        try {
+          renderer.render(scene, camera);
+        } catch (error) {
+          if (!disablePortalSurfaceShaders(error)) {
+            console.error('Renderer encountered an unrecoverable error.', error);
+          }
+        }
       }
     }
 
@@ -11528,6 +12099,9 @@
 
     function ensureGapiScriptLoaded() {
       if (!appConfig.googleClientId) {
+        return Promise.resolve(null);
+      }
+      if (!SUPPORTS_MODEL_ASSETS) {
         return Promise.resolve(null);
       }
       if (!gapiScriptPromise) {
