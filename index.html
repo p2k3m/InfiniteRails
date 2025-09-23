@@ -9,11 +9,67 @@
   </head>
   <body>
     <div class="background-sheen"></div>
-    <div class="manu-logo" aria-hidden="false">
-      <img src="assets/manu-logo.svg" alt="Created by Manu" class="manu-logo__image" />
+    <div class="manu-logo" id="logo" aria-hidden="false" data-hint="Created by Manu">
+      <svg
+        class="manu-logo__glyph"
+        viewBox="0 0 48 48"
+        role="img"
+        aria-labelledby="logoTitle logoDesc"
+      >
+        <title id="logoTitle">Manu voxel monogram</title>
+        <desc id="logoDesc">Stylised glowing M emblem rendered with a blue gradient.</desc>
+        <defs>
+          <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#00aaff"></stop>
+            <stop offset="100%" stop-color="#0044ff"></stop>
+          </linearGradient>
+          <filter id="voxelGlow" x="-40%" y="-40%" width="180%" height="180%">
+            <feGaussianBlur in="SourceGraphic" stdDeviation="2.6" result="blur"></feGaussianBlur>
+            <feMerge>
+              <feMergeNode in="blur"></feMergeNode>
+              <feMergeNode in="SourceGraphic"></feMergeNode>
+            </feMerge>
+          </filter>
+        </defs>
+        <rect x="4" y="4" width="40" height="40" rx="10" fill="url(#grad)" filter="url(#voxelGlow)"></rect>
+        <path
+          d="M12 32V16l6 8l6-8v16"
+          fill="none"
+          stroke="rgba(255, 255, 255, 0.88)"
+          stroke-width="4"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        ></path>
+        <path
+          d="M24 16l6 8l6-8v16"
+          fill="none"
+          stroke="rgba(180, 220, 255, 0.82)"
+          stroke-width="4"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        ></path>
+        <text
+          x="24"
+          y="32"
+          text-anchor="middle"
+          fill="white"
+          font-family="'Chakra Petch', 'Exo 2', sans-serif"
+          font-size="16"
+          font-weight="700"
+        >
+          M
+        </text>
+      </svg>
+      <span class="manu-logo__label" aria-hidden="true">Created by Manu</span>
+      <span class="sr-only">Created by Manu</span>
     </div>
     <main class="main-layout">
-      <aside class="objectives-panel" id="objectivesPanel" aria-label="Mission objectives">
+      <aside
+        class="objectives-panel"
+        id="objectivesPanel"
+        aria-label="Mission objectives"
+        data-hint="Review mission objectives and lore."
+      >
         <div class="logo-area objectives-panel__brand">
           <img src="assets/infinite-dimension-logo.svg" alt="Infinite Dimension logo" class="brand-logo" />
           <div class="brand-copy">
@@ -25,28 +81,41 @@
           <header class="objectives-panel__header">
             <h2>Current Objectives</h2>
           </header>
-          <div class="objectives-panel__card">
-            <div class="overlay-panel" id="dimensionInfo"></div>
+          <div class="objectives-panel__card" data-hint="Current dimension intel and environmental traits.">
+            <div class="overlay-panel" id="dimensionInfo" data-hint="Dimension briefing updates in real-time."></div>
           </div>
         </section>
         <section class="objectives-panel__section objectives-panel__section--hint" aria-live="polite">
           <header class="objectives-panel__header objectives-panel__header--hint">
             <h2>Guidance</h2>
           </header>
-          <div class="objectives-panel__card objectives-panel__card--hint">
-            <div class="player-hint" id="playerHint" role="status" aria-live="assertive" tabindex="0"></div>
+          <div class="objectives-panel__card objectives-panel__card--hint" data-hint="Helpful reminders for surviving each biome.">
+            <div
+              class="player-hint"
+              id="playerHint"
+              role="status"
+              aria-live="assertive"
+              tabindex="0"
+              data-hint="Priority hint feed; focus to repeat guidance."
+            ></div>
           </div>
         </section>
       </aside>
-      <section class="primary-panel">
-        <canvas id="gameCanvas" width="960" height="600" aria-label="Game world"></canvas>
+      <section class="primary-panel" data-hint="Central viewport where you explore each dimension.">
+        <canvas
+          id="gameCanvas"
+          width="960"
+          height="600"
+          aria-label="Game world"
+          data-hint="Navigate and interact with the voxel realm here."
+        ></canvas>
         <div class="hud-layer" id="gameHud">
           <div class="hud-layer__corner hud-layer__corner--top-left">
-            <div class="hud-card hud-card--status">
-              <div class="hud-status" aria-label="Player vitals" role="group">
-                <div class="status-item hearts" id="hearts"></div>
-                <div class="status-item bubbles" id="bubbles"></div>
-                <div class="status-item time" id="timeOfDay"></div>
+            <div class="hud-card hud-card--status" data-hint="Monitor vitals and access crafting tools.">
+              <div class="hud-status" aria-label="Player vitals" role="group" data-hint="Health, oxygen, and time remainers.">
+                <div class="status-item hearts" id="hearts" data-hint="Current health hearts."></div>
+                <div class="status-item bubbles" id="bubbles" data-hint="Breath remaining while underwater."></div>
+                <div class="status-item time" id="timeOfDay" data-hint="Local dimension time."></div>
               </div>
               <button
                 type="button"
@@ -55,6 +124,7 @@
                 aria-label="Open crafting interface"
                 aria-haspopup="dialog"
                 aria-controls="craftingModal"
+                data-hint="Launch the portable crafting interface."
               >
                 <span aria-hidden="true" class="craft-launcher__icon"></span>
                 <span class="sr-only">Open crafting interface</span>
@@ -62,7 +132,13 @@
             </div>
           </div>
           <div class="hud-layer__corner hud-layer__corner--top-right">
-            <div class="score-overlay" id="scorePanel" role="status" aria-live="polite">
+            <div
+              class="score-overlay"
+              id="scorePanel"
+              role="status"
+              aria-live="polite"
+              data-hint="Real-time summary of your score and bonuses."
+            >
               <span class="score-overlay__label">Score</span>
               <span class="score-overlay__value" id="scoreTotal">0</span>
               <ul class="score-overlay__breakdown">
@@ -76,7 +152,7 @@
                 </li>
               </ul>
             </div>
-            <div class="hud-card hud-card--actions">
+            <div class="hud-card hud-card--actions" data-hint="Quick actions for leaderboards, guides, and settings.">
               <div class="hud-actions" role="group" aria-label="HUD controls">
                 <button
                   type="button"
@@ -85,6 +161,7 @@
                   aria-haspopup="dialog"
                   aria-controls="leaderboardModal"
                   aria-expanded="false"
+                  data-hint="View the multiverse leaderboard."
                 >
                   <span class="leaderboard-toggle__icon" aria-hidden="true">
                     <span></span>
@@ -93,7 +170,7 @@
                   </span>
                   <span class="leaderboard-toggle__label">Leaderboard</span>
                 </button>
-                <button type="button" id="openGuide" class="ghost">Game Guide</button>
+                <button type="button" id="openGuide" class="ghost" data-hint="Open the survival guide.">Game Guide</button>
                 <button
                   type="button"
                   id="openSettings"
@@ -101,6 +178,7 @@
                   aria-haspopup="dialog"
                   aria-controls="settingsModal"
                   aria-expanded="false"
+                  data-hint="Configure audio, visuals, and difficulty."
                 >
                   <span class="settings-toggle__icon" aria-hidden="true">
                     <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
@@ -118,13 +196,14 @@
                   class="ghost mobile-sidebar-toggle"
                   aria-expanded="false"
                   aria-controls="sidePanel"
+                  data-hint="Toggle the companion panels on smaller screens."
                 >
                   Player Panels
                 </button>
               </div>
-              <div class="user-identity" aria-live="polite">
-                <span class="user-name" id="headerUserName">Guest Explorer</span>
-                <span class="user-location" id="headerUserLocation">Location unavailable</span>
+              <div class="user-identity" aria-live="polite" data-hint="Profile data captured for this run.">
+                <span class="user-name" id="headerUserName" data-hint="Current explorer alias.">Guest Explorer</span>
+                <span class="user-location" id="headerUserLocation" data-hint="Last known co-ordinates.">Location unavailable</span>
               </div>
             </div>
           </div>
@@ -136,27 +215,48 @@
               aria-valuemin="0"
               aria-valuemax="100"
               aria-valuenow="0"
+              data-hint="Stabilise portals by filling this progress bar."
             >
               <span class="label"></span>
               <span class="bar"></span>
             </div>
           </div>
         </div>
-        <div class="crosshair" id="crosshair" aria-hidden="true">
+        <div class="crosshair" id="crosshair" aria-hidden="true" data-hint="Aiming reticle for interactions.">
           <span class="crosshair__horizontal"></span>
           <span class="crosshair__vertical"></span>
         </div>
-        <div class="hand-overlay" id="handOverlay" aria-hidden="true" data-item="fist">
-          <div class="hand-overlay__icon" id="handOverlayIcon" aria-hidden="true" data-item="fist"></div>
-          <span class="hand-overlay__label" id="handOverlayLabel">Fist</span>
+        <div class="hand-overlay" id="handOverlay" aria-hidden="true" data-item="fist" data-hint="Currently equipped item.">
+          <div
+            class="hand-overlay__icon"
+            id="handOverlayIcon"
+            aria-hidden="true"
+            data-item="fist"
+            data-hint="Visual icon for your held tool."
+          ></div>
+          <span class="hand-overlay__label" id="handOverlayLabel" data-hint="Name of the held item.">Fist</span>
         </div>
-        <div class="subtitle-overlay" id="subtitleOverlay" role="status" aria-live="assertive" hidden></div>
-        <div class="victory-banner" id="victoryBanner" role="status" aria-live="assertive"></div>
+        <div
+          class="subtitle-overlay"
+          id="subtitleOverlay"
+          role="status"
+          aria-live="assertive"
+          hidden
+          data-hint="Dialogue and lore subtitles appear here."
+        ></div>
+        <div
+          class="victory-banner"
+          id="victoryBanner"
+          role="status"
+          aria-live="assertive"
+          data-hint="Triumphant banner announcing your success."
+        ></div>
         <div
           class="victory-celebration"
           id="victoryCelebration"
           hidden
           aria-hidden="true"
+          data-hint="Animated celebration with stats and share tools."
         >
           <div class="victory-celebration__backdrop" aria-hidden="true"></div>
           <div class="victory-celebration__effects" aria-hidden="true">
