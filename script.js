@@ -4887,7 +4887,23 @@
         frontPlane.renderOrder = 2;
         group.add(frontPlane);
         const sideMaterial = shaderMaterial.clone();
-        sideMaterial.uniforms = uniforms;
+        const cloneUniforms = typeof THREE?.UniformsUtils?.clone === 'function'
+          ? THREE.UniformsUtils.clone(uniforms)
+          : Object.fromEntries(
+              Object.entries(uniforms).map(([key, uniform]) => {
+                const value = uniform?.value;
+                return [
+                  key,
+                  {
+                    value:
+                      value && typeof value.clone === 'function'
+                        ? value.clone()
+                        : value,
+                  },
+                ];
+              })
+            );
+        sideMaterial.uniforms = cloneUniforms;
         const sidePlane = new THREE.Mesh(PORTAL_PLANE_GEOMETRY, sideMaterial);
         sidePlane.position.y = height + 0.85;
         sidePlane.rotation.y = Math.PI / 2;
@@ -4895,6 +4911,7 @@
         group.add(sidePlane);
         renderInfo.animations.portalSurface = {
           uniforms,
+          uniformSets: [uniforms, cloneUniforms],
           materials: [frontPlane.material, sidePlane.material],
           accentColor,
           isActive: active,
@@ -5185,20 +5202,45 @@
     function updateTileVisual(tile, renderInfo) {
       if (!tile || tile.type === 'void') return;
       if (renderInfo.animations.portalSurface) {
-        const { uniforms } = renderInfo.animations.portalSurface;
-        uniforms.uTime.value = state.elapsed;
-        if (tile.type === 'portal') {
-          const portalState = tile.portalState;
-          const activation = portalState?.activation ?? 0.6;
-          const surge = portalState?.transition ?? 0;
-          const energy = Math.min(1.6, 0.25 + activation * 0.9 + surge * 0.8);
-          uniforms.uActivation.value = energy;
-          uniforms.uOpacity.value = Math.min(1, 0.65 + activation * 0.25 + surge * 0.2);
-        } else {
-          const dormant = tile.portalState?.activation ?? 0;
-          uniforms.uActivation.value = 0.12 + dormant * 0.4;
-          uniforms.uOpacity.value = 0.45;
+        const portalSurface = renderInfo.animations.portalSurface;
+        const sets = Array.isArray(portalSurface.uniformSets)
+          ? portalSurface.uniformSets
+          : portalSurface.uniforms
+          ? Array.isArray(portalSurface.uniforms)
+            ? portalSurface.uniforms
+            : [portalSurface.uniforms]
+          : [];
+        if (!portalSurface.uniformSets && sets.length) {
+          portalSurface.uniformSets = sets;
         }
+        const applyPortalUniforms = (uniforms) => {
+          if (!uniforms) return;
+          const { uTime, uActivation, uOpacity } = uniforms;
+          if (uTime && 'value' in uTime) {
+            uTime.value = state.elapsed;
+          }
+          if (tile.type === 'portal') {
+            const portalState = tile.portalState;
+            const activation = portalState?.activation ?? 0.6;
+            const surge = portalState?.transition ?? 0;
+            const energy = Math.min(1.6, 0.25 + activation * 0.9 + surge * 0.8);
+            if (uActivation && 'value' in uActivation) {
+              uActivation.value = energy;
+            }
+            if (uOpacity && 'value' in uOpacity) {
+              uOpacity.value = Math.min(1, 0.65 + activation * 0.25 + surge * 0.2);
+            }
+          } else {
+            const dormant = tile.portalState?.activation ?? 0;
+            if (uActivation && 'value' in uActivation) {
+              uActivation.value = 0.12 + dormant * 0.4;
+            }
+            if (uOpacity && 'value' in uOpacity) {
+              uOpacity.value = 0.45;
+            }
+          }
+        };
+        sets.forEach(applyPortalUniforms);
       }
       if (renderInfo.animations.railGlow) {
         const active = state.railPhase === (tile.data?.phase ?? 0);
