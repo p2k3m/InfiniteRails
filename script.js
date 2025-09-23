@@ -172,6 +172,10 @@
     const scoreboardStatusEl = document.getElementById('scoreboardStatus');
     let previousLeaderboardSnapshot = new Map();
     let leaderboardHasRenderedOnce = false;
+    let hudGoogleButton = null;
+    let gapiScriptPromise = null;
+    let googleAuthPromise = null;
+    let googleAuthInstance = null;
     const refreshScoresButton = document.getElementById('refreshScores');
     const leaderboardModal = document.getElementById('leaderboardModal');
     const openLeaderboardButton = document.getElementById('openLeaderboard');
@@ -7813,20 +7817,7 @@
       }
       flagProgressDirty('start');
       queueProgressSave('start');
-      try {
-        if (!identityState.googleProfile && appConfig.googleClientId) {
-          const promptSeen = localStorage.getItem(SYNC_PROMPT_STORAGE_KEY);
-          if (!promptSeen) {
-            const wantsSync = window.confirm('Sync your progress across devices with Google Sign-In?');
-            localStorage.setItem(SYNC_PROMPT_STORAGE_KEY, 'dismissed');
-            if (wantsSync) {
-              attemptGoogleSignInFlow();
-            }
-          }
-        }
-      } catch (error) {
-        console.warn('Unable to prompt for progress sync.', error);
-      }
+      promptForOptionalSync();
       window.setTimeout(() => {
         if (state.isRunning) {
           const preferredScheme = prefersTouchControls() ? 'touch' : 'desktop';
@@ -10402,7 +10393,27 @@
       return 'Location hidden';
     }
 
+    function ensureHudGoogleButton() {
+      if (!appConfig.googleClientId) return null;
+      if (!hudRootEl) return null;
+      if (hudGoogleButton) return hudGoogleButton;
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = 'Sign in with Google - Optional';
+      button.style.cssText =
+        'position:absolute;top:10px;right:10px;background:blue;color:white;padding:8px 12px;border:none;border-radius:6px;font-weight:600;cursor:pointer;z-index:30;';
+      button.addEventListener('click', () => {
+        startGoogleSignInFlow();
+      });
+      hudRootEl.appendChild(button);
+      hudGoogleButton = button;
+      return hudGoogleButton;
+    }
+
     function updateIdentityUI() {
+      if (appConfig.googleClientId) {
+        ensureHudGoogleButton();
+      }
       if (headerUserNameEl) headerUserNameEl.textContent = identityState.displayName ?? 'Guest Explorer';
       if (userNameDisplayEl) userNameDisplayEl.textContent = identityState.displayName ?? 'Guest Explorer';
       if (headerUserLocationEl) headerUserLocationEl.textContent = formatLocationBadge(identityState.location);
@@ -10410,13 +10421,26 @@
       if (userDeviceDisplayEl) userDeviceDisplayEl.textContent = formatDeviceSnapshot(identityState.device);
 
       const signedIn = Boolean(identityState.googleProfile);
+      if (hudGoogleButton) {
+        if (!appConfig.googleClientId || signedIn) {
+          hudGoogleButton.hidden = true;
+        } else {
+          hudGoogleButton.hidden = false;
+          const ready = identityState.googleInitialized;
+          hudGoogleButton.disabled = !ready;
+          hudGoogleButton.setAttribute('aria-disabled', ready ? 'false' : 'true');
+          hudGoogleButton.textContent = ready
+            ? 'Sign in with Google - Optional'
+            : 'Preparing Google Sign-In…';
+          hudGoogleButton.style.opacity = ready ? '1' : '0.6';
+          hudGoogleButton.style.cursor = ready ? 'pointer' : 'not-allowed';
+        }
+      }
       googleSignOutButtons.forEach((button) => {
         button.hidden = !signedIn;
       });
       googleButtonContainers.forEach((container) => {
-        const shouldHideGoogleButton =
-          signedIn || !identityState.googleInitialized || !appConfig.googleClientId;
-        container.hidden = shouldHideGoogleButton;
+        container.hidden = true;
       });
       googleFallbackButtons.forEach((button) => {
         const showFallback = !signedIn;
@@ -10424,9 +10448,9 @@
         if (appConfig.googleClientId) {
           const ready = identityState.googleInitialized;
           button.disabled = !ready;
-          button.textContent = ready ? 'Sign in with Google' : 'Preparing Google Sign-In…';
+          button.textContent = ready ? 'Sign in with Google - Optional' : 'Preparing Google Sign-In…';
           button.title = ready
-            ? 'Open the Google Sign-In prompt.'
+            ? 'Open the Google Sign-In popup to sync your progress across devices.'
             : 'Google services are still initialising. This will become clickable momentarily.';
         } else {
           button.disabled = false;
@@ -10772,25 +10796,6 @@
       updateLeaderboardSortIndicators();
     }
 
-    function decodeJwt(token) {
-      if (!token) return null;
-      const payload = token.split('.')[1];
-      if (!payload) return null;
-      const normalized = payload.replace(/-/g, '+').replace(/_/g, '/');
-      try {
-        const decoded = atob(normalized);
-        const json = decodeURIComponent(
-          Array.prototype.map
-            .call(decoded, (char) => `%${`00${char.charCodeAt(0).toString(16)}`.slice(-2)}`)
-            .join('')
-        );
-        return JSON.parse(json);
-      } catch (error) {
-        console.warn('Failed to decode Google credential.', error);
-        return null;
-      }
-    }
-
     function ensureLocalProfileId() {
       let identifier = null;
       try {
@@ -10817,17 +10822,6 @@
       const response = window.prompt("What's your name?", base);
       const trimmed = response?.trim();
       return trimmed || base;
-    }
-
-    async function handleGoogleCredentialResponse({ credential }) {
-      const decoded = decodeJwt(credential);
-      if (!decoded) {
-        console.warn('Received invalid Google credential payload.');
-        return;
-      }
-      const defaultName = decoded.name ?? decoded.given_name ?? (decoded.email ? decoded.email.split('@')[0] : 'Explorer');
-      const preferredName = promptDisplayName(defaultName);
-      await finalizeSignIn({ ...decoded, credential }, preferredName);
     }
 
     async function handleLocalProfileSignIn() {
@@ -10865,7 +10859,7 @@
       identityState.location = await captureLocation();
       updateIdentityUI();
 
-      const syncedSnapshot = await hydrateProgressForGoogleUser(googleId);
+      const syncedSnapshot = await loadFromDynamo(googleId);
       let snapshotForSync = syncedSnapshot;
       if (!snapshotForSync) {
         const localProgress = readPersistedProgress();
@@ -10875,63 +10869,137 @@
       await loadScoreboard();
     }
 
-    function attemptGoogleInit(retries = 12) {
+    function ensureGapiScriptLoaded() {
+      if (!appConfig.googleClientId) {
+        return Promise.resolve(null);
+      }
+      if (!gapiScriptPromise) {
+        gapiScriptPromise = loadScript('https://apis.google.com/js/api.js').catch((error) => {
+          console.warn('Failed to load Google API script.', error);
+          gapiScriptPromise = null;
+          throw error;
+        });
+      }
+      return gapiScriptPromise;
+    }
+
+    async function ensureGoogleAuthReady() {
       if (!appConfig.googleClientId) {
         identityState.googleInitialized = false;
         updateIdentityUI();
-        return;
+        return null;
       }
-      if (window.google?.accounts?.id) {
-        google.accounts.id.initialize({
-          client_id: appConfig.googleClientId,
-          callback: handleGoogleCredentialResponse,
-          ux_mode: 'popup',
-          auto_select: false,
-        });
-        googleButtonContainers.forEach((container) => {
-          if (!container || container.dataset.rendered === 'true') return;
-          google.accounts.id.renderButton(container, {
-            type: 'standard',
-            theme: 'outline',
-            size: 'large',
-            text: 'signin_with',
-            shape: 'pill',
-            width: 260,
-          });
-          container.dataset.rendered = 'true';
-          container.hidden = false;
-        });
+      if (googleAuthInstance) {
         identityState.googleInitialized = true;
         updateIdentityUI();
-        return;
+        return googleAuthInstance;
       }
-      if (retries > 0) {
-        setTimeout(() => attemptGoogleInit(retries - 1), 400);
-      } else {
-        identityState.googleInitialized = false;
-        updateIdentityUI();
+      if (googleAuthPromise) {
+        return googleAuthPromise;
       }
+      identityState.googleInitialized = false;
+      updateIdentityUI();
+      googleAuthPromise = ensureGapiScriptLoaded()
+        .then(
+          () =>
+            new Promise((resolve, reject) => {
+              if (!window.gapi?.load) {
+                reject(new Error('Google API unavailable.'));
+                return;
+              }
+              window.gapi.load('auth2', () => {
+                try {
+                  const instance =
+                    window.gapi.auth2.getAuthInstance?.() ||
+                    window.gapi.auth2.init({
+                      client_id: appConfig.googleClientId,
+                    });
+                  instance
+                    .then(() => {
+                      googleAuthInstance = instance;
+                      identityState.googleInitialized = true;
+                      updateIdentityUI();
+                      resolve(instance);
+                    })
+                    .catch((error) => {
+                      identityState.googleInitialized = false;
+                      updateIdentityUI();
+                      reject(error);
+                    });
+                } catch (error) {
+                  identityState.googleInitialized = false;
+                  updateIdentityUI();
+                  reject(error);
+                }
+              });
+            })
+        )
+        .catch((error) => {
+          console.warn('Failed to initialise Google auth.', error);
+          throw error;
+        })
+        .finally(() => {
+          googleAuthPromise = null;
+        });
+      return googleAuthPromise;
     }
 
-    function attemptGoogleSignInFlow() {
+    async function startGoogleSignInFlow() {
       if (!appConfig.googleClientId) {
         console.warn('Google client ID missing.');
         return;
       }
-      if (!identityState.googleInitialized) {
-        attemptGoogleInit();
+      try {
+        const auth = await ensureGoogleAuthReady();
+        if (!auth) {
+          alert('Google Sign-In is unavailable. Please try again later.');
+          return;
+        }
+        let googleUser = auth.currentUser?.get?.();
+        if (!googleUser || !auth.isSignedIn?.get?.()) {
+          googleUser = await auth.signIn();
+        }
+        await handleGoogleUserSignIn(googleUser);
+      } catch (error) {
+        console.warn('Google Sign-In failed.', error);
+        alert('Google Sign-In failed. Please try again later.');
       }
-      if (window.google?.accounts?.id && identityState.googleInitialized) {
-        google.accounts.id.prompt((notification) => {
-          if (notification.isNotDisplayed?.()) {
-            console.warn('Google Sign-In prompt was not displayed.', notification.getNotDisplayedReason?.());
-          }
-          if (notification.isSkippedMoment?.()) {
-            console.warn('Google Sign-In prompt was skipped.', notification.getSkippedReason?.());
-          }
-        });
-      } else {
-        alert('Google Sign-In is still initialising. Please try again in a moment.');
+    }
+
+    async function handleGoogleUserSignIn(googleUser) {
+      if (!googleUser) return;
+      const profile = googleUser.getBasicProfile?.();
+      if (!profile) {
+        console.warn('Google profile unavailable.');
+        return;
+      }
+      const preferredName = profile.getName?.() || profile.getGivenName?.() || identityState.displayName || 'Explorer';
+      await finalizeSignIn(
+        {
+          sub: profile.getId?.(),
+          email: profile.getEmail?.() || null,
+          picture: profile.getImageUrl?.() || null,
+          name: profile.getName?.() || null,
+        },
+        preferredName
+      );
+    }
+
+    function promptForOptionalSync() {
+      if (!appConfig.googleClientId) return;
+      if (identityState.googleProfile) return;
+      try {
+        const promptSeen = localStorage.getItem(SYNC_PROMPT_STORAGE_KEY);
+        if (promptSeen) return;
+        const wantsSync = window.confirm(
+          'Sync progress across devices? Sign in optional.\n\nSelect OK to connect your Google account now or Cancel to sync later.'
+        );
+        localStorage.setItem(SYNC_PROMPT_STORAGE_KEY, 'dismissed');
+        if (wantsSync) {
+          startGoogleSignInFlow();
+        }
+      } catch (error) {
+        console.warn('Unable to prompt for progress sync.', error);
       }
     }
 
@@ -10944,8 +11012,11 @@
       identityState.scoreboardSource = 'remote';
       identityState.loadingScores = false;
       state.scoreSubmitted = false;
-      if (window.google?.accounts?.id) {
-        google.accounts.id.disableAutoSelect();
+      try {
+        const auth = googleAuthInstance ?? (await ensureGoogleAuthReady());
+        await auth?.signOut?.();
+      } catch (error) {
+        console.warn('Unable to sign out from Google auth instance.', error);
       }
       primeOfflineScoreboard();
       updateIdentityUI();
@@ -10964,7 +11035,7 @@
         googleId: identityState.googleProfile.sub,
         name: identityState.displayName,
         email: identityState.googleProfile.email,
-        location: identityState.location,
+        location: getGeolocation(),
         device: identityState.device,
         lastSeenAt: new Date().toISOString(),
       };
@@ -10977,6 +11048,11 @@
           payload.inventory = normalizedSnapshot.inventory;
           payload.progressVersion = normalizedSnapshot.version;
           payload.progressUpdatedAt = normalizedSnapshot.updatedAt;
+          try {
+            payload.state = JSON.stringify(normalizedSnapshot);
+          } catch (error) {
+            console.warn('Failed to serialize progress snapshot for sync.', error);
+          }
         }
       }
       try {
@@ -10997,6 +11073,11 @@
       } catch (error) {
         console.warn('Failed to sync user metadata with API.', error);
       }
+    }
+
+    async function loadFromDynamo(googleId) {
+      if (!googleId) return null;
+      return hydrateProgressForGoogleUser(googleId);
     }
 
     async function fetchRemoteUserProfile(googleId) {
@@ -11021,7 +11102,16 @@
 
     async function hydrateProgressForGoogleUser(googleId) {
       const remoteProfile = await fetchRemoteUserProfile(googleId);
-      const remoteSnapshot = remoteProfile?.progress ? normalizeProgressSnapshot(remoteProfile.progress) : null;
+      let remoteSnapshot = remoteProfile?.progress ? normalizeProgressSnapshot(remoteProfile.progress) : null;
+      if (!remoteSnapshot && remoteProfile?.state) {
+        try {
+          const parsedState =
+            typeof remoteProfile.state === 'string' ? JSON.parse(remoteProfile.state) : remoteProfile.state;
+          remoteSnapshot = normalizeProgressSnapshot(parsedState);
+        } catch (error) {
+          console.warn('Failed to parse remote state payload.', error);
+        }
+      }
       const localResult = readPersistedProgress();
       const localSnapshot = localResult?.snapshot ?? null;
       let chosenSnapshot = null;
@@ -11263,6 +11353,10 @@
       });
     }
 
+    function getGeolocation() {
+      return identityState.location ?? null;
+    }
+
     async function initializeIdentityLayer() {
       identityState.device = collectDeviceSnapshot();
       try {
@@ -11286,11 +11380,11 @@
       }
       primeOfflineScoreboard();
       updateIdentityUI();
-      attemptGoogleInit();
+      ensureGoogleAuthReady().catch(() => {});
       googleFallbackButtons.forEach((button) => {
         button.addEventListener('click', () => {
           if (appConfig.googleClientId) {
-            attemptGoogleSignInFlow();
+            startGoogleSignInFlow();
           } else {
             handleLocalProfileSignIn();
           }
