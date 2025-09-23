@@ -4829,15 +4829,45 @@
       return plate;
     }
 
+    function cloneUniformSet(uniforms) {
+      if (!uniforms || typeof uniforms !== 'object') {
+        return uniforms;
+      }
+      if (typeof THREE?.UniformsUtils?.clone === 'function') {
+        return THREE.UniformsUtils.clone(uniforms);
+      }
+      return Object.fromEntries(
+        Object.entries(uniforms).map(([key, uniform]) => {
+          if (!uniform || typeof uniform !== 'object') {
+            return [key, uniform];
+          }
+          const clonedUniform = { ...uniform };
+          const { value } = uniform;
+          if (value && typeof value.clone === 'function') {
+            clonedUniform.value = value.clone();
+          } else if (Array.isArray(value)) {
+            clonedUniform.value = value.map((item) =>
+              item && typeof item.clone === 'function' ? item.clone() : item
+            );
+          } else if (value && typeof value === 'object') {
+            clonedUniform.value = { ...value };
+          } else {
+            clonedUniform.value = value;
+          }
+          return [key, clonedUniform];
+        })
+      );
+    }
+
     function createPortalSurfaceMaterial(accentColor, active = false) {
-      const uniforms = {
+      const baseUniforms = {
         uTime: { value: 0 },
         uActivation: { value: active ? 1 : 0.18 },
         uColor: { value: new THREE.Color(accentColor) },
         uOpacity: { value: active ? 0.85 : 0.55 },
       };
       const material = new THREE.ShaderMaterial({
-        uniforms,
+        uniforms: baseUniforms,
         vertexShader: PORTAL_VERTEX_SHADER,
         fragmentShader: PORTAL_FRAGMENT_SHADER,
         transparent: true,
@@ -4846,7 +4876,7 @@
         blending: THREE.AdditiveBlending,
       });
       material.extensions = material.extensions || {};
-      return { material, uniforms };
+      return { material, uniforms: material.uniforms };
     }
 
     function createPortalFallbackMaterial(accentColor, active = false) {
@@ -4887,23 +4917,8 @@
         frontPlane.renderOrder = 2;
         group.add(frontPlane);
         const sideMaterial = shaderMaterial.clone();
-        const cloneUniforms = typeof THREE?.UniformsUtils?.clone === 'function'
-          ? THREE.UniformsUtils.clone(uniforms)
-          : Object.fromEntries(
-              Object.entries(uniforms).map(([key, uniform]) => {
-                const value = uniform?.value;
-                return [
-                  key,
-                  {
-                    value:
-                      value && typeof value.clone === 'function'
-                        ? value.clone()
-                        : value,
-                  },
-                ];
-              })
-            );
-        sideMaterial.uniforms = cloneUniforms;
+        const sideUniforms = cloneUniformSet(uniforms);
+        sideMaterial.uniforms = sideUniforms;
         const sidePlane = new THREE.Mesh(PORTAL_PLANE_GEOMETRY, sideMaterial);
         sidePlane.position.y = height + 0.85;
         sidePlane.rotation.y = Math.PI / 2;
@@ -4911,7 +4926,7 @@
         group.add(sidePlane);
         renderInfo.animations.portalSurface = {
           uniforms,
-          uniformSets: [uniforms, cloneUniforms],
+          uniformSets: [uniforms, sideUniforms].filter(Boolean),
           materials: [frontPlane.material, sidePlane.material],
           accentColor,
           isActive: active,
