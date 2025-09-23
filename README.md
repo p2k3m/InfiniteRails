@@ -80,6 +80,19 @@ sam deploy --guided
 5. Build onward portals until you reach the collapsing Netherite realm.
 6. Escape with the Eternal Ingot and return home for victory.
 
+## Portal mechanics
+
+- **4×3 frame template** – portals are assembled as 4-by-3 rectangles. The placement routine runs a collision scan so trees,
+  chests, or even the explorer cannot occupy the footprint when the frame is forged.
+- **Torch-primed activation** – touching the dormant matrix with a torch immediately charges the shader glow before the full
+  activation sequence finishes. Igniters still work, but torches guarantee the luminous surge noted in the HUD.
+- **Fade-driven traversal** – stepping onto the active surface triggers the portal fade overlay, resets the landing position to
+  the new realm’s spawn coordinates, and logs the destination name in the event feed.
+- **Dimension physics bonus** – unlocking a realm records +5 points and installs bespoke physics metadata. The Rock Dimension
+  now ships with a gravity multiplier of 1.5 and a gritty shader profile to distinguish its atmosphere.
+- **Mechanics summary API** – `portal-mechanics.js` exposes pure functions for tests and docs to report the frame footprint,
+  activation behaviour, transition flow, and score rewards.
+
 ## Local Development
 
 No build tooling is required. Open `index.html` in any modern browser or use a lightweight static server:
