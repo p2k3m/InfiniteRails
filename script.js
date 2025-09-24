@@ -398,7 +398,8 @@
       throw new Error('Three.js failed to load. Ensure the CDN script is available.');
     }
 
-    let portalShaderSupport = typeof THREE?.ShaderMaterial === 'function';
+  let portalShaderSupport = typeof THREE?.ShaderMaterial === 'function';
+  let rendererRecoveryFrames = 0;
 
     const scoreboardUtils =
       (typeof window !== 'undefined' && window.ScoreboardUtils) ||
@@ -7589,6 +7590,10 @@
       updateWorldMeshes();
       updateEntities();
       if (renderer && scene && camera) {
+        if (rendererRecoveryFrames > 0) {
+          rendererRecoveryFrames -= 1;
+          return;
+        }
         try {
           renderer.render(scene, camera);
         } catch (error) {
@@ -7597,7 +7602,10 @@
           }
           if (!disablePortalSurfaceShaders(error)) {
             console.error('Renderer encountered an unrecoverable error.', error);
+            return;
           }
+          rendererRecoveryFrames = Math.max(rendererRecoveryFrames, 2);
+          return;
         }
       }
     }
