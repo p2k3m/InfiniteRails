@@ -5328,7 +5328,80 @@
       }
     }
 
-    function rebuildInvalidMaterialUniforms(error) {
+      function resyncPortalSurfaceMaterials(oldMaterial, newMaterial) {
+        const layers = Array.isArray(tileRenderState) ? tileRenderState : [];
+        for (let y = 0; y < layers.length; y += 1) {
+          const row = layers[y];
+          if (!Array.isArray(row)) continue;
+          for (let x = 0; x < row.length; x += 1) {
+            const renderInfo = row[x];
+            const portalSurface = renderInfo?.animations?.portalSurface;
+            if (!portalSurface) continue;
+
+            const group = renderInfo.group;
+            const groupMaterials = [];
+            if (group?.children) {
+              group.children.forEach((child) => {
+                if (!child) return;
+                const { material } = child;
+                if (Array.isArray(material)) {
+                  material.forEach((mat) => {
+                    if (mat) groupMaterials.push(mat);
+                  });
+                } else if (material) {
+                  groupMaterials.push(material);
+                }
+              });
+            }
+
+            const knownMaterials = Array.isArray(portalSurface.materials)
+              ? portalSurface.materials.filter(Boolean)
+              : [];
+            const candidateMaterials = groupMaterials.length ? groupMaterials : knownMaterials;
+            const remappedMaterials = candidateMaterials
+              .map((material) => {
+                if (material === oldMaterial) {
+                  return newMaterial || null;
+                }
+                return material;
+              })
+              .filter(Boolean);
+
+            const materialsChanged =
+              remappedMaterials.length !== knownMaterials.length ||
+              remappedMaterials.some((material, idx) => material !== knownMaterials[idx]);
+
+            if (materialsChanged) {
+              portalSurface.materials = remappedMaterials;
+            }
+
+            const uniformSets = remappedMaterials
+              .map((material) => (material && material.uniforms ? material.uniforms : null))
+              .filter((uniforms) => hasValidPortalUniformStructure(uniforms));
+
+            const uniformSetsChanged =
+              materialsChanged ||
+              !Array.isArray(portalSurface.uniformSets) ||
+              portalSurface.uniformSets.length !== uniformSets.length ||
+              uniformSets.some((set, idx) => set !== portalSurface.uniformSets?.[idx]);
+
+            if (uniformSetsChanged) {
+              portalSurface.uniformSets = uniformSets;
+            }
+
+            const primaryUniforms = remappedMaterials[0]?.uniforms;
+            if (portalSurface.uniforms === oldMaterial?.uniforms && newMaterial?.uniforms) {
+              portalSurface.uniforms = newMaterial.uniforms;
+            } else if (!hasValidPortalUniformStructure(portalSurface.uniforms)) {
+              portalSurface.uniforms = hasValidPortalUniformStructure(primaryUniforms)
+                ? primaryUniforms
+                : uniformSets[0] ?? null;
+            }
+          }
+        }
+      }
+
+      function rebuildInvalidMaterialUniforms(error) {
       if (!renderer || !scene || typeof renderer.properties?.get !== 'function') {
         return false;
       }
@@ -5368,14 +5441,15 @@
         const replacement = material.clone();
         replacement.needsUpdate = true;
         sanitizedMaterialRefs.add(replacement);
-        if (Array.isArray(host.material)) {
-          host.material[index] = replacement;
-        } else {
-          host.material = replacement;
-        }
-        renderer.properties.remove(material);
-        material.dispose?.();
-        updateCachedMaterial(material, replacement);
+          if (Array.isArray(host.material)) {
+            host.material[index] = replacement;
+          } else {
+            host.material = replacement;
+          }
+          renderer.properties.remove(material);
+          material.dispose?.();
+          updateCachedMaterial(material, replacement);
+          resyncPortalSurfaceMaterials(material, replacement);
         recovered = true;
         console.warn(
           'Rebuilt material after detecting invalid uniform definitions.',
