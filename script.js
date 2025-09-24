@@ -5812,10 +5812,21 @@
           });
         }
         const programUniformKeys = Array.from(keySet);
+        const missingUniforms = [];
+
         if (!programUniformKeys.length) {
-          return;
+          if (expectPortalUniforms && !hasValidPortalUniformStructure(material?.uniforms)) {
+            PORTAL_UNIFORM_KEYS.forEach((key) => {
+              if (typeof key === 'string' && key && !missingUniforms.includes(key)) {
+                missingUniforms.push(key);
+              }
+            });
+          } else {
+            return;
+          }
         }
-          const missingUniforms = [];
+
+        if (!missingUniforms.length) {
           programUniformKeys.forEach((key) => {
             const uniformKey = typeof key === 'string' ? key : `${key}`;
             if (isRendererManagedUniform(uniformKey)) {
@@ -5843,6 +5854,7 @@
               missingUniforms.push(uniformKey);
             }
           });
+        }
         if (!missingUniforms.length) {
           return;
         }
