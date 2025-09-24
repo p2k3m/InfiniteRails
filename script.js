@@ -4829,6 +4829,18 @@
       return plate;
     }
 
+    const PORTAL_UNIFORM_KEYS = ['uTime', 'uActivation', 'uColor', 'uOpacity'];
+
+    function hasValidPortalUniformStructure(uniforms) {
+      if (!uniforms || typeof uniforms !== 'object') {
+        return false;
+      }
+      return PORTAL_UNIFORM_KEYS.every((key) => {
+        const uniform = uniforms[key];
+        return Boolean(uniform && typeof uniform === 'object' && 'value' in uniform);
+      });
+    }
+
     function createPortalSurfaceMaterial(accentColor, active = false) {
       const baseUniforms = {
         uTime: { value: 0 },
@@ -4846,6 +4858,10 @@
         blending: THREE.AdditiveBlending,
       });
       material.extensions = material.extensions || {};
+      if (!hasValidPortalUniformStructure(material.uniforms)) {
+        material.dispose?.();
+        throw new Error('Portal shader uniforms unavailable');
+      }
       return { material, uniforms: material.uniforms };
     }
 
@@ -5199,6 +5215,17 @@
         if (!portalSurface.uniformSets && sets.length) {
           portalSurface.uniformSets = sets;
         }
+        const uniformSets = (portalSurface.uniformSets || [])
+          .filter((uniforms) => hasValidPortalUniformStructure(uniforms));
+        if (!uniformSets.length) {
+          if (portalShaderSupport) {
+            disablePortalSurfaceShaders(new Error('Portal shader uniforms missing expected values.'));
+          } else {
+            delete renderInfo.animations.portalSurface;
+          }
+          return;
+        }
+        portalSurface.uniformSets = uniformSets;
         const applyPortalUniforms = (uniforms) => {
           if (!uniforms || typeof uniforms !== 'object') return;
           const accentColor = portalSurface.accentColor ?? '#7b6bff';
@@ -5252,7 +5279,7 @@
             }
           }
         };
-        sets.forEach(applyPortalUniforms);
+        uniformSets.forEach(applyPortalUniforms);
       }
       if (renderInfo.animations.railGlow) {
         const active = state.railPhase === (tile.data?.phase ?? 0);
