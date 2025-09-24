@@ -4832,6 +4832,17 @@
 
     const PORTAL_UNIFORM_KEYS = ['uTime', 'uActivation', 'uColor', 'uOpacity'];
 
+    function tagPortalSurfaceMaterial(material, accentColor, active) {
+      if (!material || typeof material !== 'object') {
+        return;
+      }
+      material.userData = material.userData || {};
+      material.userData.portalSurface = {
+        accentColor,
+        isActive: Boolean(active),
+      };
+    }
+
     function hasValidPortalUniformStructure(uniforms) {
       if (!uniforms || typeof uniforms !== 'object') {
         return false;
@@ -4878,6 +4889,7 @@
         material.dispose?.();
         throw new Error('Portal shader uniforms unavailable');
       }
+      tagPortalSurfaceMaterial(material, accentColor, active);
       return { material, uniforms: material.uniforms };
     }
 
@@ -5260,6 +5272,7 @@
         const applyPortalUniforms = (uniforms) => {
           if (!uniforms || typeof uniforms !== 'object') return;
           const accentColor = portalSurface.accentColor ?? '#7b6bff';
+          const portalIsActive = tile.type === 'portal';
           let uniformsUpdated = false;
           Object.entries(uniforms).forEach(([key, uniform]) => {
             if (!uniform || typeof uniform !== 'object') {
@@ -5286,8 +5299,8 @@
             return uniforms[key];
           };
           const uTime = ensureUniform('uTime', 0);
-          const uActivation = ensureUniform('uActivation', tile.type === 'portal' ? 1 : 0.18);
-          const uOpacity = ensureUniform('uOpacity', tile.type === 'portal' ? 0.85 : 0.55);
+          const uActivation = ensureUniform('uActivation', portalIsActive ? 1 : 0.18);
+          const uOpacity = ensureUniform('uOpacity', portalIsActive ? 0.85 : 0.55);
           const uColor = ensureUniform('uColor', () => new THREE.Color(accentColor));
 
           if (uniformsUpdated && Array.isArray(portalSurface.materials)) {
@@ -5297,6 +5310,18 @@
               }
             });
           }
+
+          if (Array.isArray(portalSurface.materials)) {
+            portalSurface.materials.forEach((material) => {
+              const metadata = material?.userData?.portalSurface;
+              if (metadata) {
+                metadata.accentColor = accentColor;
+                metadata.isActive = portalIsActive;
+              }
+            });
+          }
+          portalSurface.accentColor = accentColor;
+          portalSurface.isActive = portalIsActive;
 
           if (uColor?.value?.set) {
             uColor.value.set(accentColor);
@@ -5447,7 +5472,30 @@
         if (!missingUniforms.length) {
           return;
         }
-        const replacement = material.clone();
+        let replacement = null;
+        const portalMetadata = material?.userData?.portalSurface;
+        if (portalMetadata) {
+          try {
+            const rebuilt = createPortalSurfaceMaterial(
+              portalMetadata.accentColor,
+              portalMetadata.isActive
+            );
+            replacement = rebuilt.material;
+            tagPortalSurfaceMaterial(replacement, portalMetadata.accentColor, portalMetadata.isActive);
+          } catch (factoryError) {
+            console.warn('Failed to regenerate portal surface shader; falling back to cloning.', {
+              error: factoryError,
+              accentColor: portalMetadata.accentColor,
+              isActive: portalMetadata.isActive,
+            });
+          }
+        }
+        if (!replacement) {
+          replacement = material.clone();
+          if (portalMetadata) {
+            tagPortalSurfaceMaterial(replacement, portalMetadata.accentColor, portalMetadata.isActive);
+          }
+        }
         replacement.needsUpdate = true;
         sanitizedMaterialRefs.add(replacement);
           if (Array.isArray(host.material)) {
