@@ -2243,6 +2243,7 @@
 
     const baseMaterialCache = new Map();
     const accentMaterialCache = new Map();
+    const sanitizedMaterialRefs = new WeakSet();
     const textureVariantCache = new Map();
     const spriteTextureCache = new Map();
     let treeLeavesMaterial = null;
@@ -5327,6 +5328,77 @@
       }
     }
 
+    function rebuildInvalidMaterialUniforms(error) {
+      if (!renderer || !scene || typeof renderer.properties?.get !== 'function') {
+        return false;
+      }
+      let recovered = false;
+      const updateCachedMaterial = (oldMaterial, newMaterial) => {
+        baseMaterialCache.forEach((cached, key) => {
+          if (cached === oldMaterial) {
+            baseMaterialCache.set(key, newMaterial);
+          }
+        });
+        accentMaterialCache.forEach((cached, key) => {
+          if (cached === oldMaterial) {
+            accentMaterialCache.set(key, newMaterial);
+          }
+        });
+      };
+      const inspectMaterial = (host, material, index) => {
+        if (!material || sanitizedMaterialRefs.has(material)) {
+          return;
+        }
+        const props = renderer.properties.get(material);
+        const uniforms = props?.uniforms;
+        const programUniforms = props?.program?.getUniforms?.()?.map ?? null;
+        if (!uniforms || !programUniforms || typeof programUniforms !== 'object') {
+          return;
+        }
+        const missingUniforms = Object.keys(programUniforms).filter((key) => {
+          if (!Object.prototype.hasOwnProperty.call(programUniforms, key)) {
+            return false;
+          }
+          const uniform = uniforms[key];
+          return !uniform || typeof uniform !== 'object' || !('value' in uniform);
+        });
+        if (!missingUniforms.length) {
+          return;
+        }
+        const replacement = material.clone();
+        replacement.needsUpdate = true;
+        sanitizedMaterialRefs.add(replacement);
+        if (Array.isArray(host.material)) {
+          host.material[index] = replacement;
+        } else {
+          host.material = replacement;
+        }
+        renderer.properties.remove(material);
+        material.dispose?.();
+        updateCachedMaterial(material, replacement);
+        recovered = true;
+        console.warn(
+          'Rebuilt material after detecting invalid uniform definitions.',
+          {
+            name: material.name || host.name || 'unnamed-material',
+            type: material.type,
+            missingUniforms,
+            originalError: error?.message ?? error,
+          }
+        );
+      };
+      scene.traverse((object) => {
+        const { material } = object;
+        if (!material) return;
+        if (Array.isArray(material)) {
+          material.forEach((mat, idx) => inspectMaterial(object, mat, idx));
+        } else {
+          inspectMaterial(object, material);
+        }
+      });
+      return recovered;
+    }
+
     function disablePortalSurfaceShaders(error) {
       const supportWasEnabled = portalShaderSupport;
       portalShaderSupport = false;
@@ -6806,6 +6878,9 @@
         try {
           renderer.render(scene, camera);
         } catch (error) {
+          if (rebuildInvalidMaterialUniforms(error)) {
+            return;
+          }
           if (!disablePortalSurfaceShaders(error)) {
             console.error('Renderer encountered an unrecoverable error.', error);
           }
