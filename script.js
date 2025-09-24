@@ -5585,6 +5585,9 @@
           for (let i = segments.length; i >= 1; i -= 1) {
             pushCandidate(segments.slice(0, i).join('.'));
           }
+          for (let i = 0; i < segments.length; i += 1) {
+            pushCandidate(segments.slice(i).join('.'));
+          }
         } else {
           pushCandidate(`${uniformKey}`);
         }
