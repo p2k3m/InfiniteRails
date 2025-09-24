@@ -5265,13 +5265,12 @@
     }
 
     function disablePortalSurfaceShaders(error) {
-      if (!portalShaderSupport) {
-        return false;
-      }
+      const supportWasEnabled = portalShaderSupport;
       portalShaderSupport = false;
       let disabled = false;
-      for (let y = 0; y < tileRenderState.length; y += 1) {
-        const row = tileRenderState[y];
+      const layers = Array.isArray(tileRenderState) ? tileRenderState : [];
+      for (let y = 0; y < layers.length; y += 1) {
+        const row = layers[y];
         if (!row) continue;
         for (let x = 0; x < row.length; x += 1) {
           const renderInfo = row[x];
@@ -5293,7 +5292,7 @@
           disabled = true;
         }
       }
-      if (!disabled) {
+      if (!disabled && supportWasEnabled) {
         resetWorldMeshes();
         disabled = true;
       }
