@@ -5445,6 +5445,54 @@
       if (!renderer || !scene || typeof renderer.properties?.get !== 'function') {
         return false;
       }
+
+      const resolveUniformReference = (uniforms, uniformKey) => {
+        if (!uniforms || typeof uniforms !== 'object') {
+          return null;
+        }
+        if (uniformKey && typeof uniforms.get === 'function') {
+          try {
+            const viaGetter = uniforms.get(uniformKey);
+            if (viaGetter) {
+              return viaGetter;
+            }
+          } catch (getterError) {
+            // Ignore lookup errors from custom uniform containers.
+          }
+        }
+        if (uniformKey && uniformKey in uniforms) {
+          return uniforms[uniformKey];
+        }
+        if (typeof uniformKey !== 'string') {
+          return null;
+        }
+        const sanitizedKey = uniformKey.replace(/\[[^\]]*\]/g, '.');
+        const segments = sanitizedKey.split('.').filter(Boolean);
+        const candidateKeys = [];
+        for (let i = segments.length; i >= 1; i -= 1) {
+          const candidate = segments.slice(0, i).join('.');
+          if (candidate && !candidateKeys.includes(candidate)) {
+            candidateKeys.push(candidate);
+          }
+        }
+        for (const candidate of candidateKeys) {
+          if (candidate in uniforms) {
+            return uniforms[candidate];
+          }
+          if (typeof uniforms.get === 'function') {
+            try {
+              const viaGetter = uniforms.get(candidate);
+              if (viaGetter) {
+                return viaGetter;
+              }
+            } catch (getterError) {
+              // Ignore lookup errors from custom uniform containers.
+            }
+          }
+        }
+        return null;
+      };
+
       let recovered = false;
       const updateCachedMaterial = (oldMaterial, newMaterial) => {
         baseMaterialCache.forEach((cached, key) => {
@@ -5487,7 +5535,7 @@
         const missingUniforms = [];
         programUniformKeys.forEach((key) => {
           const uniformKey = typeof key === 'string' ? key : `${key}`;
-          const uniform = uniformKey in uniforms ? uniforms[uniformKey] : null;
+          const uniform = resolveUniformReference(uniforms, uniformKey);
           if (!uniform || typeof uniform !== 'object' || !('value' in uniform)) {
             missingUniforms.push(uniformKey);
           }
