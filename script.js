@@ -5267,6 +5267,10 @@
           disabled = true;
         }
       }
+      if (!disabled) {
+        resetWorldMeshes();
+        disabled = true;
+      }
       if (disabled) {
         console.warn(
           'Portal shaders disabled after renderer failure; continuing with emissive fallback materials.',
