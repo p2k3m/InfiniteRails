@@ -5638,34 +5638,107 @@
       const supportWasEnabled = portalShaderSupport;
       portalShaderSupport = false;
       let disabled = false;
+      let needsReset = false;
       const layers = Array.isArray(tileRenderState) ? tileRenderState : [];
+      const handledMaterials = new Set();
+
+      const replaceChildMaterial = (child, material, defaultAccent, defaultState) => {
+        if (!child || !material || handledMaterials.has(material)) {
+          return false;
+        }
+
+        const metadata = material?.userData?.portalSurface;
+        const accentColor = metadata?.accentColor ?? defaultAccent ?? '#7b6bff';
+        const isActive = metadata?.isActive ?? defaultState ?? false;
+        const fallback = createPortalFallbackMaterial(accentColor, isActive);
+        fallback.renderOrder = child.renderOrder ?? 2;
+
+        if (Array.isArray(child.material)) {
+          const materialIndex = child.material.indexOf(material);
+          if (materialIndex === -1) {
+            return false;
+          }
+          child.material[materialIndex] = fallback;
+        } else {
+          child.material = fallback;
+        }
+
+        if (renderer?.properties?.remove) {
+          renderer.properties.remove(material);
+        }
+        material.dispose?.();
+        handledMaterials.add(material);
+        return true;
+      };
+
       for (let y = 0; y < layers.length; y += 1) {
         const row = layers[y];
-        if (!row) continue;
+        if (!Array.isArray(row)) continue;
         for (let x = 0; x < row.length; x += 1) {
           const renderInfo = row[x];
           const portalSurface = renderInfo?.animations?.portalSurface;
-          if (!portalSurface || !renderInfo?.group) continue;
-          const accentColor = portalSurface.accentColor ?? '#7b6bff';
-          const isActive = portalSurface.isActive ?? false;
-          portalSurface.materials?.forEach((material) => {
-            if (!material) return;
-            const host = renderInfo.group.children?.find((child) => child.material === material);
-            material.dispose?.();
-            if (host) {
-              const fallback = createPortalFallbackMaterial(accentColor, isActive);
-              fallback.renderOrder = host.renderOrder ?? 2;
-              host.material = fallback;
+          const group = renderInfo?.group;
+          if (!group) {
+            if (portalSurface && renderInfo?.animations) {
+              delete renderInfo.animations.portalSurface;
+              disabled = true;
+              needsReset = true;
             }
-          });
-          delete renderInfo.animations.portalSurface;
-          disabled = true;
+            continue;
+          }
+
+          const accentColor = portalSurface?.accentColor ?? '#7b6bff';
+          const isActive = portalSurface?.isActive ?? false;
+          let updated = false;
+
+          if (Array.isArray(portalSurface?.materials)) {
+            portalSurface.materials.forEach((material) => {
+              if (!material) return;
+              const host = group.children?.find((child) => child?.material === material);
+              if (host && replaceChildMaterial(host, material, accentColor, isActive)) {
+                updated = true;
+              }
+            });
+          }
+
+          if (group?.children?.length) {
+            group.children.forEach((child) => {
+              if (!child) return;
+              const { material } = child;
+              if (Array.isArray(material)) {
+                material.forEach((mat) => {
+                  if (mat?.userData?.portalSurface) {
+                    if (replaceChildMaterial(child, mat, accentColor, isActive)) {
+                      updated = true;
+                    }
+                  }
+                });
+              } else if (material?.userData?.portalSurface) {
+                if (replaceChildMaterial(child, material, accentColor, isActive)) {
+                  updated = true;
+                }
+              }
+            });
+          }
+
+          if (portalSurface || updated) {
+            if (renderInfo?.animations && 'portalSurface' in renderInfo.animations) {
+              delete renderInfo.animations.portalSurface;
+            }
+            disabled = true;
+            if (portalSurface && !updated) {
+              needsReset = true;
+            }
+          }
         }
       }
-      if (!disabled && supportWasEnabled) {
+
+      if (supportWasEnabled && (needsReset || !disabled)) {
         resetWorldMeshes();
         disabled = true;
+        needsReset = false;
       }
+
       if (disabled) {
         console.warn(
           'Portal shaders disabled after renderer failure; continuing with emissive fallback materials.',
