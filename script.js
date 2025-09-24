@@ -5459,50 +5459,64 @@
         return false;
       }
 
-      const resolveUniformReference = (uniforms, uniformKey) => {
-        if (!uniforms || typeof uniforms !== 'object') {
+      const resolveUniformReference = (uniformContainers, uniformKey) => {
+        if (!uniformKey || !Array.isArray(uniformContainers) || !uniformContainers.length) {
           return null;
         }
-        if (uniformKey && typeof uniforms.get === 'function') {
-          try {
-            const viaGetter = uniforms.get(uniformKey);
-            if (viaGetter) {
-              return viaGetter;
-            }
-          } catch (getterError) {
-            // Ignore lookup errors from custom uniform containers.
+
+        const normalizedKeys = [];
+        const pushCandidate = (key) => {
+          if (typeof key !== 'string') {
+            return;
           }
-        }
-        if (uniformKey && uniformKey in uniforms) {
-          return uniforms[uniformKey];
-        }
-        if (typeof uniformKey !== 'string') {
-          return null;
-        }
-        const sanitizedKey = uniformKey.replace(/\[[^\]]*\]/g, '.');
-        const segments = sanitizedKey.split('.').filter(Boolean);
-        const candidateKeys = [];
-        for (let i = segments.length; i >= 1; i -= 1) {
-          const candidate = segments.slice(0, i).join('.');
-          if (candidate && !candidateKeys.includes(candidate)) {
-            candidateKeys.push(candidate);
+          if (key && !normalizedKeys.includes(key)) {
+            normalizedKeys.push(key);
           }
-        }
-        for (const candidate of candidateKeys) {
-          if (candidate in uniforms) {
-            return uniforms[candidate];
+        };
+
+        if (typeof uniformKey === 'string') {
+          pushCandidate(uniformKey);
+          const sanitizedKey = uniformKey.replace(/\[[^\]]*\]/g, '.');
+          const segments = sanitizedKey.split('.').filter(Boolean);
+          for (let i = segments.length; i >= 1; i -= 1) {
+            pushCandidate(segments.slice(0, i).join('.'));
           }
-          if (typeof uniforms.get === 'function') {
+        } else {
+          pushCandidate(`${uniformKey}`);
+        }
+
+        const tryResolve = (container, key) => {
+          if (!container || typeof container !== 'object') {
+            return null;
+          }
+          if (Object.prototype.hasOwnProperty.call(container, key)) {
+            return container[key];
+          }
+          if (typeof container.get === 'function') {
             try {
-              const viaGetter = uniforms.get(candidate);
-              if (viaGetter) {
+              const viaGetter = container.get(key);
+              if (viaGetter !== undefined) {
                 return viaGetter;
               }
             } catch (getterError) {
               // Ignore lookup errors from custom uniform containers.
             }
           }
+          if (container.map && typeof container.map === 'object' && key in container.map) {
+            return container.map[key];
+          }
+          return null;
+        };
+
+        for (const candidate of normalizedKeys) {
+          for (const container of uniformContainers) {
+            const resolved = tryResolve(container, candidate);
+            if (resolved) {
+              return resolved;
+            }
+          }
         }
+
         return null;
       };
 
@@ -5524,13 +5538,36 @@
           return;
         }
         const props = renderer.properties.get(material) ?? {};
-        const uniforms = props.uniforms ?? material.uniforms ?? null;
+        const uniformContainers = [];
+        if (material.uniforms && typeof material.uniforms === 'object') {
+          uniformContainers.push(material.uniforms);
+        }
+        if (props.uniforms && typeof props.uniforms === 'object') {
+          uniformContainers.push(props.uniforms);
+        }
         const portalMetadata = material?.userData?.portalSurface ?? null;
-        if (!uniforms || typeof uniforms !== 'object') {
+        if (!uniformContainers.length) {
           return;
         }
         const programInfo = props.program?.getUniforms?.() ?? null;
         const keySet = new Set();
+        uniformContainers.forEach((container) => {
+          if (!container || typeof container !== 'object') {
+            return;
+          }
+          Object.keys(container).forEach((key) => {
+            if (typeof key === 'string' && key && key !== 'map' && key !== 'seq') {
+              keySet.add(key);
+            }
+          });
+          if (container.map && typeof container.map === 'object') {
+            Object.keys(container.map).forEach((key) => {
+              if (typeof key === 'string' && key) {
+                keySet.add(key);
+              }
+            });
+          }
+        });
         if (programInfo && typeof programInfo === 'object') {
           if (programInfo.map && typeof programInfo.map === 'object') {
             Object.keys(programInfo.map).forEach((key) => {
@@ -5550,11 +5587,6 @@
             });
           }
         }
-        Object.keys(uniforms).forEach((key) => {
-          if (typeof key === 'string' && key) {
-            keySet.add(key);
-          }
-        });
         if (portalMetadata) {
           PORTAL_UNIFORM_KEYS.forEach((key) => {
             if (key) {
@@ -5569,7 +5601,7 @@
         const missingUniforms = [];
         programUniformKeys.forEach((key) => {
           const uniformKey = typeof key === 'string' ? key : `${key}`;
-          const uniform = resolveUniformReference(uniforms, uniformKey);
+          const uniform = resolveUniformReference(uniformContainers, uniformKey);
           if (!uniform || typeof uniform !== 'object' || !('value' in uniform)) {
             missingUniforms.push(uniformKey);
           }
