@@ -5462,18 +5462,35 @@
         if (!material || sanitizedMaterialRefs.has(material)) {
           return;
         }
-        const props = renderer.properties.get(material);
-        const uniforms = props?.uniforms;
-        const programUniforms = props?.program?.getUniforms?.()?.map ?? null;
-        if (!uniforms || !programUniforms || typeof programUniforms !== 'object') {
+        const props = renderer.properties.get(material) ?? {};
+        const uniforms = props.uniforms ?? material.uniforms ?? null;
+        const programInfo = props.program?.getUniforms?.() ?? null;
+        if (!uniforms || typeof uniforms !== 'object' || !programInfo) {
           return;
         }
-        const missingUniforms = Object.keys(programUniforms).filter((key) => {
-          if (!Object.prototype.hasOwnProperty.call(programUniforms, key)) {
-            return false;
+        let programUniformKeys = [];
+        if (programInfo.map && typeof programInfo.map === 'object') {
+          programUniformKeys = Object.keys(programInfo.map);
+        } else if (Array.isArray(programInfo.seq)) {
+          programUniformKeys = programInfo.seq
+            .map((uniform) => {
+              if (!uniform || typeof uniform.id === 'undefined') {
+                return null;
+              }
+              return typeof uniform.id === 'string' ? uniform.id : `${uniform.id}`;
+            })
+            .filter(Boolean);
+        }
+        if (!programUniformKeys.length) {
+          return;
+        }
+        const missingUniforms = [];
+        programUniformKeys.forEach((key) => {
+          const uniformKey = typeof key === 'string' ? key : `${key}`;
+          const uniform = uniformKey in uniforms ? uniforms[uniformKey] : null;
+          if (!uniform || typeof uniform !== 'object' || !('value' in uniform)) {
+            missingUniforms.push(uniformKey);
           }
-          const uniform = uniforms[key];
-          return !uniform || typeof uniform !== 'object' || !('value' in uniform);
         });
         if (!missingUniforms.length) {
           return;
