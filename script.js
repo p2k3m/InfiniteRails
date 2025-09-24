@@ -5846,25 +5846,36 @@
           return;
         }
         let replacement = null;
-        if (expectPortalUniforms) {
-          try {
-            const rebuilt = createPortalSurfaceMaterial(
-              portalMetadata.accentColor,
-              portalMetadata.isActive
-            );
-            replacement = rebuilt.material;
-            tagPortalSurfaceMaterial(replacement, portalMetadata.accentColor, portalMetadata.isActive);
-          } catch (factoryError) {
-            console.warn('Failed to regenerate portal surface shader; falling back to cloning.', {
-              error: factoryError,
-              accentColor: portalMetadata.accentColor,
-              isActive: portalMetadata.isActive,
-            });
+          if (expectPortalUniforms) {
+            try {
+              const rebuilt = createPortalSurfaceMaterial(
+                portalMetadata.accentColor,
+                portalMetadata.isActive
+              );
+              replacement = rebuilt.material;
+              tagPortalSurfaceMaterial(replacement, portalMetadata.accentColor, portalMetadata.isActive);
+            } catch (factoryError) {
+              console.warn(
+                'Failed to regenerate portal surface shader; switching to emissive fallback material.',
+                {
+                  error: factoryError,
+                  accentColor: portalMetadata.accentColor,
+                  isActive: portalMetadata.isActive,
+                }
+              );
+              portalShaderSupport = false;
+              replacement = createPortalFallbackMaterial(
+                portalMetadata.accentColor,
+                portalMetadata.isActive
+              );
+              if (replacement) {
+                replacement.renderOrder = material.renderOrder ?? replacement.renderOrder ?? 2;
+              }
+            }
           }
-        }
-        if (!replacement) {
-          replacement = material.clone();
-        }
+          if (!replacement) {
+            replacement = material.clone();
+          }
 
         if (portalMetadata) {
           if (expectPortalUniforms && hasValidPortalUniformStructure(replacement.uniforms)) {
