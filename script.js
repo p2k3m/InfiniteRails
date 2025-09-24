@@ -5568,6 +5568,12 @@
           uniformContainers.push(props.uniforms);
         }
         const portalMetadata = material?.userData?.portalSurface ?? null;
+        const expectPortalUniforms = Boolean(
+          portalMetadata &&
+            (material?.isShaderMaterial === true ||
+              material?.type === 'ShaderMaterial' ||
+              hasValidPortalUniformStructure(material?.uniforms))
+        );
         if (!uniformContainers.length) {
           return;
         }
@@ -5609,7 +5615,7 @@
             });
           }
         }
-        if (portalMetadata) {
+        if (expectPortalUniforms) {
           PORTAL_UNIFORM_KEYS.forEach((key) => {
             if (key) {
               keySet.add(key);
@@ -5632,7 +5638,7 @@
           return;
         }
         let replacement = null;
-        if (portalMetadata) {
+        if (expectPortalUniforms) {
           try {
             const rebuilt = createPortalSurfaceMaterial(
               portalMetadata.accentColor,
@@ -5650,8 +5656,13 @@
         }
         if (!replacement) {
           replacement = material.clone();
-          if (portalMetadata) {
+        }
+
+        if (portalMetadata) {
+          if (expectPortalUniforms && hasValidPortalUniformStructure(replacement.uniforms)) {
             tagPortalSurfaceMaterial(replacement, portalMetadata.accentColor, portalMetadata.isActive);
+          } else if (replacement?.userData?.portalSurface) {
+            delete replacement.userData.portalSurface;
           }
         }
         replacement.needsUpdate = true;
