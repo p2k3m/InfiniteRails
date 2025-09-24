@@ -5643,14 +5643,42 @@
           if (!container || typeof container !== 'object') {
             return;
           }
-          Object.keys(container).forEach((key) => {
-            if (typeof key === 'string' && key && key !== 'map' && key !== 'seq') {
+
+          const isRendererUniformContainer =
+            Array.isArray(container.seq) && typeof container.map === 'object';
+
+          if (!isRendererUniformContainer) {
+            Object.keys(container).forEach((key) => {
+              if (
+                typeof key !== 'string' ||
+                !key ||
+                key === 'map' ||
+                key === 'seq' ||
+                key === 'value'
+              ) {
+                return;
+              }
+              const entry = container[key];
+              if (
+                !entry ||
+                typeof entry !== 'object' ||
+                (!Object.prototype.hasOwnProperty.call(entry, 'value') &&
+                  typeof entry.setValue !== 'function' &&
+                  !(
+                    entry.map &&
+                    typeof entry.map === 'object' &&
+                    Array.isArray(entry.seq)
+                  ))
+              ) {
+                return;
+              }
               keySet.add(key);
-            }
-          });
+            });
+          }
+
           if (container.map && typeof container.map === 'object') {
             Object.keys(container.map).forEach((key) => {
-              if (typeof key === 'string' && key) {
+              if (typeof key === 'string' && key && key !== 'value') {
                 keySet.add(key);
               }
             });
