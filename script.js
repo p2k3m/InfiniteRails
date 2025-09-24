@@ -5525,23 +5525,44 @@
         }
         const props = renderer.properties.get(material) ?? {};
         const uniforms = props.uniforms ?? material.uniforms ?? null;
-        const programInfo = props.program?.getUniforms?.() ?? null;
-        if (!uniforms || typeof uniforms !== 'object' || !programInfo) {
+        const portalMetadata = material?.userData?.portalSurface ?? null;
+        if (!uniforms || typeof uniforms !== 'object') {
           return;
         }
-        let programUniformKeys = [];
-        if (programInfo.map && typeof programInfo.map === 'object') {
-          programUniformKeys = Object.keys(programInfo.map);
-        } else if (Array.isArray(programInfo.seq)) {
-          programUniformKeys = programInfo.seq
-            .map((uniform) => {
-              if (!uniform || typeof uniform.id === 'undefined') {
-                return null;
+        const programInfo = props.program?.getUniforms?.() ?? null;
+        const keySet = new Set();
+        if (programInfo && typeof programInfo === 'object') {
+          if (programInfo.map && typeof programInfo.map === 'object') {
+            Object.keys(programInfo.map).forEach((key) => {
+              if (typeof key === 'string' && key) {
+                keySet.add(key);
               }
-              return typeof uniform.id === 'string' ? uniform.id : `${uniform.id}`;
-            })
-            .filter(Boolean);
+            });
+          } else if (Array.isArray(programInfo.seq)) {
+            programInfo.seq.forEach((uniform) => {
+              if (!uniform || typeof uniform.id === 'undefined') {
+                return;
+              }
+              const uniformId = typeof uniform.id === 'string' ? uniform.id : `${uniform.id}`;
+              if (uniformId) {
+                keySet.add(uniformId);
+              }
+            });
+          }
         }
+        Object.keys(uniforms).forEach((key) => {
+          if (typeof key === 'string' && key) {
+            keySet.add(key);
+          }
+        });
+        if (portalMetadata) {
+          PORTAL_UNIFORM_KEYS.forEach((key) => {
+            if (key) {
+              keySet.add(key);
+            }
+          });
+        }
+        const programUniformKeys = Array.from(keySet);
         if (!programUniformKeys.length) {
           return;
         }
@@ -5557,7 +5578,6 @@
           return;
         }
         let replacement = null;
-        const portalMetadata = material?.userData?.portalSurface;
         if (portalMetadata) {
           try {
             const rebuilt = createPortalSurfaceMaterial(
