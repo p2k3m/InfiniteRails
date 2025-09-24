@@ -5926,14 +5926,96 @@
       const layers = Array.isArray(tileRenderState) ? tileRenderState : [];
       const handledMaterials = new Set();
 
+      const parsePortalAccent = (color, fallback = '#7b6bff') => {
+        if (!color) {
+          return fallback;
+        }
+        if (typeof color === 'string') {
+          return color;
+        }
+        if (typeof color === 'object') {
+          if (typeof color.getHexString === 'function') {
+            return `#${color.getHexString()}`;
+          }
+          if (Array.isArray(color) && color.length >= 3) {
+            const [r, g, b] = color;
+            const clamp = (value) => Math.min(255, Math.max(0, Math.round(value * 255)));
+            return `#${((clamp(r) << 16) | (clamp(g) << 8) | clamp(b)).toString(16).padStart(6, '0')}`;
+          }
+        }
+        return fallback;
+      };
+
+      const inferPortalMaterialState = (material, defaultAccent, defaultState) => {
+        if (!material || typeof material !== 'object') {
+          return null;
+        }
+
+        const metadata = material.userData?.portalSurface;
+        if (metadata && typeof metadata === 'object') {
+          return {
+            accentColor: metadata.accentColor ?? defaultAccent ?? '#7b6bff',
+            isActive: typeof metadata.isActive === 'boolean' ? metadata.isActive : Boolean(defaultState),
+          };
+        }
+
+        const uniforms = material.uniforms;
+        let signatureDetected = false;
+        if (uniforms && typeof uniforms === 'object') {
+          for (const key of PORTAL_UNIFORM_KEYS) {
+            if (Object.prototype.hasOwnProperty.call(uniforms, key)) {
+              signatureDetected = true;
+              break;
+            }
+          }
+        }
+
+        if (!signatureDetected) {
+          const fragmentShader = typeof material.fragmentShader === 'string' ? material.fragmentShader : '';
+          const vertexShader = typeof material.vertexShader === 'string' ? material.vertexShader : '';
+          if (
+            (fragmentShader && PORTAL_UNIFORM_KEYS.every((key) => fragmentShader.includes(key))) ||
+            (vertexShader && PORTAL_UNIFORM_KEYS.every((key) => vertexShader.includes(key)))
+          ) {
+            signatureDetected = true;
+          }
+        }
+
+        if (!signatureDetected) {
+          return null;
+        }
+
+        let accentColor = defaultAccent ?? '#7b6bff';
+        let isActive = Boolean(defaultState);
+
+        if (uniforms && typeof uniforms === 'object') {
+          const colorUniform = uniforms.uColor;
+          if (colorUniform && typeof colorUniform === 'object') {
+            accentColor = parsePortalAccent(colorUniform.value, accentColor);
+          }
+          const activationUniform = uniforms.uActivation;
+          if (activationUniform && typeof activationUniform === 'object') {
+            const { value } = activationUniform;
+            if (typeof value === 'number' && Number.isFinite(value)) {
+              isActive = value >= 0.4;
+            }
+          }
+        }
+
+        return { accentColor, isActive };
+      };
+
       const replaceChildMaterial = (child, material, defaultAccent, defaultState) => {
         if (!child || !material || handledMaterials.has(material)) {
           return false;
         }
 
-        const metadata = material?.userData?.portalSurface;
-        const accentColor = metadata?.accentColor ?? defaultAccent ?? '#7b6bff';
-        const isActive = metadata?.isActive ?? defaultState ?? false;
+        const inferredState = inferPortalMaterialState(material, defaultAccent, defaultState);
+        if (!inferredState) {
+          return false;
+        }
+
+        const { accentColor, isActive } = inferredState;
         const fallback = createPortalFallbackMaterial(accentColor, isActive);
         fallback.renderOrder = child.renderOrder ?? 2;
 
@@ -5951,6 +6033,12 @@
           renderer.properties.remove(material);
         }
         material.dispose?.();
+        if (fallback?.userData) {
+          fallback.userData.portalSurface = {
+            accentColor,
+            isActive,
+          };
+        }
         handledMaterials.add(material);
         return true;
       };
@@ -6026,13 +6114,7 @@
           }
 
           const applyFallback = (mat) => {
-            if (!mat?.userData?.portalSurface) {
-              return false;
-            }
-            const metadata = mat.userData.portalSurface;
-            const accentColor = metadata?.accentColor ?? '#7b6bff';
-            const isActive = metadata?.isActive ?? false;
-            if (replaceChildMaterial(object, mat, accentColor, isActive)) {
+            if (replaceChildMaterial(object, mat, '#7b6bff', false)) {
               disabled = true;
               return true;
             }
@@ -6053,6 +6135,14 @@
         resetWorldMeshes();
         disabled = true;
         needsReset = false;
+      }
+
+      if (renderer?.renderLists?.dispose) {
+        try {
+          renderer.renderLists.dispose();
+        } catch (disposeError) {
+          console.warn('Failed to dispose renderer lists after disabling portal shaders.', disposeError);
+        }
       }
 
       if (disabled) {
