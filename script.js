@@ -6078,11 +6078,12 @@
         }
 
         const inferredState = inferPortalMaterialState(material, defaultAccent, defaultState);
-        if (!inferredState) {
+        if (!inferredState && !material?.userData?.portalSurface) {
           return false;
         }
 
-        const { accentColor, isActive } = inferredState;
+        const accentColor = inferredState?.accentColor ?? defaultAccent ?? '#7b6bff';
+        const isActive = inferredState?.isActive ?? Boolean(defaultState);
         const fallback = createPortalFallbackMaterial(accentColor, isActive);
         fallback.renderOrder = child.renderOrder ?? 2;
 
