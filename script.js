@@ -5345,6 +5345,9 @@
               return;
             }
             if (!Object.prototype.hasOwnProperty.call(uniform, 'value')) {
+              if (typeof uniform.setValue === 'function') {
+                return;
+              }
               let preserved = null;
               if (typeof uniform.clone === 'function') {
                 try {
@@ -5354,26 +5357,60 @@
                 }
               } else if (typeof uniform.value !== 'undefined') {
                 preserved = uniform.value;
-              } else {
-                preserved = uniform;
               }
-              uniforms[key] = { value: preserved ?? null };
+              const nextValue = preserved ?? null;
+              try {
+                uniform.value = nextValue;
+              } catch (assignError) {
+                uniforms[key] = { value: nextValue };
+              }
               uniformsUpdated = true;
               return;
             }
             if (typeof uniform.value === 'undefined') {
-              uniforms[key] = { value: null };
+              uniform.value = null;
               uniformsUpdated = true;
             }
           });
           const ensureUniform = (key, createValue) => {
-            const current = uniforms[key];
-            if (!current || typeof current.value === 'undefined') {
-              const defaultValue = typeof createValue === 'function' ? createValue() : createValue;
+            const resolveDefault = () =>
+              typeof createValue === 'function' ? createValue() : createValue;
+            let uniform = uniforms[key];
+            if (!uniform || typeof uniform !== 'object') {
+              const defaultValue = resolveDefault();
               uniforms[key] = { value: defaultValue };
               uniformsUpdated = true;
+              return uniforms[key];
             }
-            return uniforms[key];
+            if (!Object.prototype.hasOwnProperty.call(uniform, 'value')) {
+              if (typeof uniform.setValue === 'function') {
+                return uniform;
+              }
+              let preserved = null;
+              if (typeof uniform.clone === 'function') {
+                try {
+                  preserved = uniform.clone();
+                } catch (cloneError) {
+                  preserved = null;
+                }
+              } else if (typeof uniform.value !== 'undefined') {
+                preserved = uniform.value;
+              }
+              const defaultValue = preserved ?? resolveDefault();
+              try {
+                uniform.value = defaultValue;
+              } catch (assignError) {
+                uniforms[key] = { value: defaultValue };
+                uniform = uniforms[key];
+              }
+              uniformsUpdated = true;
+              return uniform;
+            }
+            if (typeof uniform.value === 'undefined') {
+              uniform.value = resolveDefault();
+              uniformsUpdated = true;
+            }
+            return uniform;
           };
           const uTime = ensureUniform('uTime', 0);
           const uActivation = ensureUniform('uActivation', portalIsActive ? 1 : 0.18);
