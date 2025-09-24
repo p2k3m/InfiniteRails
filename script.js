@@ -5521,6 +5521,27 @@
       };
 
       let recovered = false;
+
+      const updateSharedMaterialReference = (oldMaterial, newMaterial) => {
+        if (!oldMaterial || !newMaterial || oldMaterial === newMaterial) {
+          return;
+        }
+        if (voxelIslandAssets.material === oldMaterial) {
+          voxelIslandAssets.material = newMaterial;
+        }
+        if (treeLeavesMaterial === oldMaterial) {
+          treeLeavesMaterial = newMaterial;
+        }
+        const materials = previewAssets?.materials;
+        if (materials && typeof materials === 'object') {
+          Object.keys(materials).forEach((key) => {
+            if (materials[key] === oldMaterial) {
+              materials[key] = newMaterial;
+            }
+          });
+        }
+      };
+
       const updateCachedMaterial = (oldMaterial, newMaterial) => {
         baseMaterialCache.forEach((cached, key) => {
           if (cached === oldMaterial) {
@@ -5532,6 +5553,7 @@
             accentMaterialCache.set(key, newMaterial);
           }
         });
+        updateSharedMaterialReference(oldMaterial, newMaterial);
       };
       const inspectMaterial = (host, material, index) => {
         if (!material || sanitizedMaterialRefs.has(material)) {
