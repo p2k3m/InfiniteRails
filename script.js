@@ -5459,6 +5459,46 @@
         return false;
       }
 
+      const RENDERER_MANAGED_UNIFORM_PREFIXES = [
+        'modelMatrix',
+        'modelViewMatrix',
+        'projectionMatrix',
+        'viewMatrix',
+        'normalMatrix',
+        'cameraPosition',
+        'isOrthographic',
+        'toneMappingExposure',
+        'morphTargetBaseInfluence',
+        'morphTargetInfluences',
+        'boneTexture',
+        'boneTextureSize',
+        'boneMatrices',
+        'bindMatrix',
+        'bindMatrixInverse',
+        'logDepthBufFC',
+        'clippingPlanes',
+        'clippingPlanesMatrix',
+        'clippingPlanesTexture',
+        'clippingPlanesNear',
+        'clippingPlanesFar',
+      ];
+
+      const isRendererManagedUniform = (uniformKey) => {
+        if (!uniformKey) {
+          return false;
+        }
+        const normalizedKey = `${uniformKey}`
+          .replace(/\[[^\]]*\]/g, '.')
+          .split('.')
+          .filter(Boolean)[0];
+        if (!normalizedKey) {
+          return false;
+        }
+        return RENDERER_MANAGED_UNIFORM_PREFIXES.some((prefix) =>
+          normalizedKey === prefix
+        );
+      };
+
       const resolveUniformReference = (uniformContainers, uniformKey) => {
         if (!uniformKey || !Array.isArray(uniformContainers) || !uniformContainers.length) {
           return null;
@@ -5629,6 +5669,9 @@
         const missingUniforms = [];
         programUniformKeys.forEach((key) => {
           const uniformKey = typeof key === 'string' ? key : `${key}`;
+          if (isRendererManagedUniform(uniformKey)) {
+            return;
+          }
           const uniform = resolveUniformReference(uniformContainers, uniformKey);
           if (!uniform || typeof uniform !== 'object' || !('value' in uniform)) {
             missingUniforms.push(uniformKey);
