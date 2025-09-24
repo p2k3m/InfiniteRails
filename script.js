@@ -5563,74 +5563,71 @@
         );
       };
 
-      const resolveUniformReference = (uniformContainers, uniformKey) => {
-        if (!uniformKey || !Array.isArray(uniformContainers) || !uniformContainers.length) {
-          return null;
-        }
+        const enumerateUniformKeyCandidates = (uniformKey) => {
+          const normalizedKeys = [];
+          const pushCandidate = (key) => {
+            if (typeof key !== 'string') {
+              return;
+            }
+            if (key && !normalizedKeys.includes(key)) {
+              normalizedKeys.push(key);
+            }
+          };
 
-        const normalizedKeys = [];
-        const pushCandidate = (key) => {
-          if (typeof key !== 'string') {
-            return;
+          if (typeof uniformKey === 'string') {
+            pushCandidate(uniformKey);
+            const sanitizedKey = uniformKey.replace(/\[[^\]]*\]/g, '.');
+            const segments = sanitizedKey.split('.').filter(Boolean);
+            for (let i = segments.length; i >= 1; i -= 1) {
+              pushCandidate(segments.slice(0, i).join('.'));
+            }
+            for (let i = 0; i < segments.length; i += 1) {
+              pushCandidate(segments.slice(i).join('.'));
+            }
+          } else {
+            pushCandidate(`${uniformKey}`);
           }
-          if (key && !normalizedKeys.includes(key)) {
-            normalizedKeys.push(key);
-          }
+
+          return normalizedKeys;
         };
 
-        if (typeof uniformKey === 'string') {
-          pushCandidate(uniformKey);
-          const sanitizedKey = uniformKey.replace(/\[[^\]]*\]/g, '.');
-          const segments = sanitizedKey.split('.').filter(Boolean);
-          for (let i = segments.length; i >= 1; i -= 1) {
-            pushCandidate(segments.slice(0, i).join('.'));
-          }
-          for (let i = 0; i < segments.length; i += 1) {
-            pushCandidate(segments.slice(i).join('.'));
-          }
-        } else {
-          pushCandidate(`${uniformKey}`);
-        }
-
-        const tryResolve = (container, key) => {
+        const findUniformInContainer = (container, uniformKey) => {
           if (!container || typeof container !== 'object') {
-            return null;
+            return { hasDefinition: false, uniform: null };
           }
-          if (Object.prototype.hasOwnProperty.call(container, key)) {
-            return container[key];
-          }
-          if (typeof container.get === 'function') {
-            try {
-              const viaGetter = container.get(key);
-              if (viaGetter !== undefined) {
-                return viaGetter;
+
+          const candidates = enumerateUniformKeyCandidates(uniformKey);
+
+          for (const candidate of candidates) {
+            if (!candidate) continue;
+
+            if (Object.prototype.hasOwnProperty.call(container, candidate)) {
+              return { hasDefinition: true, uniform: container[candidate] };
+            }
+
+            if (typeof container.get === 'function') {
+              try {
+                const viaGetter = container.get(candidate);
+                if (viaGetter !== undefined) {
+                  return { hasDefinition: true, uniform: viaGetter };
+                }
+              } catch (getterError) {
+                // Ignore lookup errors from custom uniform containers.
               }
-            } catch (getterError) {
-              // Ignore lookup errors from custom uniform containers.
+            }
+
+            if (container.map && typeof container.map === 'object' && candidate in container.map) {
+              return { hasDefinition: true, uniform: container.map[candidate] };
             }
           }
-          if (container.map && typeof container.map === 'object' && key in container.map) {
-            return container.map[key];
-          }
-          return null;
+
+          return { hasDefinition: false, uniform: null };
         };
 
-        for (const candidate of normalizedKeys) {
-          for (const container of uniformContainers) {
-            const resolved = tryResolve(container, candidate);
-            if (resolved) {
-              return resolved;
-            }
+        const hasUsableUniformValue = (uniform) => {
+          if (!uniform || typeof uniform !== 'object') {
+            return false;
           }
-        }
-
-        return null;
-      };
-
-      const hasUsableUniformValue = (uniform) => {
-        if (!uniform || typeof uniform !== 'object') {
-          return false;
-        }
 
         if (Object.prototype.hasOwnProperty.call(uniform, 'value')) {
           return true;
@@ -5780,17 +5777,34 @@
         if (!programUniformKeys.length) {
           return;
         }
-        const missingUniforms = [];
-        programUniformKeys.forEach((key) => {
-          const uniformKey = typeof key === 'string' ? key : `${key}`;
-          if (isRendererManagedUniform(uniformKey)) {
-            return;
-          }
-          const uniform = resolveUniformReference(uniformContainers, uniformKey);
-          if (!hasUsableUniformValue(uniform)) {
-            missingUniforms.push(uniformKey);
-          }
-        });
+          const missingUniforms = [];
+          programUniformKeys.forEach((key) => {
+            const uniformKey = typeof key === 'string' ? key : `${key}`;
+            if (isRendererManagedUniform(uniformKey)) {
+              return;
+            }
+
+            let definitions = 0;
+            let validDefinitions = 0;
+            let invalidDefinitions = 0;
+
+            uniformContainers.forEach((container) => {
+              const { hasDefinition, uniform } = findUniformInContainer(container, uniformKey);
+              if (!hasDefinition) {
+                return;
+              }
+              definitions += 1;
+              if (hasUsableUniformValue(uniform)) {
+                validDefinitions += 1;
+              } else {
+                invalidDefinitions += 1;
+              }
+            });
+
+            if (!definitions || invalidDefinitions > 0 || validDefinitions === 0) {
+              missingUniforms.push(uniformKey);
+            }
+          });
         if (!missingUniforms.length) {
           return;
         }
