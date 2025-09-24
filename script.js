@@ -5262,8 +5262,17 @@
           const accentColor = portalSurface.accentColor ?? '#7b6bff';
           let uniformsUpdated = false;
           Object.entries(uniforms).forEach(([key, uniform]) => {
-            if (!uniform || typeof uniform !== 'object' || !('value' in uniform)) {
-              delete uniforms[key];
+            if (!uniform || typeof uniform !== 'object') {
+              uniforms[key] = { value: null };
+              uniformsUpdated = true;
+              return;
+            }
+            if (!('value' in uniform)) {
+              try {
+                uniform.value = uniform.value ?? null;
+              } catch (error) {
+                uniforms[key] = { value: null };
+              }
               uniformsUpdated = true;
             }
           });
