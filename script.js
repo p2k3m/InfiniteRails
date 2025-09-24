@@ -4849,6 +4849,13 @@
       return entries.every(([, uniform]) => Boolean(uniform && typeof uniform === 'object' && 'value' in uniform));
     }
 
+    function isValidPortalShaderMaterial(material) {
+      if (!material || typeof material !== 'object') {
+        return false;
+      }
+      return hasValidPortalUniformStructure(material.uniforms);
+    }
+
     function createPortalSurfaceMaterial(accentColor, active = false) {
       const baseUniforms = {
         uTime: { value: 0 },
@@ -5213,6 +5220,21 @@
       if (!tile || tile.type === 'void') return;
       if (renderInfo.animations.portalSurface) {
         const portalSurface = renderInfo.animations.portalSurface;
+        const materials = Array.isArray(portalSurface.materials)
+          ? portalSurface.materials.filter(Boolean)
+          : [];
+        if (materials.length !== (portalSurface.materials?.length ?? 0)) {
+          portalSurface.materials = materials;
+        }
+        const materialsInvalid = materials.length > 0 && !materials.every(isValidPortalShaderMaterial);
+        if (materialsInvalid) {
+          if (portalShaderSupport) {
+            disablePortalSurfaceShaders(new Error('Portal shader materials lost required uniforms.'));
+          } else {
+            delete renderInfo.animations.portalSurface;
+          }
+          return;
+        }
         const sets = Array.isArray(portalSurface.uniformSets)
           ? portalSurface.uniformSets
           : portalSurface.uniforms
