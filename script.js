@@ -4835,10 +4835,18 @@
       if (!uniforms || typeof uniforms !== 'object') {
         return false;
       }
-      return PORTAL_UNIFORM_KEYS.every((key) => {
+      const entries = Object.entries(uniforms);
+      if (!entries.length) {
+        return false;
+      }
+      const hasRequiredUniforms = PORTAL_UNIFORM_KEYS.every((key) => {
         const uniform = uniforms[key];
         return Boolean(uniform && typeof uniform === 'object' && 'value' in uniform);
       });
+      if (!hasRequiredUniforms) {
+        return false;
+      }
+      return entries.every(([, uniform]) => Boolean(uniform && typeof uniform === 'object' && 'value' in uniform));
     }
 
     function createPortalSurfaceMaterial(accentColor, active = false) {
@@ -5230,6 +5238,12 @@
           if (!uniforms || typeof uniforms !== 'object') return;
           const accentColor = portalSurface.accentColor ?? '#7b6bff';
           let uniformsUpdated = false;
+          Object.entries(uniforms).forEach(([key, uniform]) => {
+            if (!uniform || typeof uniform !== 'object' || !('value' in uniform)) {
+              delete uniforms[key];
+              uniformsUpdated = true;
+            }
+          });
           const ensureUniform = (key, createValue) => {
             const current = uniforms[key];
             if (!current || typeof current.value === 'undefined') {
