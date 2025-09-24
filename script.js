@@ -6017,6 +6017,38 @@
         }
       }
 
+      if (scene && typeof scene.traverse === 'function') {
+        scene.traverse((object) => {
+          if (!object) return;
+          const { material } = object;
+          if (!material) {
+            return;
+          }
+
+          const applyFallback = (mat) => {
+            if (!mat?.userData?.portalSurface) {
+              return false;
+            }
+            const metadata = mat.userData.portalSurface;
+            const accentColor = metadata?.accentColor ?? '#7b6bff';
+            const isActive = metadata?.isActive ?? false;
+            if (replaceChildMaterial(object, mat, accentColor, isActive)) {
+              disabled = true;
+              return true;
+            }
+            return false;
+          };
+
+          if (Array.isArray(material)) {
+            material.forEach((mat) => {
+              applyFallback(mat);
+            });
+          } else {
+            applyFallback(material);
+          }
+        });
+      }
+
       if (supportWasEnabled && (needsReset || !disabled)) {
         resetWorldMeshes();
         disabled = true;
