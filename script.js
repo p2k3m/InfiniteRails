@@ -5305,7 +5305,13 @@
 
           if (uniformsUpdated && Array.isArray(portalSurface.materials)) {
             portalSurface.materials.forEach((material) => {
-              if (material && 'uniformsNeedUpdate' in material) {
+              if (!material || typeof material !== 'object') {
+                return;
+              }
+              if ('needsUpdate' in material) {
+                material.needsUpdate = true;
+              }
+              if ('uniformsNeedUpdate' in material) {
                 material.uniformsNeedUpdate = true;
               }
             });
