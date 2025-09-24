@@ -5658,21 +5658,23 @@
               ) {
                 return;
               }
+
+              // Register the uniform key even when the stored entry is malformed so that
+              // recovery logic can detect the missing value instead of skipping it outright.
+              keySet.add(key);
+
               const entry = container[key];
               if (
-                !entry ||
-                typeof entry !== 'object' ||
-                (!Object.prototype.hasOwnProperty.call(entry, 'value') &&
-                  typeof entry.setValue !== 'function' &&
-                  !(
-                    entry.map &&
+                entry &&
+                typeof entry === 'object' &&
+                (Object.prototype.hasOwnProperty.call(entry, 'value') ||
+                  typeof entry.setValue === 'function' ||
+                  (entry.map &&
                     typeof entry.map === 'object' &&
-                    Array.isArray(entry.seq)
-                  ))
+                    Array.isArray(entry.seq)))
               ) {
                 return;
               }
-              keySet.add(key);
             });
           }
 
