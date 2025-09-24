@@ -5280,12 +5280,25 @@
               uniformsUpdated = true;
               return;
             }
-            if (!('value' in uniform)) {
-              try {
-                uniform.value = uniform.value ?? null;
-              } catch (error) {
-                uniforms[key] = { value: null };
+            if (!Object.prototype.hasOwnProperty.call(uniform, 'value')) {
+              let preserved = null;
+              if (typeof uniform.clone === 'function') {
+                try {
+                  preserved = uniform.clone();
+                } catch (cloneError) {
+                  preserved = null;
+                }
+              } else if (typeof uniform.value !== 'undefined') {
+                preserved = uniform.value;
+              } else {
+                preserved = uniform;
               }
+              uniforms[key] = { value: preserved ?? null };
+              uniformsUpdated = true;
+              return;
+            }
+            if (typeof uniform.value === 'undefined') {
+              uniforms[key] = { value: null };
               uniformsUpdated = true;
             }
           });
