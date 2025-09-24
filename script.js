@@ -5560,6 +5560,26 @@
         return null;
       };
 
+      const hasUsableUniformValue = (uniform) => {
+        if (!uniform || typeof uniform !== 'object') {
+          return false;
+        }
+
+        if (Object.prototype.hasOwnProperty.call(uniform, 'value')) {
+          return true;
+        }
+
+        if (typeof uniform.setValue === 'function') {
+          return true;
+        }
+
+        if (uniform.map && typeof uniform.map === 'object' && Array.isArray(uniform.seq)) {
+          return true;
+        }
+
+        return false;
+      };
+
       let recovered = false;
 
       const updateSharedMaterialReference = (oldMaterial, newMaterial) => {
@@ -5673,7 +5693,7 @@
             return;
           }
           const uniform = resolveUniformReference(uniformContainers, uniformKey);
-          if (!uniform || typeof uniform !== 'object' || !('value' in uniform)) {
+          if (!hasUsableUniformValue(uniform)) {
             missingUniforms.push(uniformKey);
           }
         });
