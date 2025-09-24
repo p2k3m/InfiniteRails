@@ -5701,9 +5701,6 @@
               material?.type === 'ShaderMaterial' ||
               hasValidPortalUniformStructure(material?.uniforms))
         );
-        if (!uniformContainers.length) {
-          return;
-        }
         const programInfo = props.program?.getUniforms?.() ?? null;
         const keySet = new Set();
         uniformContainers.forEach((container) => {
