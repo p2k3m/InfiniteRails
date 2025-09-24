@@ -5200,8 +5200,34 @@
           portalSurface.uniformSets = sets;
         }
         const applyPortalUniforms = (uniforms) => {
-          if (!uniforms) return;
-          const { uTime, uActivation, uOpacity } = uniforms;
+          if (!uniforms || typeof uniforms !== 'object') return;
+          const accentColor = portalSurface.accentColor ?? '#7b6bff';
+          let uniformsUpdated = false;
+          const ensureUniform = (key, createValue) => {
+            const current = uniforms[key];
+            if (!current || typeof current.value === 'undefined') {
+              const defaultValue = typeof createValue === 'function' ? createValue() : createValue;
+              uniforms[key] = { value: defaultValue };
+              uniformsUpdated = true;
+            }
+            return uniforms[key];
+          };
+          const uTime = ensureUniform('uTime', 0);
+          const uActivation = ensureUniform('uActivation', tile.type === 'portal' ? 1 : 0.18);
+          const uOpacity = ensureUniform('uOpacity', tile.type === 'portal' ? 0.85 : 0.55);
+          const uColor = ensureUniform('uColor', () => new THREE.Color(accentColor));
+
+          if (uniformsUpdated && Array.isArray(portalSurface.materials)) {
+            portalSurface.materials.forEach((material) => {
+              if (material && 'uniformsNeedUpdate' in material) {
+                material.uniformsNeedUpdate = true;
+              }
+            });
+          }
+
+          if (uColor?.value?.set) {
+            uColor.value.set(accentColor);
+          }
           if (uTime && 'value' in uTime) {
             uTime.value = state.elapsed;
           }
