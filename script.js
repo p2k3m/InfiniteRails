@@ -4843,6 +4843,33 @@
       };
     }
 
+    function collectPortalSurfaceMaterialsFromGroup(group) {
+      if (!group?.children?.length) {
+        return [];
+      }
+
+      const collected = [];
+      const seen = new Set();
+
+      group.children.forEach((child) => {
+        if (!child) return;
+        const { material } = child;
+        if (Array.isArray(material)) {
+          material.forEach((mat) => {
+            if (mat?.userData?.portalSurface && !seen.has(mat)) {
+              seen.add(mat);
+              collected.push(mat);
+            }
+          });
+        } else if (material?.userData?.portalSurface && !seen.has(material)) {
+          seen.add(material);
+          collected.push(material);
+        }
+      });
+
+      return collected;
+    }
+
     function hasValidPortalUniformStructure(uniforms) {
       if (!uniforms || typeof uniforms !== 'object') {
         return false;
@@ -5233,13 +5260,29 @@
       if (!tile || tile.type === 'void') return;
       if (renderInfo.animations.portalSurface) {
         const portalSurface = renderInfo.animations.portalSurface;
-        const materials = Array.isArray(portalSurface.materials)
+        const knownMaterials = Array.isArray(portalSurface.materials)
           ? portalSurface.materials.filter(Boolean)
           : [];
-        if (materials.length !== (portalSurface.materials?.length ?? 0)) {
+        if (knownMaterials.length !== (portalSurface.materials?.length ?? 0)) {
+          portalSurface.materials = knownMaterials;
+        }
+
+        const groupMaterials = collectPortalSurfaceMaterialsFromGroup(renderInfo.group);
+        let materials = knownMaterials;
+
+        const shouldResyncMaterials =
+          groupMaterials.length > 0 &&
+          (materials.length === 0 ||
+            materials.length !== groupMaterials.length ||
+            groupMaterials.some((material, idx) => material !== materials[idx]));
+
+        if (shouldResyncMaterials) {
+          materials = groupMaterials;
           portalSurface.materials = materials;
         }
-        const materialsInvalid = materials.length > 0 && !materials.every(isValidPortalShaderMaterial);
+
+        const materialsInvalid =
+          materials.length > 0 && !materials.every(isValidPortalShaderMaterial);
         if (materialsInvalid) {
           if (portalShaderSupport) {
             disablePortalSurfaceShaders(new Error('Portal shader materials lost required uniforms.'));
@@ -5248,18 +5291,35 @@
           }
           return;
         }
-        const sets = Array.isArray(portalSurface.uniformSets)
+
+        const derivedUniformSets = materials
+          .map((material) => (material && material.uniforms ? material.uniforms : null))
+          .filter((uniforms) => hasValidPortalUniformStructure(uniforms));
+
+        const existingUniformSets = Array.isArray(portalSurface.uniformSets)
           ? portalSurface.uniformSets
           : portalSurface.uniforms
           ? Array.isArray(portalSurface.uniforms)
             ? portalSurface.uniforms
             : [portalSurface.uniforms]
           : [];
-        if (!portalSurface.uniformSets && sets.length) {
-          portalSurface.uniformSets = sets;
-        }
-        const uniformSets = (portalSurface.uniformSets || [])
+
+        let uniformSets = (existingUniformSets || [])
           .filter((uniforms) => hasValidPortalUniformStructure(uniforms));
+
+        const needsUniformResync =
+          derivedUniformSets.length > 0 &&
+          (uniformSets.length !== derivedUniformSets.length ||
+            derivedUniformSets.some((set, idx) => set !== uniformSets[idx]));
+
+        if (needsUniformResync || (!uniformSets.length && derivedUniformSets.length)) {
+          uniformSets = derivedUniformSets;
+        }
+
+        if (portalSurface.uniformSets !== uniformSets) {
+          portalSurface.uniformSets = uniformSets;
+        }
+
         if (!uniformSets.length) {
           if (portalShaderSupport) {
             disablePortalSurfaceShaders(new Error('Portal shader uniforms missing expected values.'));
@@ -5268,7 +5328,11 @@
           }
           return;
         }
-        portalSurface.uniformSets = uniformSets;
+
+        if (!hasValidPortalUniformStructure(portalSurface.uniforms)) {
+          portalSurface.uniforms = uniformSets[0] ?? null;
+        }
+
         const applyPortalUniforms = (uniforms) => {
           if (!uniforms || typeof uniforms !== 'object') return;
           const accentColor = portalSurface.accentColor ?? '#7b6bff';
