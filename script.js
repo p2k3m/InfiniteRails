@@ -5905,37 +5905,127 @@
         const visitedMaterials = new Set();
         let sanitized = false;
 
+        const sanitizeUniformEntry = (container, key, entry) => {
+          const result = { updated: false, requiresRendererReset: false };
+
+          if (!entry || typeof entry !== 'object') {
+            container[key] = { value: null };
+            result.updated = true;
+            return result;
+          }
+
+          if (!Object.prototype.hasOwnProperty.call(entry, 'value')) {
+            if (typeof entry.setValue === 'function') {
+              try {
+                entry.setValue(entry.value ?? null);
+                return result;
+              } catch (setError) {
+                result.requiresRendererReset = true;
+              }
+            }
+
+            let preservedValue = null;
+            if (typeof entry.clone === 'function') {
+              try {
+                preservedValue = entry.clone();
+              } catch (cloneError) {
+                preservedValue = null;
+              }
+            } else if (typeof entry.value !== 'undefined') {
+              preservedValue = entry.value;
+            }
+
+            container[key] = { value: preservedValue ?? null };
+            result.updated = true;
+            return result;
+          }
+
+          if (typeof entry.value === 'undefined') {
+            entry.value = null;
+            result.updated = true;
+          }
+
+          return result;
+        };
+
         const sanitizeUniformContainer = (uniforms) => {
           if (!uniforms || typeof uniforms !== 'object') {
-            return false;
+            return { updated: false, requiresRendererReset: false };
           }
+
           let updated = false;
-          Object.keys(uniforms).forEach((key) => {
-            const entry = uniforms[key];
-            if (!entry || typeof entry !== 'object') {
-              uniforms[key] = { value: null };
-              updated = true;
+          let requiresRendererReset = false;
+          const visited = new Set();
+
+          const processResult = (result) => {
+            if (!result) {
               return;
             }
-            if (!Object.prototype.hasOwnProperty.call(entry, 'value')) {
-              if (typeof entry.setValue === 'function') {
-                try {
-                  entry.setValue(entry.value ?? null);
-                  return;
-                } catch (setError) {
-                  // Fall through to rebuild the entry below.
-                }
+            if (result.updated) {
+              updated = true;
+            }
+            if (result.requiresRendererReset) {
+              requiresRendererReset = true;
+            }
+          };
+
+          const processKey = (key) => {
+            if (typeof key !== 'string' && typeof key !== 'number') {
+              return;
+            }
+            const normalizedKey = `${key}`;
+            if (!normalizedKey || visited.has(normalizedKey)) {
+              return;
+            }
+            visited.add(normalizedKey);
+            processResult(sanitizeUniformEntry(uniforms, normalizedKey, uniforms[normalizedKey]));
+          };
+
+          if (Array.isArray(uniforms)) {
+            for (let i = 0; i < uniforms.length; i += 1) {
+              if (!Object.prototype.hasOwnProperty.call(uniforms, i)) {
+                uniforms[i] = { value: null };
+                updated = true;
+                continue;
               }
-              uniforms[key] = { value: entry?.value ?? null };
-              updated = true;
+              processResult(sanitizeUniformEntry(uniforms, i, uniforms[i]));
+            }
+          }
+
+          Object.keys(uniforms).forEach((key) => {
+            if (key === 'map' || key === 'seq') {
               return;
             }
-            if (typeof entry.value === 'undefined') {
-              entry.value = null;
-              updated = true;
-            }
+            processKey(key);
           });
-          return updated;
+
+          if (Array.isArray(uniforms.seq)) {
+            for (let i = 0; i < uniforms.seq.length; i += 1) {
+              const entry = uniforms.seq[i];
+              if (!entry || typeof entry !== 'object') {
+                requiresRendererReset = true;
+                continue;
+              }
+              if (
+                !Object.prototype.hasOwnProperty.call(entry, 'value') &&
+                typeof entry.setValue !== 'function'
+              ) {
+                requiresRendererReset = true;
+                continue;
+              }
+              if (typeof entry.value === 'undefined' && typeof entry.setValue !== 'function') {
+                requiresRendererReset = true;
+              }
+            }
+          }
+
+          if (uniforms.map && typeof uniforms.map === 'object') {
+            Object.keys(uniforms.map).forEach((key) => {
+              processKey(key);
+            });
+          }
+
+          return { updated, requiresRendererReset };
         };
 
         scene.traverse((object) => {
@@ -5951,8 +6041,30 @@
             }
             visitedMaterials.add(mat);
             let updated = false;
+            let rendererReset = false;
             if (mat.uniforms && typeof mat.uniforms === 'object') {
-              updated = sanitizeUniformContainer(mat.uniforms) || updated;
+              const result = sanitizeUniformContainer(mat.uniforms);
+              if (result.updated) {
+                updated = true;
+              }
+              if (result.requiresRendererReset) {
+                rendererReset = true;
+              }
+            }
+            if (rendererReset && renderer?.properties?.remove) {
+              try {
+                renderer.properties.remove(mat);
+              } catch (removeError) {
+                // Ignore renderer cache removal failures.
+              }
+              if ('needsUpdate' in mat) {
+                mat.needsUpdate = true;
+              }
+              if ('uniformsNeedUpdate' in mat) {
+                mat.uniformsNeedUpdate = true;
+              }
+              sanitized = true;
+              return;
             }
             if (updated) {
               if ('uniformsNeedUpdate' in mat) {
