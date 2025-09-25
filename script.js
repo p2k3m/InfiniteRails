@@ -5919,7 +5919,66 @@
             );
           }
         };
-          if (expectPortalUniforms) {
+
+        const attemptInPlaceRepair = () => {
+          if (!missingUniforms.length) {
+            return false;
+          }
+          if (!material || typeof material !== 'object' || !material.uniforms) {
+            return false;
+          }
+
+          sanitizeMaterialUniforms(material, {
+            missingKeys: missingUniforms,
+            expectPortal: expectPortalUniforms,
+            metadata: portalMetadata,
+          });
+
+          const unresolved = missingUniforms.filter((key) => {
+            const uniform = material.uniforms?.[key];
+            return (
+              !uniform ||
+              typeof uniform !== 'object' ||
+              !Object.prototype.hasOwnProperty.call(uniform, 'value')
+            );
+          });
+
+          if (unresolved.length) {
+            return false;
+          }
+
+          try {
+            renderer.properties.remove(material);
+          } catch (removeError) {
+            // Ignore failures removing cached material properties; renderer will rebuild them when needed.
+          }
+
+          if ('needsUpdate' in material) {
+            material.needsUpdate = true;
+          }
+          if ('uniformsNeedUpdate' in material) {
+            material.uniformsNeedUpdate = true;
+          }
+
+          sanitizedMaterialRefs.add(material);
+          recovered = true;
+          console.warn(
+            'Repaired material uniforms in-place after renderer failure.',
+            {
+              name: material.name || host.name || 'unnamed-material',
+              type: material.type,
+              missingUniforms,
+              originalError: error?.message ?? error,
+            }
+          );
+          return true;
+        };
+
+        if (attemptInPlaceRepair()) {
+          return;
+        }
+
+        if (expectPortalUniforms) {
             try {
               const rebuilt = createPortalSurfaceMaterial(
                 portalMetadata.accentColor,
