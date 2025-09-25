@@ -398,8 +398,9 @@
       throw new Error('Three.js failed to load. Ensure the CDN script is available.');
     }
 
-  let portalShaderSupport = typeof THREE?.ShaderMaterial === 'function';
-  let rendererRecoveryFrames = 0;
+    let portalShaderSupport = typeof THREE?.ShaderMaterial === 'function';
+    let rendererRecoveryFrames = 0;
+    let pendingUniformSanitizations = 0;
 
     const scoreboardUtils =
       (typeof window !== 'undefined' && window.ScoreboardUtils) ||
@@ -5896,6 +5897,78 @@
         }
       }
 
+      function sanitizeSceneUniforms() {
+        if (!scene || typeof scene.traverse !== 'function') {
+          return false;
+        }
+
+        const visitedMaterials = new Set();
+        let sanitized = false;
+
+        const sanitizeUniformContainer = (uniforms) => {
+          if (!uniforms || typeof uniforms !== 'object') {
+            return false;
+          }
+          let updated = false;
+          Object.keys(uniforms).forEach((key) => {
+            const entry = uniforms[key];
+            if (!entry || typeof entry !== 'object') {
+              uniforms[key] = { value: null };
+              updated = true;
+              return;
+            }
+            if (!Object.prototype.hasOwnProperty.call(entry, 'value')) {
+              if (typeof entry.setValue === 'function') {
+                try {
+                  entry.setValue(entry.value ?? null);
+                  return;
+                } catch (setError) {
+                  // Fall through to rebuild the entry below.
+                }
+              }
+              uniforms[key] = { value: entry?.value ?? null };
+              updated = true;
+              return;
+            }
+            if (typeof entry.value === 'undefined') {
+              entry.value = null;
+              updated = true;
+            }
+          });
+          return updated;
+        };
+
+        scene.traverse((object) => {
+          if (!object) return;
+          const { material } = object;
+          if (!material) {
+            return;
+          }
+          const materials = Array.isArray(material) ? material : [material];
+          materials.forEach((mat) => {
+            if (!mat || visitedMaterials.has(mat)) {
+              return;
+            }
+            visitedMaterials.add(mat);
+            let updated = false;
+            if (mat.uniforms && typeof mat.uniforms === 'object') {
+              updated = sanitizeUniformContainer(mat.uniforms) || updated;
+            }
+            if (updated) {
+              if ('uniformsNeedUpdate' in mat) {
+                mat.uniformsNeedUpdate = true;
+              }
+              if ('needsUpdate' in mat) {
+                mat.needsUpdate = true;
+              }
+              sanitized = true;
+            }
+          });
+        });
+
+        return sanitized;
+      }
+
       function rebuildInvalidMaterialUniforms(error) {
       if (!renderer || !scene || typeof renderer.properties?.get !== 'function') {
         return false;
@@ -8129,17 +8202,27 @@
           rendererRecoveryFrames -= 1;
           return;
         }
+        if (pendingUniformSanitizations > 0) {
+          const sanitized = sanitizeSceneUniforms();
+          pendingUniformSanitizations -= 1;
+          if (sanitized) {
+            rendererRecoveryFrames = Math.max(rendererRecoveryFrames, 1);
+          }
+        }
         try {
           renderer.render(scene, camera);
         } catch (error) {
           if (rebuildInvalidMaterialUniforms(error)) {
+            pendingUniformSanitizations = Math.max(pendingUniformSanitizations, 2);
             return;
           }
           if (!disablePortalSurfaceShaders(error)) {
             console.error('Renderer encountered an unrecoverable error.', error);
+            pendingUniformSanitizations = Math.max(pendingUniformSanitizations, 2);
             return;
           }
           rendererRecoveryFrames = Math.max(rendererRecoveryFrames, 2);
+          pendingUniformSanitizations = Math.max(pendingUniformSanitizations, 3);
           return;
         }
       }
