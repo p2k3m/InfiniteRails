@@ -4889,6 +4889,58 @@
       return entries.every(([, uniform]) => Boolean(uniform && typeof uniform === 'object' && 'value' in uniform));
     }
 
+    function assignPortalUniformValue(uniform, nextValue) {
+      if (!uniform || typeof uniform !== 'object') {
+        return false;
+      }
+
+      const applyValue = (value) => {
+        try {
+          uniform.value = value;
+          return true;
+        } catch (assignError) {
+          try {
+            Object.defineProperty(uniform, 'value', {
+              configurable: true,
+              enumerable: true,
+              writable: true,
+              value,
+            });
+            return true;
+          } catch (defineError) {
+            return false;
+          }
+        }
+      };
+
+      if (!Object.prototype.hasOwnProperty.call(uniform, 'value')) {
+        return applyValue(nextValue);
+      }
+
+      const currentValue = uniform.value;
+
+      if (currentValue && typeof currentValue === 'object') {
+        if (typeof currentValue.copy === 'function' && nextValue && typeof nextValue === 'object' && currentValue !== nextValue) {
+          try {
+            currentValue.copy(nextValue);
+            return true;
+          } catch (copyError) {
+            // Ignore copy failures and fall back to direct assignment.
+          }
+        }
+        if (typeof currentValue.set === 'function' && typeof nextValue !== 'undefined') {
+          try {
+            currentValue.set(nextValue);
+            return true;
+          } catch (setError) {
+            // Ignore set failures and fall back to direct assignment.
+          }
+        }
+      }
+
+      return applyValue(nextValue);
+    }
+
     function isValidPortalShaderMaterial(material) {
       if (!material || typeof material !== 'object') {
         return false;
@@ -5347,6 +5399,12 @@
             }
             if (!Object.prototype.hasOwnProperty.call(uniform, 'value')) {
               if (typeof uniform.setValue === 'function') {
+                try {
+                  uniform.setValue(null);
+                  uniformsUpdated = true;
+                } catch (setError) {
+                  uniformsUpdated = assignPortalUniformValue(uniform, null) || uniformsUpdated;
+                }
                 return;
               }
               let preserved = null;
@@ -5360,17 +5418,11 @@
                 preserved = uniform.value;
               }
               const nextValue = preserved ?? null;
-              try {
-                uniform.value = nextValue;
-              } catch (assignError) {
-                uniforms[key] = { value: nextValue };
-              }
-              uniformsUpdated = true;
+              uniformsUpdated = assignPortalUniformValue(uniform, nextValue) || uniformsUpdated;
               return;
             }
             if (typeof uniform.value === 'undefined') {
-              uniform.value = null;
-              uniformsUpdated = true;
+              uniformsUpdated = assignPortalUniformValue(uniform, null) || uniformsUpdated;
             }
           });
           const ensureUniform = (key, createValue) => {
@@ -5385,6 +5437,14 @@
             }
             if (!Object.prototype.hasOwnProperty.call(uniform, 'value')) {
               if (typeof uniform.setValue === 'function') {
+                const defaultValue = resolveDefault();
+                try {
+                  uniform.setValue(defaultValue);
+                  uniformsUpdated = true;
+                } catch (setError) {
+                  // Ignore failures and fall back to assignPortalUniformValue.
+                  uniformsUpdated = assignPortalUniformValue(uniform, defaultValue) || uniformsUpdated;
+                }
                 return uniform;
               }
               let preserved = null;
@@ -5398,18 +5458,12 @@
                 preserved = uniform.value;
               }
               const defaultValue = preserved ?? resolveDefault();
-              try {
-                uniform.value = defaultValue;
-              } catch (assignError) {
-                uniforms[key] = { value: defaultValue };
-                uniform = uniforms[key];
-              }
-              uniformsUpdated = true;
+              uniformsUpdated = assignPortalUniformValue(uniform, defaultValue) || uniformsUpdated;
               return uniform;
             }
             if (typeof uniform.value === 'undefined') {
-              uniform.value = resolveDefault();
-              uniformsUpdated = true;
+              const nextValue = resolveDefault();
+              uniformsUpdated = assignPortalUniformValue(uniform, nextValue) || uniformsUpdated;
             }
             return uniform;
           };
@@ -5891,18 +5945,20 @@
             }
             if (Object.prototype.hasOwnProperty.call(entry, 'value')) {
               if (typeof entry.value === 'undefined') {
-                entry.value = resolvedDefault;
+                assignPortalUniformValue(entry, resolvedDefault);
               }
               return;
             }
             if (typeof entry.setValue === 'function') {
+              try {
+                entry.setValue(resolvedDefault);
+              } catch (setError) {
+                // Ignore failures and fall back to assignPortalUniformValue.
+                assignPortalUniformValue(entry, resolvedDefault);
+              }
               return;
             }
-            try {
-              entry.value = resolvedDefault;
-            } catch (assignError) {
-              uniforms[key] = { value: resolvedDefault };
-            }
+            assignPortalUniformValue(entry, resolvedDefault);
           };
 
           Object.entries(uniforms).forEach(([key]) => {
