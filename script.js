@@ -8423,6 +8423,7 @@
           pendingUniformSanitizations -= 1;
           if (sanitized) {
             rendererRecoveryFrames = Math.max(rendererRecoveryFrames, 1);
+            return;
           }
         }
         try {
