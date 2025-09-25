@@ -2245,6 +2245,35 @@
     const baseMaterialCache = new Map();
     const accentMaterialCache = new Map();
     const sanitizedMaterialRefs = new WeakSet();
+
+    const getRendererBoundLight = (material) => {
+      if (!material || !renderer || typeof renderer.properties?.get !== 'function') {
+        return null;
+      }
+      try {
+        const props = renderer.properties.get(material);
+        if (props && typeof props === 'object' && props.light) {
+          return props.light;
+        }
+      } catch (error) {
+        // Ignore lookup failures; absence of a bound light is handled by callers.
+      }
+      return null;
+    };
+
+    const restoreRendererBoundLight = (material, light) => {
+      if (!light || !material || !renderer || typeof renderer.properties?.get !== 'function') {
+        return;
+      }
+      try {
+        const props = renderer.properties.get(material);
+        if (props && typeof props === 'object') {
+          props.light = light;
+        }
+      } catch (error) {
+        // Ignore restoration failures; renderer will manage light bindings if possible.
+      }
+    };
     const textureVariantCache = new Map();
     const spriteTextureCache = new Map();
     let treeLeavesMaterial = null;
@@ -6129,11 +6158,13 @@
             return false;
           }
 
+          const boundLight = getRendererBoundLight(material);
           try {
             renderer.properties.remove(material);
           } catch (removeError) {
             // Ignore failures removing cached material properties; renderer will rebuild them when needed.
           }
+          restoreRendererBoundLight(material, boundLight);
 
           if ('needsUpdate' in material) {
             material.needsUpdate = true;
@@ -6204,6 +6235,7 @@
         }
         replacement.needsUpdate = true;
         sanitizedMaterialRefs.add(replacement);
+          const boundLight = getRendererBoundLight(material);
           if (Array.isArray(host.material)) {
             host.material[index] = replacement;
           } else {
@@ -6211,6 +6243,9 @@
           }
           renderer.properties.remove(material);
           material.dispose?.();
+          if (boundLight) {
+            restoreRendererBoundLight(replacement, boundLight);
+          }
           updateCachedMaterial(material, replacement);
           resyncPortalSurfaceMaterials(material, replacement);
         recovered = true;
@@ -6380,6 +6415,7 @@
         }
 
         if (!disposedMaterials.has(material)) {
+          const boundLight = getRendererBoundLight(material);
           if (renderer?.properties?.remove) {
             try {
               renderer.properties.remove(material);
@@ -6391,6 +6427,9 @@
             material.dispose?.();
           } catch (disposeError) {
             // Ignore dispose failures and continue with the fallback material.
+          }
+          if (boundLight) {
+            restoreRendererBoundLight(fallback, boundLight);
           }
           disposedMaterials.add(material);
         }
