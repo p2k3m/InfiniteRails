@@ -401,6 +401,7 @@
     let portalShaderSupport = typeof THREE?.ShaderMaterial === 'function';
     let rendererRecoveryFrames = 0;
     let pendingUniformSanitizations = 0;
+    let uniformSanitizationFailureStreak = 0;
 
     const scoreboardUtils =
       (typeof window !== 'undefined' && window.ScoreboardUtils) ||
@@ -8428,6 +8429,7 @@
         }
         try {
           renderer.render(scene, camera);
+          uniformSanitizationFailureStreak = 0;
         } catch (error) {
           if (rebuildInvalidMaterialUniforms(error)) {
             pendingUniformSanitizations = Math.max(pendingUniformSanitizations, 2);
@@ -8441,6 +8443,24 @@
               : '';
           if (uniformValueErrorMessage.includes("Cannot read properties of undefined (reading 'value')")) {
             const sanitizedNow = sanitizeSceneUniforms();
+            if (sanitizedNow) {
+              uniformSanitizationFailureStreak = 0;
+            } else {
+              uniformSanitizationFailureStreak += 1;
+              if (uniformSanitizationFailureStreak >= 3) {
+                const disabled = disablePortalSurfaceShaders(
+                  new Error(
+                    'Renderer repeatedly encountered undefined shader uniforms despite sanitization attempts.'
+                  )
+                );
+                if (disabled) {
+                  rendererRecoveryFrames = Math.max(rendererRecoveryFrames, 2);
+                  pendingUniformSanitizations = Math.max(pendingUniformSanitizations, 3);
+                  uniformSanitizationFailureStreak = 0;
+                  return;
+                }
+              }
+            }
             rendererRecoveryFrames = Math.max(rendererRecoveryFrames, sanitizedNow ? 1 : 2);
             pendingUniformSanitizations = Math.max(pendingUniformSanitizations, sanitizedNow ? 1 : 2);
             console.warn(
