@@ -6259,16 +6259,23 @@
           replacement = material.clone();
         }
 
-          const uniformKeysToRepair = missingUniforms.filter(
-            (key) => key !== RENDERER_UNIFORM_CORRUPTION_SENTINEL
-          );
-          if (uniformKeysToRepair.length) {
-            ensurePortalUniformIntegrity(replacement, {
-              missingKeys: uniformKeysToRepair,
-              expectPortal: expectPortalUniforms,
-              metadata: portalMetadata,
-            });
-          }
+        const uniformKeysToRepair = missingUniforms.filter(
+          (key) => key !== RENDERER_UNIFORM_CORRUPTION_SENTINEL
+        );
+        const shouldRepairPortalUniforms =
+          uniformKeysToRepair.length > 0 &&
+          replacement &&
+          typeof replacement === 'object' &&
+          (replacement.isShaderMaterial === true ||
+            replacement.type === 'ShaderMaterial' ||
+            hasValidPortalUniformStructure(replacement.uniforms));
+        if (shouldRepairPortalUniforms) {
+          ensurePortalUniformIntegrity(replacement, {
+            missingKeys: uniformKeysToRepair,
+            expectPortal: expectPortalUniforms,
+            metadata: portalMetadata,
+          });
+        }
 
         if (portalMetadata) {
           if (expectPortalUniforms && hasValidPortalUniformStructure(replacement.uniforms)) {
