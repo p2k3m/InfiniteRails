@@ -6178,7 +6178,8 @@
       let disabled = false;
       let needsReset = false;
       const layers = Array.isArray(tileRenderState) ? tileRenderState : [];
-      const handledMaterials = new Set();
+      const handledMaterials = new Map();
+      const disposedMaterials = new Set();
 
       const parsePortalAccent = (color, fallback = '#7b6bff') => {
         if (!color) {
@@ -6260,41 +6261,76 @@
       };
 
       const replaceChildMaterial = (child, material, defaultAccent, defaultState) => {
-        if (!child || !material || handledMaterials.has(material)) {
+        if (!child || !material) {
           return false;
         }
 
-        const inferredState = inferPortalMaterialState(material, defaultAccent, defaultState);
-        if (!inferredState && !material?.userData?.portalSurface) {
-          return false;
-        }
+        let cacheEntry = handledMaterials.get(material);
+        let fallback = cacheEntry?.fallback ?? null;
+        let accentColor = cacheEntry?.accentColor ?? defaultAccent ?? '#7b6bff';
+        let isActive = cacheEntry?.isActive ?? Boolean(defaultState);
 
-        const accentColor = inferredState?.accentColor ?? defaultAccent ?? '#7b6bff';
-        const isActive = inferredState?.isActive ?? Boolean(defaultState);
-        const fallback = createPortalFallbackMaterial(accentColor, isActive);
-        fallback.renderOrder = child.renderOrder ?? 2;
-
-        if (Array.isArray(child.material)) {
-          const materialIndex = child.material.indexOf(material);
-          if (materialIndex === -1) {
+        if (!fallback) {
+          const inferredState = inferPortalMaterialState(material, defaultAccent, defaultState);
+          if (!inferredState && !material?.userData?.portalSurface) {
             return false;
           }
-          child.material[materialIndex] = fallback;
-        } else {
-          child.material = fallback;
+
+          accentColor = inferredState?.accentColor ?? accentColor;
+          isActive = inferredState?.isActive ?? isActive;
+
+          fallback = createPortalFallbackMaterial(accentColor, isActive);
+          fallback.renderOrder = child.renderOrder ?? 2;
+          if (fallback.renderOrder < (child.renderOrder ?? 2)) {
+            fallback.renderOrder = child.renderOrder ?? 2;
+          }
+
+          if (fallback?.userData) {
+            fallback.userData.portalSurface = {
+              accentColor,
+              isActive,
+            };
+          }
+
+          handledMaterials.set(material, { fallback, accentColor, isActive });
+        } else if (child.renderOrder && fallback.renderOrder < child.renderOrder) {
+          fallback.renderOrder = child.renderOrder;
         }
 
-        if (renderer?.properties?.remove) {
-          renderer.properties.remove(material);
+        let replaced = false;
+        if (Array.isArray(child.material)) {
+          child.material = child.material.map((mat) => {
+            if (mat === material) {
+              replaced = true;
+              return fallback;
+            }
+            return mat;
+          });
+        } else if (child.material === material) {
+          child.material = fallback;
+          replaced = true;
         }
-        material.dispose?.();
-        if (fallback?.userData) {
-          fallback.userData.portalSurface = {
-            accentColor,
-            isActive,
-          };
+
+        if (!replaced) {
+          return false;
         }
-        handledMaterials.add(material);
+
+        if (!disposedMaterials.has(material)) {
+          if (renderer?.properties?.remove) {
+            try {
+              renderer.properties.remove(material);
+            } catch (removeError) {
+              // Ignore cleanup errors; renderer will rebuild its caches if needed.
+            }
+          }
+          try {
+            material.dispose?.();
+          } catch (disposeError) {
+            // Ignore dispose failures and continue with the fallback material.
+          }
+          disposedMaterials.add(material);
+        }
+
         needsReset = true;
         return true;
       };
