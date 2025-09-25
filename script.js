@@ -4833,17 +4833,6 @@
 
     const PORTAL_UNIFORM_KEYS = ['uTime', 'uActivation', 'uColor', 'uOpacity'];
 
-    function tagPortalSurfaceMaterial(material, accentColor, active) {
-      if (!material || typeof material !== 'object') {
-        return;
-      }
-      material.userData = material.userData || {};
-      material.userData.portalSurface = {
-        accentColor,
-        isActive: Boolean(active),
-      };
-    }
-
     function collectPortalSurfaceMaterialsFromGroup(group) {
       if (!group?.children?.length) {
         return [];
@@ -4939,6 +4928,101 @@
       }
 
       return applyValue(nextValue);
+    }
+
+    function ensurePortalUniformIntegrity(
+      material,
+      { missingKeys = [], expectPortal = false, metadata = null } = {}
+    ) {
+      if (!material || typeof material !== 'object') {
+        return false;
+      }
+
+      let uniforms = material.uniforms;
+      if (!uniforms || typeof uniforms !== 'object') {
+        uniforms = {};
+        try {
+          material.uniforms = uniforms;
+        } catch (assignError) {
+          return false;
+        }
+      }
+
+      const resolveDefault = (value) => (typeof value === 'function' ? value() : value);
+      let modified = false;
+
+      const ensureUniformEntry = (key, defaultValue = null) => {
+        if (!key) {
+          return null;
+        }
+        const resolvedDefault = resolveDefault(defaultValue);
+        let entry = uniforms[key];
+        if (!entry || typeof entry !== 'object') {
+          uniforms[key] = { value: resolvedDefault };
+          modified = true;
+          return uniforms[key];
+        }
+        if (!Object.prototype.hasOwnProperty.call(entry, 'value')) {
+          if (typeof entry.setValue === 'function') {
+            try {
+              entry.setValue(resolvedDefault);
+              modified = true;
+              return entry;
+            } catch (setError) {
+              // Ignore failures and fall back to assignPortalUniformValue.
+            }
+          }
+          if (assignPortalUniformValue(entry, resolvedDefault)) {
+            modified = true;
+          }
+          return entry;
+        }
+        if (typeof entry.value === 'undefined') {
+          if (assignPortalUniformValue(entry, resolvedDefault)) {
+            modified = true;
+          }
+        }
+        return entry;
+      };
+
+      Object.keys(uniforms).forEach((key) => {
+        const entry = uniforms[key];
+        if (!entry || typeof entry !== 'object' || !Object.prototype.hasOwnProperty.call(entry, 'value')) {
+          ensureUniformEntry(key, null);
+        }
+      });
+
+      missingKeys.forEach((key) => {
+        ensureUniformEntry(key, null);
+      });
+
+      if (expectPortal) {
+        const accent = metadata?.accentColor ?? '#7b6bff';
+        const isActive = Boolean(metadata?.isActive);
+        ensureUniformEntry('uTime', 0);
+        ensureUniformEntry('uActivation', isActive ? 1 : 0.18);
+        ensureUniformEntry('uOpacity', isActive ? 0.85 : 0.55);
+        ensureUniformEntry('uColor', () =>
+          typeof THREE?.Color === 'function' ? new THREE.Color(accent) : accent
+        );
+      }
+
+      return modified;
+    }
+
+    function tagPortalSurfaceMaterial(material, accentColor, active) {
+      if (!material || typeof material !== 'object') {
+        return;
+      }
+      material.userData = material.userData || {};
+      material.userData.portalSurface = {
+        accentColor,
+        isActive: Boolean(active),
+      };
+      ensurePortalUniformIntegrity(material, {
+        expectPortal: true,
+        metadata: { accentColor, isActive: Boolean(active) },
+      });
     }
 
     function isValidPortalShaderMaterial(material) {
@@ -5954,73 +6038,6 @@
         }
         let replacement = null;
 
-        const sanitizeMaterialUniforms = (
-          targetMaterial,
-          { missingKeys = [], expectPortal = false, metadata = null } = {}
-        ) => {
-          if (!targetMaterial || typeof targetMaterial !== 'object') {
-            return;
-          }
-          let uniforms = targetMaterial.uniforms;
-          if (!uniforms || typeof uniforms !== 'object') {
-            uniforms = {};
-            try {
-              targetMaterial.uniforms = uniforms;
-            } catch (assignError) {
-              return;
-            }
-          }
-
-          const resolveDefault = (value) => (typeof value === 'function' ? value() : value);
-
-          const ensureUniformEntry = (key, defaultValue = null) => {
-            if (!key) {
-              return;
-            }
-            const resolvedDefault = resolveDefault(defaultValue);
-            let entry = uniforms[key];
-            if (!entry || typeof entry !== 'object') {
-              uniforms[key] = { value: resolvedDefault };
-              return;
-            }
-            if (Object.prototype.hasOwnProperty.call(entry, 'value')) {
-              if (typeof entry.value === 'undefined') {
-                assignPortalUniformValue(entry, resolvedDefault);
-              }
-              return;
-            }
-            if (typeof entry.setValue === 'function') {
-              try {
-                entry.setValue(resolvedDefault);
-              } catch (setError) {
-                // Ignore failures and fall back to assignPortalUniformValue.
-                assignPortalUniformValue(entry, resolvedDefault);
-              }
-              return;
-            }
-            assignPortalUniformValue(entry, resolvedDefault);
-          };
-
-          Object.entries(uniforms).forEach(([key]) => {
-            ensureUniformEntry(key, null);
-          });
-
-          missingKeys.forEach((key) => {
-            ensureUniformEntry(key, null);
-          });
-
-          if (expectPortal) {
-            const accent = metadata?.accentColor ?? '#7b6bff';
-            const isActive = Boolean(metadata?.isActive);
-            ensureUniformEntry('uTime', 0);
-            ensureUniformEntry('uActivation', isActive ? 1 : 0.18);
-            ensureUniformEntry('uOpacity', isActive ? 0.85 : 0.55);
-            ensureUniformEntry('uColor', () =>
-              typeof THREE?.Color === 'function' ? new THREE.Color(accent) : accent
-            );
-          }
-        };
-
         const attemptInPlaceRepair = () => {
           if (!missingUniforms.length) {
             return false;
@@ -6029,7 +6046,7 @@
             return false;
           }
 
-          sanitizeMaterialUniforms(material, {
+          ensurePortalUniformIntegrity(material, {
             missingKeys: missingUniforms,
             expectPortal: expectPortalUniforms,
             metadata: portalMetadata,
@@ -6108,7 +6125,7 @@
           replacement = material.clone();
         }
 
-          sanitizeMaterialUniforms(replacement, {
+          ensurePortalUniformIntegrity(replacement, {
             missingKeys: missingUniforms,
             expectPortal: expectPortalUniforms,
             metadata: portalMetadata,
