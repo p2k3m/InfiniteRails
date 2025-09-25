@@ -5910,12 +5910,19 @@
         const visitedMaterials = new Set();
         let sanitized = false;
 
-        const sanitizeUniformEntry = (container, key, entry) => {
+        const sanitizeUniformEntry = (container, key, entry, options = {}) => {
+          const { markRendererReset = false } = options;
           const result = { updated: false, requiresRendererReset: false };
+          const markReset = () => {
+            if (markRendererReset) {
+              result.requiresRendererReset = true;
+            }
+          };
 
           if (!entry || typeof entry !== 'object') {
             container[key] = { value: null };
             result.updated = true;
+            markReset();
             return result;
           }
 
@@ -5928,6 +5935,7 @@
                 }
               } catch (setError) {
                 result.requiresRendererReset = true;
+                markReset();
               }
             }
 
@@ -5944,6 +5952,7 @@
 
             container[key] = { value: preservedValue ?? null };
             result.updated = true;
+            markReset();
             return result;
           }
 
@@ -5985,7 +5994,9 @@
               return;
             }
             visited.add(normalizedKey);
-            processResult(sanitizeUniformEntry(uniforms, normalizedKey, uniforms[normalizedKey]));
+            processResult(
+              sanitizeUniformEntry(uniforms, normalizedKey, uniforms[normalizedKey])
+            );
           };
 
           const sanitizeArrayEntries = (container, options = {}) => {
@@ -6002,7 +6013,9 @@
                 }
                 continue;
               }
-              const result = sanitizeUniformEntry(container, i, container[i]);
+              const result = sanitizeUniformEntry(container, i, container[i], {
+                markRendererReset,
+              });
               processResult(result);
               if (markRendererReset && result && result.updated) {
                 requiresRendererReset = true;
@@ -6038,7 +6051,11 @@
 
           if (uniforms.map && typeof uniforms.map === 'object') {
             Object.keys(uniforms.map).forEach((key) => {
-              processResult(sanitizeUniformEntry(uniforms.map, key, uniforms.map[key]));
+              processResult(
+                sanitizeUniformEntry(uniforms.map, key, uniforms.map[key], {
+                  markRendererReset: true,
+                })
+              );
               processKey(key);
             });
           }
@@ -6084,6 +6101,17 @@
                 }
 
                 if (rendererUniforms && typeof rendererUniforms === 'object') {
+                  const rendererUniformSanitization = sanitizeUniformContainer(
+                    rendererUniforms
+                  );
+                  if (rendererUniformSanitization.updated) {
+                    sanitized = true;
+                  }
+                  if (rendererUniformSanitization.requiresRendererReset) {
+                    rendererReset = true;
+                    sanitized = true;
+                  }
+
                   if (!mat.uniforms || typeof mat.uniforms !== 'object') {
                     mat.uniforms = {};
                   }
