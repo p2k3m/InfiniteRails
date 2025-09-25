@@ -8216,6 +8216,22 @@
             pendingUniformSanitizations = Math.max(pendingUniformSanitizations, 2);
             return;
           }
+          const uniformValueErrorMessage =
+            typeof error?.message === 'string'
+              ? error.message
+              : typeof error === 'string'
+              ? error
+              : '';
+          if (uniformValueErrorMessage.includes("Cannot read properties of undefined (reading 'value')")) {
+            const sanitizedNow = sanitizeSceneUniforms();
+            rendererRecoveryFrames = Math.max(rendererRecoveryFrames, sanitizedNow ? 1 : 2);
+            pendingUniformSanitizations = Math.max(pendingUniformSanitizations, sanitizedNow ? 1 : 2);
+            console.warn(
+              'Renderer detected undefined uniform values; scheduling additional uniform sanitization.',
+              error
+            );
+            return;
+          }
           if (!disablePortalSurfaceShaders(error)) {
             console.error('Renderer encountered an unrecoverable error.', error);
             pendingUniformSanitizations = Math.max(pendingUniformSanitizations, 2);
