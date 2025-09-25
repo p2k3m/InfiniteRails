@@ -5981,16 +5981,21 @@
             processResult(sanitizeUniformEntry(uniforms, normalizedKey, uniforms[normalizedKey]));
           };
 
-          if (Array.isArray(uniforms)) {
-            for (let i = 0; i < uniforms.length; i += 1) {
-              if (!Object.prototype.hasOwnProperty.call(uniforms, i)) {
-                uniforms[i] = { value: null };
+          const sanitizeArrayEntries = (container) => {
+            if (!Array.isArray(container)) {
+              return;
+            }
+            for (let i = 0; i < container.length; i += 1) {
+              if (!Object.prototype.hasOwnProperty.call(container, i)) {
+                container[i] = { value: null };
                 updated = true;
                 continue;
               }
-              processResult(sanitizeUniformEntry(uniforms, i, uniforms[i]));
+              processResult(sanitizeUniformEntry(container, i, container[i]));
             }
-          }
+          };
+
+          sanitizeArrayEntries(uniforms);
 
           Object.keys(uniforms).forEach((key) => {
             if (key === 'map' || key === 'seq') {
@@ -6000,6 +6005,7 @@
           });
 
           if (Array.isArray(uniforms.seq)) {
+            sanitizeArrayEntries(uniforms.seq);
             for (let i = 0; i < uniforms.seq.length; i += 1) {
               const entry = uniforms.seq[i];
               if (!entry || typeof entry !== 'object') {
@@ -6011,16 +6017,13 @@
                 typeof entry.setValue !== 'function'
               ) {
                 requiresRendererReset = true;
-                continue;
-              }
-              if (typeof entry.value === 'undefined' && typeof entry.setValue !== 'function') {
-                requiresRendererReset = true;
               }
             }
           }
 
           if (uniforms.map && typeof uniforms.map === 'object') {
             Object.keys(uniforms.map).forEach((key) => {
+              processResult(sanitizeUniformEntry(uniforms.map, key, uniforms.map[key]));
               processKey(key);
             });
           }
