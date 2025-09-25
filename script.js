@@ -5918,7 +5918,9 @@
             if (typeof entry.setValue === 'function') {
               try {
                 entry.setValue(entry.value ?? null);
-                return result;
+                if (Object.prototype.hasOwnProperty.call(entry, 'value')) {
+                  return result;
+                }
               } catch (setError) {
                 result.requiresRendererReset = true;
               }
