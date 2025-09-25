@@ -5867,9 +5867,14 @@
           if (!targetMaterial || typeof targetMaterial !== 'object') {
             return;
           }
-          const uniforms = targetMaterial.uniforms;
+          let uniforms = targetMaterial.uniforms;
           if (!uniforms || typeof uniforms !== 'object') {
-            return;
+            uniforms = {};
+            try {
+              targetMaterial.uniforms = uniforms;
+            } catch (assignError) {
+              return;
+            }
           }
 
           const resolveDefault = (value) => (typeof value === 'function' ? value() : value);
