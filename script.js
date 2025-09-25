@@ -3671,6 +3671,11 @@
       createPlayerLocator();
       syncCameraToPlayer({ idleBob: 0, walkBob: 0, movementStrength: 0 });
       updateLighting(0);
+      const uniformsReady = sanitizeSceneUniforms();
+      if (!uniformsReady) {
+        pendingUniformSanitizations = Math.max(pendingUniformSanitizations, 2);
+      }
+      rendererRecoveryFrames = Math.max(rendererRecoveryFrames, 1);
       console.log('Scene loaded');
       return true;
     }
