@@ -4907,6 +4907,90 @@
       return entries.every(([, uniform]) => Boolean(uniform && typeof uniform === 'object' && 'value' in uniform));
     }
 
+    function parsePortalAccentColor(color, fallback = '#7b6bff') {
+      if (!color) {
+        return fallback;
+      }
+      if (typeof color === 'string') {
+        return color;
+      }
+      if (typeof color === 'object') {
+        if (typeof color.getHexString === 'function') {
+          return `#${color.getHexString()}`;
+        }
+        if (Array.isArray(color) && color.length >= 3) {
+          const clamp = (value) => Math.min(255, Math.max(0, Math.round(value * 255)));
+          const [r, g, b] = color;
+          return `#${((clamp(r) << 16) | (clamp(g) << 8) | clamp(b)).toString(16).padStart(6, '0')}`;
+        }
+      }
+      return fallback;
+    }
+
+    function inferPortalMaterialState(material, defaults = {}) {
+      const accentDefault = defaults.accentColor ?? '#7b6bff';
+      const activeDefault = typeof defaults.isActive === 'boolean' ? defaults.isActive : false;
+      let accentColor = accentDefault;
+      let isActive = activeDefault;
+      const uniforms = material?.uniforms;
+
+      if (uniforms && typeof uniforms === 'object') {
+        const colorUniform = uniforms.uColor;
+        if (colorUniform && typeof colorUniform === 'object') {
+          accentColor = parsePortalAccentColor(colorUniform.value, accentColor);
+        }
+        const activationUniform = uniforms.uActivation;
+        if (activationUniform && typeof activationUniform === 'object') {
+          const { value } = activationUniform;
+          if (typeof value === 'number' && Number.isFinite(value)) {
+            isActive = value >= 0.4;
+          }
+        }
+      }
+
+      return { accentColor, isActive };
+    }
+
+    function materialUsesPortalSurfaceShader(material) {
+      if (!material || typeof material !== 'object') {
+        return false;
+      }
+
+      const fragmentShader = typeof material.fragmentShader === 'string' ? material.fragmentShader : '';
+      const vertexShader = typeof material.vertexShader === 'string' ? material.vertexShader : '';
+
+      if (fragmentShader === PORTAL_FRAGMENT_SHADER && vertexShader === PORTAL_VERTEX_SHADER) {
+        return true;
+      }
+
+      const uniforms = material.uniforms;
+      let matchedUniforms = 0;
+      if (uniforms && typeof uniforms === 'object') {
+        PORTAL_UNIFORM_KEYS.forEach((key) => {
+          if (Object.prototype.hasOwnProperty.call(uniforms, key)) {
+            matchedUniforms += 1;
+          }
+        });
+        if (matchedUniforms >= 3) {
+          return true;
+        }
+      }
+
+      if (fragmentShader || vertexShader) {
+        let referenced = 0;
+        PORTAL_UNIFORM_KEYS.forEach((key) => {
+          if ((fragmentShader && fragmentShader.includes(key)) || (vertexShader && vertexShader.includes(key))) {
+            referenced += 1;
+          }
+        });
+        if (referenced >= 3) {
+          return true;
+        }
+      }
+
+      return false;
+    }
+
     function assignPortalUniformValue(uniform, nextValue) {
       if (!uniform || typeof uniform !== 'object') {
         return false;
@@ -5996,12 +6080,16 @@
         if (props.uniforms && typeof props.uniforms === 'object') {
           uniformContainers.push(props.uniforms);
         }
-        const portalMetadata = material?.userData?.portalSurface ?? null;
+        const portalUserMetadata = material?.userData?.portalSurface ?? null;
+        const isShaderMaterial =
+          material?.isShaderMaterial === true || material?.type === 'ShaderMaterial';
+        const portalShaderSignature = isShaderMaterial && materialUsesPortalSurfaceShader(material);
+        const portalMetadata =
+          portalUserMetadata ??
+          (portalShaderSignature ? inferPortalMaterialState(material) : null);
         const expectPortalUniforms = Boolean(
-          portalMetadata &&
-            (material?.isShaderMaterial === true ||
-              material?.type === 'ShaderMaterial' ||
-              hasValidPortalUniformStructure(material?.uniforms))
+          portalShaderSignature ||
+            (portalMetadata && (isShaderMaterial || hasValidPortalUniformStructure(material?.uniforms)))
         );
         const programInfo = props.program?.getUniforms?.() ?? null;
         const keySet = new Set();
