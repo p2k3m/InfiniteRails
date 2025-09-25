@@ -4973,6 +4973,31 @@
       return { material, uniforms: material.uniforms };
     }
 
+    function recreatePortalSurfaceMaterialFromMetadata(metadata = {}, options = {}) {
+      const accentColor = metadata?.accentColor ?? '#7b6bff';
+      const isActive = Boolean(metadata?.isActive);
+      const { forceFallback = false, onShaderError = null } = options;
+
+      if (portalShaderSupport && !forceFallback) {
+        try {
+          const rebuilt = createPortalSurfaceMaterial(accentColor, isActive);
+          return { ...rebuilt, accentColor, isActive, usedFallback: false };
+        } catch (error) {
+          if (typeof onShaderError === 'function') {
+            onShaderError(error, { accentColor, isActive });
+          }
+          portalShaderSupport = false;
+        }
+      }
+
+      const fallback = createPortalFallbackMaterial(accentColor, isActive);
+      if (fallback?.userData) {
+        fallback.userData.portalSurface = { accentColor, isActive };
+      }
+
+      return { material: fallback, uniforms: null, accentColor, isActive, usedFallback: true };
+    }
+
     function createPortalFallbackMaterial(accentColor, active = false) {
       const accent = new THREE.Color(accentColor ?? '#7b6bff');
       const baseColor = new THREE.Color('#1a1f39').lerp(accent, active ? 0.65 : 0.5);
@@ -6040,35 +6065,33 @@
         }
 
         if (expectPortalUniforms) {
-            try {
-              const rebuilt = createPortalSurfaceMaterial(
-                portalMetadata.accentColor,
-                portalMetadata.isActive
-              );
-              replacement = rebuilt.material;
-              tagPortalSurfaceMaterial(replacement, portalMetadata.accentColor, portalMetadata.isActive);
-            } catch (factoryError) {
+          const rebuildResult = recreatePortalSurfaceMaterialFromMetadata(portalMetadata, {
+            onShaderError: (factoryError, context) => {
               console.warn(
                 'Failed to regenerate portal surface shader; switching to emissive fallback material.',
                 {
                   error: factoryError,
-                  accentColor: portalMetadata.accentColor,
-                  isActive: portalMetadata.isActive,
+                  accentColor: context.accentColor,
+                  isActive: context.isActive,
                 }
               );
-              portalShaderSupport = false;
-              replacement = createPortalFallbackMaterial(
-                portalMetadata.accentColor,
-                portalMetadata.isActive
-              );
-              if (replacement) {
-                replacement.renderOrder = material.renderOrder ?? replacement.renderOrder ?? 2;
-              }
-            }
+            },
+          });
+          replacement = rebuildResult.material;
+          if (rebuildResult.usedFallback && replacement) {
+            replacement.renderOrder = material.renderOrder ?? replacement.renderOrder ?? 2;
           }
-          if (!replacement) {
-            replacement = material.clone();
+        }
+        if (!replacement && portalMetadata) {
+          const rebuildResult = recreatePortalSurfaceMaterialFromMetadata(portalMetadata);
+          replacement = rebuildResult.material;
+          if (rebuildResult.usedFallback && replacement) {
+            replacement.renderOrder = material.renderOrder ?? replacement.renderOrder ?? 2;
           }
+        }
+        if (!replacement) {
+          replacement = material.clone();
+        }
 
           sanitizeMaterialUniforms(replacement, {
             missingKeys: missingUniforms,
