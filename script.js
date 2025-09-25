@@ -5988,17 +5988,25 @@
             processResult(sanitizeUniformEntry(uniforms, normalizedKey, uniforms[normalizedKey]));
           };
 
-          const sanitizeArrayEntries = (container) => {
+          const sanitizeArrayEntries = (container, options = {}) => {
             if (!Array.isArray(container)) {
               return;
             }
+            const { markRendererReset = false } = options;
             for (let i = 0; i < container.length; i += 1) {
               if (!Object.prototype.hasOwnProperty.call(container, i)) {
                 container[i] = { value: null };
                 updated = true;
+                if (markRendererReset) {
+                  requiresRendererReset = true;
+                }
                 continue;
               }
-              processResult(sanitizeUniformEntry(container, i, container[i]));
+              const result = sanitizeUniformEntry(container, i, container[i]);
+              processResult(result);
+              if (markRendererReset && result && result.updated) {
+                requiresRendererReset = true;
+              }
             }
           };
 
@@ -6012,7 +6020,7 @@
           });
 
           if (Array.isArray(uniforms.seq)) {
-            sanitizeArrayEntries(uniforms.seq);
+            sanitizeArrayEntries(uniforms.seq, { markRendererReset: true });
             for (let i = 0; i < uniforms.seq.length; i += 1) {
               const entry = uniforms.seq[i];
               if (!entry || typeof entry !== 'object') {
