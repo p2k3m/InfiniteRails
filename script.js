@@ -5841,6 +5841,8 @@
         'clippingPlanesFar',
       ];
 
+      const RENDERER_UNIFORM_CORRUPTION_SENTINEL = '__renderer_uniform_reset__';
+
       const isRendererManagedUniform = (uniformKey) => {
         if (!uniformKey) {
           return false;
@@ -5987,6 +5989,7 @@
         }
         const props = renderer.properties.get(material) ?? {};
         const uniformContainers = [];
+        let rendererUniformsCorrupted = false;
         if (material.uniforms && typeof material.uniforms === 'object') {
           uniformContainers.push(material.uniforms);
         }
@@ -6038,6 +6041,24 @@
                 return;
               }
             });
+          } else {
+            const inspectRendererUniformEntry = (entry) => {
+              if (!hasUsableUniformValue(entry)) {
+                rendererUniformsCorrupted = true;
+              }
+            };
+
+            if (Array.isArray(container.seq)) {
+              container.seq.forEach((entry) => {
+                inspectRendererUniformEntry(entry);
+              });
+            }
+
+            if (container.map && typeof container.map === 'object') {
+              Object.values(container.map).forEach((entry) => {
+                inspectRendererUniformEntry(entry);
+              });
+            }
           }
 
           if (container.map && typeof container.map === 'object') {
@@ -6075,16 +6096,20 @@
           });
         }
         const programUniformKeys = Array.from(keySet);
-        const missingUniforms = [];
+        const missingUniforms = rendererUniformsCorrupted
+          ? [RENDERER_UNIFORM_CORRUPTION_SENTINEL]
+          : [];
 
         if (!programUniformKeys.length) {
-          if (expectPortalUniforms && !hasValidPortalUniformStructure(material?.uniforms)) {
+          const portalUniformsInvalid =
+            expectPortalUniforms && !hasValidPortalUniformStructure(material?.uniforms);
+          if (portalUniformsInvalid) {
             PORTAL_UNIFORM_KEYS.forEach((key) => {
               if (typeof key === 'string' && key && !missingUniforms.includes(key)) {
                 missingUniforms.push(key);
               }
             });
-          } else {
+          } else if (!rendererUniformsCorrupted) {
             return;
           }
         }
@@ -6132,30 +6157,43 @@
         let replacement = null;
 
         const attemptInPlaceRepair = () => {
-          if (!missingUniforms.length) {
+          const uniformKeysToRepair = missingUniforms.filter(
+            (key) => key !== RENDERER_UNIFORM_CORRUPTION_SENTINEL
+          );
+          const requiresRendererUniformReset = missingUniforms.includes(
+            RENDERER_UNIFORM_CORRUPTION_SENTINEL
+          );
+
+          if (!uniformKeysToRepair.length && !requiresRendererUniformReset) {
             return false;
           }
-          if (!material || typeof material !== 'object' || !material.uniforms) {
+          if (!material || typeof material !== 'object') {
             return false;
           }
 
-          ensurePortalUniformIntegrity(material, {
-            missingKeys: missingUniforms,
-            expectPortal: expectPortalUniforms,
-            metadata: portalMetadata,
-          });
+          if (uniformKeysToRepair.length) {
+            if (!material.uniforms || typeof material.uniforms !== 'object') {
+              return false;
+            }
 
-          const unresolved = missingUniforms.filter((key) => {
-            const uniform = material.uniforms?.[key];
-            return (
-              !uniform ||
-              typeof uniform !== 'object' ||
-              !Object.prototype.hasOwnProperty.call(uniform, 'value')
-            );
-          });
+            ensurePortalUniformIntegrity(material, {
+              missingKeys: uniformKeysToRepair,
+              expectPortal: expectPortalUniforms,
+              metadata: portalMetadata,
+            });
 
-          if (unresolved.length) {
-            return false;
+            const unresolved = uniformKeysToRepair.filter((key) => {
+              const uniform = material.uniforms?.[key];
+              return (
+                !uniform ||
+                typeof uniform !== 'object' ||
+                !Object.prototype.hasOwnProperty.call(uniform, 'value')
+              );
+            });
+
+            if (unresolved.length) {
+              return false;
+            }
           }
 
           const boundLight = getRendererBoundLight(material);
@@ -6180,7 +6218,8 @@
             {
               name: material.name || host.name || 'unnamed-material',
               type: material.type,
-              missingUniforms,
+              missingUniforms: uniformKeysToRepair,
+              resetRendererCache: requiresRendererUniformReset,
               originalError: error?.message ?? error,
             }
           );
@@ -6220,11 +6259,16 @@
           replacement = material.clone();
         }
 
-          ensurePortalUniformIntegrity(replacement, {
-            missingKeys: missingUniforms,
-            expectPortal: expectPortalUniforms,
-            metadata: portalMetadata,
-          });
+          const uniformKeysToRepair = missingUniforms.filter(
+            (key) => key !== RENDERER_UNIFORM_CORRUPTION_SENTINEL
+          );
+          if (uniformKeysToRepair.length) {
+            ensurePortalUniformIntegrity(replacement, {
+              missingKeys: uniformKeysToRepair,
+              expectPortal: expectPortalUniforms,
+              metadata: portalMetadata,
+            });
+          }
 
         if (portalMetadata) {
           if (expectPortalUniforms && hasValidPortalUniformStructure(replacement.uniforms)) {
@@ -6254,7 +6298,9 @@
           {
             name: material.name || host.name || 'unnamed-material',
             type: material.type,
-            missingUniforms,
+            missingUniforms: missingUniforms.filter(
+              (key) => key !== RENDERER_UNIFORM_CORRUPTION_SENTINEL
+            ),
             originalError: error?.message ?? error,
           }
         );
