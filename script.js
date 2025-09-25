@@ -6060,60 +6060,73 @@
             visitedMaterials.add(mat);
             let updated = false;
             let rendererReset = false;
-          if (mat.uniforms && typeof mat.uniforms === 'object') {
-            const result = sanitizeUniformContainer(mat.uniforms);
-            if (result.updated) {
-              updated = true;
-            }
-            if (result.requiresRendererReset) {
-              rendererReset = true;
-            }
-          }
+            const isShaderMaterial =
+              mat?.isShaderMaterial === true || mat?.type === 'ShaderMaterial';
+            const expectPortalUniforms = Boolean(mat?.userData?.portalSurface);
 
-          if (mat && renderer?.properties?.get) {
-            let rendererUniforms = null;
-            try {
-              rendererUniforms = renderer.properties.get(mat)?.uniforms ?? null;
-            } catch (propertyError) {
-              rendererUniforms = null;
-            }
-
-            if (rendererUniforms && typeof rendererUniforms === 'object') {
-              if (!mat.uniforms || typeof mat.uniforms !== 'object') {
-                mat.uniforms = {};
-              }
-
-              const ensureMaterialUniform = (uniformId) => {
-                if (!uniformId) {
-                  return;
-                }
-                const key = typeof uniformId === 'string' ? uniformId : `${uniformId}`;
-                if (!key) {
-                  return;
-                }
-                const entry = mat.uniforms[key];
-                if (!entry || typeof entry !== 'object' || !Object.prototype.hasOwnProperty.call(entry, 'value')) {
-                  mat.uniforms[key] = { value: entry && typeof entry === 'object' ? entry.value ?? null : null };
+            if (isShaderMaterial || expectPortalUniforms) {
+              if (mat.uniforms && typeof mat.uniforms === 'object') {
+                const result = sanitizeUniformContainer(mat.uniforms);
+                if (result.updated) {
                   updated = true;
                 }
-              };
-
-              if (Array.isArray(rendererUniforms.seq)) {
-                rendererUniforms.seq.forEach((uniform) => {
-                  if (!uniform || typeof uniform !== 'object') {
-                    return;
-                  }
-                  ensureMaterialUniform(uniform.id ?? uniform.name ?? null);
-                });
+                if (result.requiresRendererReset) {
+                  rendererReset = true;
+                }
               }
 
-              if (rendererUniforms.map && typeof rendererUniforms.map === 'object') {
-                Object.keys(rendererUniforms.map).forEach((key) => {
-                  ensureMaterialUniform(key);
-                });
+              if (mat && renderer?.properties?.get) {
+                let rendererUniforms = null;
+                try {
+                  rendererUniforms = renderer.properties.get(mat)?.uniforms ?? null;
+                } catch (propertyError) {
+                  rendererUniforms = null;
+                }
+
+                if (rendererUniforms && typeof rendererUniforms === 'object') {
+                  if (!mat.uniforms || typeof mat.uniforms !== 'object') {
+                    mat.uniforms = {};
+                  }
+
+                  const ensureMaterialUniform = (uniformId) => {
+                    if (!uniformId) {
+                      return;
+                    }
+                    const key = typeof uniformId === 'string' ? uniformId : `${uniformId}`;
+                    if (!key) {
+                      return;
+                    }
+                    const entry = mat.uniforms[key];
+                    if (
+                      !entry ||
+                      typeof entry !== 'object' ||
+                      !Object.prototype.hasOwnProperty.call(entry, 'value')
+                    ) {
+                      mat.uniforms[key] = {
+                        value: entry && typeof entry === 'object' ? entry.value ?? null : null,
+                      };
+                      updated = true;
+                    }
+                  };
+
+                  if (Array.isArray(rendererUniforms.seq)) {
+                    rendererUniforms.seq.forEach((uniform) => {
+                      if (!uniform || typeof uniform !== 'object') {
+                        return;
+                      }
+                      ensureMaterialUniform(uniform.id ?? uniform.name ?? null);
+                    });
+                  }
+
+                  if (rendererUniforms.map && typeof rendererUniforms.map === 'object') {
+                    Object.keys(rendererUniforms.map).forEach((key) => {
+                      ensureMaterialUniform(key);
+                    });
+                  }
+                }
               }
             }
-          }
+
             if (rendererReset && renderer?.properties?.remove) {
               try {
                 renderer.properties.remove(mat);
