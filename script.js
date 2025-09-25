@@ -6120,6 +6120,7 @@
           };
         }
         handledMaterials.add(material);
+        needsReset = true;
         return true;
       };
 
@@ -6211,7 +6212,7 @@
         });
       }
 
-      if (supportWasEnabled && (needsReset || !disabled)) {
+      if (needsReset || (supportWasEnabled && !disabled)) {
         resetWorldMeshes();
         disabled = true;
         needsReset = false;
