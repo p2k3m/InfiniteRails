@@ -5680,6 +5680,14 @@
         );
       };
 
+      const isRendererManagedUniformContainer = (container) =>
+        Boolean(
+          container &&
+            typeof container === 'object' &&
+            Array.isArray(container.seq) &&
+            typeof container.map === 'object'
+        );
+
         const enumerateUniformKeyCandidates = (uniformKey) => {
           const normalizedKeys = [];
           const pushCandidate = (key) => {
@@ -5822,8 +5830,7 @@
             return;
           }
 
-          const isRendererUniformContainer =
-            Array.isArray(container.seq) && typeof container.map === 'object';
+          const isRendererUniformContainer = isRendererManagedUniformContainer(container);
 
           if (!isRendererUniformContainer) {
             Object.keys(container).forEach((key) => {
@@ -5917,10 +5924,18 @@
             let invalidDefinitions = 0;
 
             uniformContainers.forEach((container) => {
+              const isRendererContainer = isRendererManagedUniformContainer(container);
               const { hasDefinition, uniform } = findUniformInContainer(container, uniformKey);
               if (!hasDefinition) {
                 return;
               }
+              if (isRendererContainer) {
+                if (!hasUsableUniformValue(uniform)) {
+                  invalidDefinitions += 1;
+                }
+                return;
+              }
+
               definitions += 1;
               if (hasUsableUniformValue(uniform)) {
                 validDefinitions += 1;
