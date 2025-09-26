@@ -6795,22 +6795,43 @@
             if (!Array.isArray(container)) {
               return;
             }
-            const { markRendererReset = false } = options;
+            const { markRendererReset = false, rendererManaged = false } = options;
             for (let i = 0; i < container.length; i += 1) {
               if (!Object.prototype.hasOwnProperty.call(container, i)) {
-                container[i] = { value: null };
+                if (rendererManaged) {
+                  container[i] = {
+                    id: `${i}`,
+                    setValue: () => {},
+                    updateCache: () => {},
+                    cache: [],
+                    uniform: { value: null },
+                    value: null,
+                  };
+                } else {
+                  container[i] = { value: null };
+                }
                 updated = true;
                 if (markRendererReset) {
                   requiresRendererReset = true;
                 }
                 continue;
               }
-              const result = sanitizeUniformEntry(container, i, container[i], {
-                markRendererReset,
-              });
-              processResult(result);
-              if (markRendererReset && result && result.updated) {
-                requiresRendererReset = true;
+              if (rendererManaged) {
+                const repaired = repairRendererUniformEntry(container, i, container[i]);
+                if (repaired) {
+                  updated = true;
+                  if (markRendererReset) {
+                    requiresRendererReset = true;
+                  }
+                }
+              } else {
+                const result = sanitizeUniformEntry(container, i, container[i], {
+                  markRendererReset,
+                });
+                processResult(result);
+                if (markRendererReset && result && result.updated) {
+                  requiresRendererReset = true;
+                }
               }
             }
           };
@@ -6825,6 +6846,11 @@
                 });
                 processResult(result);
               });
+              return;
+            }
+
+            if (key === 'seq' && Array.isArray(uniforms.seq)) {
+              sanitizeArrayEntries(uniforms.seq, { markRendererReset: true, rendererManaged: true });
               return;
             }
 
