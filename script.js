@@ -6533,12 +6533,29 @@
                     }
                   }
 
-                  const ensureMaterialUniform = (uniformId) => {
-                    if (!uniformId) {
-                      return;
+                  const ensureMaterialUniform = (uniformId, uniformEntry = null) => {
+                    let key = null;
+                    if (typeof uniformId === 'string' || typeof uniformId === 'number') {
+                      key = `${uniformId}`;
+                    } else if (uniformEntry && typeof uniformEntry === 'object') {
+                      if (typeof uniformEntry.id === 'string' || typeof uniformEntry.id === 'number') {
+                        key = `${uniformEntry.id}`;
+                      } else if (
+                        typeof uniformEntry.name === 'string' ||
+                        typeof uniformEntry.name === 'number'
+                      ) {
+                        key = `${uniformEntry.name}`;
+                      } else if (
+                        uniformEntry.uniform &&
+                        typeof uniformEntry.uniform === 'object' &&
+                        (typeof uniformEntry.uniform.id === 'string' ||
+                          typeof uniformEntry.uniform.id === 'number')
+                      ) {
+                        key = `${uniformEntry.uniform.id}`;
+                      }
                     }
-                    const key = typeof uniformId === 'string' ? uniformId : `${uniformId}`;
-                    if (!key) {
+
+                    if (key === null || typeof key === 'undefined') {
                       return;
                     }
                     const entry = mat.uniforms[key];
@@ -6559,7 +6576,7 @@
                       if (!uniform || typeof uniform !== 'object') {
                         return;
                       }
-                      ensureMaterialUniform(uniform.id ?? uniform.name ?? null);
+                      ensureMaterialUniform(uniform.id ?? uniform.name ?? null, uniform);
                     });
                   }
 
