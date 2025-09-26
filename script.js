@@ -6472,9 +6472,20 @@
           sanitizeArrayEntries(uniforms);
 
           Object.keys(uniforms).forEach((key) => {
-            if (key === 'seq') {
+            if (key === 'map' && uniforms.map && typeof uniforms.map === 'object') {
+              Object.keys(uniforms.map).forEach((mapKey) => {
+                const result = sanitizeUniformEntry(uniforms.map, mapKey, uniforms.map[mapKey], {
+                  markRendererReset: true,
+                });
+                processResult(result);
+              });
               return;
             }
+
+            if (RESERVED_UNIFORM_CONTAINER_KEYS.has(key)) {
+              return;
+            }
+
             processKey(key);
           });
 
