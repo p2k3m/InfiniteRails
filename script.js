@@ -6222,7 +6222,45 @@
       const isRendererManagedUniformContainer = (container) =>
         Boolean(container && typeof container === 'object' && Array.isArray(container.seq));
 
-      function sanitizeSceneUniforms() {
+  const RENDERER_MANAGED_UNIFORM_PREFIXES = [
+    'modelMatrix',
+    'modelViewMatrix',
+    'projectionMatrix',
+    'viewMatrix',
+    'normalMatrix',
+    'cameraPosition',
+    'isOrthographic',
+    'toneMappingExposure',
+    'morphTargetBaseInfluence',
+    'morphTargetInfluences',
+    'boneTexture',
+    'boneTextureSize',
+    'boneMatrices',
+    'bindMatrix',
+    'bindMatrixInverse',
+    'logDepthBufFC',
+    'clippingPlanes',
+    'clippingPlanesMatrix',
+    'clippingPlanesTexture',
+    'clippingPlanesNear',
+    'clippingPlanesFar',
+  ];
+
+  const isRendererManagedUniform = (uniformKey) => {
+    if (!uniformKey) {
+      return false;
+    }
+    const normalizedKey = `${uniformKey}`
+      .replace(/\[[^\]]*\]/g, '.')
+      .split('.')
+      .filter(Boolean)[0];
+    if (!normalizedKey) {
+      return false;
+    }
+    return RENDERER_MANAGED_UNIFORM_PREFIXES.some((prefix) => normalizedKey === prefix);
+  };
+
+  function sanitizeSceneUniforms() {
         if (!scene || typeof scene.traverse !== 'function') {
           return false;
         }
@@ -6547,12 +6585,23 @@
 
             const shouldSanitizeRendererUniforms = Boolean(renderer?.properties?.get);
             if (shouldSanitizeRendererUniforms) {
-              let rendererUniforms = null;
+              let materialProperties = null;
               try {
-                rendererUniforms = renderer.properties.get(mat)?.uniforms ?? null;
+                materialProperties = renderer.properties.get(mat) ?? null;
               } catch (propertyError) {
-                rendererUniforms = null;
+                materialProperties = null;
               }
+
+              const rendererUniforms =
+                materialProperties && typeof materialProperties.uniforms === 'object'
+                  ? materialProperties.uniforms
+                  : null;
+              const programInfo =
+                materialProperties &&
+                materialProperties.program &&
+                typeof materialProperties.program.getUniforms === 'function'
+                  ? materialProperties.program.getUniforms()
+                  : null;
 
               if (rendererUniforms && typeof rendererUniforms === 'object') {
                 const purgedRendererUniforms = purgeRendererUniformCache(rendererUniforms);
@@ -6569,6 +6618,52 @@
                 if (rendererUniformSanitization.requiresRendererReset) {
                   rendererReset = true;
                   sanitized = true;
+                }
+
+                if (!isRendererManagedUniformContainer(rendererUniforms) && programInfo) {
+                  let programUniformsUpdated = false;
+                  let programUniformsRequireReset = false;
+
+                  const ensureProgramUniform = (key) => {
+                    if (!key) {
+                      return;
+                    }
+                    if (isRendererManagedUniform(key)) {
+                      return;
+                    }
+                    const result = sanitizeUniformEntry(rendererUniforms, key, rendererUniforms[key], {
+                      markRendererReset: true,
+                    });
+                    if (result.updated) {
+                      programUniformsUpdated = true;
+                    }
+                    if (result.requiresRendererReset) {
+                      programUniformsRequireReset = true;
+                    }
+                  };
+
+                  if (programInfo.map && typeof programInfo.map === 'object') {
+                    Object.keys(programInfo.map).forEach((key) => {
+                      ensureProgramUniform(key);
+                    });
+                  } else if (Array.isArray(programInfo.seq)) {
+                    programInfo.seq.forEach((uniformEntry) => {
+                      const uniformId =
+                        typeof uniformEntry?.id === 'string' || typeof uniformEntry?.id === 'number'
+                          ? `${uniformEntry.id}`
+                          : null;
+                      if (uniformId) {
+                        ensureProgramUniform(uniformId);
+                      }
+                    });
+                  }
+
+                  if (programUniformsUpdated) {
+                    sanitized = true;
+                  }
+                  if (programUniformsRequireReset) {
+                    rendererReset = true;
+                  }
                 }
 
                 if (shouldSanitizeMaterialUniforms) {
@@ -6672,47 +6767,7 @@
         return false;
       }
 
-      const RENDERER_MANAGED_UNIFORM_PREFIXES = [
-        'modelMatrix',
-        'modelViewMatrix',
-        'projectionMatrix',
-        'viewMatrix',
-        'normalMatrix',
-        'cameraPosition',
-        'isOrthographic',
-        'toneMappingExposure',
-        'morphTargetBaseInfluence',
-        'morphTargetInfluences',
-        'boneTexture',
-        'boneTextureSize',
-        'boneMatrices',
-        'bindMatrix',
-        'bindMatrixInverse',
-        'logDepthBufFC',
-        'clippingPlanes',
-        'clippingPlanesMatrix',
-        'clippingPlanesTexture',
-        'clippingPlanesNear',
-        'clippingPlanesFar',
-      ];
-
       const RENDERER_UNIFORM_CORRUPTION_SENTINEL = '__renderer_uniform_reset__';
-
-      const isRendererManagedUniform = (uniformKey) => {
-        if (!uniformKey) {
-          return false;
-        }
-        const normalizedKey = `${uniformKey}`
-          .replace(/\[[^\]]*\]/g, '.')
-          .split('.')
-          .filter(Boolean)[0];
-        if (!normalizedKey) {
-          return false;
-        }
-        return RENDERER_MANAGED_UNIFORM_PREFIXES.some((prefix) =>
-          normalizedKey === prefix
-        );
-      };
 
         const enumerateUniformKeyCandidates = (uniformKey) => {
           const normalizedKeys = [];
