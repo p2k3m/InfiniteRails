@@ -6209,6 +6209,7 @@
                 const result = sanitizeUniformContainer(mat.uniforms);
                 if (result.updated) {
                   updated = true;
+                  rendererReset = true;
                 }
                 if (result.requiresRendererReset) {
                   rendererReset = true;
@@ -6229,6 +6230,7 @@
                   );
                   if (rendererUniformSanitization.updated) {
                     sanitized = true;
+                    rendererReset = true;
                   }
                   if (rendererUniformSanitization.requiresRendererReset) {
                     rendererReset = true;
