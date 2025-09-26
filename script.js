@@ -6637,6 +6637,8 @@
             const expectPortalUniforms = Boolean(portalMetadata);
             const hasPortalUniforms = hasValidPortalUniformStructure(mat?.uniforms);
             const usesPortalShader = materialUsesPortalSurfaceShader(mat);
+            const hasUniformObject = Boolean(mat?.uniforms && typeof mat.uniforms === 'object');
+
             const shouldInspect = Boolean(
               isShaderMaterial || portalMetadata || hasPortalUniforms || usesPortalShader
             );
@@ -6652,7 +6654,7 @@
             }
 
             const shouldSanitizeMaterialUniforms = Boolean(
-              isShaderMaterial || hasPortalUniforms || usesPortalShader
+              isShaderMaterial || hasPortalUniforms || usesPortalShader || hasUniformObject
             );
 
             if (shouldSanitizeMaterialUniforms && mat.uniforms && typeof mat.uniforms === 'object') {
