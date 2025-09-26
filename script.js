@@ -5327,6 +5327,119 @@
       return proxy;
     }
 
+    function ensureDistanceMaterialUniformIntegrity(material) {
+      if (!material || typeof material !== 'object') {
+        return { modified: false, requiresRendererReset: false };
+      }
+
+      const isDistanceMaterial =
+        material.isMeshDistanceMaterial === true || material.type === 'MeshDistanceMaterial';
+      if (!isDistanceMaterial) {
+        return { modified: false, requiresRendererReset: false };
+      }
+
+      const createVector3 = () => {
+        if (typeof THREE?.Vector3 === 'function') {
+          return new THREE.Vector3();
+        }
+        return {
+          x: 0,
+          y: 0,
+          z: 0,
+          set(x = 0, y = 0, z = 0) {
+            this.x = x;
+            this.y = y;
+            this.z = z;
+            return this;
+          },
+          copy(target) {
+            if (target && typeof target === 'object') {
+              if (typeof target.x === 'number') {
+                this.x = target.x;
+              }
+              if (typeof target.y === 'number') {
+                this.y = target.y;
+              }
+              if (typeof target.z === 'number') {
+                this.z = target.z;
+              }
+            }
+            return this;
+          },
+          setFromMatrixPosition() {
+            return this;
+          },
+        };
+      };
+
+      let uniforms = material.uniforms;
+      if (!uniforms || typeof uniforms !== 'object') {
+        uniforms = {};
+      }
+
+      const guardedUniforms = guardUniformContainer(uniforms);
+      if (guardedUniforms && guardedUniforms !== uniforms) {
+        uniforms = guardedUniforms;
+      }
+
+      if (material.uniforms !== uniforms) {
+        try {
+          material.uniforms = uniforms;
+        } catch (assignError) {
+          return { modified: false, requiresRendererReset: false };
+        }
+      }
+
+      let modified = false;
+      let requiresRendererReset = false;
+
+      const ensureVectorUniform = (key) => {
+        let entry = uniforms[key];
+        if (!entry || typeof entry !== 'object') {
+          uniforms[key] = { value: createVector3() };
+          modified = true;
+          requiresRendererReset = true;
+          return;
+        }
+        if (!Object.prototype.hasOwnProperty.call(entry, 'value')) {
+          entry.value = createVector3();
+          modified = true;
+          return;
+        }
+        const value = entry.value;
+        if (!value || typeof value.setFromMatrixPosition !== 'function') {
+          entry.value = createVector3();
+          modified = true;
+        }
+      };
+
+      const ensureNumberUniform = (key, fallback) => {
+        let entry = uniforms[key];
+        if (!entry || typeof entry !== 'object') {
+          uniforms[key] = { value: fallback };
+          modified = true;
+          requiresRendererReset = true;
+          return;
+        }
+        if (!Object.prototype.hasOwnProperty.call(entry, 'value')) {
+          entry.value = fallback;
+          modified = true;
+          return;
+        }
+        const value = entry.value;
+        if (typeof value !== 'number' || !Number.isFinite(value)) {
+          entry.value = fallback;
+          modified = true;
+        }
+      };
+
+      ensureVectorUniform('referencePosition');
+      ensureNumberUniform('nearDistance', 1);
+      ensureNumberUniform('farDistance', 1000);
+
+      return { modified, requiresRendererReset };
+    }
+
     function ensurePortalUniformIntegrity(
       material,
       { missingKeys = [], expectPortal = false, metadata = null } = {}
@@ -6662,6 +6775,14 @@
             const hasPortalUniforms = hasValidPortalUniformStructure(mat?.uniforms);
             const usesPortalShader = materialUsesPortalSurfaceShader(mat);
             const hasUniformObject = Boolean(mat?.uniforms && typeof mat.uniforms === 'object');
+
+            const distanceUniformResult = ensureDistanceMaterialUniformIntegrity(mat);
+            if (distanceUniformResult.modified) {
+              updated = true;
+            }
+            if (distanceUniformResult.requiresRendererReset) {
+              rendererReset = true;
+            }
 
             const shouldInspect = Boolean(
               isShaderMaterial || portalMetadata || hasPortalUniforms || usesPortalShader
