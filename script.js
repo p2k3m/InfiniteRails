@@ -6486,24 +6486,23 @@
       return true;
     }
 
+    if (entry.map && typeof entry.map === 'object' && Array.isArray(entry.seq)) {
+      return false;
+    }
+
     if (Object.prototype.hasOwnProperty.call(entry, 'value')) {
       return typeof entry.value === 'undefined';
     }
 
-    if (
-      entry.uniform &&
-      typeof entry.uniform === 'object' &&
-      Object.prototype.hasOwnProperty.call(entry.uniform, 'value')
-    ) {
+    if (entry.uniform && typeof entry.uniform === 'object') {
+      if (!Object.prototype.hasOwnProperty.call(entry.uniform, 'value')) {
+        return true;
+      }
       return typeof entry.uniform.value === 'undefined';
     }
 
     if (typeof entry.setValue === 'function') {
-      return false;
-    }
-
-    if (entry.map && typeof entry.map === 'object' && Array.isArray(entry.seq)) {
-      return false;
+      return !entry.uniform || typeof entry.uniform !== 'object';
     }
 
     return true;
