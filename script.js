@@ -6174,6 +6174,14 @@
         }
       }
 
+      const isRendererManagedUniformContainer = (container) =>
+        Boolean(
+          container &&
+            typeof container === 'object' &&
+            Array.isArray(container.seq) &&
+            typeof container.map === 'object'
+        );
+
       function sanitizeSceneUniforms() {
         if (!scene || typeof scene.traverse !== 'function') {
           return false;
@@ -6245,6 +6253,32 @@
           let requiresRendererReset = false;
           const visited = new Set();
 
+          if (isRendererManagedUniformContainer(uniforms)) {
+            if (Array.isArray(uniforms.seq)) {
+              for (let i = 0; i < uniforms.seq.length; i += 1) {
+                if (!Object.prototype.hasOwnProperty.call(uniforms.seq, i)) {
+                  requiresRendererReset = true;
+                  continue;
+                }
+                const entry = uniforms.seq[i];
+                if (!entry || typeof entry !== 'object' || typeof entry.setValue !== 'function') {
+                  requiresRendererReset = true;
+                }
+              }
+            }
+
+            if (uniforms.map && typeof uniforms.map === 'object') {
+              Object.keys(uniforms.map).forEach((key) => {
+                const entry = uniforms.map[key];
+                if (!entry || typeof entry !== 'object' || typeof entry.setValue !== 'function') {
+                  requiresRendererReset = true;
+                }
+              });
+            }
+
+            return { updated, requiresRendererReset };
+          }
+
           const processResult = (result) => {
             if (!result) {
               return;
@@ -6298,39 +6332,11 @@
           sanitizeArrayEntries(uniforms);
 
           Object.keys(uniforms).forEach((key) => {
-            if (key === 'map' || key === 'seq') {
+            if (key === 'seq') {
               return;
             }
             processKey(key);
           });
-
-          if (Array.isArray(uniforms.seq)) {
-            sanitizeArrayEntries(uniforms.seq, { markRendererReset: true });
-            for (let i = 0; i < uniforms.seq.length; i += 1) {
-              const entry = uniforms.seq[i];
-              if (!entry || typeof entry !== 'object') {
-                requiresRendererReset = true;
-                continue;
-              }
-              if (
-                !Object.prototype.hasOwnProperty.call(entry, 'value') &&
-                typeof entry.setValue !== 'function'
-              ) {
-                requiresRendererReset = true;
-              }
-            }
-          }
-
-          if (uniforms.map && typeof uniforms.map === 'object') {
-            Object.keys(uniforms.map).forEach((key) => {
-              processResult(
-                sanitizeUniformEntry(uniforms.map, key, uniforms.map[key], {
-                  markRendererReset: true,
-                })
-              );
-              processKey(key);
-            });
-          }
 
           return { updated, requiresRendererReset };
         };
@@ -6521,14 +6527,6 @@
           normalizedKey === prefix
         );
       };
-
-      const isRendererManagedUniformContainer = (container) =>
-        Boolean(
-          container &&
-            typeof container === 'object' &&
-            Array.isArray(container.seq) &&
-            typeof container.map === 'object'
-        );
 
         const enumerateUniformKeyCandidates = (uniformKey) => {
           const normalizedKeys = [];
