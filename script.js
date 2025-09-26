@@ -7777,6 +7777,81 @@
         });
       }
 
+      if (scene && typeof scene.traverse === 'function') {
+        const fallbackCache = new Map();
+        scene.traverse((object) => {
+          if (!object || !object.material) {
+            return;
+          }
+
+          const applyFallback = (host, material, index = null) => {
+            if (!material || disposedMaterials.has(material)) {
+              return false;
+            }
+
+            if (!materialUsesPortalSurfaceShader(material)) {
+              return false;
+            }
+
+            const inferredState = inferPortalMaterialState(material);
+            const accentColor = inferredState?.accentColor ?? '#7b6bff';
+            const isActive = inferredState?.isActive ?? false;
+            const cacheKey = `${accentColor}|${isActive ? '1' : '0'}`;
+            let template = fallbackCache.get(cacheKey) ?? null;
+            if (!template) {
+              template = createPortalFallbackMaterial(accentColor, isActive);
+              if (template?.userData) {
+                template.userData.portalSurface = {
+                  accentColor,
+                  isActive,
+                };
+              }
+              fallbackCache.set(cacheKey, template);
+            }
+
+            const fallbackMaterial = template.clone();
+            fallbackMaterial.renderOrder = Math.max(
+              fallbackMaterial.renderOrder ?? 2,
+              material.renderOrder ?? 2
+            );
+
+            const boundLight = getRendererBoundLight(material);
+            if (Array.isArray(host.material) && index !== null) {
+              host.material[index] = fallbackMaterial;
+            } else {
+              host.material = fallbackMaterial;
+            }
+            if (renderer?.properties?.remove) {
+              try {
+                renderer.properties.remove(material);
+              } catch (removeError) {
+                // Ignore cleanup errors for renderer caches.
+              }
+            }
+            try {
+              material.dispose?.();
+            } catch (disposeError) {
+              // Continue even if disposing fails.
+            }
+            if (boundLight) {
+              restoreRendererBoundLight(fallbackMaterial, boundLight);
+            }
+            disposedMaterials.add(material);
+            disabled = true;
+            needsReset = true;
+            return true;
+          };
+
+          if (Array.isArray(object.material)) {
+            object.material.forEach((mat, idx) => {
+              applyFallback(object, mat, idx);
+            });
+          } else {
+            applyFallback(object, object.material);
+          }
+        });
+      }
+
       if (needsReset || (supportWasEnabled && !disabled)) {
         resetWorldMeshes();
         disabled = true;
