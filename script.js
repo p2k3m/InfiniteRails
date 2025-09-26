@@ -4945,7 +4945,9 @@
       if (!uniforms || typeof uniforms !== 'object') {
         return false;
       }
-      const entries = Object.entries(uniforms);
+      const entries = Object.entries(uniforms).filter(
+        ([key]) => !RESERVED_UNIFORM_CONTAINER_KEYS.has(key)
+      );
       if (!entries.length) {
         return false;
       }
@@ -4956,7 +4958,9 @@
       if (!hasRequiredUniforms) {
         return false;
       }
-      return entries.every(([, uniform]) => Boolean(uniform && typeof uniform === 'object' && 'value' in uniform));
+      return entries.every(([, uniform]) =>
+        Boolean(uniform && typeof uniform === 'object' && 'value' in uniform)
+      );
     }
 
     function ensurePortalShaderMaterialsHaveUniformValues(
@@ -5377,6 +5381,9 @@
       };
 
       Object.keys(uniforms).forEach((key) => {
+        if (RESERVED_UNIFORM_CONTAINER_KEYS.has(key)) {
+          return;
+        }
         const entry = uniforms[key];
         if (!entry || typeof entry !== 'object' || !Object.prototype.hasOwnProperty.call(entry, 'value')) {
           ensureUniformEntry(key, null);
