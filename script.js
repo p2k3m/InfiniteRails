@@ -6917,11 +6917,15 @@
               const forcePortalUniforms = Boolean(
                 isShaderMaterial || hasPortalUniforms || usesPortalShader
               );
-              ensurePortalShaderMaterialsHaveUniformValues(
+              const ensured = ensurePortalShaderMaterialsHaveUniformValues(
                 [mat],
                 portalMetadata,
                 { forceExpectPortal: forcePortalUniforms }
               );
+              if (ensured) {
+                updated = true;
+                sanitized = true;
+              }
             }
 
             const shouldSanitizeMaterialUniforms = Boolean(
