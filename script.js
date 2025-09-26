@@ -6582,7 +6582,7 @@
             return false;
           }
 
-          const filtered = seq.filter((entry) => Boolean(entry && typeof entry === 'object'));
+          const filtered = seq.filter((entry) => !hasInvalidUniformEntry(entry));
           if (filtered.length === seq.length) {
             return false;
           }
@@ -6595,7 +6595,7 @@
           if (uniforms.map && typeof uniforms.map === 'object') {
             Object.keys(uniforms.map).forEach((key) => {
               const value = uniforms.map[key];
-              if (!value || typeof value !== 'object') {
+              if (hasInvalidUniformEntry(value)) {
                 delete uniforms.map[key];
               }
             });
