@@ -6312,6 +6312,7 @@
           if (!entry || typeof entry !== 'object') {
             container[key] = { value: null };
             result.updated = true;
+            result.requiresRendererReset = true;
             markReset();
             return result;
           }
@@ -6342,6 +6343,7 @@
 
             container[key] = { value: preservedValue ?? null };
             result.updated = true;
+            result.requiresRendererReset = true;
             markReset();
             return result;
           }
