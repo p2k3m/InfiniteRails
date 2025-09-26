@@ -301,8 +301,31 @@ jobs:
             echo '::error::CloudFront distribution ID is empty. Check the discovery step output.'
             exit 1
           fi
-          INVALIDATION_OUTPUT=$(aws cloudfront create-invalidation --distribution-id "$DISTRIBUTION_ID" --paths '/*')
-          INVALIDATION_ID=$(echo "${INVALIDATION_OUTPUT}" | jq -r '.Invalidation.Id // empty')
+          MAX_ATTEMPTS=5
+          BASE_DELAY=5
+          ATTEMPT=1
+          INVALIDATION_OUTPUT=""
+          INVALIDATION_ID=""
+
+          while [ "${ATTEMPT}" -le "${MAX_ATTEMPTS}" ]; do
+            if INVALIDATION_OUTPUT=$(aws cloudfront create-invalidation --distribution-id "$DISTRIBUTION_ID" --paths '/*' 2>&1); then
+              INVALIDATION_ID=$(echo "${INVALIDATION_OUTPUT}" | jq -r '.Invalidation.Id // empty')
+              break
+            fi
+
+            STATUS=$?
+            if echo "${INVALIDATION_OUTPUT}" | grep -qi 'Throttling' && [ "${ATTEMPT}" -lt "${MAX_ATTEMPTS}" ]; then
+              SLEEP_DURATION=$((BASE_DELAY * 2 ** (ATTEMPT - 1)))
+              echo "::warning::CloudFront invalidation throttled (attempt ${ATTEMPT}/${MAX_ATTEMPTS}). Retrying in ${SLEEP_DURATION}s."
+              sleep "${SLEEP_DURATION}"
+              ATTEMPT=$((ATTEMPT + 1))
+              continue
+            fi
+
+            echo "::error::Failed to create CloudFront invalidation after ${ATTEMPT} attempt(s). AWS CLI exited with status ${STATUS}. Output: ${INVALIDATION_OUTPUT}"
+            exit "${STATUS}"
+          done
+
           if [ -z "${INVALIDATION_ID}" ]; then
             echo '::warning::Cache invalidation request completed but no ID was returned.'
           else
