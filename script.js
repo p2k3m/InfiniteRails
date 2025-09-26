@@ -317,6 +317,7 @@
   const COMBAT_UTILS_FALLBACK = createCombatUtilsFallback();
 
   const globalScope = getGlobalScope();
+  const EMBEDDED_ASSETS = globalScope?.INFINITE_RAILS_EMBEDDED_ASSETS ?? null;
   if (globalScope) {
     if (!globalScope.ScoreboardUtils) {
       globalScope.ScoreboardUtils = SCOREBOARD_UTILS_FALLBACK;
@@ -1827,6 +1828,22 @@
       });
     }
 
+    function getEmbeddedAudioSamples() {
+      if (!EMBEDDED_ASSETS?.audioSamples) return null;
+      try {
+        return JSON.parse(JSON.stringify(EMBEDDED_ASSETS.audioSamples));
+      } catch (error) {
+        console.warn('Unable to clone embedded audio samples.', error);
+        return null;
+      }
+    }
+
+    function shouldPreferEmbeddedAudio() {
+      if (!EMBEDDED_ASSETS?.audioSamples) return false;
+      if (typeof window === 'undefined' || !window.location) return false;
+      return window.location.protocol === 'file:';
+    }
+
     async function initializeAudioEngine() {
       registerStaticAudioEffects();
       if (audioState.initialized || audioState.loadingSamples) {
@@ -1840,11 +1857,29 @@
       audioState.loadingSamples = true;
       try {
         registerStaticAudioEffects();
-        const response = await fetch(AUDIO_SAMPLE_URL, { cache: 'no-cache' });
-        if (!response.ok) {
-          throw new Error(`Failed to load audio samples: ${response.status}`);
+        let samples = null;
+        if (shouldPreferEmbeddedAudio()) {
+          samples = getEmbeddedAudioSamples();
+        } else {
+          try {
+            const response = await fetch(AUDIO_SAMPLE_URL, { cache: 'no-cache' });
+            if (!response.ok) {
+              throw new Error(`Failed to load audio samples: ${response.status}`);
+            }
+            samples = await response.json();
+          } catch (networkError) {
+            const embeddedSamples = getEmbeddedAudioSamples();
+            if (embeddedSamples) {
+              console.info('Falling back to embedded audio samples after fetch failure.', networkError);
+              samples = embeddedSamples;
+            } else {
+              throw networkError;
+            }
+          }
         }
-        const samples = await response.json();
+        if (!samples) {
+          throw new Error('Audio samples unavailable.');
+        }
         const miningSources = [samples?.miningA, samples?.miningB]
           .filter((value) => typeof value === 'string' && value.length > 0)
           .map((value) => `data:audio/wav;base64,${value}`);
@@ -4543,9 +4578,19 @@
             undefined,
             (error) => {
               console.warn('Failed to load first-person hand model.', error);
-              const fallback = createFallbackHand();
-              previewHandTemplate = fallback;
-              resolve(fallback);
+              parseEmbeddedModel(
+                'arm',
+                (embeddedGltf) => {
+                  const template = embeddedGltf.scene || embeddedGltf.scenes?.[0] || createFallbackHand();
+                  previewHandTemplate = template;
+                  resolve(template);
+                },
+                () => {
+                  const fallback = createFallbackHand();
+                  previewHandTemplate = fallback;
+                  resolve(fallback);
+                }
+              );
             },
           );
         }).finally(() => {
@@ -7059,6 +7104,94 @@
       return group;
     }
 
+    function useFallbackPlayerMesh() {
+      if (!entityGroup) return;
+      const placeholder = createPlaceholderHumanoid({
+        bodyColor: '#5b8cff',
+        headColor: '#f4d7b2',
+        bodyWidth: 0.62,
+        bodyDepth: 0.46,
+        bodyHeight: 1.4,
+        headSize: 0.44,
+        name: 'player-fallback',
+      });
+      placeholder.position.y = 0;
+      entityGroup.add(placeholder);
+      playerMesh = placeholder;
+      playerMeshParts = null;
+      resetPlayerAnimationState();
+    }
+
+    function parseEmbeddedModel(key, onLoad, onError) {
+      if (!EMBEDDED_ASSETS?.models?.[key]) {
+        onError?.(new Error(`Embedded model "${key}" is unavailable.`));
+        return;
+      }
+      if (!THREE?.GLTFLoader) {
+        onError?.(new Error('GLTFLoader is unavailable for embedded model parsing.'));
+        return;
+      }
+      if (!gltfLoader) {
+        gltfLoader = new THREE.GLTFLoader();
+      }
+      try {
+        const modelString = EMBEDDED_ASSETS.models[key];
+        gltfLoader.parse(
+          modelString,
+          '',
+          onLoad,
+          (parseError) => {
+            onError?.(parseError);
+          },
+        );
+      } catch (error) {
+        onError?.(error);
+      }
+    }
+
+    function handlePlayerGltfLoad(gltf) {
+      const steveScene = gltf.scene || gltf.scenes?.[0];
+      if (!steveScene) {
+        console.error('Steve model did not include a scene.');
+        return;
+      }
+
+      playerMesh = steveScene;
+      playerMesh.name = 'player-steve';
+      playerMesh.position.set(0, 0, 0);
+      playerMesh.rotation.set(0, 0, 0);
+      playerMesh.traverse((child) => {
+        if (child.isMesh) {
+          child.castShadow = true;
+          child.receiveShadow = true;
+          if (child.material?.color?.isColor) {
+            child.material.color.convertSRGBToLinear?.();
+          }
+        }
+      });
+
+      entityGroup.add(playerMesh);
+
+      const hairNode = playerMesh.getObjectByName('Hair') ?? null;
+      const fringeNode = playerMesh.getObjectByName('Fringe') ?? null;
+
+      playerMeshParts = {
+        leftArm: playerMesh.getObjectByName('LeftArm') ?? null,
+        rightArm: playerMesh.getObjectByName('RightArm') ?? null,
+        leftLeg: playerMesh.getObjectByName('LeftLeg') ?? null,
+        rightLeg: playerMesh.getObjectByName('RightLeg') ?? null,
+        head: playerMesh.getObjectByName('HeadPivot') ?? null,
+        hair: hairNode,
+        fringe: fringeNode,
+        hairBasePosition: hairNode ? hairNode.position.clone() : null,
+        fringeBasePosition: fringeNode ? fringeNode.position.clone() : null,
+      };
+
+      if (playerMeshParts.leftArm && playerMeshParts.rightArm && playerMeshParts.leftLeg && playerMeshParts.rightLeg) {
+        initializePlayerAnimations();
+      }
+    }
+
     function createPlayerMesh() {
       if (!entityGroup) return;
       if (playerMesh) {
@@ -7069,19 +7202,7 @@
       resetPlayerAnimationState();
 
       if (!SUPPORTS_MODEL_ASSETS) {
-        const placeholder = createPlaceholderHumanoid({
-          bodyColor: '#5b8cff',
-          headColor: '#f4d7b2',
-          bodyWidth: 0.62,
-          bodyDepth: 0.46,
-          bodyHeight: 1.4,
-          headSize: 0.44,
-          name: 'player-fallback',
-        });
-        placeholder.position.y = 0;
-        entityGroup.add(placeholder);
-        playerMesh = placeholder;
-        playerMeshParts = null;
+        useFallbackPlayerMesh();
         return;
       }
 
@@ -7096,48 +7217,14 @@
       gltfLoader.load(
         'assets/steve.gltf',
         (gltf) => {
-          const steveScene = gltf.scene || gltf.scenes?.[0];
-          if (!steveScene) {
-            console.error('Steve model did not include a scene.');
-            return;
-          }
-
-          playerMesh = steveScene;
-          playerMesh.name = 'player-steve';
-          playerMesh.position.set(0, 0, 0);
-          playerMesh.rotation.set(0, 0, 0);
-          playerMesh.traverse((child) => {
-            if (child.isMesh) {
-              child.castShadow = true;
-              child.receiveShadow = true;
-              if (child.material?.color?.isColor) {
-                child.material.color.convertSRGBToLinear?.();
-              }
-            }
-          });
-
-          entityGroup.add(playerMesh);
-
-          const hairNode = playerMesh.getObjectByName('Hair') ?? null;
-          const fringeNode = playerMesh.getObjectByName('Fringe') ?? null;
-
-          playerMeshParts = {
-            leftArm: playerMesh.getObjectByName('LeftArm') ?? null,
-            rightArm: playerMesh.getObjectByName('RightArm') ?? null,
-            leftLeg: playerMesh.getObjectByName('LeftLeg') ?? null,
-            rightLeg: playerMesh.getObjectByName('RightLeg') ?? null,
-            head: playerMesh.getObjectByName('HeadPivot') ?? null,
-            hair: hairNode,
-            fringe: fringeNode,
-            hairBasePosition: hairNode ? hairNode.position.clone() : null,
-            fringeBasePosition: fringeNode ? fringeNode.position.clone() : null,
-          };
-
-          initializePlayerAnimations();
+          handlePlayerGltfLoad(gltf);
         },
         undefined,
         (error) => {
           console.error('Failed to load Steve model.', error);
+          parseEmbeddedModel('steve', handlePlayerGltfLoad, () => {
+            useFallbackPlayerMesh();
+          });
         }
       );
     }
@@ -7267,13 +7354,17 @@
         gltfLoader = new THREE.GLTFLoader();
       }
       zombieModelPromise = new Promise((resolve) => {
+        const resolveWithTemplate = (template) => {
+          zombieModelTemplate = template;
+          resolve(template);
+        };
         gltfLoader.load(
           'assets/zombie.gltf',
           (gltf) => {
             const zombieScene = gltf.scene || gltf.scenes?.[0];
             if (!zombieScene) {
               console.error('Zombie model did not include a scene.');
-              resolve(null);
+              resolveWithTemplate(createFallbackZombieTemplate());
               return;
             }
             zombieScene.position.set(0, 0, 0);
@@ -7281,17 +7372,38 @@
             zombieScene.scale.set(1, 1, 1);
             zombieScene.updateMatrixWorld(true);
             const bounds = new THREE.Box3().setFromObject(zombieScene);
-            zombieModelTemplate = {
+            resolveWithTemplate({
               scene: zombieScene,
               groundOffset: -bounds.min.y,
               defaultScale: 0.6,
-            };
-            resolve(zombieModelTemplate);
+            });
           },
           undefined,
           (error) => {
             console.error('Failed to load the zombie model.', error);
-            resolve(null);
+            parseEmbeddedModel(
+              'zombie',
+              (embeddedGltf) => {
+                const zombieScene = embeddedGltf.scene || embeddedGltf.scenes?.[0];
+                if (!zombieScene) {
+                  resolveWithTemplate(createFallbackZombieTemplate());
+                  return;
+                }
+                zombieScene.position.set(0, 0, 0);
+                zombieScene.rotation.set(0, 0, 0);
+                zombieScene.scale.set(1, 1, 1);
+                zombieScene.updateMatrixWorld(true);
+                const bounds = new THREE.Box3().setFromObject(zombieScene);
+                resolveWithTemplate({
+                  scene: zombieScene,
+                  groundOffset: -bounds.min.y,
+                  defaultScale: 0.6,
+                });
+              },
+              () => {
+                resolveWithTemplate(createFallbackZombieTemplate());
+              }
+            );
           }
         );
       });
@@ -7455,13 +7567,17 @@
         gltfLoader = new THREE.GLTFLoader();
       }
       ironGolemModelPromise = new Promise((resolve) => {
+        const resolveWithTemplate = (template) => {
+          ironGolemModelTemplate = template;
+          resolve(template);
+        };
         gltfLoader.load(
           'assets/iron_golem.gltf',
           (gltf) => {
             const golemScene = gltf.scene || gltf.scenes?.[0];
             if (!golemScene) {
               console.error('Iron golem model did not include a scene.');
-              resolve(null);
+              resolveWithTemplate(createFallbackGolemTemplate());
               return;
             }
             golemScene.position.set(0, 0, 0);
@@ -7469,17 +7585,38 @@
             golemScene.scale.set(1, 1, 1);
             golemScene.updateMatrixWorld(true);
             const bounds = new THREE.Box3().setFromObject(golemScene);
-            ironGolemModelTemplate = {
+            resolveWithTemplate({
               scene: golemScene,
               groundOffset: -bounds.min.y,
               defaultScale: 0.55,
-            };
-            resolve(ironGolemModelTemplate);
+            });
           },
           undefined,
           (error) => {
             console.error('Failed to load the iron golem model.', error);
-            resolve(null);
+            parseEmbeddedModel(
+              'ironGolem',
+              (embeddedGltf) => {
+                const golemScene = embeddedGltf.scene || embeddedGltf.scenes?.[0];
+                if (!golemScene) {
+                  resolveWithTemplate(createFallbackGolemTemplate());
+                  return;
+                }
+                golemScene.position.set(0, 0, 0);
+                golemScene.rotation.set(0, 0, 0);
+                golemScene.scale.set(1, 1, 1);
+                golemScene.updateMatrixWorld(true);
+                const bounds = new THREE.Box3().setFromObject(golemScene);
+                resolveWithTemplate({
+                  scene: golemScene,
+                  groundOffset: -bounds.min.y,
+                  defaultScale: 0.55,
+                });
+              },
+              () => {
+                resolveWithTemplate(createFallbackGolemTemplate());
+              }
+            );
           }
         );
       });
