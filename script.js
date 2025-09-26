@@ -5211,7 +5211,24 @@
           }
 
           if (Object.prototype.hasOwnProperty.call(target, normalizedKey)) {
-            return target[normalizedKey];
+            const entry = target[normalizedKey];
+            if (!entry || typeof entry !== 'object') {
+              const placeholder = { value: null };
+              target[normalizedKey] = placeholder;
+              return placeholder;
+            }
+
+            if (!Object.prototype.hasOwnProperty.call(entry, 'value')) {
+              if (!assignPortalUniformValue(entry, null)) {
+                const placeholder = { value: null };
+                target[normalizedKey] = placeholder;
+                return placeholder;
+              }
+            } else if (typeof entry.value === 'undefined') {
+              assignPortalUniformValue(entry, null);
+            }
+
+            return entry;
           }
 
           const placeholder = { value: null };
