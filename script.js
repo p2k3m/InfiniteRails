@@ -8895,12 +8895,6 @@
           if (uniformValueErrorMessage.includes("Cannot read properties of undefined (reading 'value')")) {
             const sanitizedNow = sanitizeSceneUniforms();
             uniformSanitizationFailureStreak += 1;
-            if (sanitizedNow) {
-              uniformSanitizationFailureStreak = Math.max(
-                1,
-                uniformSanitizationFailureStreak - 1
-              );
-            }
             if (uniformSanitizationFailureStreak >= 3) {
               const disabled = disablePortalSurfaceShaders(
                 new Error(
