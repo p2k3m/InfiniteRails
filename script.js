@@ -8829,22 +8829,24 @@
               : '';
           if (uniformValueErrorMessage.includes("Cannot read properties of undefined (reading 'value')")) {
             const sanitizedNow = sanitizeSceneUniforms();
+            uniformSanitizationFailureStreak += 1;
             if (sanitizedNow) {
-              uniformSanitizationFailureStreak = 0;
-            } else {
-              uniformSanitizationFailureStreak += 1;
-              if (uniformSanitizationFailureStreak >= 3) {
-                const disabled = disablePortalSurfaceShaders(
-                  new Error(
-                    'Renderer repeatedly encountered undefined shader uniforms despite sanitization attempts.'
-                  )
-                );
-                if (disabled) {
-                  rendererRecoveryFrames = Math.max(rendererRecoveryFrames, 2);
-                  pendingUniformSanitizations = Math.max(pendingUniformSanitizations, 3);
-                  uniformSanitizationFailureStreak = 0;
-                  return;
-                }
+              uniformSanitizationFailureStreak = Math.max(
+                1,
+                uniformSanitizationFailureStreak - 1
+              );
+            }
+            if (uniformSanitizationFailureStreak >= 3) {
+              const disabled = disablePortalSurfaceShaders(
+                new Error(
+                  'Renderer repeatedly encountered undefined shader uniforms despite sanitization attempts.'
+                )
+              );
+              if (disabled) {
+                rendererRecoveryFrames = Math.max(rendererRecoveryFrames, 2);
+                pendingUniformSanitizations = Math.max(pendingUniformSanitizations, 3);
+                uniformSanitizationFailureStreak = 0;
+                return;
               }
             }
             rendererRecoveryFrames = Math.max(rendererRecoveryFrames, sanitizedNow ? 1 : 2);
