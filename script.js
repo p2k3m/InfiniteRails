@@ -6260,6 +6260,90 @@
     return RENDERER_MANAGED_UNIFORM_PREFIXES.some((prefix) => normalizedKey === prefix);
   };
 
+  function hasInvalidUniformEntry(entry) {
+    if (!entry || typeof entry !== 'object') {
+      return true;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(entry, 'value')) {
+      return typeof entry.value === 'undefined';
+    }
+
+    if (
+      entry.uniform &&
+      typeof entry.uniform === 'object' &&
+      Object.prototype.hasOwnProperty.call(entry.uniform, 'value')
+    ) {
+      return typeof entry.uniform.value === 'undefined';
+    }
+
+    if (typeof entry.setValue === 'function') {
+      return false;
+    }
+
+    if (entry.map && typeof entry.map === 'object' && Array.isArray(entry.seq)) {
+      return false;
+    }
+
+    return true;
+  }
+
+  function uniformContainerNeedsSanitization(uniforms) {
+    if (!uniforms || typeof uniforms !== 'object') {
+      return false;
+    }
+
+    const inspectArrayEntries = (array) => {
+      if (!Array.isArray(array)) {
+        return false;
+      }
+      for (let i = 0; i < array.length; i += 1) {
+        if (!Object.prototype.hasOwnProperty.call(array, i)) {
+          return true;
+        }
+        if (hasInvalidUniformEntry(array[i])) {
+          return true;
+        }
+      }
+      return false;
+    };
+
+    if (inspectArrayEntries(uniforms)) {
+      return true;
+    }
+
+    for (const key of Object.keys(uniforms)) {
+      if (RESERVED_UNIFORM_CONTAINER_KEYS.has(key)) {
+        continue;
+      }
+      const entry = uniforms[key];
+      if (Array.isArray(entry)) {
+        if (inspectArrayEntries(entry)) {
+          return true;
+        }
+        continue;
+      }
+      if (hasInvalidUniformEntry(entry)) {
+        return true;
+      }
+    }
+
+    if (isRendererManagedUniformContainer(uniforms)) {
+      if (inspectArrayEntries(uniforms.seq)) {
+        return true;
+      }
+      if (uniforms.map && typeof uniforms.map === 'object') {
+        for (const key of Object.keys(uniforms.map)) {
+          if (hasInvalidUniformEntry(uniforms.map[key])) {
+            return true;
+          }
+        }
+      }
+    }
+
+    return false;
+  }
+
   function sanitizeSceneUniforms() {
         if (!scene || typeof scene.traverse !== 'function') {
           return false;
@@ -6762,6 +6846,69 @@
         });
 
         return sanitized;
+      }
+
+      function sceneHasUniformIntegrityIssues() {
+        if (!scene || typeof scene.traverse !== 'function') {
+          return false;
+        }
+
+        const visitedMaterials = new Set();
+        let invalid = false;
+
+        scene.traverse((object) => {
+          if (invalid || !object) {
+            return;
+          }
+
+          const { material } = object;
+          if (!material) {
+            return;
+          }
+
+          const materials = Array.isArray(material) ? material : [material];
+          materials.forEach((mat) => {
+            if (invalid || !mat || visitedMaterials.has(mat)) {
+              return;
+            }
+            visitedMaterials.add(mat);
+
+            if (uniformContainerNeedsSanitization(mat.uniforms)) {
+              invalid = true;
+              return;
+            }
+
+            if (renderer?.properties?.get) {
+              let materialProperties = null;
+              try {
+                materialProperties = renderer.properties.get(mat) ?? null;
+              } catch (propertyError) {
+                materialProperties = null;
+              }
+
+              const rendererUniforms =
+                materialProperties && typeof materialProperties.uniforms === 'object'
+                  ? materialProperties.uniforms
+                  : null;
+              if (uniformContainerNeedsSanitization(rendererUniforms)) {
+                invalid = true;
+                return;
+              }
+
+              const programUniforms =
+                materialProperties &&
+                materialProperties.program &&
+                typeof materialProperties.program.getUniforms === 'function'
+                  ? materialProperties.program.getUniforms()
+                  : null;
+              if (uniformContainerNeedsSanitization(programUniforms)) {
+                invalid = true;
+              }
+            }
+          });
+        });
+
+        return invalid;
       }
 
       function rebuildInvalidMaterialUniforms(error) {
@@ -9048,6 +9195,15 @@
             rendererRecoveryFrames = Math.max(rendererRecoveryFrames, 1);
             return;
           }
+        }
+        if (pendingUniformSanitizations === 0 && sceneHasUniformIntegrityIssues()) {
+          const sanitized = sanitizeSceneUniforms();
+          rendererRecoveryFrames = Math.max(rendererRecoveryFrames, sanitized ? 1 : 2);
+          pendingUniformSanitizations = Math.max(pendingUniformSanitizations, sanitized ? 1 : 2);
+          if (!sanitized) {
+            uniformSanitizationFailureStreak = Math.max(uniformSanitizationFailureStreak, 1);
+          }
+          return;
         }
         try {
           renderer.render(scene, camera);
