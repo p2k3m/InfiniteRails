@@ -6530,49 +6530,48 @@
               isShaderMaterial || hasPortalUniforms || usesPortalShader
             );
 
-            if (shouldSanitizeMaterialUniforms) {
-              if (mat.uniforms && typeof mat.uniforms === 'object') {
-                const guardedUniforms = guardUniformContainer(mat.uniforms);
-                if (guardedUniforms && guardedUniforms !== mat.uniforms) {
-                  mat.uniforms = guardedUniforms;
-                }
-                const result = sanitizeUniformContainer(mat.uniforms);
-                if (result.updated) {
-                  updated = true;
-                  rendererReset = true;
-                }
-                if (result.requiresRendererReset) {
-                  rendererReset = true;
-                }
+            if (shouldSanitizeMaterialUniforms && mat.uniforms && typeof mat.uniforms === 'object') {
+              const guardedUniforms = guardUniformContainer(mat.uniforms);
+              if (guardedUniforms && guardedUniforms !== mat.uniforms) {
+                mat.uniforms = guardedUniforms;
+              }
+              const result = sanitizeUniformContainer(mat.uniforms);
+              if (result.updated) {
+                updated = true;
+                rendererReset = true;
+              }
+              if (result.requiresRendererReset) {
+                rendererReset = true;
+              }
+            }
+
+            const shouldSanitizeRendererUniforms = Boolean(renderer?.properties?.get);
+            if (shouldSanitizeRendererUniforms) {
+              let rendererUniforms = null;
+              try {
+                rendererUniforms = renderer.properties.get(mat)?.uniforms ?? null;
+              } catch (propertyError) {
+                rendererUniforms = null;
               }
 
-              if (mat && renderer?.properties?.get) {
-                let rendererUniforms = null;
-                try {
-                  rendererUniforms = renderer.properties.get(mat)?.uniforms ?? null;
-                } catch (propertyError) {
-                  rendererUniforms = null;
+              if (rendererUniforms && typeof rendererUniforms === 'object') {
+                const purgedRendererUniforms = purgeRendererUniformCache(rendererUniforms);
+                if (purgedRendererUniforms) {
+                  sanitized = true;
+                  rendererReset = true;
                 }
 
-                if (rendererUniforms && typeof rendererUniforms === 'object') {
-                  const purgedRendererUniforms = purgeRendererUniformCache(rendererUniforms);
-                  if (purgedRendererUniforms) {
-                    sanitized = true;
-                    rendererReset = true;
-                  }
+                const rendererUniformSanitization = sanitizeUniformContainer(rendererUniforms);
+                if (rendererUniformSanitization.updated) {
+                  sanitized = true;
+                  rendererReset = true;
+                }
+                if (rendererUniformSanitization.requiresRendererReset) {
+                  rendererReset = true;
+                  sanitized = true;
+                }
 
-                  const rendererUniformSanitization = sanitizeUniformContainer(
-                    rendererUniforms
-                  );
-                  if (rendererUniformSanitization.updated) {
-                    sanitized = true;
-                    rendererReset = true;
-                  }
-                  if (rendererUniformSanitization.requiresRendererReset) {
-                    rendererReset = true;
-                    sanitized = true;
-                  }
-
+                if (shouldSanitizeMaterialUniforms) {
                   if (!mat.uniforms || typeof mat.uniforms !== 'object') {
                     mat.uniforms = guardUniformContainer({});
                   } else {
