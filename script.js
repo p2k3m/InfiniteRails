@@ -5196,6 +5196,24 @@
       }
 
       const proxy = new Proxy(container, {
+        get(target, key, receiver) {
+          if (typeof key === 'symbol') {
+            return Reflect.get(target, key, receiver);
+          }
+
+          const normalizedKey = `${key}`;
+          if (!normalizedKey || RESERVED_UNIFORM_CONTAINER_KEYS.has(normalizedKey)) {
+            return Reflect.get(target, key, receiver);
+          }
+
+          if (Object.prototype.hasOwnProperty.call(target, normalizedKey)) {
+            return target[normalizedKey];
+          }
+
+          const placeholder = { value: null };
+          target[normalizedKey] = placeholder;
+          return placeholder;
+        },
         set(target, key, value) {
           if (typeof key === 'symbol') {
             target[key] = value;
