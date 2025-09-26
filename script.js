@@ -6220,12 +6220,7 @@
       }
 
       const isRendererManagedUniformContainer = (container) =>
-        Boolean(
-          container &&
-            typeof container === 'object' &&
-            Array.isArray(container.seq) &&
-            typeof container.map === 'object'
-        );
+        Boolean(container && typeof container === 'object' && Array.isArray(container.seq));
 
       function sanitizeSceneUniforms() {
         if (!scene || typeof scene.traverse !== 'function') {
@@ -6299,6 +6294,11 @@
           const visited = new Set();
 
           if (isRendererManagedUniformContainer(uniforms)) {
+            if (!uniforms.map || typeof uniforms.map !== 'object') {
+              uniforms.map = {};
+              updated = true;
+              requiresRendererReset = true;
+            }
             const repairRendererUniformEntry = (container, key, entry) => {
               let updatedEntry = entry;
               let entryUpdated = false;
