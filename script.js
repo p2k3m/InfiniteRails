@@ -4959,6 +4959,60 @@
       return entries.every(([, uniform]) => Boolean(uniform && typeof uniform === 'object' && 'value' in uniform));
     }
 
+    function ensurePortalShaderMaterialsHaveUniformValues(
+      materials,
+      metadata = null,
+      { forceExpectPortal = false } = {}
+    ) {
+      if (!Array.isArray(materials) || materials.length === 0) {
+        return false;
+      }
+
+      const accentColor = metadata?.accentColor ?? '#7b6bff';
+      const isActive =
+        typeof metadata?.isActive === 'boolean' ? metadata.isActive : Boolean(metadata?.isActive);
+
+      let ensured = false;
+
+      materials.forEach((material) => {
+        if (!material || typeof material !== 'object') {
+          return;
+        }
+
+        const expectsPortalUniforms =
+          forceExpectPortal ||
+          Boolean(material?.userData?.portalSurface) ||
+          material?.isShaderMaterial === true ||
+          material?.type === 'ShaderMaterial' ||
+          hasValidPortalUniformStructure(material.uniforms) ||
+          materialUsesPortalSurfaceShader(material);
+
+        if (!expectsPortalUniforms) {
+          return;
+        }
+
+        const wasValid = hasValidPortalUniformStructure(material.uniforms);
+        const modified = ensurePortalUniformIntegrity(material, {
+          missingKeys: PORTAL_UNIFORM_KEYS,
+          expectPortal: true,
+          metadata: { accentColor, isActive },
+        });
+        const isValid = hasValidPortalUniformStructure(material.uniforms);
+
+        if (isValid && (!wasValid || modified)) {
+          if ('needsUpdate' in material) {
+            material.needsUpdate = true;
+          }
+          if ('uniformsNeedUpdate' in material) {
+            material.uniformsNeedUpdate = true;
+          }
+          ensured = true;
+        }
+      });
+
+      return ensured;
+    }
+
     function parsePortalAccentColor(color, fallback = '#7b6bff') {
       if (!color) {
         return fallback;
@@ -5625,11 +5679,17 @@
       if (!tile || tile.type === 'void') return;
       if (renderInfo.animations.portalSurface) {
         const portalSurface = renderInfo.animations.portalSurface;
+        const accentColor = portalSurface?.accentColor ?? '#7b6bff';
+        const portalIsActive = tile.type === 'portal';
         const knownMaterials = Array.isArray(portalSurface.materials)
           ? portalSurface.materials.filter(Boolean)
           : [];
         if (knownMaterials.length !== (portalSurface.materials?.length ?? 0)) {
           portalSurface.materials = knownMaterials;
+          ensurePortalShaderMaterialsHaveUniformValues(portalSurface.materials, {
+            accentColor,
+            isActive: portalIsActive,
+          });
         }
 
         const groupMaterials = collectPortalSurfaceMaterialsFromGroup(renderInfo.group);
@@ -5644,12 +5704,14 @@
         if (shouldResyncMaterials) {
           materials = groupMaterials;
           portalSurface.materials = materials;
+          ensurePortalShaderMaterialsHaveUniformValues(portalSurface.materials, {
+            accentColor,
+            isActive: portalIsActive,
+          });
         }
 
         if (materials.length > 0 && !materials.every(isValidPortalShaderMaterial)) {
           let repaired = false;
-          const accentColor = portalSurface?.accentColor ?? '#7b6bff';
-          const portalIsActive = tile.type === 'portal';
           materials.forEach((material) => {
             if (!material || isValidPortalShaderMaterial(material)) {
               return;
@@ -5668,6 +5730,10 @@
             if (repairedMaterials.length) {
               materials = repairedMaterials;
               portalSurface.materials = materials;
+              ensurePortalShaderMaterialsHaveUniformValues(portalSurface.materials, {
+                accentColor,
+                isActive: portalIsActive,
+              });
             }
           }
         }
@@ -5920,6 +5986,10 @@
 
             if (materialsChanged) {
               portalSurface.materials = remappedMaterials;
+              ensurePortalShaderMaterialsHaveUniformValues(portalSurface.materials, {
+                accentColor: portalSurface?.accentColor,
+                isActive: portalSurface?.isActive,
+              });
             }
 
             const uniformSets = remappedMaterials
@@ -6126,6 +6196,13 @@
             const isShaderMaterial =
               mat?.isShaderMaterial === true || mat?.type === 'ShaderMaterial';
             const expectPortalUniforms = Boolean(mat?.userData?.portalSurface);
+            if (isShaderMaterial || expectPortalUniforms) {
+              ensurePortalShaderMaterialsHaveUniformValues(
+                [mat],
+                mat?.userData?.portalSurface || null,
+                { forceExpectPortal: expectPortalUniforms }
+              );
+            }
 
             if (isShaderMaterial || expectPortalUniforms) {
               if (mat.uniforms && typeof mat.uniforms === 'object') {
