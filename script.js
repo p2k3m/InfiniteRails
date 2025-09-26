@@ -6850,31 +6850,16 @@
                     }
                   }
 
-                  const ensureMaterialUniform = (uniformId, uniformEntry = null) => {
-                    let key = null;
-                    if (typeof uniformId === 'string' || typeof uniformId === 'number') {
-                      key = `${uniformId}`;
-                    } else if (uniformEntry && typeof uniformEntry === 'object') {
-                      if (typeof uniformEntry.id === 'string' || typeof uniformEntry.id === 'number') {
-                        key = `${uniformEntry.id}`;
-                      } else if (
-                        typeof uniformEntry.name === 'string' ||
-                        typeof uniformEntry.name === 'number'
-                      ) {
-                        key = `${uniformEntry.name}`;
-                      } else if (
-                        uniformEntry.uniform &&
-                        typeof uniformEntry.uniform === 'object' &&
-                        (typeof uniformEntry.uniform.id === 'string' ||
-                          typeof uniformEntry.uniform.id === 'number')
-                      ) {
-                        key = `${uniformEntry.uniform.id}`;
-                      }
-                    }
-
-                    if (key === null || typeof key === 'undefined') {
+                  const ensuredKeys = new Set();
+                  const ensureMaterialUniformEntry = (rawKey) => {
+                    if (rawKey === null || typeof rawKey === 'undefined') {
                       return;
                     }
+                    const key = `${rawKey}`;
+                    if (!key || ensuredKeys.has(key)) {
+                      return;
+                    }
+                    ensuredKeys.add(key);
                     const entry = mat.uniforms[key];
                     if (
                       !entry ||
@@ -6886,6 +6871,76 @@
                       };
                       updated = true;
                     }
+                  };
+
+                  const enumerateUniformKeyCandidates = (candidate) => {
+                    if (candidate === null || typeof candidate === 'undefined') {
+                      return [];
+                    }
+                    const key = `${candidate}`;
+                    if (!key) {
+                      return [];
+                    }
+                    const normalized = key.replace(/\[[^\]]*\]/g, '.');
+                    const segments = normalized.split('.').filter(Boolean);
+                    const variants = new Set([key, normalized]);
+
+                    if (segments.length) {
+                      variants.add(segments.join('.'));
+                      for (let i = 0; i < segments.length; i += 1) {
+                        variants.add(segments[i]);
+                        const suffix = segments.slice(i).join('.');
+                        if (suffix) {
+                          variants.add(suffix);
+                        }
+                        if (i > 0) {
+                          const prefix = segments.slice(0, i).join('.');
+                          if (prefix) {
+                            variants.add(prefix);
+                          }
+                        }
+                      }
+                    }
+
+                    return Array.from(variants).filter(Boolean);
+                  };
+
+                  const ensureMaterialUniform = (uniformId, uniformEntry = null) => {
+                    const candidates = new Set();
+                    if (typeof uniformId === 'string' || typeof uniformId === 'number') {
+                      enumerateUniformKeyCandidates(uniformId).forEach((key) =>
+                        candidates.add(key)
+                      );
+                    }
+
+                    if (uniformEntry && typeof uniformEntry === 'object') {
+                      if (typeof uniformEntry.id === 'string' || typeof uniformEntry.id === 'number') {
+                        enumerateUniformKeyCandidates(uniformEntry.id).forEach((key) =>
+                          candidates.add(key)
+                        );
+                      }
+                      if (typeof uniformEntry.name === 'string' || typeof uniformEntry.name === 'number') {
+                        enumerateUniformKeyCandidates(uniformEntry.name).forEach((key) =>
+                          candidates.add(key)
+                        );
+                      }
+                      if (
+                        uniformEntry.uniform &&
+                        typeof uniformEntry.uniform === 'object' &&
+                        (typeof uniformEntry.uniform.id === 'string' ||
+                          typeof uniformEntry.uniform.id === 'number')
+                      ) {
+                        enumerateUniformKeyCandidates(uniformEntry.uniform.id).forEach((key) =>
+                          candidates.add(key)
+                        );
+                      }
+                    }
+
+                    if (!candidates.size) {
+                      return;
+                    }
+
+                    candidates.forEach((key) => ensureMaterialUniformEntry(key));
                   };
 
                   if (Array.isArray(rendererUniforms.seq)) {
