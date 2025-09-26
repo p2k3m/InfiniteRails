@@ -5014,7 +5014,39 @@
           expectPortal: true,
           metadata: { accentColor, isActive },
         });
-        const isValid = hasValidPortalUniformStructure(material.uniforms);
+        let isValid = hasValidPortalUniformStructure(material.uniforms);
+
+        if (!isValid && shouldInspectPortalUniforms) {
+          const fallbackUniforms = guardUniformContainer({
+            uTime: { value: 0 },
+            uActivation: { value: isActive ? 1 : 0.18 },
+            uColor: {
+              value:
+                typeof THREE?.Color === 'function'
+                  ? new THREE.Color(accentColor ?? '#7b6bff')
+                  : accentColor ?? '#7b6bff',
+            },
+            uOpacity: { value: isActive ? 0.85 : 0.55 },
+          });
+          try {
+            material.uniforms = fallbackUniforms;
+            isValid = hasValidPortalUniformStructure(material.uniforms);
+            if (isValid) {
+              if ('uniformsNeedUpdate' in material) {
+                material.uniformsNeedUpdate = true;
+              }
+              if ('needsUpdate' in material) {
+                material.needsUpdate = true;
+              }
+              ensured = true;
+            }
+          } catch (uniformAssignError) {
+            console.warn(
+              'Failed to repair portal shader uniforms; continuing with existing fallback handling.',
+              uniformAssignError
+            );
+          }
+        }
 
         if (isValid && (!wasValid || modified)) {
           if ('needsUpdate' in material) {
