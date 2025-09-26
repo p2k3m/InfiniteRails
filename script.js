@@ -6230,6 +6230,38 @@
         const visitedMaterials = new Set();
         let sanitized = false;
 
+        const purgeRendererUniformCache = (uniforms) => {
+          if (!uniforms || typeof uniforms !== 'object') {
+            return false;
+          }
+
+          const { seq } = uniforms;
+          if (!Array.isArray(seq) || seq.length === 0) {
+            return false;
+          }
+
+          const filtered = seq.filter((entry) => Boolean(entry && typeof entry === 'object'));
+          if (filtered.length === seq.length) {
+            return false;
+          }
+
+          seq.length = 0;
+          filtered.forEach((entry) => {
+            seq.push(entry);
+          });
+
+          if (uniforms.map && typeof uniforms.map === 'object') {
+            Object.keys(uniforms.map).forEach((key) => {
+              const value = uniforms.map[key];
+              if (!value || typeof value !== 'object') {
+                delete uniforms.map[key];
+              }
+            });
+          }
+
+          return true;
+        };
+
         const sanitizeUniformEntry = (container, key, entry, options = {}) => {
           const { markRendererReset = false } = options;
           const result = { updated: false, requiresRendererReset: false };
@@ -6512,6 +6544,12 @@
                 }
 
                 if (rendererUniforms && typeof rendererUniforms === 'object') {
+                  const purgedRendererUniforms = purgeRendererUniformCache(rendererUniforms);
+                  if (purgedRendererUniforms) {
+                    sanitized = true;
+                    rendererReset = true;
+                  }
+
                   const rendererUniformSanitization = sanitizeUniformContainer(
                     rendererUniforms
                   );
