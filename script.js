@@ -6840,12 +6840,28 @@
 
         scene.traverse((object) => {
           if (!object) return;
-          const { material } = object;
-          if (!material) {
+
+          const collectedMaterials = [];
+          const collectMaterial = (candidate) => {
+            if (!candidate) {
+              return;
+            }
+            if (Array.isArray(candidate)) {
+              candidate.forEach((entry) => collectMaterial(entry));
+              return;
+            }
+            collectedMaterials.push(candidate);
+          };
+
+          collectMaterial(object.material);
+          collectMaterial(object.customDepthMaterial);
+          collectMaterial(object.customDistanceMaterial);
+
+          if (collectedMaterials.length === 0) {
             return;
           }
-          const materials = Array.isArray(material) ? material : [material];
-          materials.forEach((mat) => {
+
+          collectedMaterials.forEach((mat) => {
             if (!mat || visitedMaterials.has(mat)) {
               return;
             }
@@ -7233,13 +7249,27 @@
             return;
           }
 
-          const { material } = object;
-          if (!material) {
+          const collectedMaterials = [];
+          const collectMaterial = (candidate) => {
+            if (!candidate) {
+              return;
+            }
+            if (Array.isArray(candidate)) {
+              candidate.forEach((entry) => collectMaterial(entry));
+              return;
+            }
+            collectedMaterials.push(candidate);
+          };
+
+          collectMaterial(object.material);
+          collectMaterial(object.customDepthMaterial);
+          collectMaterial(object.customDistanceMaterial);
+
+          if (!collectedMaterials.length) {
             return;
           }
 
-          const materials = Array.isArray(material) ? material : [material];
-          materials.forEach((mat) => {
+          collectedMaterials.forEach((mat) => {
             if (invalid || !mat || visitedMaterials.has(mat)) {
               return;
             }
@@ -7740,13 +7770,29 @@
         );
       };
       scene.traverse((object) => {
-        const { material } = object;
-        if (!material) return;
-        if (Array.isArray(material)) {
-          material.forEach((mat, idx) => inspectMaterial(object, mat, idx));
-        } else {
-          inspectMaterial(object, material);
+        if (!object) {
+          return;
         }
+
+        const collectedMaterials = [];
+        const collectMaterial = (candidate) => {
+          if (!candidate) {
+            return;
+          }
+          if (Array.isArray(candidate)) {
+            candidate.forEach((entry) => collectMaterial(entry));
+            return;
+          }
+          collectedMaterials.push(candidate);
+        };
+
+        collectMaterial(object.material);
+        collectMaterial(object.customDepthMaterial);
+        collectMaterial(object.customDistanceMaterial);
+
+        collectedMaterials.forEach((mat, idx) => {
+          inspectMaterial(object, mat, idx);
+        });
       });
       return recovered;
     }
@@ -7984,10 +8030,22 @@
       if (scene && typeof scene.traverse === 'function') {
         scene.traverse((object) => {
           if (!object) return;
-          const { material } = object;
-          if (!material) {
-            return;
-          }
+
+          const collectedMaterials = [];
+          const collectMaterial = (candidate) => {
+            if (!candidate) {
+              return;
+            }
+            if (Array.isArray(candidate)) {
+              candidate.forEach((entry) => collectMaterial(entry));
+              return;
+            }
+            collectedMaterials.push(candidate);
+          };
+
+          collectMaterial(object.material);
+          collectMaterial(object.customDepthMaterial);
+          collectMaterial(object.customDistanceMaterial);
 
           const applyFallback = (mat) => {
             if (replaceChildMaterial(object, mat, '#7b6bff', false)) {
@@ -7997,20 +8055,36 @@
             return false;
           };
 
-          if (Array.isArray(material)) {
-            material.forEach((mat) => {
-              applyFallback(mat);
-            });
-          } else {
-            applyFallback(material);
-          }
+          collectedMaterials.forEach((mat) => {
+            applyFallback(mat);
+          });
         });
       }
 
       if (scene && typeof scene.traverse === 'function') {
         const fallbackCache = new Map();
         scene.traverse((object) => {
-          if (!object || !object.material) {
+          if (!object) {
+            return;
+          }
+
+          const collectedMaterials = [];
+          const collectMaterial = (candidate) => {
+            if (!candidate) {
+              return;
+            }
+            if (Array.isArray(candidate)) {
+              candidate.forEach((entry) => collectMaterial(entry));
+              return;
+            }
+            collectedMaterials.push(candidate);
+          };
+
+          collectMaterial(object.material);
+          collectMaterial(object.customDepthMaterial);
+          collectMaterial(object.customDistanceMaterial);
+
+          if (!collectedMaterials.length) {
             return;
           }
 
@@ -8072,13 +8146,9 @@
             return true;
           };
 
-          if (Array.isArray(object.material)) {
-            object.material.forEach((mat, idx) => {
-              applyFallback(object, mat, idx);
-            });
-          } else {
-            applyFallback(object, object.material);
-          }
+          collectedMaterials.forEach((mat, idx) => {
+            applyFallback(object, mat, idx);
+          });
         });
       }
 
