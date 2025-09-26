@@ -5527,10 +5527,62 @@
       if (expectPortal) {
         const accent = metadata?.accentColor ?? '#7b6bff';
         const isActive = Boolean(metadata?.isActive);
-        ensureUniformEntry('uTime', 0);
-        ensureUniformEntry('uActivation', isActive ? 1 : 0.18);
-        ensureUniformEntry('uOpacity', isActive ? 0.85 : 0.55);
-        ensureUniformEntry('uColor', () =>
+        const ensureNumberUniformValue = (key, fallback) => {
+          const entry = ensureUniformEntry(key, fallback);
+          if (!entry || typeof entry !== 'object') {
+            return;
+          }
+          const fallbackValue = resolveDefault(fallback);
+          const value = entry.value;
+          if (typeof value !== 'number' || !Number.isFinite(value)) {
+            entry.value = fallbackValue;
+            modified = true;
+          }
+        };
+
+        const ensureColorUniformValue = (key, fallback) => {
+          const entry = ensureUniformEntry(key, fallback);
+          if (!entry || typeof entry !== 'object') {
+            return;
+          }
+          const fallbackValue = resolveDefault(fallback);
+
+          if (typeof THREE?.Color === 'function') {
+            const ensureColorInstance = (value) => {
+              if (value && typeof value === 'object' && value.isColor === true) {
+                return value;
+              }
+              if (value && typeof value.getHexString === 'function') {
+                return value;
+              }
+              try {
+                return new THREE.Color(value ?? accent ?? '#7b6bff');
+              } catch (colorError) {
+                return new THREE.Color(accent ?? '#7b6bff');
+              }
+            };
+
+            const current = entry.value;
+            if (!current || typeof current !== 'object' || current.isColor !== true) {
+              entry.value = ensureColorInstance(fallbackValue);
+              modified = true;
+            }
+          } else {
+            const normalized =
+              typeof fallbackValue === 'string' && fallbackValue
+                ? fallbackValue
+                : accent ?? '#7b6bff';
+            if (typeof entry.value !== 'string' || !entry.value) {
+              entry.value = normalized;
+              modified = true;
+            }
+          }
+        };
+
+        ensureNumberUniformValue('uTime', 0);
+        ensureNumberUniformValue('uActivation', isActive ? 1 : 0.18);
+        ensureNumberUniformValue('uOpacity', isActive ? 0.85 : 0.55);
+        ensureColorUniformValue('uColor', () =>
           typeof THREE?.Color === 'function' ? new THREE.Color(accent) : accent
         );
       }
