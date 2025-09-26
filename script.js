@@ -5302,11 +5302,15 @@
           return null;
         }
         const resolvedDefault = resolveDefault(defaultValue);
+        const replaceEntry = () => {
+          const replacement = { value: resolvedDefault };
+          uniforms[key] = replacement;
+          modified = true;
+          return replacement;
+        };
         let entry = uniforms[key];
         if (!entry || typeof entry !== 'object') {
-          uniforms[key] = { value: resolvedDefault };
-          modified = true;
-          return uniforms[key];
+          return replaceEntry();
         }
         if (!Object.prototype.hasOwnProperty.call(entry, 'value')) {
           if (typeof entry.setValue === 'function') {
@@ -5320,13 +5324,16 @@
           }
           if (assignPortalUniformValue(entry, resolvedDefault)) {
             modified = true;
+            return entry;
           }
-          return entry;
+          return replaceEntry();
         }
         if (typeof entry.value === 'undefined') {
           if (assignPortalUniformValue(entry, resolvedDefault)) {
             modified = true;
+            return entry;
           }
+          return replaceEntry();
         }
         return entry;
       };
