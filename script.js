@@ -5149,6 +5149,125 @@
       return applyValue(nextValue);
     }
 
+    const RESERVED_UNIFORM_CONTAINER_KEYS = new Set([
+      'seq',
+      'map',
+      'clone',
+      'dispose',
+      'onBeforeCompile',
+      'isUniformsGroup',
+    ]);
+
+    const PORTAL_UNIFORM_CONTAINER_PROXIES = new WeakMap();
+    const PORTAL_UNIFORM_PROXY_TARGETS = new WeakMap();
+
+    function guardUniformContainer(container) {
+      if (!container || typeof container !== 'object') {
+        return container;
+      }
+
+      if (PORTAL_UNIFORM_PROXY_TARGETS.has(container)) {
+        return container;
+      }
+
+      const existingProxy = PORTAL_UNIFORM_CONTAINER_PROXIES.get(container);
+      if (existingProxy) {
+        return existingProxy;
+      }
+
+      const proxy = new Proxy(container, {
+        set(target, key, value) {
+          if (typeof key === 'symbol') {
+            target[key] = value;
+            return true;
+          }
+
+          const normalizedKey = `${key}`;
+          if (!normalizedKey) {
+            target[key] = value;
+            return true;
+          }
+
+          if (RESERVED_UNIFORM_CONTAINER_KEYS.has(normalizedKey)) {
+            target[normalizedKey] = value;
+            return true;
+          }
+
+          if (Array.isArray(value)) {
+            target[normalizedKey] = value;
+            return true;
+          }
+
+          if (value && typeof value === 'object') {
+            if (
+              Object.prototype.hasOwnProperty.call(value, 'value') ||
+              typeof value.setValue === 'function'
+            ) {
+              target[normalizedKey] = value;
+              return true;
+            }
+          }
+
+          const resolvedValue = typeof value === 'undefined' ? null : value;
+          const existing = target[normalizedKey];
+          if (existing && typeof existing === 'object') {
+            if (Object.prototype.hasOwnProperty.call(existing, 'value')) {
+              assignPortalUniformValue(existing, resolvedValue);
+              return true;
+            }
+            if (typeof existing.setValue === 'function') {
+              try {
+                existing.setValue(resolvedValue);
+                return true;
+              } catch (setError) {
+                // Ignore and fall back to wrapping below.
+              }
+            }
+          }
+
+          target[normalizedKey] = { value: resolvedValue };
+          return true;
+        },
+        deleteProperty(target, key) {
+          if (typeof key === 'symbol') {
+            return Reflect.deleteProperty(target, key);
+          }
+
+          const normalizedKey = `${key}`;
+          if (!normalizedKey) {
+            return true;
+          }
+
+          if (!Object.prototype.hasOwnProperty.call(target, normalizedKey)) {
+            return true;
+          }
+
+          const entry = target[normalizedKey];
+          if (entry && typeof entry === 'object') {
+            if (Object.prototype.hasOwnProperty.call(entry, 'value')) {
+              assignPortalUniformValue(entry, null);
+              return true;
+            }
+            if (typeof entry.setValue === 'function') {
+              try {
+                entry.setValue(null);
+                return true;
+              } catch (setError) {
+                // Ignore and fall through to wrapping below.
+              }
+            }
+          }
+
+          target[normalizedKey] = { value: null };
+          return true;
+        },
+      });
+
+      PORTAL_UNIFORM_CONTAINER_PROXIES.set(container, proxy);
+      PORTAL_UNIFORM_PROXY_TARGETS.set(proxy, container);
+      return proxy;
+    }
+
     function ensurePortalUniformIntegrity(
       material,
       { missingKeys = [], expectPortal = false, metadata = null } = {}
@@ -5160,6 +5279,14 @@
       let uniforms = material.uniforms;
       if (!uniforms || typeof uniforms !== 'object') {
         uniforms = {};
+      }
+
+      const guardedUniforms = guardUniformContainer(uniforms);
+      if (guardedUniforms && guardedUniforms !== uniforms) {
+        uniforms = guardedUniforms;
+      }
+
+      if (material.uniforms !== uniforms) {
         try {
           material.uniforms = uniforms;
         } catch (assignError) {
@@ -5290,12 +5417,12 @@
     }
 
     function createPortalSurfaceMaterial(accentColor, active = false) {
-      const baseUniforms = {
+      const baseUniforms = guardUniformContainer({
         uTime: { value: 0 },
         uActivation: { value: active ? 1 : 0.18 },
         uColor: { value: new THREE.Color(accentColor) },
         uOpacity: { value: active ? 0.85 : 0.55 },
-      };
+      });
       const material = new THREE.ShaderMaterial({
         uniforms: baseUniforms,
         vertexShader: PORTAL_VERTEX_SHADER,
@@ -5384,7 +5511,12 @@
         sidePlane.renderOrder = 2;
         group.add(sidePlane);
 
-        const uniformSets = [frontSurface.uniforms, sideSurface.uniforms].filter(Boolean);
+        const uniformSets = [frontSurface.uniforms, sideSurface.uniforms]
+          .map((uniforms) => {
+            const guarded = guardUniformContainer(uniforms);
+            return guarded || uniforms;
+          })
+          .filter(Boolean);
         renderInfo.animations.portalSurface = {
           uniforms: frontSurface.uniforms,
           uniformSets,
@@ -5750,7 +5882,16 @@
         }
 
         const derivedUniformSets = materials
-          .map((material) => (material && material.uniforms ? material.uniforms : null))
+          .map((material) => {
+            if (!material || !material.uniforms) {
+              return null;
+            }
+            const guarded = guardUniformContainer(material.uniforms);
+            if (guarded && material.uniforms !== guarded) {
+              material.uniforms = guarded;
+            }
+            return guarded || material.uniforms;
+          })
           .filter((uniforms) => hasValidPortalUniformStructure(uniforms));
 
         const existingUniformSets = Array.isArray(portalSurface.uniformSets)
@@ -5787,7 +5928,13 @@
         }
 
         if (!hasValidPortalUniformStructure(portalSurface.uniforms)) {
-          portalSurface.uniforms = uniformSets[0] ?? null;
+          const primaryUniforms = guardUniformContainer(uniformSets[0] ?? null);
+          portalSurface.uniforms = primaryUniforms ?? uniformSets[0] ?? null;
+        } else {
+          const guardedPortalUniforms = guardUniformContainer(portalSurface.uniforms);
+          if (guardedPortalUniforms && guardedPortalUniforms !== portalSurface.uniforms) {
+            portalSurface.uniforms = guardedPortalUniforms;
+          }
         }
 
         const applyPortalUniforms = (uniforms) => {
@@ -5993,7 +6140,16 @@
             }
 
             const uniformSets = remappedMaterials
-              .map((material) => (material && material.uniforms ? material.uniforms : null))
+              .map((material) => {
+                if (!material || !material.uniforms) {
+                  return null;
+                }
+                const guarded = guardUniformContainer(material.uniforms);
+                if (guarded && material.uniforms !== guarded) {
+                  material.uniforms = guarded;
+                }
+                return guarded || material.uniforms;
+              })
               .filter((uniforms) => hasValidPortalUniformStructure(uniforms));
 
             const uniformSetsChanged =
@@ -6206,6 +6362,10 @@
 
             if (isShaderMaterial || expectPortalUniforms) {
               if (mat.uniforms && typeof mat.uniforms === 'object') {
+                const guardedUniforms = guardUniformContainer(mat.uniforms);
+                if (guardedUniforms && guardedUniforms !== mat.uniforms) {
+                  mat.uniforms = guardedUniforms;
+                }
                 const result = sanitizeUniformContainer(mat.uniforms);
                 if (result.updated) {
                   updated = true;
@@ -6238,7 +6398,12 @@
                   }
 
                   if (!mat.uniforms || typeof mat.uniforms !== 'object') {
-                    mat.uniforms = {};
+                    mat.uniforms = guardUniformContainer({});
+                  } else {
+                    const guarded = guardUniformContainer(mat.uniforms);
+                    if (guarded && guarded !== mat.uniforms) {
+                      mat.uniforms = guarded;
+                    }
                   }
 
                   const ensureMaterialUniform = (uniformId) => {
