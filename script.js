@@ -7851,7 +7851,8 @@
 
         if (!fallback) {
           const inferredState = inferPortalMaterialState(material, defaultAccent, defaultState);
-          if (!inferredState && !material?.userData?.portalSurface) {
+          const hasPortalSignature = materialUsesPortalSurfaceShader(material);
+          if (!inferredState && !material?.userData?.portalSurface && !hasPortalSignature) {
             return false;
           }
 
