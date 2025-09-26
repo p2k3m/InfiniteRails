@@ -6947,8 +6947,9 @@
               }
             }
 
-            const shouldSanitizeRendererUniforms = Boolean(renderer?.properties?.get) &&
-              (isShaderMaterial || hasPortalUniforms || usesPortalShader || portalMetadata);
+            const shouldSanitizeRendererUniforms =
+              Boolean(renderer?.properties?.get) &&
+              (isShaderMaterial || hasPortalUniforms || usesPortalShader);
             if (shouldSanitizeRendererUniforms) {
               let materialProperties = null;
               try {
