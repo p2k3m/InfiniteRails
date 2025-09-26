@@ -6299,25 +6299,39 @@
           const visited = new Set();
 
           if (isRendererManagedUniformContainer(uniforms)) {
+            const inspectRendererUniformEntry = (entry) => {
+              if (!entry || typeof entry !== 'object') {
+                requiresRendererReset = true;
+                return;
+              }
+              if (typeof entry.setValue !== 'function') {
+                requiresRendererReset = true;
+              }
+              if ('uniform' in entry) {
+                const uniformValue = entry.uniform;
+                if (!uniformValue || typeof uniformValue !== 'object') {
+                  requiresRendererReset = true;
+                  return;
+                }
+                if (!Object.prototype.hasOwnProperty.call(uniformValue, 'value')) {
+                  requiresRendererReset = true;
+                }
+              }
+            };
+
             if (Array.isArray(uniforms.seq)) {
               for (let i = 0; i < uniforms.seq.length; i += 1) {
                 if (!Object.prototype.hasOwnProperty.call(uniforms.seq, i)) {
                   requiresRendererReset = true;
                   continue;
                 }
-                const entry = uniforms.seq[i];
-                if (!entry || typeof entry !== 'object' || typeof entry.setValue !== 'function') {
-                  requiresRendererReset = true;
-                }
+                inspectRendererUniformEntry(uniforms.seq[i]);
               }
             }
 
             if (uniforms.map && typeof uniforms.map === 'object') {
               Object.keys(uniforms.map).forEach((key) => {
-                const entry = uniforms.map[key];
-                if (!entry || typeof entry !== 'object' || typeof entry.setValue !== 'function') {
-                  requiresRendererReset = true;
-                }
+                inspectRendererUniformEntry(uniforms.map[key]);
               });
             }
 
