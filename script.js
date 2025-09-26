@@ -6440,6 +6440,59 @@
           return result;
         };
 
+        const repairRendererUniformEntry = (container, key, entry) => {
+          let updatedEntry = entry;
+          let entryUpdated = false;
+
+          if (!updatedEntry || typeof updatedEntry !== 'object') {
+            updatedEntry = {
+              id: key,
+              setValue: () => {},
+              updateCache: () => {},
+              cache: [],
+              uniform: { value: null },
+              value: null,
+            };
+            entryUpdated = true;
+          } else {
+            if (typeof updatedEntry.setValue !== 'function') {
+              updatedEntry.setValue = () => {};
+              entryUpdated = true;
+            }
+            if (typeof updatedEntry.updateCache !== 'function') {
+              updatedEntry.updateCache = () => {};
+              entryUpdated = true;
+            }
+            if (!Array.isArray(updatedEntry.cache)) {
+              updatedEntry.cache = [];
+              entryUpdated = true;
+            }
+            if (!updatedEntry.uniform || typeof updatedEntry.uniform !== 'object') {
+              updatedEntry.uniform = { value: null };
+              entryUpdated = true;
+            } else if (!Object.prototype.hasOwnProperty.call(updatedEntry.uniform, 'value')) {
+              updatedEntry.uniform.value =
+                typeof updatedEntry.uniform.value === 'undefined'
+                  ? null
+                  : updatedEntry.uniform.value;
+              entryUpdated = true;
+            }
+            if (!Object.prototype.hasOwnProperty.call(updatedEntry, 'value')) {
+              updatedEntry.value =
+                typeof updatedEntry.uniform?.value !== 'undefined'
+                  ? updatedEntry.uniform.value
+                  : null;
+              entryUpdated = true;
+            }
+          }
+
+          if (entryUpdated) {
+            container[key] = updatedEntry;
+          }
+
+          return entryUpdated;
+        };
+
         const sanitizeUniformContainer = (uniforms) => {
           if (!uniforms || typeof uniforms !== 'object') {
             return { updated: false, requiresRendererReset: false };
@@ -6455,58 +6508,6 @@
               updated = true;
               requiresRendererReset = true;
             }
-            const repairRendererUniformEntry = (container, key, entry) => {
-              let updatedEntry = entry;
-              let entryUpdated = false;
-
-              if (!updatedEntry || typeof updatedEntry !== 'object') {
-                updatedEntry = {
-                  id: key,
-                  setValue: () => {},
-                  updateCache: () => {},
-                  cache: [],
-                  uniform: { value: null },
-                  value: null,
-                };
-                entryUpdated = true;
-              } else {
-                if (typeof updatedEntry.setValue !== 'function') {
-                  updatedEntry.setValue = () => {};
-                  entryUpdated = true;
-                }
-                if (typeof updatedEntry.updateCache !== 'function') {
-                  updatedEntry.updateCache = () => {};
-                  entryUpdated = true;
-                }
-                if (!Array.isArray(updatedEntry.cache)) {
-                  updatedEntry.cache = [];
-                  entryUpdated = true;
-                }
-                if (!updatedEntry.uniform || typeof updatedEntry.uniform !== 'object') {
-                  updatedEntry.uniform = { value: null };
-                  entryUpdated = true;
-                } else if (!Object.prototype.hasOwnProperty.call(updatedEntry.uniform, 'value')) {
-                  updatedEntry.uniform.value =
-                    typeof updatedEntry.uniform.value === 'undefined'
-                      ? null
-                      : updatedEntry.uniform.value;
-                  entryUpdated = true;
-                }
-                if (!Object.prototype.hasOwnProperty.call(updatedEntry, 'value')) {
-                  updatedEntry.value =
-                    typeof updatedEntry.uniform?.value !== 'undefined'
-                      ? updatedEntry.uniform.value
-                      : null;
-                  entryUpdated = true;
-                }
-              }
-
-              if (entryUpdated) {
-                container[key] = updatedEntry;
-              }
-
-              return entryUpdated;
-            };
 
             if (Array.isArray(uniforms.seq)) {
               for (let i = 0; i < uniforms.seq.length; i += 1) {
@@ -6704,6 +6705,91 @@
                 if (rendererUniformSanitization.requiresRendererReset) {
                   rendererReset = true;
                   sanitized = true;
+                }
+
+                const ensureRendererManagedUniform = (uniformId) => {
+                  if (uniformId === null || typeof uniformId === 'undefined') {
+                    return;
+                  }
+                  const key = `${uniformId}`;
+                  if (!key) {
+                    return;
+                  }
+
+                  if (!rendererUniforms.map || typeof rendererUniforms.map !== 'object') {
+                    rendererUniforms.map = {};
+                    rendererReset = true;
+                    sanitized = true;
+                  }
+
+                  if (!Array.isArray(rendererUniforms.seq)) {
+                    rendererUniforms.seq = [];
+                    rendererReset = true;
+                    sanitized = true;
+                  }
+
+                  const ensureSequenceEntry = (entry) => {
+                    let hasEntry = false;
+                    for (let i = 0; i < rendererUniforms.seq.length; i += 1) {
+                      const seqEntry = rendererUniforms.seq[i];
+                      if (!seqEntry || typeof seqEntry !== 'object') {
+                        rendererUniforms.seq[i] = entry;
+                        hasEntry = true;
+                        rendererReset = true;
+                        sanitized = true;
+                        break;
+                      }
+                      const seqId =
+                        typeof seqEntry.id === 'string' || typeof seqEntry.id === 'number'
+                          ? `${seqEntry.id}`
+                          : typeof seqEntry.name === 'string' || typeof seqEntry.name === 'number'
+                          ? `${seqEntry.name}`
+                          : null;
+                      if (seqId === key) {
+                        hasEntry = true;
+                        break;
+                      }
+                    }
+                    if (!hasEntry) {
+                      rendererUniforms.seq.push(entry);
+                      rendererReset = true;
+                      sanitized = true;
+                    }
+                  };
+
+                  let entry = rendererUniforms.map[key];
+                  const repaired = repairRendererUniformEntry(rendererUniforms.map, key, entry);
+                  if (repaired) {
+                    rendererReset = true;
+                    sanitized = true;
+                  }
+                  entry = rendererUniforms.map[key];
+                  if (!entry || typeof entry !== 'object') {
+                    return;
+                  }
+                  ensureSequenceEntry(entry);
+                };
+
+                if (isRendererManagedUniformContainer(rendererUniforms) && programInfo) {
+                  if (programInfo.map && typeof programInfo.map === 'object') {
+                    Object.keys(programInfo.map).forEach((key) => {
+                      if (typeof key === 'string' && key) {
+                        ensureRendererManagedUniform(key);
+                      }
+                    });
+                  } else if (Array.isArray(programInfo.seq)) {
+                    programInfo.seq.forEach((uniform) => {
+                      const uniformId =
+                        typeof uniform?.id === 'string' || typeof uniform?.id === 'number'
+                          ? `${uniform.id}`
+                          : typeof uniform?.name === 'string' || typeof uniform?.name === 'number'
+                          ? `${uniform.name}`
+                          : null;
+                      if (uniformId) {
+                        ensureRendererManagedUniform(uniformId);
+                      }
+                    });
+                  }
                 }
 
                 if (!isRendererManagedUniformContainer(rendererUniforms) && programInfo) {
