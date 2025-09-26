@@ -6420,7 +6420,11 @@
               );
             }
 
-            if (isShaderMaterial || expectPortalUniforms) {
+            const shouldSanitizeMaterialUniforms = Boolean(
+              isShaderMaterial || hasPortalUniforms || usesPortalShader
+            );
+
+            if (shouldSanitizeMaterialUniforms) {
               if (mat.uniforms && typeof mat.uniforms === 'object') {
                 const guardedUniforms = guardUniformContainer(mat.uniforms);
                 if (guardedUniforms && guardedUniforms !== mat.uniforms) {
