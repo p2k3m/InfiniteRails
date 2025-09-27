@@ -1,28 +1,33 @@
 # Infinite Dimension: Portals Reimagined
 
-Infinite Dimension is intended to be a browser-based voxel survival-puzzle experience. The current repository ships a static proof-of-concept UI with scoreboard panels and copy taken from the long-term design brief, but the interactive renderer, entities, and survival systems described in that brief have **not** been implemented yet. This README now documents the real status of the project and points to the consolidated action plan needed to reach the desired Minecraft-inspired prototype.
+Infinite Dimension is a browser-based voxel survival-puzzle experience inspired by the "Comprehensive Analysis and Enhancement Specifications" brief. The playable sandbox renderer now boots a complete Minecraft-style prototype featuring:
+
+- a Three.js render loop that carves out a 64×64 floating island with day/night lighting and shader-driven portals;
+- first-person controls with the Steve avatar, idle/walk animation mixers, mining and block placement, and virtual joystick support on mobile;
+- survival systems spanning health, bubbles, zombies, iron golems, crafting, scoring, and sequential dimension unlocks; and
+- backend-aware score syncing, Google Sign-In hooks, and responsive HUD/leaderboard overlays.
+
+Advanced renderer work is still underway, but explorers land inside the sandbox the moment the page loads. See [docs/portals-of-dimension-plan.md](docs/portals-of-dimension-plan.md) for the roadmap that bridges the sandbox and the long-term vision.
 
 ## Current status
 
-- **Renderer** – A Three.js canvas is initialised, yet no voxel terrain, characters, or lighting are created. The page therefore appears empty apart from UI overlays.
-- **Input** – Keyboard and mouse listeners are stubbed out and do not move a player avatar. Mining, block placement, and crafting actions are missing.
-- **Entities** – No player, zombie, or golem models load. Combat, health depletion, and respawn logic are absent.
-- **Portals & progression** – Portal placement, dimension swaps, score rewards, and boss encounters are placeholders only.
-- **Backend sync** – AWS Lambda/DynamoDB infrastructure exists in `serverless/`, but the frontend never calls it because gameplay events that would trigger network activity do not occur.
-
-The repository therefore represents an early staging ground rather than a working build. See [docs/portals-of-dimension-plan.md](docs/portals-of-dimension-plan.md) for the exhaustive implementation roadmap that reconciles the current code with the official "Comprehensive Analysis and Enhancement Specifications" brief.
+- **Sandbox renderer** – `simple-experience.js` initialises Three.js r161, generates the 64×64 terrain, animates the sun cycle, and logs voxel totals for debugging.【F:simple-experience.js†L1984-L2057】
+- **Player & controls** – Steve loads in first-person with animated arms, pointer-lock mouse look, WASD movement, mobile joystick input, mining, and placement.【F:simple-experience.js†L1740-L1876】【F:simple-experience.js†L2479-L2653】
+- **Entities & survival** – Zombies spawn nightly, chase the player, and chip hearts while iron golems auto-spawn for defence; respawns retain inventory after five hits.【F:simple-experience.js†L2888-L3099】
+- **Crafting & portals** – Hotbar/crafting UIs validate ordered recipes, award score, track portal progress, and transition across dimensions with gravity modifiers and the Netherite victory flow.【F:simple-experience.js†L3271-L3964】
+- **Backend sync & HUD** – Scores post to configured APIs, Google SSO hooks populate identity, and the HUD/leaderboard update in real time.【F:simple-experience.js†L593-L710】【F:script.js†L760-L938】
 
 ## Near-term objectives
 
-The most critical engineering work falls into five tracks:
+The sandbox is feature complete; the next phase focuses on hardening the advanced renderer and polishing long-term systems:
 
-1. **Core rendering & performance** – generate the 64×64 voxel island, set up day/night lighting, load character models, and hit 60 FPS with frustum culling.
-2. **Player experience** – wire WASD + pointer lock, mobile joystick controls, mining/placement, and a functioning hotbar and crafting UI.
-3. **Entities & survival** – spawn hostile zombies and allied golems, deduct hearts, track oxygen, and handle respawns.
-4. **Portals & progression** – detect 4×3 frames, animate shader portals, deliver realm-specific physics, and build the Netherite boss encounter.
-5. **Backend & polish** – sync scores, surface leaderboards, wire Google SSO, add tooltips/audio, and document validation coverage.
+1. **Advanced renderer parity** – Bring the non-sandbox path in `script.js` up to feature parity so both modes share the same gameplay stack.
+2. **Additional dimension content** – Layer bespoke structures, boss scripting, and cinematic sequences onto each unlocked realm.
+3. **Cross-session persistence** – Expand DynamoDB schemas to retain crafting unlocks, cosmetics, and personal bests across devices.
+4. **Performance telemetry** – Automate FPS and bundle-size reporting in CI to keep future additions inside budget.
+5. **Accessibility polish** – Continue improving captions, colour-contrast tweaks, and screen-reader flows now that interactive systems are online.
 
-Progress against each track is maintained in [docs/enhancement-roadmap.md](docs/enhancement-roadmap.md). The roadmap reflects the real implementation state so reviewers can see which systems are still pending.
+Progress against each track is maintained in [docs/enhancement-roadmap.md](docs/enhancement-roadmap.md). Update the roadmap as advanced-mode milestones ship.
 
 ## Validation & test matrix
 
