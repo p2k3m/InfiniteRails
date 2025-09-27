@@ -6861,15 +6861,25 @@
 
           if (!Object.prototype.hasOwnProperty.call(entry, 'value')) {
             if (typeof entry.setValue === 'function') {
-              try {
-                entry.setValue(entry.value ?? null);
-                if (Object.prototype.hasOwnProperty.call(entry, 'value')) {
-                  return result;
+              const repair = repairRendererUniformEntry(container, key, entry);
+              if (repair.removed) {
+                if (Array.isArray(container)) {
+                  const index = typeof key === 'number' ? key : Number.parseInt(`${key}`, 10);
+                  if (Number.isInteger(index)) {
+                    container.splice(index, 1);
+                  }
+                } else {
+                  delete container[key];
                 }
-              } catch (setError) {
+                result.updated = true;
+              } else if (repair.updated) {
+                result.updated = true;
+              }
+              if (repair.requiresRendererReset) {
                 result.requiresRendererReset = true;
                 markReset();
               }
+              return result;
             }
 
             let preservedValue = null;
