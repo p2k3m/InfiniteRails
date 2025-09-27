@@ -7725,11 +7725,11 @@
           typeof materialProperties.program.getUniforms === 'function'
             ? materialProperties.program.getUniforms()
             : null;
-        if (stabiliseRendererUniformCache(programUniforms)) {
-          modified = true;
-        }
-        if (uniformContainerNeedsSanitization(programUniforms)) {
-          modified = true;
+        if (programUniforms) {
+          stabiliseRendererUniformCache(programUniforms);
+          if (uniformContainerNeedsSanitization(programUniforms)) {
+            modified = true;
+          }
         }
       };
 
