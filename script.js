@@ -12522,6 +12522,9 @@
           : 'origin';
       teardownPreviewScene();
       resetRendererUniformCaches();
+      pendingUniformSanitizations = Math.max(pendingUniformSanitizations, 2);
+      rendererRecoveryFrames = Math.max(rendererRecoveryFrames, 1);
+      uniformSanitizationFailureStreak = 0;
       const context = ensureAudioContext();
       context?.resume?.().catch(() => {});
       if (window.Howler?.ctx?.state === 'suspended') {
