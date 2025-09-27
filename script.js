@@ -958,65 +958,89 @@
     }
 
     const simpleModeEnabled = shouldStartSimpleMode();
+    let simpleExperience = null;
     if (simpleModeEnabled && window.SimpleExperience?.create) {
-      const simpleExperience = window.SimpleExperience.create({
-        canvas,
-        apiBaseUrl: window.APP_CONFIG?.apiBaseUrl ?? null,
-        playerName:
-          (headerUserNameEl?.textContent || window.APP_CONFIG?.playerName || '').trim() || 'Explorer',
-        ui: {
-          introModal,
-          startButton,
-          hudRootEl,
-          gameBriefing: gameBriefingEl,
-          dismissBriefingButton,
-          heartsEl,
-          bubblesEl,
-          timeEl,
-          dimensionInfoEl,
-          scoreTotalEl,
-          scoreRecipesEl,
-          scoreDimensionsEl,
-          portalProgressLabel,
-          portalProgressBar,
-          hotbarEl,
-          playerHintEl,
-          scoreboardListEl,
-          scoreboardStatusEl,
-          refreshScoresButton,
-          mobileControls,
-          virtualJoystick: virtualJoystickEl,
-          virtualJoystickThumb,
-          craftingModal,
-          craftSequenceEl,
-          craftingInventoryEl,
-          craftSuggestionsEl,
-          craftButton,
-          clearCraftButton,
-          craftLauncherButton,
-          closeCraftingButton,
-          openCraftingSearchButton,
-          closeCraftingSearchButton,
-          craftingSearchPanel,
-          craftingSearchInput,
-          craftingSearchResultsEl,
-          inventoryModal,
-          inventoryGridEl,
-          inventorySortButton,
-          inventoryOverflowEl,
-          closeInventoryButton,
-          openInventoryButtons: [toggleExtendedBtn].filter(Boolean),
-        },
-      });
-      const launchSimple = () => {
-        simpleExperience.start();
-      };
-      if (startButton) {
-        startButton.addEventListener('click', launchSimple, { once: true });
+      try {
+        simpleExperience = window.SimpleExperience.create({
+          canvas,
+          apiBaseUrl: window.APP_CONFIG?.apiBaseUrl ?? null,
+          playerName:
+            (headerUserNameEl?.textContent || window.APP_CONFIG?.playerName || '').trim() || 'Explorer',
+          ui: {
+            introModal,
+            startButton,
+            hudRootEl,
+            gameBriefing: gameBriefingEl,
+            dismissBriefingButton,
+            heartsEl,
+            bubblesEl,
+            timeEl,
+            dimensionInfoEl,
+            scoreTotalEl,
+            scoreRecipesEl,
+            scoreDimensionsEl,
+            portalProgressLabel,
+            portalProgressBar,
+            hotbarEl,
+            playerHintEl,
+            scoreboardListEl,
+            scoreboardStatusEl,
+            refreshScoresButton,
+            mobileControls,
+            virtualJoystick: virtualJoystickEl,
+            virtualJoystickThumb,
+            craftingModal,
+            craftSequenceEl,
+            craftingInventoryEl,
+            craftSuggestionsEl,
+            craftButton,
+            clearCraftButton,
+            craftLauncherButton,
+            closeCraftingButton,
+            openCraftingSearchButton,
+            closeCraftingSearchButton,
+            craftingSearchPanel,
+            craftingSearchInput,
+            craftingSearchResultsEl,
+            inventoryModal,
+            inventoryGridEl,
+            inventorySortButton,
+            inventoryOverflowEl,
+            closeInventoryButton,
+            openInventoryButtons: [toggleExtendedBtn].filter(Boolean),
+          },
+        });
+      } catch (error) {
+        console.error('Failed to initialise simple gameplay sandbox.', error);
+        simpleExperience = null;
       }
-      launchSimple();
-      setupSimpleExperienceIntegrations(simpleExperience);
-      return;
+
+      if (simpleExperience) {
+        let startFailed = false;
+        const launchSimple = () => {
+          try {
+            simpleExperience.start();
+          } catch (error) {
+            console.error('Simple experience start failed; falling back to advanced mode.', error);
+            startFailed = true;
+            if (startButton) {
+              startButton.disabled = false;
+            }
+          }
+        };
+        if (startButton) {
+          startButton.addEventListener('click', launchSimple, { once: true });
+        }
+        launchSimple();
+        if (!startFailed) {
+          setupSimpleExperienceIntegrations(simpleExperience);
+          return;
+        }
+        console.warn('Simple experience could not start — continuing with advanced mode.');
+      }
+      if (!simpleExperience) {
+        console.warn('Simple experience unavailable — reverting to advanced mode.');
+      }
     }
     let previousLeaderboardSnapshot = new Map();
     let leaderboardHasRenderedOnce = false;
