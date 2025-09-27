@@ -1030,6 +1030,16 @@
 
     <script src="vendor/howler-stub.js" defer></script>
     <script>
+      window.APP_CONFIG = Object.assign(
+        {
+          enableAdvancedExperience: true,
+          preferAdvanced: true,
+          defaultMode: 'advanced',
+        },
+        window.APP_CONFIG || {},
+      );
+    </script>
+    <script>
       (function loadOptionalGoogleScripts() {
         if (window.location && window.location.protocol === 'file:') {
           return;
