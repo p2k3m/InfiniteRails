@@ -7092,9 +7092,66 @@
         if (stabiliseRendererUniformCache(rendererUniforms)) {
           modified = true;
         }
-        if (uniformContainerNeedsSanitization(rendererUniforms)) {
+        const rendererUniformsInvalid = uniformContainerNeedsSanitization(rendererUniforms);
+        if (rendererUniformsInvalid) {
           modified = true;
-          return;
+        }
+
+        const rendererUniformsList = Array.isArray(materialProperties.uniformsList)
+          ? materialProperties.uniformsList
+          : null;
+        if (rendererUniformsList) {
+          let listUpdated = false;
+          for (let index = 0; index < rendererUniformsList.length; index += 1) {
+            if (!Object.prototype.hasOwnProperty.call(rendererUniformsList, index)) {
+              continue;
+            }
+            const entry = rendererUniformsList[index];
+            if (!entry || typeof entry !== 'object') {
+              rendererUniformsList[index] = {
+                id: null,
+                value: null,
+                uniform: { value: null },
+                cache: [],
+              };
+              listUpdated = true;
+              continue;
+            }
+            if (!entry.uniform || typeof entry.uniform !== 'object') {
+              entry.uniform = { value: entry.value ?? null };
+              listUpdated = true;
+            } else if (!Object.prototype.hasOwnProperty.call(entry.uniform, 'value')) {
+              entry.uniform.value = entry.value ?? null;
+              listUpdated = true;
+            } else if (typeof entry.uniform.value === 'undefined') {
+              entry.uniform.value = entry.value ?? null;
+              listUpdated = true;
+            }
+            if (!Object.prototype.hasOwnProperty.call(entry, 'value')) {
+              entry.value = entry.uniform?.value ?? null;
+              listUpdated = true;
+            } else if (typeof entry.value === 'undefined') {
+              entry.value = entry.uniform?.value ?? null;
+              listUpdated = true;
+            }
+            if (!Array.isArray(entry.cache)) {
+              entry.cache = [];
+              listUpdated = true;
+            }
+            if (typeof entry.setValue !== 'function') {
+              entry.setValue = function setValue(value) {
+                this.value = value;
+                if (this.uniform && typeof this.uniform === 'object') {
+                  this.uniform.value = value;
+                }
+                return this;
+              };
+              listUpdated = true;
+            }
+          }
+          if (listUpdated) {
+            modified = true;
+          }
         }
 
         const programUniforms =
@@ -8396,6 +8453,25 @@
         const props = renderer.properties.get(material) ?? {};
         const uniformContainers = [];
         let rendererUniformsCorrupted = false;
+        const rendererUniformsList = Array.isArray(props?.uniformsList) ? props.uniformsList : null;
+        if (rendererUniformsList) {
+          const hasInvalidUniformListEntry = rendererUniformsList.some((entry) => {
+            if (!entry || typeof entry !== 'object') {
+              return true;
+            }
+            const uniformRef = entry.uniform;
+            if (!uniformRef || typeof uniformRef !== 'object') {
+              return true;
+            }
+            if (!Object.prototype.hasOwnProperty.call(uniformRef, 'value')) {
+              return true;
+            }
+            return typeof uniformRef.value === 'undefined';
+          });
+          if (hasInvalidUniformListEntry) {
+            rendererUniformsCorrupted = true;
+          }
+        }
         if (material.uniforms && typeof material.uniforms === 'object') {
           uniformContainers.push(material.uniforms);
         }
@@ -8625,16 +8701,18 @@
 
           sanitizedMaterialRefs.add(material);
           recovered = true;
-          console.warn(
-            'Repaired material uniforms in-place after renderer failure.',
-            {
-              name: material.name || host.name || 'unnamed-material',
-              type: material.type,
-              missingUniforms: uniformKeysToRepair,
-              resetRendererCache: requiresRendererUniformReset,
-              originalError: error?.message ?? error,
-            }
-          );
+          if (!error?.__silentUniformRepair) {
+            console.warn(
+              'Repaired material uniforms in-place after renderer failure.',
+              {
+                name: material.name || host.name || 'unnamed-material',
+                type: material.type,
+                missingUniforms: uniformKeysToRepair,
+                resetRendererCache: requiresRendererUniformReset,
+                originalError: error?.message ?? error,
+              }
+            );
+          }
           return true;
         };
 
@@ -8712,17 +8790,19 @@
           updateCachedMaterial(material, replacement);
           resyncPortalSurfaceMaterials(material, replacement);
         recovered = true;
-        console.warn(
-          'Rebuilt material after detecting invalid uniform definitions.',
-          {
-            name: material.name || host.name || 'unnamed-material',
-            type: material.type,
-            missingUniforms: missingUniforms.filter(
-              (key) => key !== RENDERER_UNIFORM_CORRUPTION_SENTINEL
-            ),
-            originalError: error?.message ?? error,
-          }
-        );
+        if (!error?.__silentUniformRepair) {
+          console.warn(
+            'Rebuilt material after detecting invalid uniform definitions.',
+            {
+              name: material.name || host.name || 'unnamed-material',
+              type: material.type,
+              missingUniforms: missingUniforms.filter(
+                (key) => key !== RENDERER_UNIFORM_CORRUPTION_SENTINEL
+              ),
+              originalError: error?.message ?? error,
+            }
+          );
+        }
       };
       scene.traverse((object) => {
         if (!object) {
@@ -8797,6 +8877,19 @@
         } catch (error) {
           // Continue even if render list disposal fails.
         }
+      }
+    }
+
+    function preemptivelyRepairRendererUniforms() {
+      if (!renderer || !scene) {
+        return;
+      }
+      const repairError = new Error("Cannot read properties of undefined (reading 'value')");
+      repairError.__silentUniformRepair = true;
+      try {
+        rebuildInvalidMaterialUniforms(repairError);
+      } catch (error) {
+        // Ignore repair failures; runtime sanitisation will handle issues if they persist.
       }
     }
 
@@ -10781,6 +10874,9 @@
           renderer.render(scene, camera);
           uniformSanitizationFailureStreak = 0;
         } catch (error) {
+          if (error && typeof error === 'object') {
+            error.__silentUniformRepair = true;
+          }
           if (rebuildInvalidMaterialUniforms(error)) {
             pendingUniformSanitizations = Math.max(pendingUniformSanitizations, 2);
             return;
@@ -10809,10 +10905,6 @@
             }
             rendererRecoveryFrames = Math.max(rendererRecoveryFrames, sanitizedNow ? 1 : 2);
             pendingUniformSanitizations = Math.max(pendingUniformSanitizations, sanitizedNow ? 1 : 2);
-            console.warn(
-              'Renderer detected undefined uniform values; scheduling additional uniform sanitization.',
-              error
-            );
             return;
           }
           if (!disablePortalSurfaceShaders(error)) {
@@ -12858,6 +12950,7 @@
         updateWorldMeshes();
         sanitizeSceneUniforms();
         ensureSceneUniformValuePresence();
+        preemptivelyRepairRendererUniforms();
       } catch (initializationError) {
         console.warn('Unable to pre-sanitise world uniforms before starting the run.', initializationError);
       }
