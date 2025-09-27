@@ -7000,27 +7000,17 @@
               }
             }
 
+            const rendererUniformsNeedSanitization =
+              uniformContainerNeedsSanitization(rendererUniformsCandidate) ||
+              uniformContainerNeedsSanitization(programInfo);
             const shouldSanitizeRendererUniforms =
               Boolean(renderer?.properties?.get) &&
-              (isShaderMaterial || hasPortalUniforms || usesPortalShader);
+              (isShaderMaterial ||
+                hasPortalUniforms ||
+                usesPortalShader ||
+                rendererUniformsNeedSanitization);
             if (shouldSanitizeRendererUniforms) {
-              let materialProperties = null;
-              try {
-                materialProperties = renderer.properties.get(mat) ?? null;
-              } catch (propertyError) {
-                materialProperties = null;
-              }
-
-              const rendererUniforms =
-                materialProperties && typeof materialProperties.uniforms === 'object'
-                  ? materialProperties.uniforms
-                  : null;
-              const programInfo =
-                materialProperties &&
-                materialProperties.program &&
-                typeof materialProperties.program.getUniforms === 'function'
-                  ? materialProperties.program.getUniforms()
-                  : null;
+              const rendererUniforms = rendererUniformsCandidate;
 
               if (rendererUniforms && typeof rendererUniforms === 'object') {
                 const purgedRendererUniforms = purgeRendererUniformCache(rendererUniforms);
@@ -7562,8 +7552,10 @@
         if (material.uniforms && typeof material.uniforms === 'object') {
           uniformContainers.push(material.uniforms);
         }
-        if (props.uniforms && typeof props.uniforms === 'object') {
-          uniformContainers.push(props.uniforms);
+        const rendererUniformsCandidate =
+          props && typeof props.uniforms === 'object' ? props.uniforms : null;
+        if (rendererUniformsCandidate) {
+          uniformContainers.push(rendererUniformsCandidate);
         }
         const portalUserMetadata = material?.userData?.portalSurface ?? null;
         const isShaderMaterial =
