@@ -6574,15 +6574,21 @@
       return typeof entry.value === 'undefined';
     }
 
+    if (typeof entry.setValue === 'function') {
+      if (entry.uniform && typeof entry.uniform === 'object') {
+        if (!Object.prototype.hasOwnProperty.call(entry.uniform, 'value')) {
+          return true;
+        }
+        return typeof entry.uniform.value === 'undefined';
+      }
+      return false;
+    }
+
     if (entry.uniform && typeof entry.uniform === 'object') {
       if (!Object.prototype.hasOwnProperty.call(entry.uniform, 'value')) {
         return true;
       }
       return typeof entry.uniform.value === 'undefined';
-    }
-
-    if (typeof entry.setValue === 'function') {
-      return !entry.uniform || typeof entry.uniform !== 'object';
     }
 
     return true;
