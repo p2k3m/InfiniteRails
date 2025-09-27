@@ -922,6 +922,9 @@
       }
     }
     const playerHintEl = document.getElementById('playerHint');
+    const gameBriefingEl = document.getElementById('gameBriefing');
+    const gameBriefingStepsEl = document.getElementById('gameBriefingSteps');
+    const dismissBriefingButton = document.getElementById('dismissBriefing');
     const drowningVignetteEl = document.getElementById('drowningVignette');
     const tarOverlayEl = document.getElementById('tarOverlay');
     const dimensionTransitionEl = document.getElementById('dimensionTransition');
@@ -934,6 +937,8 @@
     const primaryPanelEl = document.querySelector('.primary-panel');
     const topBarEl = document.querySelector('.top-bar');
     const footerEl = document.querySelector('.footer');
+
+    let gameBriefingTimer = null;
 
     if (defeatRespawnButton) {
       defeatRespawnButton.addEventListener('click', () => {
@@ -2217,6 +2222,11 @@
       }
     });
 
+    dismissBriefingButton?.addEventListener('click', () => {
+      hideGameBriefing();
+      canvas?.focus();
+    });
+
     const CAMERA_EYE_OFFSET = 1.6;
     const CAMERA_FORWARD_OFFSET = 3.6;
     const CAMERA_LOOK_DISTANCE = 6.5;
@@ -2965,6 +2975,76 @@
       playerHintEl.removeAttribute('data-variant');
     }
 
+    const DEFAULT_BRIEFING_STEPS = [
+      'Collect wood and stone with Space, F, or a tap while facing a resource tile.',
+      'Open the hammer icon to craft a Stone Pickaxe and unlock new recipes.',
+      'Form a 4×3 portal frame with Q and ignite it with R to stabilise a gateway.',
+    ];
+
+    function getBriefingSteps() {
+      const tasks = Array.isArray(dimensionOverlayState?.tasks) ? dimensionOverlayState.tasks.filter(Boolean) : [];
+      if (!tasks.length) {
+        return DEFAULT_BRIEFING_STEPS;
+      }
+      const combined = tasks.slice(0, 3);
+      for (const step of DEFAULT_BRIEFING_STEPS) {
+        if (combined.length >= 3) break;
+        if (!combined.includes(step)) {
+          combined.push(step);
+        }
+      }
+      return combined;
+    }
+
+    function renderGameBriefingSteps() {
+      if (!gameBriefingStepsEl) return;
+      const steps = getBriefingSteps();
+      gameBriefingStepsEl.innerHTML = steps.map((step) => `<li>${step}</li>`).join('');
+    }
+
+    function hideGameBriefing({ immediate = false } = {}) {
+      if (!gameBriefingEl) return;
+      if (gameBriefingTimer) {
+        clearTimeout(gameBriefingTimer);
+        gameBriefingTimer = null;
+      }
+      if (immediate) {
+        gameBriefingEl.classList.remove('is-visible');
+        gameBriefingEl.hidden = true;
+        gameBriefingEl.setAttribute('aria-hidden', 'true');
+        return;
+      }
+      if (!gameBriefingEl.classList.contains('is-visible')) {
+        return;
+      }
+      gameBriefingEl.classList.remove('is-visible');
+      window.setTimeout(() => {
+        gameBriefingEl.hidden = true;
+        gameBriefingEl.setAttribute('aria-hidden', 'true');
+      }, 260);
+    }
+
+    function showGameBriefing(options = {}) {
+      if (!gameBriefingEl) return;
+      const { autoHide = true, duration = 14000 } = options;
+      renderGameBriefingSteps();
+      if (gameBriefingTimer) {
+        clearTimeout(gameBriefingTimer);
+        gameBriefingTimer = null;
+      }
+      gameBriefingEl.hidden = false;
+      gameBriefingEl.setAttribute('aria-hidden', 'false');
+      // Restart transition
+      gameBriefingEl.classList.remove('is-visible');
+      void gameBriefingEl.offsetWidth;
+      gameBriefingEl.classList.add('is-visible');
+      if (autoHide) {
+        gameBriefingTimer = window.setTimeout(() => {
+          hideGameBriefing();
+        }, Math.max(2000, duration));
+      }
+    }
+
     function showPlayerHint(message, options = {}) {
       if (!playerHintEl || (!message && !options.html)) return;
       if (playerHintTimer) {
@@ -3001,6 +3081,7 @@
       }
       state.ui.movementHintDismissed = true;
       hidePlayerHint();
+      hideGameBriefing();
     }
 
     const coarsePointerQuery =
@@ -9966,21 +10047,68 @@
       if (!entityGroup) return;
       if (playerLocator) {
         entityGroup.remove(playerLocator);
-        playerLocator.geometry?.dispose?.();
-        playerLocator.material?.dispose?.();
+        if (typeof playerLocator.traverse === 'function') {
+          playerLocator.traverse((child) => {
+            if (child.isMesh) {
+              child.geometry?.dispose?.();
+              child.material?.dispose?.();
+            }
+          });
+        } else {
+          playerLocator.geometry?.dispose?.();
+          playerLocator.material?.dispose?.();
+        }
       }
-      const geometry = new THREE.RingGeometry(0.55, 0.82, 48);
-      const material = new THREE.MeshBasicMaterial({
+      const ringGeometry = new THREE.RingGeometry(0.55, 0.86, 48);
+      const ringMaterial = new THREE.MeshBasicMaterial({
         color: new THREE.Color(BASE_THEME.accent),
         transparent: true,
         opacity: 0.6,
         side: THREE.DoubleSide,
         depthWrite: false,
+        blending: THREE.AdditiveBlending,
       });
-      playerLocator = new THREE.Mesh(geometry, material);
-      playerLocator.rotation.x = -Math.PI / 2;
-      playerLocator.renderOrder = 2;
-      entityGroup.add(playerLocator);
+      ringMaterial.userData = { baseOpacity: 0.6 };
+      const ring = new THREE.Mesh(ringGeometry, ringMaterial);
+      ring.rotation.x = -Math.PI / 2;
+
+      const beaconGeometry = new THREE.CylinderGeometry(0.17, 0.17, 1.6, 24, 1, true);
+      const beaconMaterial = new THREE.MeshBasicMaterial({
+        color: new THREE.Color(BASE_THEME.accent),
+        transparent: true,
+        opacity: 0.32,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      });
+      beaconMaterial.userData = { baseOpacity: 0.32 };
+      const beacon = new THREE.Mesh(beaconGeometry, beaconMaterial);
+      beacon.position.y = 0.8;
+
+      const tipGeometry = new THREE.ConeGeometry(0.22, 0.4, 24);
+      const tipMaterial = new THREE.MeshBasicMaterial({
+        color: new THREE.Color(BASE_THEME.accent).lerp(new THREE.Color('#ffffff'), 0.35),
+        transparent: true,
+        opacity: 0.4,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      });
+      tipMaterial.userData = { baseOpacity: 0.4 };
+      const tip = new THREE.Mesh(tipGeometry, tipMaterial);
+      tip.position.y = 1.4;
+
+      const locatorGroup = new THREE.Group();
+      locatorGroup.name = 'player-locator';
+      locatorGroup.renderOrder = 2;
+      locatorGroup.add(ring, beacon, tip);
+      entityGroup.add(locatorGroup);
+
+      playerLocator = locatorGroup;
+      playerLocator.material = ringMaterial;
+      playerLocator.userData = {
+        ...(playerLocator.userData || {}),
+        pulseMaterials: [ringMaterial, beaconMaterial, tipMaterial],
+      };
     }
 
     function createFallbackZombieTemplate() {
@@ -10604,10 +10732,19 @@
         const height = tileSurfaceHeight(state.player.x, state.player.y) + 0.02;
         playerLocator.position.set(x, height, z);
         const cycle = (now % 2400) / 2400;
-        const pulse = 1 + Math.sin(cycle * Math.PI * 2) * 0.12;
-        playerLocator.scale.set(pulse, pulse, 1);
-        if (playerLocator.material) {
-          const opacity = 0.35 + Math.sin(cycle * Math.PI * 2) * 0.25;
+        const wave = Math.sin(cycle * Math.PI * 2);
+        const pulse = 1 + wave * 0.12;
+        playerLocator.scale.set(pulse, 1, pulse);
+        const materials = playerLocator.userData?.pulseMaterials;
+        if (Array.isArray(materials) && materials.length) {
+          materials.forEach((material) => {
+            if (!material) return;
+            const baseOpacity = material.userData?.baseOpacity ?? material.opacity ?? 0.45;
+            const intensity = THREE.MathUtils.clamp(baseOpacity * (0.85 + wave * 0.45), 0.18, 0.95);
+            material.opacity = intensity;
+          });
+        } else if (playerLocator.material) {
+          const opacity = 0.35 + wave * 0.25;
           playerLocator.material.opacity = THREE.MathUtils.clamp(opacity, 0.2, 0.85);
         }
       }
@@ -12811,10 +12948,14 @@
       }
       dimensionOverlayState = { info, tasks };
       renderDimensionOverlay(dimensionOverlayState, { animate: true });
+      renderGameBriefingSteps();
       const hintKey = `${info.id}:${tasks.join('|')}`;
       if (hintKey !== lastDimensionHintKey) {
         const summary = tasks[0] ?? info.description;
         showPlayerHint(`Now entering ${info.name}. ${summary}`);
+        if (state.isRunning) {
+          showGameBriefing({ autoHide: true });
+        }
         lastDimensionHintKey = hintKey;
       }
       return dimensionOverlayState;
@@ -13297,6 +13438,7 @@
         startButton.setAttribute('tabindex', '-1');
         startButton.blur();
       }
+      hideGameBriefing({ immediate: true });
       canvas?.focus();
       document.body?.classList.add('game-active');
       resetHudInactivityTimer();
@@ -16193,6 +16335,9 @@
         }
         if (playerHintEl?.classList.contains('visible')) {
           hidePlayerHint();
+        }
+        if (gameBriefingEl?.classList.contains('is-visible')) {
+          hideGameBriefing();
         }
       });
     }

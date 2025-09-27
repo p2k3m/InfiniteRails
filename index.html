@@ -109,6 +109,34 @@
           aria-label="Game world"
           data-hint="Navigate and interact with the voxel realm here."
         ></canvas>
+        <div class="game-briefing" id="gameBriefing" role="region" aria-live="polite" hidden>
+          <div class="game-briefing__content">
+            <div class="game-briefing__header">
+              <p class="game-briefing__eyebrow">Mission Briefing</p>
+              <h2 class="game-briefing__title">Secure the Origin Rail</h2>
+            </div>
+            <ol class="game-briefing__steps" id="gameBriefingSteps">
+              <li>Collect wood and stone with Space or a tap while facing a resource tile.</li>
+              <li>Open the crafting terminal from the hammer icon and assemble a Stone Pickaxe.</li>
+              <li>Build a 4×3 portal frame with Q, then ignite it with R to escape the biome.</li>
+            </ol>
+            <div class="game-briefing__controls" aria-label="Core controls">
+              <div>
+                <span class="game-briefing__label">Movement</span>
+                <span class="game-briefing__keys">W · A · S · D</span>
+              </div>
+              <div>
+                <span class="game-briefing__label">Gather / Use</span>
+                <span class="game-briefing__keys">Space · Click · F</span>
+              </div>
+              <div>
+                <span class="game-briefing__label">Place / Portal</span>
+                <span class="game-briefing__keys">Q · R</span>
+              </div>
+            </div>
+            <button type="button" class="game-briefing__dismiss" id="dismissBriefing">Begin the run</button>
+          </div>
+        </div>
         <div class="hud-layer" id="gameHud">
           <div class="hud-layer__corner hud-layer__corner--top-left">
             <div class="hud-card hud-card--status" data-hint="Monitor vitals and access crafting tools.">

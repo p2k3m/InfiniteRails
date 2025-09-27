@@ -1214,6 +1214,139 @@ body.game-active #gameCanvas {
   outline-offset: 2px;
 }
 
+.game-briefing {
+  position: absolute;
+  top: clamp(1.5rem, 5vh, 3rem);
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(92%, 520px);
+  z-index: 60;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.28s ease, transform 0.28s ease;
+}
+
+.game-briefing.is-visible {
+  opacity: 1;
+  transform: translate(-50%, 0);
+  pointer-events: auto;
+}
+
+.game-briefing__content {
+  background: linear-gradient(180deg, rgba(5, 12, 28, 0.94), rgba(8, 22, 40, 0.96));
+  border: 1px solid rgba(73, 242, 255, 0.28);
+  box-shadow: 0 28px 70px rgba(0, 0, 0, 0.45);
+  border-radius: 24px;
+  padding: clamp(1.25rem, 2vw, 1.75rem) clamp(1.25rem, 2.2vw, 2rem);
+  display: grid;
+  gap: 1.1rem;
+}
+
+.game-briefing__header {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.game-briefing__eyebrow {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.26em;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.game-briefing__title {
+  font-size: clamp(1.25rem, 2.4vw, 1.8rem);
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.game-briefing__steps {
+  margin-left: 1.1rem;
+  display: grid;
+  gap: 0.65rem;
+  font-size: 0.95rem;
+  color: var(--text-secondary);
+}
+
+.game-briefing__steps li {
+  line-height: 1.55;
+}
+
+.game-briefing__controls {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 0.75rem;
+  padding: 0.85rem 1rem;
+  border-radius: 18px;
+  background: rgba(9, 24, 42, 0.72);
+  border: 1px solid rgba(73, 242, 255, 0.18);
+}
+
+.game-briefing__label {
+  display: block;
+  font-size: 0.75rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: rgba(242, 245, 250, 0.68);
+  margin-bottom: 0.35rem;
+}
+
+.game-briefing__keys {
+  font-family: 'Chakra Petch', 'Exo 2', sans-serif;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  display: inline-flex;
+  gap: 0.35rem;
+}
+
+.game-briefing__dismiss {
+  justify-self: start;
+  border: none;
+  border-radius: 999px;
+  padding: 0.65rem 1.4rem;
+  background: linear-gradient(120deg, var(--accent) 0%, var(--primary) 100%);
+  color: #02070f;
+  font-weight: 700;
+  font-size: 0.9rem;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  cursor: pointer;
+  box-shadow: 0 18px 36px rgba(0, 0, 0, 0.35);
+  transition: transform 0.18s ease, box-shadow 0.18s ease, opacity 0.18s ease;
+}
+
+.game-briefing__dismiss:hover,
+.game-briefing__dismiss:focus-visible {
+  transform: translateY(-1px);
+  box-shadow: 0 26px 50px rgba(0, 0, 0, 0.4);
+  outline: none;
+}
+
+.game-briefing__dismiss:focus-visible {
+  opacity: 0.95;
+}
+
+@media (max-width: 720px) {
+  .game-briefing {
+    top: clamp(1rem, 4vh, 2rem);
+    width: min(96%, 420px);
+  }
+
+  .game-briefing__content {
+    gap: 0.9rem;
+  }
+
+  .game-briefing__controls {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .game-briefing__keys {
+    font-size: 0.85rem;
+  }
+}
+
 
 .overlay-panel {
   position: relative;
