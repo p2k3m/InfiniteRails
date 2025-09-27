@@ -3173,6 +3173,7 @@
               ${renderList(mobileList)}
             </section>
           </div>
+          <p class="player-hint__note">Move to make your compass ring glow gold, then face a tree or stone and press Space or ✦ to gather.</p>
         </div>
       `;
     }
@@ -9851,6 +9852,14 @@
       playerAnimationBlend.walk = 0;
     }
 
+    function srgbColor(hex) {
+      const color = new THREE.Color(hex);
+      if (typeof color.convertSRGBToLinear === 'function') {
+        color.convertSRGBToLinear();
+      }
+      return color;
+    }
+
     function createPlaceholderHumanoid({
       bodyColor = '#4e8cff',
       headColor = '#f2d7b4',
@@ -9896,22 +9905,190 @@
       return group;
     }
 
+    function createFallbackSteveModel() {
+      const group = new THREE.Group();
+      group.name = 'player-fallback-steve';
+
+      const palette = {
+        shirt: '#3c9ee6',
+        jeans: '#2d6ecf',
+        boot: '#7b4a2e',
+        skin: '#f0c29f',
+        hair: '#3f2a1b',
+        eye: '#7cd8ff',
+        nose: '#d9a06b',
+      };
+
+      const shirtColor = srgbColor(palette.shirt);
+      const jeansColor = srgbColor(palette.jeans);
+      const bootColor = srgbColor(palette.boot);
+      const skinColor = srgbColor(palette.skin);
+      const hairColor = srgbColor(palette.hair);
+      const eyeColor = srgbColor(palette.eye);
+      const noseColor = srgbColor(palette.nose);
+
+      const shirtMaterial = new THREE.MeshStandardMaterial({
+        color: shirtColor.clone(),
+        roughness: 0.58,
+        metalness: 0.08,
+        emissive: shirtColor.clone().multiplyScalar(0.18),
+        emissiveIntensity: 0.55,
+      });
+      const jeansMaterial = new THREE.MeshStandardMaterial({
+        color: jeansColor.clone(),
+        roughness: 0.62,
+        metalness: 0.04,
+        emissive: jeansColor.clone().multiplyScalar(0.12),
+        emissiveIntensity: 0.5,
+      });
+      const bootMaterial = new THREE.MeshStandardMaterial({
+        color: bootColor.clone(),
+        roughness: 0.65,
+        metalness: 0.1,
+        emissive: bootColor.clone().multiplyScalar(0.2),
+        emissiveIntensity: 0.6,
+      });
+      const skinMaterial = new THREE.MeshStandardMaterial({
+        color: skinColor.clone(),
+        roughness: 0.54,
+        metalness: 0.04,
+        emissive: skinColor.clone().multiplyScalar(0.1),
+        emissiveIntensity: 0.4,
+      });
+      const hairMaterial = new THREE.MeshStandardMaterial({
+        color: hairColor.clone(),
+        roughness: 0.55,
+        metalness: 0.18,
+        emissive: hairColor.clone().multiplyScalar(0.22),
+        emissiveIntensity: 0.65,
+      });
+      const eyeMaterial = new THREE.MeshStandardMaterial({
+        color: eyeColor.clone(),
+        roughness: 0.35,
+        metalness: 0.08,
+        emissive: eyeColor.clone(),
+        emissiveIntensity: 1.4,
+      });
+      const noseMaterial = new THREE.MeshStandardMaterial({
+        color: noseColor.clone(),
+        roughness: 0.6,
+        metalness: 0.08,
+      });
+
+      const legLength = 0.82;
+      const bodyHeight = 0.92;
+      const headSize = 0.6;
+      const armLength = 0.84;
+      const bodyWidth = 0.78;
+
+      const body = new THREE.Mesh(new THREE.BoxGeometry(bodyWidth, bodyHeight, 0.42), shirtMaterial);
+      body.position.y = legLength + bodyHeight / 2;
+      group.add(body);
+
+      const headPivot = new THREE.Group();
+      headPivot.name = 'HeadPivot';
+      headPivot.position.set(0, legLength + bodyHeight, 0);
+      const head = new THREE.Mesh(new THREE.BoxGeometry(headSize, headSize, headSize), skinMaterial.clone());
+      head.name = 'Head';
+      head.position.y = headSize / 2;
+      headPivot.add(head);
+
+      const hairPivot = new THREE.Group();
+      hairPivot.name = 'Hair';
+      hairPivot.position.set(0, headSize * 0.22, 0);
+      const hair = new THREE.Mesh(new THREE.BoxGeometry(headSize * 1.04, headSize * 0.52, headSize * 1.04), hairMaterial.clone());
+      hair.position.y = headSize * 0.26;
+      hairPivot.add(hair);
+      headPivot.add(hairPivot);
+
+      const fringePivot = new THREE.Group();
+      fringePivot.name = 'Fringe';
+      fringePivot.position.set(0, headSize * 0.35, headSize * 0.48);
+      const fringe = new THREE.Mesh(new THREE.BoxGeometry(headSize * 0.98, headSize * 0.42, 0.14), hairMaterial.clone());
+      fringe.position.y = headSize * 0.16;
+      fringePivot.add(fringe);
+      headPivot.add(fringePivot);
+
+      const leftEye = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.12, 0.02), eyeMaterial.clone());
+      leftEye.position.set(-0.12, headSize * 0.36, headSize / 2 + 0.01);
+      headPivot.add(leftEye);
+      const rightEye = leftEye.clone();
+      rightEye.position.x = 0.12;
+      headPivot.add(rightEye);
+
+      const nose = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.18, 0.1), noseMaterial);
+      nose.position.set(0, headSize * 0.22, headSize / 2 + 0.05);
+      headPivot.add(nose);
+
+      group.add(headPivot);
+
+      const leftArmPivot = new THREE.Group();
+      leftArmPivot.name = 'LeftArm';
+      leftArmPivot.position.set(-(bodyWidth / 2 + 0.2), legLength + bodyHeight - 0.08, 0);
+      const leftArm = new THREE.Mesh(new THREE.BoxGeometry(0.28, armLength, 0.28), skinMaterial.clone());
+      leftArm.position.y = -armLength / 2;
+      leftArmPivot.add(leftArm);
+      group.add(leftArmPivot);
+
+      const rightArmPivot = new THREE.Group();
+      rightArmPivot.name = 'RightArm';
+      rightArmPivot.position.set(bodyWidth / 2 + 0.2, legLength + bodyHeight - 0.08, 0);
+      const rightArm = leftArm.clone();
+      rightArmPivot.add(rightArm);
+      group.add(rightArmPivot);
+
+      const legGeometry = new THREE.BoxGeometry(0.3, legLength, 0.3);
+      const leftLegPivot = new THREE.Group();
+      leftLegPivot.name = 'LeftLeg';
+      leftLegPivot.position.set(-0.18, legLength, 0);
+      const leftLeg = new THREE.Mesh(legGeometry, jeansMaterial.clone());
+      leftLeg.position.y = -legLength / 2;
+      leftLegPivot.add(leftLeg);
+      const leftBoot = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.2, 0.34), bootMaterial.clone());
+      leftBoot.position.y = -legLength + 0.1;
+      leftLegPivot.add(leftBoot);
+      group.add(leftLegPivot);
+
+      const rightLegPivot = new THREE.Group();
+      rightLegPivot.name = 'RightLeg';
+      rightLegPivot.position.set(0.18, legLength, 0);
+      const rightLeg = leftLeg.clone();
+      rightLegPivot.add(rightLeg);
+      const rightBoot = leftBoot.clone();
+      rightLegPivot.add(rightBoot);
+      group.add(rightLegPivot);
+
+      group.traverse((child) => {
+        if (!child?.isMesh) return;
+        child.castShadow = true;
+        child.receiveShadow = true;
+      });
+
+      group.updateMatrixWorld(true);
+
+      const parts = {
+        leftArm: leftArmPivot,
+        rightArm: rightArmPivot,
+        leftLeg: leftLegPivot,
+        rightLeg: rightLegPivot,
+        head: headPivot,
+        hair: hairPivot,
+        fringe: fringePivot,
+        hairBasePosition: hairPivot.position.clone(),
+        fringeBasePosition: fringePivot.position.clone(),
+      };
+
+      return { group, parts };
+    }
+
     function useFallbackPlayerMesh() {
       if (!entityGroup) return;
-      const placeholder = createPlaceholderHumanoid({
-        bodyColor: '#4f7dff',
-        headColor: '#f0d7b8',
-        bodyWidth: 0.62,
-        bodyDepth: 0.46,
-        bodyHeight: 1.4,
-        headSize: 0.44,
-        accentColor: '#ffb657',
-        name: 'player-fallback',
-      });
+      const fallback = createFallbackSteveModel();
+      const placeholder = fallback.group;
       placeholder.position.y = 0;
       entityGroup.add(placeholder);
       playerMesh = placeholder;
-      playerMeshParts = null;
+      playerMeshParts = fallback.parts;
       resetPlayerAnimationState();
       announceVisualFallback(
         'player-model',
@@ -9961,29 +10138,49 @@
       playerMesh.position.set(0, 0, 0);
       playerMesh.rotation.set(0, 0, 0);
       playerMesh.traverse((child) => {
-        if (child.isMesh) {
-          child.castShadow = true;
-          child.receiveShadow = true;
-          if (child.material?.color?.isColor) {
-            child.material.color.convertSRGBToLinear?.();
-            if (typeof child.material.roughness === 'number') {
-              child.material.roughness = THREE.MathUtils.clamp(
-                child.material.roughness * 0.85,
-                0.2,
-                0.8
-              );
-            }
-            if (typeof child.material.metalness === 'number') {
-              child.material.metalness = THREE.MathUtils.clamp(child.material.metalness * 0.6, 0, 0.5);
-            }
-            if (child.material.emissive?.isColor) {
-              tmpColorA.copy(child.material.color).multiplyScalar(0.32);
-              child.material.emissive.lerp(tmpColorA, 0.65);
-              child.material.emissiveIntensity = Math.max(child.material.emissiveIntensity ?? 0.2, 0.35);
-            }
-            child.material.needsUpdate = true;
-          }
+        if (!child.isMesh) return;
+        child.castShadow = true;
+        child.receiveShadow = true;
+        if (!child.material) return;
+        child.material = child.material.clone();
+        const materialName = child.material.name ?? child.name ?? '';
+        const palette = {
+          Shirt: '#3c9ee6',
+          Skin: '#f0c29f',
+          Jeans: '#2d6ecf',
+          Boot: '#7b4a2e',
+          Hair: '#3f2a1b',
+          Eye: '#7cd8ff',
+        };
+        const targetHex = palette[materialName] ?? null;
+        if (targetHex && child.material.color?.isColor) {
+          child.material.color.copy(srgbColor(targetHex));
+        } else if (child.material.color?.isColor) {
+          child.material.color.convertSRGBToLinear?.();
         }
+        if (typeof child.material.roughness === 'number') {
+          child.material.roughness = THREE.MathUtils.clamp(child.material.roughness * 0.85, 0.18, 0.75);
+        }
+        if (typeof child.material.metalness === 'number') {
+          child.material.metalness = THREE.MathUtils.clamp(child.material.metalness * 0.55, 0, 0.4);
+        }
+        if (materialName === 'Eye') {
+          const glow = srgbColor(palette.Eye);
+          if (child.material.color?.isColor) {
+            child.material.color.copy(glow);
+          }
+          child.material.emissive = glow.clone();
+          child.material.emissiveIntensity = Math.max(child.material.emissiveIntensity ?? 0.6, 1.4);
+        } else if (targetHex) {
+          const glow = srgbColor(targetHex).multiplyScalar(0.22);
+          if (child.material.emissive?.isColor) {
+            child.material.emissive.lerp(glow, 0.7);
+          } else {
+            child.material.emissive = glow;
+          }
+          child.material.emissiveIntensity = Math.max(child.material.emissiveIntensity ?? 0.3, 0.55);
+        }
+        child.material.needsUpdate = true;
       });
 
       entityGroup.add(playerMesh);
@@ -10130,8 +10327,10 @@
         }
       }
       const ringGeometry = new THREE.RingGeometry(0.55, 0.86, 48);
+      const baseLocatorColor = srgbColor(BASE_THEME.accent);
+      const highlightLocatorColor = srgbColor(BASE_THEME.accentStrong || '#f7b733');
       const ringMaterial = new THREE.MeshBasicMaterial({
-        color: new THREE.Color(BASE_THEME.accent),
+        color: baseLocatorColor.clone(),
         transparent: true,
         opacity: 0.6,
         side: THREE.DoubleSide,
@@ -10144,7 +10343,7 @@
 
       const beaconGeometry = new THREE.CylinderGeometry(0.17, 0.17, 1.6, 24, 1, true);
       const beaconMaterial = new THREE.MeshBasicMaterial({
-        color: new THREE.Color(BASE_THEME.accent),
+        color: baseLocatorColor.clone(),
         transparent: true,
         opacity: 0.32,
         side: THREE.DoubleSide,
@@ -10157,7 +10356,7 @@
 
       const tipGeometry = new THREE.ConeGeometry(0.22, 0.4, 24);
       const tipMaterial = new THREE.MeshBasicMaterial({
-        color: new THREE.Color(BASE_THEME.accent).lerp(new THREE.Color('#ffffff'), 0.35),
+        color: baseLocatorColor.clone().lerp(highlightLocatorColor, 0.45),
         transparent: true,
         opacity: 0.4,
         depthWrite: false,
@@ -10178,6 +10377,9 @@
       playerLocator.userData = {
         ...(playerLocator.userData || {}),
         pulseMaterials: [ringMaterial, beaconMaterial, tipMaterial],
+        baseColor: baseLocatorColor.clone(),
+        highlightColor: highlightLocatorColor.clone(),
+        lastMovementMix: 0,
       };
     }
 
@@ -10196,6 +10398,12 @@
         if (child.isMesh && child.material) {
           child.material.roughness = 0.78;
           child.material.metalness = 0.08;
+          if (child.material.emissive?.isColor) {
+            child.material.emissive.lerp(srgbColor('#9affb9'), 0.6);
+          } else {
+            child.material.emissive = srgbColor('#9affb9').multiplyScalar(0.6);
+          }
+          child.material.emissiveIntensity = Math.max(child.material.emissiveIntensity ?? 0.3, 0.75);
         }
       });
       group.updateMatrixWorld(true);
@@ -10287,6 +10495,20 @@
           if (child.material.color?.isColor) {
             child.material.color.convertSRGBToLinear?.();
           }
+          if (child.name?.toLowerCase?.().includes('eye')) {
+            const glow = srgbColor('#9fffc7');
+            child.material.color?.copy(glow);
+            child.material.emissive = glow.clone();
+            child.material.emissiveIntensity = Math.max(child.material.emissiveIntensity ?? 0.8, 1.6);
+          } else if (child.material.color?.isColor) {
+            const emissiveBase = child.material.color.clone().multiplyScalar(0.28);
+            if (child.material.emissive?.isColor) {
+              child.material.emissive.lerp(emissiveBase, 0.8);
+            } else {
+              child.material.emissive = emissiveBase;
+            }
+            child.material.emissiveIntensity = Math.max(child.material.emissiveIntensity ?? 0.35, 0.7);
+          }
         }
       });
       clone.scale.setScalar(defaultScale);
@@ -10348,6 +10570,32 @@
         aggression: 0,
         groundOffset: groundOffset * defaultScale,
       };
+      actor.bodyMaterials.forEach((material, index) => {
+        if (!material?.color?.isColor) return;
+        const baseColor = actor.baseBodyColors[index];
+        if (!baseColor) return;
+        const emissive = baseColor.clone().multiplyScalar(0.28);
+        if (material.emissive?.isColor) {
+          material.emissive.copy(emissive);
+        } else {
+          material.emissive = emissive.clone();
+        }
+        material.emissiveIntensity = Math.max(material.emissiveIntensity ?? 0.35, 0.7);
+        actor.baseEmissiveColors[index] = emissive.clone();
+      });
+      actor.eyeMaterials.forEach((material, index) => {
+        const glow = srgbColor('#9fffc7');
+        if (material.color?.isColor) {
+          material.color.copy(glow);
+        }
+        if (material.emissive?.isColor) {
+          material.emissive.copy(glow);
+        } else {
+          material.emissive = glow.clone();
+        }
+        material.emissiveIntensity = Math.max(material.emissiveIntensity ?? 1.1, 1.6);
+        actor.baseEyeColors[index] = glow.clone();
+      });
       entityGroup.add(clone);
       return actor;
     }
@@ -10379,6 +10627,8 @@
         color: new THREE.Color('#b9b3a4'),
         metalness: 0.26,
         roughness: 0.58,
+        emissive: srgbColor('#f6d7a7').multiplyScalar(0.12),
+        emissiveIntensity: 0.5,
       });
       const body = new THREE.Mesh(new THREE.BoxGeometry(0.98, 1.8, 0.72), bodyMaterial);
       body.position.y = 0.9;
@@ -10401,6 +10651,8 @@
         color: new THREE.Color('#d2ccbd'),
         metalness: 0.22,
         roughness: 0.6,
+        emissive: srgbColor('#f6d7a7').multiplyScalar(0.1),
+        emissiveIntensity: 0.45,
       });
       const leftArm = new THREE.Mesh(new THREE.BoxGeometry(0.26, 1.2, 0.26), armMaterial);
       leftArm.position.set(-0.72, 0.9, 0);
@@ -10500,6 +10752,20 @@
           if (child.material.color?.isColor) {
             child.material.color.convertSRGBToLinear?.();
           }
+          if (child.name?.toLowerCase?.().includes('eye')) {
+            const glow = srgbColor('#ffe8a3');
+            child.material.color?.copy(glow);
+            child.material.emissive = glow.clone();
+            child.material.emissiveIntensity = Math.max(child.material.emissiveIntensity ?? 0.8, 1.4);
+          } else if (child.material.color?.isColor) {
+            const emissiveBase = child.material.color.clone().multiplyScalar(0.18);
+            if (child.material.emissive?.isColor) {
+              child.material.emissive.lerp(emissiveBase, 0.7);
+            } else {
+              child.material.emissive = emissiveBase;
+            }
+            child.material.emissiveIntensity = Math.max(child.material.emissiveIntensity ?? 0.3, 0.6);
+          }
         }
       });
       clone.scale.setScalar(defaultScale);
@@ -10559,6 +10825,32 @@
         aggression: 0,
         groundOffset: groundOffset * defaultScale,
       };
+      actor.bodyMaterials.forEach((material, index) => {
+        if (!material?.color?.isColor) return;
+        const baseColor = actor.baseBodyColors[index];
+        if (!baseColor) return;
+        const emissive = baseColor.clone().multiplyScalar(0.2);
+        if (material.emissive?.isColor) {
+          material.emissive.copy(emissive);
+        } else {
+          material.emissive = emissive.clone();
+        }
+        material.emissiveIntensity = Math.max(material.emissiveIntensity ?? 0.3, 0.6);
+        actor.baseEmissiveColors[index] = emissive.clone();
+      });
+      actor.eyeMaterials.forEach((material, index) => {
+        const glow = srgbColor('#ffe8a3');
+        if (material.color?.isColor) {
+          material.color.copy(glow);
+        }
+        if (material.emissive?.isColor) {
+          material.emissive.copy(glow);
+        } else {
+          material.emissive = glow.clone();
+        }
+        material.emissiveIntensity = Math.max(material.emissiveIntensity ?? 0.9, 1.3);
+        actor.baseEyeColors[index] = glow.clone();
+      });
       entityGroup.add(clone);
       return actor;
     }
@@ -10619,6 +10911,16 @@
         const idleBob = Math.sin(now / 1200) * 0.02;
         const bob = Math.sin(walkCycle) * 0.08 * movementStrength;
         const baseHeight = height + idleBob + bob;
+
+        if (movementStrength > 0.28) {
+          dismissMovementHint();
+          if (state?.ui && !state.ui.movementGlowHintShown) {
+            showPlayerHint('Great! Follow the golden ring as it turns bright—face a tree or stone and press Space to gather.', {
+              duration: 7200,
+            });
+            state.ui.movementGlowHintShown = true;
+          }
+        }
 
         let playerBodyHeightOffset = 0;
         let playerBodyPitch = 0;
@@ -10806,17 +11108,34 @@
         const pulse = 1 + wave * 0.12;
         playerLocator.scale.set(pulse, 1, pulse);
         const materials = playerLocator.userData?.pulseMaterials;
+        const baseColor = playerLocator.userData?.baseColor;
+        const highlightColor = playerLocator.userData?.highlightColor;
+        let movementMix = 0;
+        if (baseColor && highlightColor) {
+          const normalized = THREE.MathUtils.clamp(movementStrength * 1.25, 0, 1);
+          movementMix = normalized * normalized * (3 - 2 * normalized);
+        }
         if (Array.isArray(materials) && materials.length) {
-          materials.forEach((material) => {
+          materials.forEach((material, index) => {
             if (!material) return;
             const baseOpacity = material.userData?.baseOpacity ?? material.opacity ?? 0.45;
             const intensity = THREE.MathUtils.clamp(baseOpacity * (0.85 + wave * 0.45), 0.18, 0.95);
             material.opacity = intensity;
+            if (material.color?.isColor && baseColor && highlightColor) {
+              const tipBoost = index === materials.length - 1 ? Math.min(1, movementMix + 0.2) : movementMix;
+              tmpColorA.copy(baseColor).lerp(highlightColor, tipBoost);
+              material.color.copy(tmpColorA);
+            }
           });
         } else if (playerLocator.material) {
           const opacity = 0.35 + wave * 0.25;
           playerLocator.material.opacity = THREE.MathUtils.clamp(opacity, 0.2, 0.85);
+          if (playerLocator.material.color?.isColor && baseColor && highlightColor) {
+            tmpColorA.copy(baseColor).lerp(highlightColor, movementMix);
+            playerLocator.material.color.copy(tmpColorA);
+          }
         }
+        playerLocator.userData.lastMovementMix = movementMix;
       }
       ensureZombieMeshCount(state.zombies.length);
       ensureIronGolemMeshCount(state.ironGolems?.length ?? 0);
@@ -12010,6 +12329,7 @@
         inventorySortMode: 'default',
         tarOverlayLevel: 0,
         movementHintDismissed: false,
+        movementGlowHintShown: false,
         briefingAcknowledged: false,
         fallbackNoticeShown: false,
       },
@@ -13540,6 +13860,7 @@
       state.isRunning = true;
       if (state.ui) {
         state.ui.movementHintDismissed = false;
+        state.ui.movementGlowHintShown = false;
       }
       state.player.effects = {};
       state.victory = false;
