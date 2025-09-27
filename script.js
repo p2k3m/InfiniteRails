@@ -501,6 +501,16 @@
     const scoreboardListEl = document.getElementById('scoreboardList');
     const scoreboardStatusEl = document.getElementById('scoreboardStatus');
     const refreshScoresButton = document.getElementById('refreshScores');
+    const scorePanelEl = document.getElementById('scorePanel');
+    const scoreTotalEl = document.getElementById('scoreTotal');
+    const scoreRecipesEl = document.getElementById('scoreRecipes');
+    const scoreDimensionsEl = document.getElementById('scoreDimensions');
+    const playerHintEl = document.getElementById('playerHint');
+    const inventoryModal = document.getElementById('inventoryModal');
+    const closeInventoryButton = document.getElementById('closeInventory');
+    const inventoryGridEl = document.getElementById('inventoryGrid');
+    const inventorySortButton = document.getElementById('inventorySortButton');
+    const inventoryOverflowEl = document.getElementById('inventoryOverflow');
 
     function shouldStartSimpleMode() {
       if (typeof window === 'undefined') return false;
@@ -1066,10 +1076,6 @@
     const leaderboardTableContainer = document.getElementById('leaderboardTable');
     const leaderboardEmptyMessage = document.getElementById('leaderboardEmptyMessage');
     const leaderboardSortHeaders = Array.from(document.querySelectorAll('.leaderboard-sortable'));
-    const scorePanelEl = document.getElementById('scorePanel');
-    const scoreTotalEl = document.getElementById('scoreTotal');
-    const scoreRecipesEl = document.getElementById('scoreRecipes');
-    const scoreDimensionsEl = document.getElementById('scoreDimensions');
     const scoreState = {
       score: 0,
       recipes: new Set(),
@@ -1090,12 +1096,6 @@
     let dimensionOverlayState = { info: null, tasks: [] };
     let scoreFlipTimeout = null;
     let scoreOverlayInitialized = false;
-    const inventoryModal = document.getElementById('inventoryModal');
-    const closeInventoryButton = document.getElementById('closeInventory');
-    const inventoryGridEl = document.getElementById('inventoryGrid');
-    const inventorySortButton = document.getElementById('inventorySortButton');
-    const inventoryOverflowEl = document.getElementById('inventoryOverflow');
-
     const reduceMotionQuery =
       typeof window !== 'undefined' && window.matchMedia
         ? window.matchMedia('(prefers-reduced-motion: reduce)')
@@ -1480,7 +1480,6 @@
         markObjectiveComplete('gather-wood', { celebrate });
       }
     }
-    const playerHintEl = document.getElementById('playerHint');
     const drowningVignetteEl = document.getElementById('drowningVignette');
     const tarOverlayEl = document.getElementById('tarOverlay');
     const dimensionTransitionEl = document.getElementById('dimensionTransition');

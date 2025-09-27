@@ -531,6 +531,7 @@
       this.showBriefingOverlay();
       this.updateLocalScoreEntry('start');
       this.loadScoreboard();
+      this.exposeDebugInterface();
       this.renderFrame(performance.now());
     }
 
@@ -4136,6 +4137,48 @@
           this.currentDimensionIndex + 1
         }/${DIMENSION_THEME.length}</p>
       `;
+    }
+
+    exposeDebugInterface() {
+      if (typeof window === 'undefined') {
+        return;
+      }
+      const scope = window;
+      scope.__INFINITE_RAILS_ACTIVE_EXPERIENCE__ = this;
+      scope.__INFINITE_RAILS_DEBUG__ = {
+        experience: this,
+        getSnapshot: () => this.getDebugSnapshot(),
+      };
+      try {
+        scope.dispatchEvent(
+          new CustomEvent('infinite-rails:start', {
+            detail: {
+              mode: 'simple',
+              timestamp: Date.now(),
+            },
+          }),
+        );
+      } catch (error) {
+        console.debug('Debug event dispatch failed', error);
+      }
+    }
+
+    getDebugSnapshot() {
+      return {
+        started: this.started,
+        dimension: this.dimensionSettings?.name ?? null,
+        dimensionIndex: this.currentDimensionIndex,
+        voxelColumns: this.columns?.size ?? 0,
+        portalReady: Boolean(this.portalReady),
+        portalActivated: Boolean(this.portalActivated),
+        zombieCount: Array.isArray(this.zombies) ? this.zombies.length : 0,
+        golemCount: Array.isArray(this.golems) ? this.golems.length : 0,
+        score: Math.round(this.score ?? 0),
+        hotbarSlots: Array.isArray(this.hotbar) ? this.hotbar.length : 0,
+        sceneChildren: this.scene?.children?.length ?? 0,
+        hudActive:
+          typeof document !== 'undefined' ? document.body.classList.contains('game-active') : false,
+      };
     }
   }
 
