@@ -33,6 +33,10 @@ To keep progress visible, the actionable checklist extracted from that brief now
 [`docs/enhancement-roadmap.md`](docs/enhancement-roadmap.md). Update that roadmap as features land so the team can quickly gauge
 momentum toward the full experience described in the brief.
 
+If you need a quick status snapshot, [`docs/spec-compliance.md`](docs/spec-compliance.md) summarises how each requirement in the
+brief maps to shipped code (with direct citations), while [`docs/feature-verification.md`](docs/feature-verification.md) dives
+deeper into the implementation details and validation steps.
+
 If you work with coding agents (for example GitHub Copilot or Code Interpreter) the verbatim prompts from the brief are archived in [`docs/coding-agent-prompts.md`](docs/coding-agent-prompts.md). Reusing those prompts keeps automated contributions aligned with the currently shipped sandbox systems.
 
 ## Simplified sandbox mode
