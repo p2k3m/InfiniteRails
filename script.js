@@ -3574,7 +3574,9 @@
           if (tile?.type === 'grass') {
             color = HOVER_OUTLINE_COLORS.placeable;
           }
-          tileHighlightHelper.material.color.set(color);
+          if (tileHighlightHelper.material?.color) {
+            tileHighlightHelper.material.color.set(color);
+          }
           tileHighlightHelper.visible = true;
           if (tileHighlightHelper.geometry?.attributes?.position) {
             tileHighlightHelper.geometry.attributes.position.needsUpdate = true;
@@ -3589,7 +3591,9 @@
           tmpRaycastBox.setFromObject(entityTarget.object);
           tmpRaycastBox.expandByScalar(0.05);
           enemyHighlightHelper.box.copy(tmpRaycastBox);
-          enemyHighlightHelper.material.color.set(HOVER_OUTLINE_COLORS.enemy);
+          if (enemyHighlightHelper.material?.color) {
+            enemyHighlightHelper.material.color.set(HOVER_OUTLINE_COLORS.enemy);
+          }
           enemyHighlightHelper.visible = true;
           if (enemyHighlightHelper.geometry?.attributes?.position) {
             enemyHighlightHelper.geometry.attributes.position.needsUpdate = true;
