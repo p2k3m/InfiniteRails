@@ -2605,6 +2605,7 @@
     let virtualJoystickReady = false;
 
     let renderer;
+    const renderClock = new THREE.Clock();
     let scene;
     let camera;
     let worldGroup;
@@ -4700,6 +4701,10 @@
           );
           voxelIslandAssets.instancingFallbackNotified = true;
         }
+      }
+      voxelIslandAssets.tileCount = index;
+      if (typeof console !== 'undefined') {
+        console.log(`World generated: ${index} voxels`);
       }
     }
 
@@ -10835,6 +10840,10 @@
       entityGroup.add(playerMesh);
       attachPlayerKeyLight(playerMesh);
 
+      if (typeof console !== 'undefined') {
+        console.log('Steve visible in scene');
+      }
+
       const hairNode = playerMesh.getObjectByName('Hair') ?? null;
       const fringeNode = playerMesh.getObjectByName('Fringe') ?? null;
 
@@ -14485,6 +14494,9 @@
         const cycleRatio = THREE.MathUtils.clamp(DEFAULT_DAY_START_RATIO, 0, 0.99);
         state.elapsed = state.dayLength * cycleRatio;
       }
+      renderClock.stop();
+      renderClock.start();
+      renderClock.getDelta();
       teardownPreviewScene();
       resetRendererUniformCaches();
       pendingUniformSanitizations = Math.max(pendingUniformSanitizations, 2);
@@ -14674,10 +14686,8 @@
     const TARGET_FRAME_TIME = 1 / 60;
     let frameAccumulator = 0;
 
-    function loop(timestamp) {
-      if (!state.prevTimestamp) state.prevTimestamp = timestamp;
-      const delta = (timestamp - state.prevTimestamp) / 1000;
-      state.prevTimestamp = timestamp;
+    function loop() {
+      const delta = Math.min(renderClock.getDelta(), 0.12);
       frameAccumulator += delta;
       frameAccumulator = Math.min(frameAccumulator, TARGET_FRAME_TIME * 5);
       while (frameAccumulator >= TARGET_FRAME_TIME) {
