@@ -539,6 +539,9 @@
           scoreboardListEl,
           scoreboardStatusEl,
           refreshScoresButton,
+          mobileControls,
+          virtualJoystick: virtualJoystickEl,
+          virtualJoystickThumb,
         },
       });
       const launchSimple = () => {
