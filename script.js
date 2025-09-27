@@ -7190,9 +7190,9 @@
           }
 
           if (!Object.prototype.hasOwnProperty.call(entry, 'value')) {
-              if (typeof entry.setValue === 'function') {
-                const repair = repairRendererUniformEntry(container, key, entry);
-                if (repair.removed) {
+            if (typeof entry.setValue === 'function') {
+              const repair = repairRendererUniformEntry(container, key, entry);
+              if (repair.removed) {
                 const { entry: stabilised } = stabiliseRendererUniformEntry(entry, key);
                 if (Array.isArray(container)) {
                   const index = typeof key === 'number' ? key : Number.parseInt(`${key}`, 10);
@@ -7206,7 +7206,25 @@
                 result.requiresRendererReset = true;
                 markReset();
                 return result;
-              } else if (repair.updated) {
+              }
+
+              if (hasInvalidUniformEntry(entry)) {
+                const { entry: stabilised } = stabiliseRendererUniformEntry(entry, key);
+                if (Array.isArray(container)) {
+                  const index = typeof key === 'number' ? key : Number.parseInt(`${key}`, 10);
+                  if (Number.isInteger(index)) {
+                    container[index] = stabilised;
+                  }
+                } else {
+                  container[key] = stabilised;
+                }
+                result.updated = true;
+                result.requiresRendererReset = true;
+                markReset();
+                return result;
+              }
+
+              if (repair.updated) {
                 result.updated = true;
               }
               if (repair.requiresRendererReset) {
