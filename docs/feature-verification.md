@@ -29,4 +29,9 @@ This document maps the requested experience requirements to concrete implementat
 - Delta-based animation pacing, chunk-level frustum culling, and cached GLTF assets keep the experience close to the 60 FPS target.【F:simple-experience.js†L1923-L2051】【F:simple-experience.js†L2656-L2799】
 - Ambient hints, HUD tooltips, and accessibility-friendly overlays guide the user through onboarding and advanced mechanics.【F:index.html†L66-L204】【F:index.html†L205-L410】
 
+## Audio, Mobile, and Immersion Polish
+- Embedded Howler-powered samples provide mining crunches, portal swells, and victory cues while exposing volume controls for the settings modal.【F:simple-experience.js†L1284-L1339】【F:script.js†L2137-L2269】
+- Touch-first virtual joystick bindings, long-press mining gestures, and portal shortcuts keep the HUD fully playable on phones and tablets.【F:simple-experience.js†L1343-L1520】【F:index.html†L1015-L1024】
+- GLTF preloading caches the arm, Steve, zombie, and golem rigs so new entities materialise instantly when night falls or portals activate.【F:simple-experience.js†L1672-L1749】
+
 These references confirm the requested functionality is present and integrated across rendering, gameplay, UI, and backend systems.
