@@ -4,7 +4,10 @@ This document captures the comprehensive feature and polish requests that
 accompanied the "Comprehensive Analysis and Enhancement Specifications for
 Infinite Rails: Portals of Dimension" brief. The checklist is grouped by the
 major systems discussed in the brief so that each improvement can be tracked and
-implemented iteratively without losing sight of the overall vision.
+implemented iteratively without losing sight of the overall vision. For teams
+using automated coding assistants, the verbatim task prompts from the brief are
+archived in [`coding-agent-prompts.md`](./coding-agent-prompts.md) so they can be
+shared directly with your tooling when a checklist item needs to be revisited.
 
 ## Rendering & World Simulation
 
