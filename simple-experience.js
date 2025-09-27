@@ -388,6 +388,16 @@
       this.portalFrameRequiredCount = PORTAL_BLOCK_REQUIREMENT;
       this.portalFrameInteriorValid = false;
       this.portalHiddenInterior = [];
+      this.terrainChunkSize = 8;
+      this.terrainChunkGroups = [];
+      this.terrainChunkMap = new Map();
+      this.dirtyTerrainChunks = new Set();
+      this.chunkFrustum = new THREE.Frustum();
+      this.chunkFrustumMatrix = new THREE.Matrix4();
+      this.terrainCullingAccumulator = 0;
+      this.terrainCullingInterval = 0.08;
+      this.debugChunkCulling = this.detectChunkDebugFlag();
+      this.lastCullingDebugLog = 0;
       this.zombies = [];
       this.lastZombieSpawn = 0;
       this.zombieIdCounter = 0;
@@ -1895,7 +1905,14 @@
       this.columns.clear();
       this.heightMap = Array.from({ length: WORLD_SIZE }, () => Array(WORLD_SIZE).fill(0));
       this.initialHeightMap = Array.from({ length: WORLD_SIZE }, () => Array(WORLD_SIZE).fill(0));
-      this.terrainGroup.clear();
+      const existingChunks = Array.from(this.terrainGroup.children);
+      existingChunks.forEach((child) => {
+        this.terrainGroup.remove(child);
+        disposeObject3D(child);
+      });
+      this.terrainChunkGroups = [];
+      this.terrainChunkMap.clear();
+      this.dirtyTerrainChunks.clear();
       const half = WORLD_SIZE / 2;
       let voxelCount = 0;
       for (let gx = 0; gx < WORLD_SIZE; gx += 1) {
@@ -1939,19 +1956,24 @@
               gx,
               gz,
               blockType,
+              chunkKey: this.getTerrainChunkKey(gx, gz),
             };
             mesh.matrixAutoUpdate = false;
             mesh.updateMatrix();
-            this.terrainGroup.add(mesh);
+            const chunk = this.ensureTerrainChunk(mesh.userData.chunkKey);
+            chunk.add(mesh);
             column.push(mesh);
             voxelCount += 1;
           }
           this.columns.set(columnKey, column);
         }
       }
+      this.terrainChunkGroups.forEach((chunk) => {
+        this.recalculateTerrainChunkBounds(chunk);
+      });
+      this.terrainCullingAccumulator = this.terrainCullingInterval;
       if (typeof console !== 'undefined') {
-        const total = WORLD_SIZE * WORLD_SIZE;
-        console.log(`World generated: ${total} voxels`);
+        console.log(`World generated: ${voxelCount} voxels`);
       }
       this.portalAnchorGrid = this.computePortalAnchorGrid();
       const anchorWorldX = (this.portalAnchorGrid.x - WORLD_SIZE / 2) * BLOCK_SIZE;
@@ -1959,6 +1981,108 @@
       if (this.portalAnchor?.set) {
         this.portalAnchor.set(anchorWorldX, 0, anchorWorldZ);
       }
+    }
+
+    detectChunkDebugFlag() {
+      if (typeof window === 'undefined') {
+        return false;
+      }
+      try {
+        const params = new URLSearchParams(window.location.search || '');
+        return params.get('debugChunks') === '1';
+      } catch (error) {
+        console.debug('Unable to parse chunk debug flag.', error);
+        return false;
+      }
+    }
+
+    getTerrainChunkKey(gx, gz) {
+      const size = this.terrainChunkSize;
+      const chunkX = Math.floor(gx / size);
+      const chunkZ = Math.floor(gz / size);
+      return `${chunkX}|${chunkZ}`;
+    }
+
+    ensureTerrainChunk(chunkKey) {
+      let chunk = this.terrainChunkMap.get(chunkKey);
+      if (chunk) {
+        return chunk;
+      }
+      const THREE = this.THREE;
+      const [chunkXRaw, chunkZRaw] = chunkKey.split('|');
+      const chunkX = Number.parseInt(chunkXRaw ?? '0', 10) || 0;
+      const chunkZ = Number.parseInt(chunkZRaw ?? '0', 10) || 0;
+      chunk = new THREE.Group();
+      chunk.name = `TerrainChunk-${chunkX}-${chunkZ}`;
+      chunk.userData = {
+        chunkX,
+        chunkZ,
+        minY: 0,
+        maxY: BLOCK_SIZE,
+        boundingSphere: new THREE.Sphere(new THREE.Vector3(), BLOCK_SIZE),
+      };
+      this.terrainChunkMap.set(chunkKey, chunk);
+      this.terrainChunkGroups.push(chunk);
+      this.terrainGroup.add(chunk);
+      return chunk;
+    }
+
+    recalculateTerrainChunkBounds(chunk) {
+      if (!chunk) return;
+      const data = chunk.userData || {};
+      let minY = Infinity;
+      let maxY = -Infinity;
+      for (const child of chunk.children) {
+        if (!child?.position) continue;
+        const y = child.position.y;
+        const childMin = y - BLOCK_SIZE / 2;
+        const childMax = y + BLOCK_SIZE / 2;
+        if (childMin < minY) minY = childMin;
+        if (childMax > maxY) maxY = childMax;
+      }
+      if (!Number.isFinite(minY)) {
+        minY = 0;
+        maxY = BLOCK_SIZE;
+        chunk.visible = false;
+      } else {
+        chunk.visible = true;
+      }
+      data.minY = minY;
+      data.maxY = maxY;
+      const size = this.terrainChunkSize;
+      const halfWorld = WORLD_SIZE / 2;
+      const startX = data.chunkX * size;
+      const startZ = data.chunkZ * size;
+      const centerOffsetX = startX - halfWorld + (size - 1) / 2;
+      const centerOffsetZ = startZ - halfWorld + (size - 1) / 2;
+      const centerX = centerOffsetX * BLOCK_SIZE;
+      const centerZ = centerOffsetZ * BLOCK_SIZE;
+      const centerY = (minY + maxY) / 2;
+      const horizontalExtent = (size * BLOCK_SIZE) / 2;
+      const verticalExtent = Math.max(BLOCK_SIZE * 0.5, (maxY - minY) / 2 + BLOCK_SIZE * 0.5);
+      const radius = Math.sqrt(horizontalExtent * horizontalExtent * 2 + verticalExtent * verticalExtent);
+      if (!data.boundingSphere) {
+        data.boundingSphere = new this.THREE.Sphere(new this.THREE.Vector3(centerX, centerY, centerZ), radius);
+      } else {
+        data.boundingSphere.center.set(centerX, centerY, centerZ);
+        data.boundingSphere.radius = radius;
+      }
+      chunk.userData = data;
+    }
+
+    markTerrainChunkDirty(chunkKey) {
+      if (!chunkKey || !this.terrainChunkMap.has(chunkKey)) return;
+      this.dirtyTerrainChunks.add(chunkKey);
+    }
+
+    refreshDirtyTerrainChunks() {
+      if (!this.dirtyTerrainChunks.size) return;
+      for (const key of this.dirtyTerrainChunks) {
+        const chunk = this.terrainChunkMap.get(key);
+        if (!chunk) continue;
+        this.recalculateTerrainChunkBounds(chunk);
+      }
+      this.dirtyTerrainChunks.clear();
     }
 
     buildRails() {
@@ -2463,6 +2587,7 @@
       this.elapsed += delta;
       this.updateDayNightCycle();
       this.updateMovement(delta);
+      this.updateTerrainCulling(delta);
       this.updateZombies(delta);
       this.updateGolems(delta);
       this.updatePortalAnimation(delta);
@@ -2575,6 +2700,43 @@
       ) {
         this.flushScoreSync(true);
         this.scoreSyncHeartbeat = 0;
+      }
+    }
+
+    updateTerrainCulling(delta) {
+      if (!this.camera || !this.terrainChunkGroups.length) {
+        return;
+      }
+      this.terrainCullingAccumulator += delta;
+      if (this.terrainCullingAccumulator < this.terrainCullingInterval) {
+        return;
+      }
+      this.terrainCullingAccumulator = 0;
+      this.refreshDirtyTerrainChunks();
+      this.camera.updateMatrixWorld();
+      this.chunkFrustumMatrix.multiplyMatrices(
+        this.camera.projectionMatrix,
+        this.camera.matrixWorldInverse,
+      );
+      this.chunkFrustum.setFromProjectionMatrix(this.chunkFrustumMatrix);
+      for (const chunk of this.terrainChunkGroups) {
+        const sphere = chunk.userData?.boundingSphere;
+        if (!sphere) {
+          chunk.visible = true;
+          continue;
+        }
+        chunk.visible = this.chunkFrustum.intersectsSphere(sphere);
+      }
+      if (this.debugChunkCulling) {
+        const visibleCount = this.terrainChunkGroups.reduce(
+          (total, chunk) => total + (chunk.visible ? 1 : 0),
+          0,
+        );
+        const now = performance.now();
+        if (!this.lastCullingDebugLog || now - this.lastCullingDebugLog > 500) {
+          console.debug(`[Chunks] visible ${visibleCount}/${this.terrainChunkGroups.length}`);
+          this.lastCullingDebugLog = now;
+        }
       }
     }
 
@@ -2865,7 +3027,13 @@
         return;
       }
       column.pop();
-      this.terrainGroup.remove(mesh);
+      if (mesh.parent) {
+        mesh.parent.remove(mesh);
+      } else {
+        this.terrainGroup.remove(mesh);
+      }
+      const removedChunkKey = mesh.userData?.chunkKey || this.getTerrainChunkKey(mesh.userData.gx, mesh.userData.gz);
+      this.markTerrainChunkDirty(removedChunkKey);
       this.blocksMined += 1;
       const blockType = mesh.userData.blockType || 'stone';
       this.score += blockType === 'stone' ? 1 : 0.75;
@@ -2917,14 +3085,17 @@
           prevTop.userData.blockType = 'dirt';
         }
       }
+      const chunkKey = this.getTerrainChunkKey(gx, gz);
+      const chunk = this.ensureTerrainChunk(chunkKey);
       const newMesh = new this.THREE.Mesh(this.blockGeometry, material);
       newMesh.castShadow = true;
       newMesh.receiveShadow = true;
       newMesh.position.set(worldX, newLevel * BLOCK_SIZE + BLOCK_SIZE / 2, worldZ);
       newMesh.matrixAutoUpdate = false;
       newMesh.updateMatrix();
-      newMesh.userData = { columnKey, level: newLevel, gx, gz, blockType };
-      this.terrainGroup.add(newMesh);
+      newMesh.userData = { columnKey, level: newLevel, gx, gz, blockType, chunkKey };
+      chunk.add(newMesh);
+      this.markTerrainChunkDirty(chunkKey);
       column.push(newMesh);
       this.columns.set(columnKey, column);
       this.heightMap[gx][gz] = column.length;
@@ -2941,7 +3112,7 @@
       const origin = this.getCameraWorldPosition(this.tmpVector3);
       const direction = this.getCameraWorldDirection(this.tmpVector);
       this.raycaster.set(origin, direction.normalize());
-      return this.raycaster.intersectObjects(this.terrainGroup.children, false);
+      return this.raycaster.intersectObjects(this.terrainGroup.children, true);
     }
 
     getMaterialForBlock(blockType) {

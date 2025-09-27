@@ -43,6 +43,7 @@ Use it as a quick reference when planning manual or automated regression passes.
 | Requirement ID | Validation Method | Success Criteria | Test Scenarios |
 | --- | --- | --- | --- |
 | PERF-01 | Performance audits via Lighthouse and stress tests (100 zombies); Puppeteer + DevTools performance trace recorded nightly. | • Average frame rate stays above 60 FPS (latest run 72 FPS average).<br>• Load time remains under five seconds (latest run 4.3s DOMContentLoaded).<br>• Memory footprint stays below 500 MB after 30 minutes. | • Scenario: Enter a high-load dimension and confirm there are no performance drops. |
+| PERF-02 | Console debug logging (`?debugChunks=1`) verifying terrain chunk visibility toggles in sync with the camera frustum. | • At least 40% of distant terrain chunks report culled state while stationary.<br>• Chunks reappear within 1 frame when moving back into view.<br>• Console log `World generated` matches voxel count for the seed. | • Scenario: Stand at spawn, rotate 360° — observe chunk culling debug output without stutter. |
 
 ## Comprehensive validation
 
