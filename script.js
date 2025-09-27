@@ -6985,6 +6985,28 @@
                   sanitized = true;
                 }
 
+                if (
+                  programInfo &&
+                  programInfo !== rendererUniforms &&
+                  typeof programInfo === 'object'
+                ) {
+                  const purgedProgramUniforms = purgeRendererUniformCache(programInfo);
+                  if (purgedProgramUniforms) {
+                    sanitized = true;
+                    rendererReset = true;
+                  }
+
+                  const programUniformSanitization = sanitizeUniformContainer(programInfo);
+                  if (programUniformSanitization.updated) {
+                    sanitized = true;
+                    rendererReset = true;
+                  }
+                  if (programUniformSanitization.requiresRendererReset) {
+                    rendererReset = true;
+                    sanitized = true;
+                  }
+                }
+
                 const ensureRendererManagedUniform = (uniformId) => {
                   if (uniformId === null || typeof uniformId === 'undefined') {
                     return;
