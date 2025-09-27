@@ -5016,6 +5016,73 @@
         });
         let isValid = hasValidPortalUniformStructure(material.uniforms);
 
+        const safeUniformContainer = (() => {
+          const uniforms = guardUniformContainer(material.uniforms);
+          if (uniforms && material.uniforms !== uniforms) {
+            try {
+              material.uniforms = uniforms;
+            } catch (assignError) {
+              // Ignore assignment failures – we'll fall back to the existing reference.
+            }
+          }
+          return uniforms || material.uniforms;
+        })();
+
+        const enforcePortalUniformPresence = () => {
+          const uniforms = safeUniformContainer;
+          if (!uniforms || typeof uniforms !== 'object') {
+            return false;
+          }
+
+          let updated = false;
+          const defaults = {
+            uTime: () => 0,
+            uActivation: () => (isActive ? 1 : 0.18),
+            uOpacity: () => (isActive ? 0.85 : 0.55),
+            uColor: () =>
+              typeof THREE?.Color === 'function'
+                ? new THREE.Color(accentColor ?? '#7b6bff')
+                : accentColor ?? '#7b6bff',
+          };
+
+          PORTAL_UNIFORM_KEYS.forEach((key) => {
+            const ensureValue = defaults[key];
+            if (!ensureValue) {
+              return;
+            }
+            const entry = uniforms[key];
+            if (!entry || typeof entry !== 'object') {
+              uniforms[key] = { value: ensureValue() };
+              updated = true;
+              return;
+            }
+            if (!Object.prototype.hasOwnProperty.call(entry, 'value')) {
+              if (!assignPortalUniformValue(entry, ensureValue())) {
+                uniforms[key] = { value: ensureValue() };
+              }
+              updated = true;
+              return;
+            }
+            if (typeof entry.value === 'undefined') {
+              if (!assignPortalUniformValue(entry, ensureValue())) {
+                entry.value = ensureValue();
+              }
+              updated = true;
+            }
+          });
+
+          if (updated) {
+            if ('uniformsNeedUpdate' in material) {
+              material.uniformsNeedUpdate = true;
+            }
+            if ('needsUpdate' in material) {
+              material.needsUpdate = true;
+            }
+          }
+
+          return updated;
+        };
+
         if (!isValid && shouldInspectPortalUniforms) {
           const fallbackUniforms = guardUniformContainer({
             uTime: { value: 0 },
@@ -5046,6 +5113,11 @@
               uniformAssignError
             );
           }
+        }
+
+        if (enforcePortalUniformPresence()) {
+          ensured = true;
+          isValid = hasValidPortalUniformStructure(material.uniforms);
         }
 
         if (isValid && (!wasValid || modified)) {
