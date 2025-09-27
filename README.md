@@ -33,12 +33,14 @@ To keep progress visible, the actionable checklist extracted from that brief now
 [`docs/enhancement-roadmap.md`](docs/enhancement-roadmap.md). Update that roadmap as features land so the team can quickly gauge
 momentum toward the full experience described in the brief.
 
+If you work with coding agents (for example GitHub Copilot or Code Interpreter) the verbatim prompts from the brief are archived in [`docs/coding-agent-prompts.md`](docs/coding-agent-prompts.md). Reusing those prompts keeps automated contributions aligned with the currently shipped sandbox systems.
+
 ## Simplified sandbox mode
 
 The legacy renderer and gameplay stack are still under heavy construction. To ensure explorers always land in a responsive,
 playable space, the page now boots into a lightweight **sandbox mode** by default. This mode:
 
-- draws a 48×48 voxel island with soft day/night lighting at 60 FPS, complete with a procedurally curved rail spine,
+- draws a 64×64 voxel island with soft day/night lighting at 60 FPS, complete with a procedurally curved rail spine,
 - locks the camera to a first-person perspective with mouse look + `WASD` movement and jump physics that adapt to each realm,
 - supports mining (left-click) and block placement (right-click) with realtime HUD updates and portal progress feedback,
 - rewards completing a 12-block frame by spawning an animated portal that advances the dimension palette and physics, and
