@@ -1,5 +1,5 @@
 (function () {
-  const WORLD_SIZE = 48;
+  const WORLD_SIZE = 64;
   const BLOCK_SIZE = 1;
   const PLAYER_EYE_HEIGHT = 1.7;
   const PLAYER_BASE_SPEED = 4.5;
@@ -148,41 +148,8 @@
       this.heightMap = Array.from({ length: WORLD_SIZE }, () => Array(WORLD_SIZE).fill(0));
       this.blockGeometry = new THREE.BoxGeometry(BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE);
       this.railGeometry = new THREE.BoxGeometry(BLOCK_SIZE * 0.9, BLOCK_SIZE * 0.15, BLOCK_SIZE * 1.2);
-      this.materials = {
-        grass: new THREE.MeshStandardMaterial({ color: new THREE.Color('#69c368'), roughness: 0.7, metalness: 0.05 }),
-        dirt: new THREE.MeshStandardMaterial({ color: new THREE.Color('#b07a42'), roughness: 0.95, metalness: 0.02 }),
-        stone: new THREE.MeshStandardMaterial({ color: new THREE.Color('#9d9d9d'), roughness: 0.8, metalness: 0.18 }),
-        rails: new THREE.MeshStandardMaterial({ color: new THREE.Color('#c9a14d'), roughness: 0.35, metalness: 0.65 }),
-        zombie: new THREE.MeshStandardMaterial({ color: new THREE.Color('#2e7d32'), roughness: 0.8, metalness: 0.1 }),
-        portal: new THREE.ShaderMaterial({
-          transparent: true,
-          depthWrite: false,
-          uniforms: {
-            uTime: { value: 0 },
-            uColorA: { value: new THREE.Color('#7f5af0') },
-            uColorB: { value: new THREE.Color('#2cb67d') },
-          },
-          vertexShader: `
-            varying vec2 vUv;
-            void main() {
-              vUv = uv;
-              gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-            }
-          `,
-          fragmentShader: `
-            uniform float uTime;
-            uniform vec3 uColorA;
-            uniform vec3 uColorB;
-            varying vec2 vUv;
-            void main() {
-              float swirl = sin((vUv.x + vUv.y + uTime * 0.7) * 6.2831) * 0.5 + 0.5;
-              float vignette = smoothstep(0.95, 0.35, distance(vUv, vec2(0.5)));
-              vec3 color = mix(uColorA, uColorB, swirl) * vignette;
-              gl_FragColor = vec4(color, vignette);
-            }
-          `,
-        }),
-      };
+      this.textureCache = new Map();
+      this.materials = this.createMaterials();
       this.keys = new Set();
       this.velocity = new THREE.Vector3();
       this.tmpForward = new THREE.Vector3();
@@ -232,6 +199,8 @@
       this.daylightIntensity = 1;
       this.raycaster = new THREE.Raycaster();
       this.animationFrame = null;
+      this.briefingAutoHideTimer = null;
+      this.briefingFadeTimer = null;
       this.started = false;
       this.prevTime = null;
       this.onPointerLockChange = this.handlePointerLockChange.bind(this);
@@ -242,6 +211,7 @@
       this.onResize = this.handleResize.bind(this);
       this.onMouseDown = this.handleMouseDown.bind(this);
       this.preventContextMenu = (event) => event.preventDefault();
+      this.onDismissBriefing = this.handleBriefingDismiss.bind(this);
     }
 
     start() {
@@ -257,6 +227,7 @@
       this.bindEvents();
       this.updateHud();
       this.hideIntro();
+      this.showBriefingOverlay();
       this.updateLocalScoreEntry('start');
       this.loadScoreboard();
       this.renderFrame(performance.now());
@@ -279,6 +250,53 @@
         document.body.classList.add('game-active');
       }
       this.canvas.focus({ preventScroll: true });
+    }
+
+    showBriefingOverlay() {
+      const briefing = this.ui?.gameBriefing;
+      if (!briefing) return;
+      const timerHost = typeof window !== 'undefined' ? window : globalThis;
+      timerHost.clearTimeout(this.briefingAutoHideTimer);
+      timerHost.clearTimeout(this.briefingFadeTimer);
+      briefing.hidden = false;
+      briefing.setAttribute('aria-hidden', 'false');
+      requestAnimationFrame(() => {
+        briefing.classList.add('is-visible');
+      });
+      const dismissButton = this.ui?.dismissBriefingButton;
+      if (dismissButton) {
+        dismissButton.disabled = false;
+        dismissButton.addEventListener('click', this.onDismissBriefing, { once: true });
+      }
+      this.briefingAutoHideTimer = timerHost.setTimeout(() => {
+        this.hideBriefingOverlay();
+      }, 5000);
+    }
+
+    handleBriefingDismiss(event) {
+      if (event?.preventDefault) {
+        event.preventDefault();
+      }
+      this.hideBriefingOverlay(true);
+    }
+
+    hideBriefingOverlay(force = false) {
+      const briefing = this.ui?.gameBriefing;
+      if (!briefing) return;
+      const timerHost = typeof window !== 'undefined' ? window : globalThis;
+      timerHost.clearTimeout(this.briefingAutoHideTimer);
+      if (!briefing.classList.contains('is-visible')) {
+        briefing.hidden = true;
+        briefing.setAttribute('aria-hidden', 'true');
+        return;
+      }
+      briefing.classList.remove('is-visible');
+      briefing.setAttribute('aria-hidden', 'true');
+      const duration = force ? 120 : 280;
+      this.briefingFadeTimer = timerHost.setTimeout(() => {
+        briefing.hidden = true;
+        this.canvas.focus({ preventScroll: true });
+      }, duration);
     }
 
     initializeScoreboardUi() {
@@ -556,6 +574,7 @@
       this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
       this.renderer.setPixelRatio(window.devicePixelRatio ?? 1);
       this.renderer.setSize(width, height, false);
+      this.applyTextureAnisotropy();
 
       this.hemiLight = new THREE.HemisphereLight(0xbddcff, 0x34502d, 0.9);
       this.scene.add(this.hemiLight);
@@ -585,6 +604,134 @@
       this.scene.add(this.portalGroup);
       this.scene.add(this.zombieGroup);
       this.createFirstPersonHands();
+    }
+
+    createMaterials() {
+      const THREE = this.THREE;
+      const grassTexture = this.createVoxelTexture('grass', {
+        base: '#69c368',
+        highlight: '#92dd83',
+        shadow: '#3f8f3a',
+        accent: '#7dcf6f',
+      });
+      const dirtTexture = this.createVoxelTexture('dirt', {
+        base: '#a66a33',
+        highlight: '#c28145',
+        shadow: '#7b4a26',
+        accent: '#b5773a',
+      });
+      const stoneTexture = this.createVoxelTexture('stone', {
+        base: '#8f8f8f',
+        highlight: '#b8babd',
+        shadow: '#5b5f63',
+        accent: '#a5a5a5',
+      });
+      return {
+        grass: new THREE.MeshStandardMaterial({
+          map: grassTexture,
+          color: new THREE.Color('#ffffff'),
+          roughness: 0.72,
+          metalness: 0.04,
+        }),
+        dirt: new THREE.MeshStandardMaterial({
+          map: dirtTexture,
+          color: new THREE.Color('#ffffff'),
+          roughness: 0.92,
+          metalness: 0.03,
+        }),
+        stone: new THREE.MeshStandardMaterial({
+          map: stoneTexture,
+          color: new THREE.Color('#ffffff'),
+          roughness: 0.82,
+          metalness: 0.16,
+        }),
+        rails: new THREE.MeshStandardMaterial({
+          color: new THREE.Color('#c9a14d'),
+          roughness: 0.35,
+          metalness: 0.65,
+        }),
+        zombie: new THREE.MeshStandardMaterial({
+          color: new THREE.Color('#2e7d32'),
+          roughness: 0.8,
+          metalness: 0.1,
+        }),
+        portal: new THREE.ShaderMaterial({
+          transparent: true,
+          depthWrite: false,
+          uniforms: {
+            uTime: { value: 0 },
+            uColorA: { value: new THREE.Color('#7f5af0') },
+            uColorB: { value: new THREE.Color('#2cb67d') },
+          },
+          vertexShader: `
+            varying vec2 vUv;
+            void main() {
+              vUv = uv;
+              gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+            }
+          `,
+          fragmentShader: `
+            uniform float uTime;
+            uniform vec3 uColorA;
+            uniform vec3 uColorB;
+            varying vec2 vUv;
+            void main() {
+              float swirl = sin((vUv.x + vUv.y + uTime * 0.7) * 6.2831) * 0.5 + 0.5;
+              float vignette = smoothstep(0.95, 0.35, distance(vUv, vec2(0.5)));
+              vec3 color = mix(uColorA, uColorB, swirl) * vignette;
+              gl_FragColor = vec4(color, vignette);
+            }
+          `,
+        }),
+      };
+    }
+
+    createVoxelTexture(key, palette) {
+      const cached = this.textureCache.get(key);
+      if (cached) {
+        return cached;
+      }
+      const THREE = this.THREE;
+      const size = 32;
+      const canvas = document.createElement('canvas');
+      canvas.width = size;
+      canvas.height = size;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        const fallback = new THREE.Texture();
+        this.textureCache.set(key, fallback);
+        return fallback;
+      }
+      const colors = [palette.base, palette.highlight, palette.shadow, palette.accent].filter(Boolean);
+      for (let y = 0; y < size; y += 1) {
+        for (let x = 0; x < size; x += 1) {
+          const noise = Math.sin(x * 12.3 + y * 7.1) * 43758.5453;
+          const index = Math.floor(Math.abs(noise) * colors.length) % colors.length;
+          ctx.fillStyle = colors[index] ?? palette.base;
+          ctx.fillRect(x, y, 1, 1);
+        }
+      }
+      const texture = new THREE.CanvasTexture(canvas);
+      texture.colorSpace = THREE.SRGBColorSpace;
+      texture.anisotropy = 1;
+      texture.magFilter = THREE.NearestFilter;
+      texture.minFilter = THREE.NearestFilter;
+      texture.wrapS = THREE.RepeatWrapping;
+      texture.wrapT = THREE.RepeatWrapping;
+      texture.needsUpdate = true;
+      this.textureCache.set(key, texture);
+      return texture;
+    }
+
+    applyTextureAnisotropy() {
+      if (!this.renderer) return;
+      const anisotropy = this.renderer.capabilities?.getMaxAnisotropy?.() ?? 1;
+      Object.values(this.materials).forEach((material) => {
+        if (material?.map) {
+          material.map.anisotropy = anisotropy;
+          material.map.needsUpdate = true;
+        }
+      });
     }
 
     createFirstPersonHands() {
@@ -689,6 +836,7 @@
       this.heightMap = Array.from({ length: WORLD_SIZE }, () => Array(WORLD_SIZE).fill(0));
       this.terrainGroup.clear();
       const half = WORLD_SIZE / 2;
+      let voxelCount = 0;
       for (let gx = 0; gx < WORLD_SIZE; gx += 1) {
         for (let gz = 0; gz < WORLD_SIZE; gz += 1) {
           const offsetX = gx - half;
@@ -727,12 +875,13 @@
             mesh.updateMatrix();
             this.terrainGroup.add(mesh);
             column.push(mesh);
+            voxelCount += 1;
           }
           this.columns.set(columnKey, column);
         }
       }
       if (typeof console !== 'undefined') {
-        console.log(`World generated: ${this.terrainGroup.children.length} voxels`);
+        console.log(`World generated: ${WORLD_SIZE ** 2} columns, ${voxelCount} voxels`);
       }
     }
 
