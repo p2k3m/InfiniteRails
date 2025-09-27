@@ -2273,6 +2273,10 @@
     const DAY_NIGHT_CYCLE_SECONDS = 20 * 60;
     const DAY_PORTION = 0.7;
     const NIGHT_PORTION = 1 - DAY_PORTION;
+    const DEFAULT_DAY_START_RATIO = Math.min(
+      Math.max(DAY_PORTION * 0.5, 0),
+      Math.max(Math.min(DAY_PORTION - 0.05, 0.95), 0.05)
+    );
     const ZOMBIES_PER_CHUNK = 3;
     const ZOMBIE_CHUNK_SIZE = 16;
     const ZOMBIE_SPAWN_INTERVAL = 10;
@@ -13264,6 +13268,11 @@
         progressSnapshot?.dimensions?.current && DIMENSIONS[progressSnapshot.dimensions.current]
           ? progressSnapshot.dimensions.current
           : 'origin';
+      const startingWithRestoredProgress = Boolean(progressSnapshot);
+      if (!startingWithRestoredProgress) {
+        const cycleRatio = THREE.MathUtils.clamp(DEFAULT_DAY_START_RATIO, 0, 0.99);
+        state.elapsed = state.dayLength * cycleRatio;
+      }
       teardownPreviewScene();
       resetRendererUniformCaches();
       pendingUniformSanitizations = Math.max(pendingUniformSanitizations, 2);
@@ -13310,6 +13319,11 @@
       state.craftSequence = [];
       renderVictoryBanner();
       loadDimension(startDimensionId);
+      if (!startingWithRestoredProgress && state.dayCycle) {
+        state.dayCycle.isNight = false;
+        state.dayCycle.spawnTimer = ZOMBIE_SPAWN_INTERVAL;
+        state.dayCycle.waveCount = 0;
+      }
       resetStatusMeterMemory();
       if (progressSnapshot) {
         applyProgressSnapshotToState(progressSnapshot, {
