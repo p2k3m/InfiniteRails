@@ -6755,6 +6755,61 @@
         const visitedMaterials = new Set();
         let sanitized = false;
 
+        const stabiliseRendererUniformEntry = (entry, key = null) => {
+          let target = entry && typeof entry === 'object' ? entry : {};
+          let modified = !entry || typeof entry !== 'object';
+
+          if (typeof target.setValue !== 'function') {
+            target.setValue = () => {};
+            modified = true;
+          }
+          if (typeof target.updateCache !== 'function') {
+            target.updateCache = () => {};
+            modified = true;
+          }
+          if (!Array.isArray(target.cache)) {
+            target.cache = [];
+            modified = true;
+          }
+
+          if (!target.uniform || typeof target.uniform !== 'object') {
+            target.uniform = { value: null };
+            modified = true;
+          } else if (!Object.prototype.hasOwnProperty.call(target.uniform, 'value')) {
+            target.uniform.value = Object.prototype.hasOwnProperty.call(target, 'value')
+              ? target.value ?? null
+              : null;
+            modified = true;
+          } else if (typeof target.uniform.value === 'undefined') {
+            target.uniform.value = null;
+            modified = true;
+          }
+
+          if (!Object.prototype.hasOwnProperty.call(target, 'value')) {
+            target.value =
+              target.uniform && typeof target.uniform === 'object'
+                ? target.uniform.value ?? null
+                : null;
+            modified = true;
+          } else if (typeof target.value === 'undefined') {
+            target.value = null;
+            modified = true;
+          }
+
+          if (!Object.prototype.hasOwnProperty.call(target, 'id') || target.id === undefined) {
+            if (typeof key === 'string' || typeof key === 'number') {
+              target.id = `${key}`;
+            } else if (typeof target.name === 'string' || typeof target.name === 'number') {
+              target.id = `${target.name}`;
+            } else {
+              target.id = null;
+            }
+            modified = true;
+          }
+
+          return { entry: target, modified };
+        };
+
         const purgeRendererUniformCache = (uniforms) => {
           if (!uniforms || typeof uniforms !== 'object') {
             return false;
@@ -6762,70 +6817,15 @@
 
           let repaired = false;
 
-          const stabiliseEntry = (entry, key = null) => {
-            let target = entry;
-            if (!target || typeof target !== 'object') {
-              target = {
-                id: key ?? null,
-                cache: [],
-                setValue: () => {},
-                updateCache: () => {},
-                uniform: { value: null },
-                value: null,
-              };
-              repaired = true;
-              return target;
-            }
-
-            if (typeof target.setValue !== 'function') {
-              target.setValue = () => {};
-              repaired = true;
-            }
-            if (typeof target.updateCache !== 'function') {
-              target.updateCache = () => {};
-              repaired = true;
-            }
-            if (!Array.isArray(target.cache)) {
-              target.cache = [];
-              repaired = true;
-            }
-
-            if (!target.uniform || typeof target.uniform !== 'object') {
-              target.uniform = { value: null };
-              repaired = true;
-            } else if (!Object.prototype.hasOwnProperty.call(target.uniform, 'value')) {
-              target.uniform.value = Object.prototype.hasOwnProperty.call(target, 'value')
-                ? target.value
-                : null;
-              repaired = true;
-            } else if (typeof target.uniform.value === 'undefined') {
-              target.uniform.value = null;
-              repaired = true;
-            }
-
-            if (!Object.prototype.hasOwnProperty.call(target, 'value')) {
-              target.value =
-                target.uniform && typeof target.uniform === 'object'
-                  ? target.uniform.value ?? null
-                  : null;
-              repaired = true;
-            } else if (typeof target.value === 'undefined') {
-              target.value = null;
-              repaired = true;
-            }
-
-            if (!Object.prototype.hasOwnProperty.call(target, 'id') || target.id === undefined) {
-              target.id = key ?? target.name ?? null;
-            }
-
-            return target;
-          };
-
           if (Array.isArray(uniforms.seq)) {
             for (let i = 0; i < uniforms.seq.length; i += 1) {
               const entry = uniforms.seq[i];
               if (hasInvalidUniformEntry(entry)) {
-                uniforms.seq[i] = stabiliseEntry(entry, i);
+                const { entry: stabilised, modified } = stabiliseRendererUniformEntry(entry, i);
+                uniforms.seq[i] = stabilised;
+                if (modified) {
+                  repaired = true;
+                }
               }
             }
           }
@@ -6834,7 +6834,11 @@
             Object.keys(uniforms.map).forEach((key) => {
               const entry = uniforms.map[key];
               if (hasInvalidUniformEntry(entry)) {
-                uniforms.map[key] = stabiliseEntry(entry, key);
+                const { entry: stabilised, modified } = stabiliseRendererUniformEntry(entry, key);
+                uniforms.map[key] = stabilised;
+                if (modified) {
+                  repaired = true;
+                }
               }
             });
           }
@@ -6860,18 +6864,22 @@
           }
 
           if (!Object.prototype.hasOwnProperty.call(entry, 'value')) {
-            if (typeof entry.setValue === 'function') {
-              const repair = repairRendererUniformEntry(container, key, entry);
-              if (repair.removed) {
+              if (typeof entry.setValue === 'function') {
+                const repair = repairRendererUniformEntry(container, key, entry);
+                if (repair.removed) {
+                const { entry: stabilised } = stabiliseRendererUniformEntry(entry, key);
                 if (Array.isArray(container)) {
                   const index = typeof key === 'number' ? key : Number.parseInt(`${key}`, 10);
                   if (Number.isInteger(index)) {
-                    container.splice(index, 1);
+                    container[index] = stabilised;
                   }
                 } else {
-                  delete container[key];
+                  container[key] = stabilised;
                 }
                 result.updated = true;
+                result.requiresRendererReset = true;
+                markReset();
+                return result;
               } else if (repair.updated) {
                 result.updated = true;
               }
@@ -6940,14 +6948,26 @@
                 result.updated = true;
                 result.requiresRendererReset = true;
               } catch (assignError) {
-                result.removed = true;
+                const { entry: stabilised } = stabiliseRendererUniformEntry(entry, key);
+                try {
+                  container[key] = stabilised;
+                } catch (assignmentError) {
+                  // Ignore assignment failures; caller will reset renderer state.
+                }
+                result.updated = true;
                 result.requiresRendererReset = true;
                 return false;
               }
             }
 
             if (!entry.uniform || typeof entry.uniform !== 'object') {
-              result.removed = true;
+              const { entry: stabilised } = stabiliseRendererUniformEntry(entry, key);
+              try {
+                container[key] = stabilised;
+              } catch (assignmentError) {
+                // Ignore assignment failures.
+              }
+              result.updated = true;
               result.requiresRendererReset = true;
               return false;
             }
@@ -6958,7 +6978,13 @@
                   typeof entry.uniform.value === 'undefined' ? null : entry.uniform.value;
                 result.updated = true;
               } catch (valueAssignError) {
-                result.removed = true;
+                const { entry: stabilised } = stabiliseRendererUniformEntry(entry, key);
+                try {
+                  container[key] = stabilised;
+                } catch (assignmentError) {
+                  // Ignore assignment failures.
+                }
+                result.updated = true;
                 result.requiresRendererReset = true;
                 return false;
               }
@@ -6973,9 +6999,14 @@
           };
 
           if (!entry || typeof entry !== 'object') {
+            const { entry: stabilised } = stabiliseRendererUniformEntry(null, key);
+            try {
+              container[key] = stabilised;
+            } catch (assignmentError) {
+              // Ignore assignment failures; we'll still flag a renderer reset.
+            }
             result.updated = true;
             result.requiresRendererReset = true;
-            result.removed = true;
             return result;
           }
 
@@ -6985,6 +7016,14 @@
 
           const hasUniform = ensureUniformObject();
           if (!hasUniform) {
+            const { entry: stabilised } = stabiliseRendererUniformEntry(entry, key);
+            try {
+              container[key] = stabilised;
+            } catch (assignmentError) {
+              // Ignore assignment failures; caller will handle fallback.
+            }
+            result.updated = true;
+            result.requiresRendererReset = true;
             return result;
           }
 
@@ -6994,7 +7033,13 @@
                 typeof entry.uniform?.value !== 'undefined' ? entry.uniform.value : null;
               result.updated = true;
             } catch (entryAssignError) {
-              result.removed = true;
+              const { entry: stabilised } = stabiliseRendererUniformEntry(entry, key);
+              try {
+                container[key] = stabilised;
+              } catch (assignmentError) {
+                // Ignore assignment failures.
+              }
+              result.updated = true;
               result.requiresRendererReset = true;
               return result;
             }
@@ -7031,8 +7076,10 @@
 
                 const repairResult = repairRendererUniformEntry(uniforms.seq, i, uniforms.seq[i]);
                 if (repairResult.removed) {
-                  uniforms.seq.splice(i, 1);
-                  i -= 1;
+                  const { entry: stabilised } = stabiliseRendererUniformEntry(uniforms.seq[i], i);
+                  uniforms.seq[i] = stabilised;
+                  updated = true;
+                  requiresRendererReset = true;
                 }
                 if (repairResult.updated) {
                   updated = true;
@@ -7047,7 +7094,10 @@
               Object.keys(uniforms.map).forEach((key) => {
                 const repairResult = repairRendererUniformEntry(uniforms.map, key, uniforms.map[key]);
                 if (repairResult.removed) {
-                  delete uniforms.map[key];
+                  const { entry: stabilised } = stabiliseRendererUniformEntry(uniforms.map[key], key);
+                  uniforms.map[key] = stabilised;
+                  updated = true;
+                  requiresRendererReset = true;
                 }
                 if (repairResult.updated) {
                   updated = true;
