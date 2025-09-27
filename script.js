@@ -1,5 +1,8 @@
 (function () {
   const THREE_CDN_URLS = [
+    // Local build bundled with the project so the experience works offline/file://
+    // without depending on a CDN (which may be blocked in classroom environments).
+    'vendor/three.min.js',
     'https://unpkg.com/three@0.161.0/build/three.min.js',
     'https://cdn.jsdelivr.net/npm/three@0.161.0/build/three.min.js',
   ];
