@@ -5090,11 +5090,14 @@
           });
 
           if (updated) {
-            if ('uniformsNeedUpdate' in material) {
-              material.uniformsNeedUpdate = true;
-            }
-            if ('needsUpdate' in material) {
-              material.needsUpdate = true;
+            const cacheReset = resetMaterialUniformCache(material);
+            if (!cacheReset) {
+              if ('uniformsNeedUpdate' in material) {
+                material.uniformsNeedUpdate = true;
+              }
+              if ('needsUpdate' in material) {
+                material.needsUpdate = true;
+              }
             }
           }
 
@@ -7042,11 +7045,14 @@
         });
 
         if (updated && material && typeof material === 'object') {
-          if ('uniformsNeedUpdate' in material) {
-            material.uniformsNeedUpdate = true;
-          }
-          if ('needsUpdate' in material) {
-            material.needsUpdate = true;
+          const cacheReset = resetMaterialUniformCache(material);
+          if (!cacheReset) {
+            if ('uniformsNeedUpdate' in material) {
+              material.uniformsNeedUpdate = true;
+            }
+            if ('needsUpdate' in material) {
+              material.needsUpdate = true;
+            }
           }
         }
 
