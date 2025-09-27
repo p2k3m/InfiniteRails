@@ -12,6 +12,20 @@
   const ZOMBIE_CONTACT_RANGE = 1.35;
   const ZOMBIE_SPAWN_INTERVAL = 8;
   const ZOMBIE_MAX_PER_DIMENSION = 4;
+  const HOTBAR_SLOTS = 9;
+  const MAX_STACK_SIZE = 99;
+  const GOLEM_CONTACT_RANGE = 1.6;
+  const GOLEM_SPAWN_INTERVAL = 26;
+  const GOLEM_MAX_PER_DIMENSION = 2;
+
+  const ITEM_DEFINITIONS = {
+    'grass-block': { label: 'Grass Block', icon: '🟩', placeable: true },
+    dirt: { label: 'Soil Chunk', icon: '🟫', placeable: true },
+    stone: { label: 'Stone Brick', icon: '⬜', placeable: true },
+    stick: { label: 'Stick', icon: '🪵', placeable: false },
+    'stone-pickaxe': { label: 'Stone Pickaxe', icon: '⛏️', placeable: false, equipment: true },
+    'portal-charge': { label: 'Portal Charge', icon: '🌀', placeable: false },
+  };
   const DIMENSION_THEME = [
     {
       id: 'origin',
@@ -92,6 +106,19 @@
     return value - Math.floor(value);
   }
 
+  function getItemDefinition(id) {
+    if (!id) {
+      return { label: 'Empty', icon: '·', placeable: false };
+    }
+    return ITEM_DEFINITIONS[id] || { label: id, icon: '⬜', placeable: false };
+  }
+
+  function formatInventoryLabel(item, quantity) {
+    const def = getItemDefinition(item);
+    const count = Number.isFinite(quantity) ? quantity : 0;
+    return `${def.icon} ${def.label}${count > 1 ? ` ×${count}` : ''}`;
+  }
+
   function createHeartMarkup(health) {
     const fullHearts = Math.floor(health / 2);
     const halfHeart = health % 2;
@@ -144,6 +171,30 @@
       this.scoreboardContainer = this.scoreboardListEl?.closest('#leaderboardTable') || null;
       this.scoreboardEmptyEl =
         (typeof document !== 'undefined' && document.getElementById('leaderboardEmptyMessage')) || null;
+      this.hotbarEl = this.ui.hotbarEl || null;
+      this.playerHintEl = this.ui.playerHintEl || null;
+      this.craftingModal = this.ui.craftingModal || null;
+      this.craftSequenceEl = this.ui.craftSequenceEl || null;
+      this.craftingInventoryEl = this.ui.craftingInventoryEl || null;
+      this.craftSuggestionsEl = this.ui.craftSuggestionsEl || null;
+      this.craftButton = this.ui.craftButton || null;
+      this.clearCraftButton = this.ui.clearCraftButton || null;
+      this.craftLauncherButton = this.ui.craftLauncherButton || null;
+      this.closeCraftingButton = this.ui.closeCraftingButton || null;
+      this.craftingSearchPanel = this.ui.craftingSearchPanel || null;
+      this.craftingSearchInput = this.ui.craftingSearchInput || null;
+      this.craftingSearchResultsEl = this.ui.craftingSearchResultsEl || null;
+      this.openCraftingSearchButton = this.ui.openCraftingSearchButton || null;
+      this.closeCraftingSearchButton = this.ui.closeCraftingSearchButton || null;
+      this.inventoryModal = this.ui.inventoryModal || null;
+      this.inventoryGridEl = this.ui.inventoryGridEl || null;
+      this.inventorySortButton = this.ui.inventorySortButton || null;
+      this.inventoryOverflowEl = this.ui.inventoryOverflowEl || null;
+      this.closeInventoryButton = this.ui.closeInventoryButton || null;
+      const openInventorySource = this.ui.openInventoryButtons || [];
+      this.openInventoryButtons = Array.isArray(openInventorySource)
+        ? openInventorySource
+        : Array.from(openInventorySource);
       this.columns = new Map();
       this.heightMap = Array.from({ length: WORLD_SIZE }, () => Array(WORLD_SIZE).fill(0));
       this.blockGeometry = new THREE.BoxGeometry(BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE);
@@ -181,6 +232,9 @@
       this.lastZombieSpawn = 0;
       this.zombieIdCounter = 0;
       this.zombieGeometry = null;
+      this.golems = [];
+      this.golemGroup = null;
+      this.lastGolemSpawn = 0;
       this.scoreboardUtils = window.ScoreboardUtils || null;
       this.scoreEntries = [];
       this.sessionId =
@@ -198,6 +252,16 @@
       this.portalPlaneGeometry = null;
       this.daylightIntensity = 1;
       this.raycaster = new THREE.Raycaster();
+      this.hotbar = Array.from({ length: HOTBAR_SLOTS }, () => ({ item: null, quantity: 0 }));
+      this.selectedHotbarIndex = 0;
+      this.satchel = new Map();
+      this.craftingState = {
+        sequence: [],
+        unlocked: new Map(),
+        searchTerm: '',
+      };
+      this.craftingRecipes = this.createCraftingRecipes();
+      this.craftedRecipes = new Set();
       this.animationFrame = null;
       this.briefingAutoHideTimer = null;
       this.briefingFadeTimer = null;
@@ -235,6 +299,23 @@
       this.onTouchLookPointerDown = this.handleTouchLookPointerDown.bind(this);
       this.onTouchLookPointerMove = this.handleTouchLookPointerMove.bind(this);
       this.onTouchLookPointerUp = this.handleTouchLookPointerUp.bind(this);
+      this.onHotbarClick = this.handleHotbarClick.bind(this);
+      this.onCanvasWheel = this.handleCanvasWheel.bind(this);
+      this.onCraftButton = this.handleCraftButton.bind(this);
+      this.onClearCraft = this.handleClearCraft.bind(this);
+      this.onOpenCrafting = this.handleOpenCrafting.bind(this);
+      this.onCloseCrafting = this.handleCloseCrafting.bind(this);
+      this.onCraftSequenceClick = this.handleCraftSequenceClick.bind(this);
+      this.onCraftSuggestionClick = this.handleCraftSuggestionClick.bind(this);
+      this.onCraftSearchInput = this.handleCraftSearchInput.bind(this);
+      this.onInventorySort = this.handleInventorySort.bind(this);
+      this.onInventoryToggle = this.handleInventoryToggle.bind(this);
+      this.onCraftingInventoryClick = this.handleCraftingInventoryClick.bind(this);
+      this.onCraftingModalBackdrop = (event) => {
+        if (event?.target === this.craftingModal) {
+          this.handleCloseCrafting(event);
+        }
+      };
     }
 
     start() {
@@ -250,6 +331,7 @@
       this.bindEvents();
       this.initializeMobileControls();
       this.updateHud();
+      this.refreshCraftingUi();
       this.hideIntro();
       this.showBriefingOverlay();
       this.updateLocalScoreEntry('start');
@@ -425,7 +507,7 @@
         score: Math.round(this.score),
         dimensionCount: Math.max(1, this.currentDimensionIndex + 1),
         runTimeSeconds: Math.round(this.elapsed),
-        inventoryCount: Math.max(0, Math.round(this.blocksPlaced + this.blocksMined)),
+        inventoryCount: Math.max(0, this.getTotalInventoryCount()),
         locationLabel: 'Local session',
         updatedAt: new Date().toISOString(),
         reason,
@@ -623,10 +705,12 @@
       this.railsGroup = new THREE.Group();
       this.portalGroup = new THREE.Group();
       this.zombieGroup = new THREE.Group();
+      this.golemGroup = new THREE.Group();
       this.scene.add(this.terrainGroup);
       this.scene.add(this.railsGroup);
       this.scene.add(this.portalGroup);
       this.scene.add(this.zombieGroup);
+      this.scene.add(this.golemGroup);
       this.createFirstPersonHands();
     }
 
@@ -708,6 +792,29 @@
           `,
         }),
       };
+    }
+
+    createCraftingRecipes() {
+      return new Map([
+        [
+          'stick,stick,stone',
+          {
+            id: 'stone-pickaxe',
+            label: 'Stone Pickaxe',
+            score: 2,
+            description: 'Unlocks tougher mining strikes and portal prep.',
+          },
+        ],
+        [
+          'stone,stone,grass-block',
+          {
+            id: 'portal-charge',
+            label: 'Portal Charge',
+            score: 4,
+            description: 'Stabilises the next realm transition.',
+          },
+        ],
+      ]);
     }
 
     createVoxelTexture(key, palette) {
@@ -1208,11 +1315,17 @@
           const column = [];
           for (let level = 0; level < maxHeight; level += 1) {
             const isSurface = level === maxHeight - 1;
-            const material = isSurface
-              ? this.materials.grass
+            const blockType = isSurface
+              ? 'grass-block'
               : level > maxHeight - 3
-                ? this.materials.dirt
-                : this.materials.stone;
+                ? 'dirt'
+                : 'stone';
+            const material =
+              blockType === 'grass-block'
+                ? this.materials.grass
+                : blockType === 'dirt'
+                  ? this.materials.dirt
+                  : this.materials.stone;
             const mesh = new THREE.Mesh(this.blockGeometry, material);
             mesh.castShadow = isSurface;
             mesh.receiveShadow = true;
@@ -1222,6 +1335,7 @@
               level,
               gx,
               gz,
+              blockType,
             };
             mesh.matrixAutoUpdate = false;
             mesh.updateMatrix();
@@ -1364,6 +1478,8 @@
       this.refreshPortalState();
       this.positionPlayer();
       this.clearZombies();
+      this.clearGolems();
+      this.lastGolemSpawn = this.elapsed;
       this.score += 8;
       this.updateHud();
       this.scheduleScoreSync('dimension-advanced');
@@ -1377,6 +1493,7 @@
       this.portalMesh = null;
       this.score += 25;
       this.clearZombies();
+      this.clearGolems();
       this.updatePortalProgress();
       this.updateHud();
       this.scheduleScoreSync('victory');
@@ -1402,6 +1519,7 @@
       document.addEventListener('mousemove', this.onMouseMove);
       document.addEventListener('mousedown', this.onMouseDown);
       window.addEventListener('resize', this.onResize);
+      this.canvas.addEventListener('wheel', this.onCanvasWheel, { passive: false });
       this.canvas.addEventListener('pointerdown', this.onTouchLookPointerDown, { passive: false });
       window.addEventListener('pointermove', this.onTouchLookPointerMove, { passive: false });
       window.addEventListener('pointerup', this.onTouchLookPointerUp);
@@ -1412,6 +1530,26 @@
         }
       });
       this.canvas.addEventListener('contextmenu', this.preventContextMenu);
+      if (this.hotbarEl) {
+        this.hotbarEl.addEventListener('click', this.onHotbarClick);
+      }
+      this.craftLauncherButton?.addEventListener('click', this.onOpenCrafting);
+      this.closeCraftingButton?.addEventListener('click', this.onCloseCrafting);
+      this.craftingModal?.addEventListener('click', this.onCraftingModalBackdrop);
+      this.craftButton?.addEventListener('click', this.onCraftButton);
+      this.clearCraftButton?.addEventListener('click', this.onClearCraft);
+      this.craftSequenceEl?.addEventListener('click', this.onCraftSequenceClick);
+      this.craftSuggestionsEl?.addEventListener('click', this.onCraftSuggestionClick);
+      this.craftingSearchResultsEl?.addEventListener('click', this.onCraftSuggestionClick);
+      this.craftingInventoryEl?.addEventListener('click', this.onCraftingInventoryClick);
+      this.openCraftingSearchButton?.addEventListener('click', () => this.toggleCraftingSearch(true));
+      this.closeCraftingSearchButton?.addEventListener('click', () => this.toggleCraftingSearch(false));
+      this.craftingSearchInput?.addEventListener('input', this.onCraftSearchInput);
+      this.inventorySortButton?.addEventListener('click', this.onInventorySort);
+      this.closeInventoryButton?.addEventListener('click', this.onInventoryToggle);
+      this.openInventoryButtons.forEach((el) => {
+        el.addEventListener('click', this.onInventoryToggle);
+      });
     }
 
     unbindEvents() {
@@ -1422,11 +1560,30 @@
       document.removeEventListener('mousemove', this.onMouseMove);
       document.removeEventListener('mousedown', this.onMouseDown);
       window.removeEventListener('resize', this.onResize);
+      this.canvas.removeEventListener('wheel', this.onCanvasWheel);
       this.canvas.removeEventListener('pointerdown', this.onTouchLookPointerDown);
       window.removeEventListener('pointermove', this.onTouchLookPointerMove);
       window.removeEventListener('pointerup', this.onTouchLookPointerUp);
       window.removeEventListener('pointercancel', this.onTouchLookPointerUp);
       this.canvas.removeEventListener('contextmenu', this.preventContextMenu);
+      if (this.hotbarEl) {
+        this.hotbarEl.removeEventListener('click', this.onHotbarClick);
+      }
+      this.craftLauncherButton?.removeEventListener('click', this.onOpenCrafting);
+      this.closeCraftingButton?.removeEventListener('click', this.onCloseCrafting);
+      this.craftingModal?.removeEventListener('click', this.onCraftingModalBackdrop);
+      this.craftButton?.removeEventListener('click', this.onCraftButton);
+      this.clearCraftButton?.removeEventListener('click', this.onClearCraft);
+      this.craftSequenceEl?.removeEventListener('click', this.onCraftSequenceClick);
+      this.craftSuggestionsEl?.removeEventListener('click', this.onCraftSuggestionClick);
+      this.craftingSearchResultsEl?.removeEventListener('click', this.onCraftSuggestionClick);
+      this.craftingInventoryEl?.removeEventListener('click', this.onCraftingInventoryClick);
+      this.craftingSearchInput?.removeEventListener('input', this.onCraftSearchInput);
+      this.inventorySortButton?.removeEventListener('click', this.onInventorySort);
+      this.closeInventoryButton?.removeEventListener('click', this.onInventoryToggle);
+      this.openInventoryButtons.forEach((el) => {
+        el.removeEventListener('click', this.onInventoryToggle);
+      });
       this.teardownMobileControls();
     }
 
@@ -1460,6 +1617,31 @@
           this.advanceDimension();
         }
         event.preventDefault();
+      }
+      if (event.code === 'KeyQ') {
+        this.placeBlock();
+        event.preventDefault();
+      }
+      if (event.code === 'KeyE') {
+        const open = this.craftingModal?.hidden !== false;
+        this.toggleCraftingModal(open);
+        event.preventDefault();
+      }
+      if (event.code === 'KeyI') {
+        const open = this.inventoryModal?.hidden !== false;
+        this.toggleInventoryModal(open);
+        event.preventDefault();
+      }
+      if (event.code === 'Escape') {
+        this.toggleCraftingModal(false);
+        this.toggleInventoryModal(false);
+      }
+      if (event.code.startsWith('Digit')) {
+        const index = Number.parseInt(event.code.slice(5), 10) - 1;
+        if (Number.isInteger(index)) {
+          this.selectHotbarSlot(index, true);
+          event.preventDefault();
+        }
       }
     }
 
@@ -1508,6 +1690,7 @@
       this.updateDayNightCycle();
       this.updateMovement(delta);
       this.updateZombies(delta);
+      this.updateGolems(delta);
       this.updatePortalAnimation(delta);
       this.updateHands(delta);
       this.updateScoreSync(delta);
@@ -1726,6 +1909,130 @@
       this.zombies = [];
     }
 
+    removeZombie(target) {
+      if (!target) return;
+      const index = this.zombies.indexOf(target);
+      if (index >= 0) {
+        this.zombies.splice(index, 1);
+      }
+      this.zombieGroup.remove(target.mesh);
+      target.mesh.material?.dispose?.();
+    }
+
+    findNearestZombie(position) {
+      if (!position) return null;
+      let best = null;
+      let bestDistance = Infinity;
+      for (const zombie of this.zombies) {
+        const distance = position.distanceTo(zombie.mesh.position);
+        if (distance < bestDistance) {
+          best = zombie;
+          bestDistance = distance;
+        }
+      }
+      return best;
+    }
+
+    createGolemActor() {
+      const THREE = this.THREE;
+      if (!THREE) return null;
+      const group = new THREE.Group();
+      const bodyMaterial = new THREE.MeshStandardMaterial({ color: '#d9c9a7', roughness: 0.7, metalness: 0.1 });
+      const accentMaterial = new THREE.MeshStandardMaterial({ color: '#ffb347', emissive: '#ff7043', emissiveIntensity: 0.3 });
+      const body = new THREE.Mesh(new THREE.BoxGeometry(0.9, 1.6, 0.6), bodyMaterial);
+      body.position.y = 0.8;
+      const head = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.6, 0.6), bodyMaterial.clone());
+      head.position.y = 1.6;
+      const eye = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.12, 0.02), accentMaterial);
+      eye.position.set(0, 1.6, 0.32);
+      const armGeometry = new THREE.BoxGeometry(0.28, 0.9, 0.28);
+      const leftArm = new THREE.Mesh(armGeometry, bodyMaterial.clone());
+      leftArm.position.set(-0.65, 0.6, 0);
+      const rightArm = new THREE.Mesh(armGeometry, bodyMaterial.clone());
+      rightArm.position.set(0.65, 0.6, 0);
+      const legGeometry = new THREE.BoxGeometry(0.3, 0.8, 0.3);
+      const leftLeg = new THREE.Mesh(legGeometry, bodyMaterial.clone());
+      leftLeg.position.set(-0.25, 0.1, 0);
+      const rightLeg = new THREE.Mesh(legGeometry, bodyMaterial.clone());
+      rightLeg.position.set(0.25, 0.1, 0);
+      [body, head, eye, leftArm, rightArm, leftLeg, rightLeg].forEach((mesh) => {
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+        group.add(mesh);
+      });
+      return group;
+    }
+
+    spawnGolem() {
+      const THREE = this.THREE;
+      if (!THREE || !this.golemGroup) return;
+      if (this.golems.length >= GOLEM_MAX_PER_DIMENSION) return;
+      const actor = this.createGolemActor();
+      if (!actor) return;
+      const base = this.camera?.position ?? new THREE.Vector3();
+      const angle = Math.random() * Math.PI * 2;
+      const radius = 6 + Math.random() * 4;
+      const x = base.x + Math.cos(angle) * radius;
+      const z = base.z + Math.sin(angle) * radius;
+      const ground = this.sampleGroundHeight(x, z);
+      actor.position.set(x, ground + 1, z);
+      this.golemGroup.add(actor);
+      this.golems.push({ id: `golem-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, mesh: actor, cooldown: 0, speed: 3.1 });
+      this.lastGolemSpawn = this.elapsed;
+      this.showHint('An iron golem joins your defense.');
+    }
+
+    updateGolems(delta) {
+      if (!this.golemGroup) return;
+      const shouldSpawnGuard = this.isNight() || this.zombies.length > 0;
+      if (
+        shouldSpawnGuard &&
+        this.elapsed - this.lastGolemSpawn > GOLEM_SPAWN_INTERVAL &&
+        this.golems.length < GOLEM_MAX_PER_DIMENSION
+      ) {
+        this.spawnGolem();
+      }
+      if (!this.golems.length) return;
+      const THREE = this.THREE;
+      const playerPosition = this.camera?.position;
+      for (const golem of this.golems) {
+        golem.cooldown = Math.max(0, golem.cooldown - delta);
+        const target = this.findNearestZombie(golem.mesh.position) ?? null;
+        const destination = target?.mesh?.position ?? playerPosition;
+        if (destination) {
+          this.tmpVector.subVectors(destination, golem.mesh.position);
+          const distance = this.tmpVector.length();
+          if (distance > 0.001) {
+            this.tmpVector.normalize();
+            this.tmpVector2.copy(this.tmpVector).multiplyScalar(golem.speed * delta);
+            golem.mesh.position.add(this.tmpVector2);
+            golem.mesh.rotation.y = Math.atan2(this.tmpVector.x, this.tmpVector.z);
+          }
+          const ground = this.sampleGroundHeight(golem.mesh.position.x, golem.mesh.position.z);
+          golem.mesh.position.y = THREE.MathUtils.lerp(golem.mesh.position.y, ground + 1.1, delta * 8);
+          if (target && distance < GOLEM_CONTACT_RANGE && golem.cooldown <= 0) {
+            this.removeZombie(target);
+            golem.cooldown = 1.1;
+            this.score += 0.5;
+            this.updateHud();
+            this.audio.play('zombieGroan', { volume: 0.3 });
+            this.showHint('Iron golem smashed a zombie!');
+            this.scheduleScoreSync('golem-defense');
+          }
+        }
+      }
+      this.golems = this.golems.filter((golem) => golem.mesh.parent === this.golemGroup);
+    }
+
+    clearGolems() {
+      if (!this.golems.length) return;
+      for (const golem of this.golems) {
+        this.golemGroup.remove(golem.mesh);
+      }
+      this.golemGroup?.clear?.();
+      this.golems = [];
+    }
+
     damagePlayer(amount) {
       const previous = this.health;
       this.health = Math.max(0, this.health - amount);
@@ -1747,6 +2054,8 @@
       this.positionPlayer();
       this.clearZombies();
       this.lastZombieSpawn = this.elapsed;
+      this.clearGolems();
+      this.lastGolemSpawn = this.elapsed;
       this.updateHud();
       this.scheduleScoreSync('respawn');
       this.audio.play('bubble', { volume: 0.45 });
@@ -1768,13 +2077,19 @@
       column.pop();
       this.terrainGroup.remove(mesh);
       this.blocksMined += 1;
-      this.score += 1;
+      const blockType = mesh.userData.blockType || 'stone';
+      this.score += blockType === 'stone' ? 1 : 0.75;
       this.heightMap[mesh.userData.gx][mesh.userData.gz] = column.length;
       if (column.length) {
         const newTop = column[column.length - 1];
         newTop.material = this.materials.grass;
+        newTop.userData.blockType = 'grass-block';
       }
       this.portalBlocksPlaced = Math.max(0, this.portalBlocksPlaced - 1);
+      const drops = this.getDropsForBlock(blockType);
+      if (drops.length) {
+        this.collectDrops(drops);
+      }
       this.checkPortalActivation();
       this.updateHud();
       this.audio.playRandom(['miningA', 'miningB'], {
@@ -1795,25 +2110,37 @@
       const worldX = mesh.position.x;
       const worldZ = mesh.position.z;
       if (newLevel >= 12) {
+        this.showHint('Column at maximum height. Try another spot.');
         return;
       }
+      const allowed = new Set(['grass-block', 'dirt', 'stone']);
+      const consumed = this.useSelectedItem({ allow: allowed });
+      if (!consumed) {
+        this.showHint('Select a block in your hotbar to place it.');
+        return;
+      }
+      const blockType = consumed;
+      const material = this.getMaterialForBlock(blockType);
       if (column.length) {
         const prevTop = column[column.length - 1];
-        prevTop.material = this.materials.dirt;
+        if (prevTop) {
+          prevTop.material = this.materials.dirt;
+          prevTop.userData.blockType = 'dirt';
+        }
       }
-      const newMesh = new this.THREE.Mesh(this.blockGeometry, this.materials.grass);
+      const newMesh = new this.THREE.Mesh(this.blockGeometry, material);
       newMesh.castShadow = true;
       newMesh.receiveShadow = true;
       newMesh.position.set(worldX, newLevel * BLOCK_SIZE + BLOCK_SIZE / 2, worldZ);
       newMesh.matrixAutoUpdate = false;
       newMesh.updateMatrix();
-      newMesh.userData = { columnKey, level: newLevel, gx, gz };
+      newMesh.userData = { columnKey, level: newLevel, gx, gz, blockType };
       this.terrainGroup.add(newMesh);
       column.push(newMesh);
       this.columns.set(columnKey, column);
       this.heightMap[gx][gz] = column.length;
       this.blocksPlaced += 1;
-      this.score = Math.max(0, this.score - 0.5);
+      this.score = Math.max(0, this.score - 0.25);
       this.portalBlocksPlaced += 1;
       this.checkPortalActivation();
       this.updateHud();
@@ -1828,6 +2155,598 @@
       return this.raycaster.intersectObjects(this.terrainGroup.children, false);
     }
 
+    getMaterialForBlock(blockType) {
+      if (blockType === 'grass-block') return this.materials.grass;
+      if (blockType === 'dirt') return this.materials.dirt;
+      return this.materials.stone;
+    }
+
+    getDropsForBlock(blockType) {
+      const drops = [];
+      if (blockType === 'grass-block') {
+        drops.push({ item: 'grass-block', quantity: 1 });
+        if (Math.random() < 0.35) {
+          drops.push({ item: 'stick', quantity: 1 });
+        }
+      } else if (blockType === 'dirt') {
+        drops.push({ item: 'dirt', quantity: 1 });
+        if (Math.random() < 0.15) {
+          drops.push({ item: 'stick', quantity: 1 });
+        }
+      } else if (blockType === 'stone') {
+        drops.push({ item: 'stone', quantity: 1 });
+        if (this.currentDimensionIndex >= 2 && Math.random() < 0.18) {
+          drops.push({ item: 'portal-charge', quantity: 1 });
+        }
+      } else {
+        drops.push({ item: blockType, quantity: 1 });
+      }
+      return drops;
+    }
+
+    collectDrops(drops = []) {
+      let collectedAny = false;
+      drops.forEach(({ item, quantity }) => {
+        if (!item || quantity <= 0) return;
+        const accepted = this.addItemToInventory(item, quantity);
+        if (accepted) {
+          collectedAny = true;
+        }
+      });
+      if (collectedAny) {
+        this.updateHud();
+      }
+    }
+
+    addItemToInventory(item, quantity = 1) {
+      if (!item || quantity <= 0) return false;
+      let remaining = quantity;
+      for (let i = 0; i < this.hotbar.length && remaining > 0; i += 1) {
+        const slot = this.hotbar[i];
+        if (slot.item === item && slot.quantity < MAX_STACK_SIZE) {
+          const add = Math.min(MAX_STACK_SIZE - slot.quantity, remaining);
+          slot.quantity += add;
+          remaining -= add;
+        }
+      }
+      for (let i = 0; i < this.hotbar.length && remaining > 0; i += 1) {
+        const slot = this.hotbar[i];
+        if (!slot.item) {
+          const add = Math.min(MAX_STACK_SIZE, remaining);
+          slot.item = item;
+          slot.quantity = add;
+          remaining -= add;
+        }
+      }
+      if (remaining > 0) {
+        const existing = this.satchel.get(item) ?? 0;
+        this.satchel.set(item, existing + remaining);
+        remaining = 0;
+      }
+      if (remaining === 0) {
+        this.updateInventoryUi();
+        return true;
+      }
+      return false;
+    }
+
+    removeItemFromInventory(item, quantity = 1) {
+      if (!item || quantity <= 0) return 0;
+      let remaining = quantity;
+      for (let i = 0; i < this.hotbar.length && remaining > 0; i += 1) {
+        const slot = this.hotbar[i];
+        if (slot.item !== item) continue;
+        const take = Math.min(slot.quantity, remaining);
+        slot.quantity -= take;
+        remaining -= take;
+        if (slot.quantity <= 0) {
+          slot.item = null;
+          slot.quantity = 0;
+        }
+      }
+      if (remaining > 0) {
+        const available = this.satchel.get(item) ?? 0;
+        const take = Math.min(available, remaining);
+        if (take > 0) {
+          this.satchel.set(item, available - take);
+          remaining -= take;
+        }
+        if (this.satchel.get(item) === 0) {
+          this.satchel.delete(item);
+        }
+      }
+      if (remaining > 0) {
+        return quantity - remaining;
+      }
+      this.updateInventoryUi();
+      return quantity;
+    }
+
+    useSelectedItem({ allow } = {}) {
+      const slot = this.hotbar[this.selectedHotbarIndex];
+      if (!slot?.item || slot.quantity <= 0) {
+        return null;
+      }
+      if (allow instanceof Set && !allow.has(slot.item)) {
+        return null;
+      }
+      const item = slot.item;
+      slot.quantity -= 1;
+      if (slot.quantity <= 0) {
+        slot.item = null;
+        slot.quantity = 0;
+        this.refillHotbarSlot(this.selectedHotbarIndex, item);
+      }
+      this.updateInventoryUi();
+      return item;
+    }
+
+    refillHotbarSlot(index, item) {
+      if (!item) return;
+      const available = this.satchel.get(item);
+      if (!available) return;
+      const slot = this.hotbar[index];
+      const take = Math.min(MAX_STACK_SIZE, available);
+      slot.item = item;
+      slot.quantity = take;
+      this.satchel.set(item, available - take);
+      if (this.satchel.get(item) === 0) {
+        this.satchel.delete(item);
+      }
+    }
+
+    getTotalInventoryCount() {
+      const hotbarTotal = this.hotbar.reduce((sum, slot) => sum + (slot.quantity || 0), 0);
+      let satchelTotal = 0;
+      this.satchel.forEach((value) => {
+        satchelTotal += value;
+      });
+      return hotbarTotal + satchelTotal;
+    }
+
+    updateInventoryUi() {
+      this.updateHotbarUi();
+      this.updateCraftingInventoryUi();
+      this.updateInventoryModal();
+      this.updateCraftButtonState();
+    }
+
+    updateHotbarUi() {
+      if (!this.hotbarEl) return;
+      const slots = Array.from(this.hotbarEl.querySelectorAll('[data-hotbar-slot]'));
+      if (!slots.length) {
+        this.hotbarEl.innerHTML = '';
+        this.hotbar.forEach((slot, index) => {
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.className = 'hotbar-slot';
+          button.dataset.hotbarSlot = index;
+          button.setAttribute('aria-label', 'Empty slot');
+          this.hotbarEl.appendChild(button);
+        });
+      }
+      const updatedSlots = Array.from(this.hotbarEl.querySelectorAll('[data-hotbar-slot]'));
+      updatedSlots.forEach((element) => {
+        const index = Number.parseInt(element.dataset.hotbarSlot ?? '-1', 10);
+        if (!Number.isInteger(index) || index < 0 || index >= this.hotbar.length) return;
+        const slot = this.hotbar[index];
+        const def = getItemDefinition(slot.item);
+        element.dataset.active = index === this.selectedHotbarIndex ? 'true' : 'false';
+        element.textContent = slot.item ? `${def.icon} ${slot.quantity}` : '·';
+        element.setAttribute('aria-label', slot.item ? formatInventoryLabel(slot.item, slot.quantity) : 'Empty slot');
+      });
+    }
+
+    updateCraftingInventoryUi() {
+      if (!this.craftingInventoryEl) return;
+      const fragment = document.createDocumentFragment();
+      const aggregate = new Map();
+      this.hotbar.forEach((slot) => {
+        if (!slot.item) return;
+        aggregate.set(slot.item, (aggregate.get(slot.item) ?? 0) + slot.quantity);
+      });
+      this.satchel.forEach((quantity, item) => {
+        aggregate.set(item, (aggregate.get(item) ?? 0) + quantity);
+      });
+      const items = Array.from(aggregate.entries());
+      items.sort((a, b) => b[1] - a[1]);
+      items.forEach(([item, quantity]) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'crafting-inventory__item';
+        button.dataset.itemId = item;
+        button.textContent = formatInventoryLabel(item, quantity);
+        button.setAttribute('role', 'listitem');
+        button.setAttribute('aria-label', formatInventoryLabel(item, quantity));
+        fragment.appendChild(button);
+      });
+      this.craftingInventoryEl.innerHTML = '';
+      this.craftingInventoryEl.appendChild(fragment);
+    }
+
+    updateInventoryModal() {
+      if (!this.inventoryGridEl) return;
+      const aggregate = new Map();
+      this.hotbar.forEach((slot) => {
+        if (!slot.item) return;
+        aggregate.set(slot.item, (aggregate.get(slot.item) ?? 0) + slot.quantity);
+      });
+      this.satchel.forEach((quantity, item) => {
+        aggregate.set(item, (aggregate.get(item) ?? 0) + quantity);
+      });
+      const items = Array.from(aggregate.entries());
+      items.sort((a, b) => a[0].localeCompare(b[0]));
+      this.inventoryGridEl.innerHTML = '';
+      if (!items.length) {
+        this.inventoryGridEl.textContent = 'Inventory empty — gather resources to craft.';
+        return;
+      }
+      items.forEach(([item, quantity]) => {
+        const cell = document.createElement('div');
+        cell.className = 'inventory-grid__cell';
+        cell.textContent = formatInventoryLabel(item, quantity);
+        this.inventoryGridEl.appendChild(cell);
+      });
+      if (this.inventoryOverflowEl) {
+        const satchelOnly = Array.from(this.satchel.entries()).reduce((sum, [, value]) => sum + value, 0);
+        if (satchelOnly > 0) {
+          this.inventoryOverflowEl.hidden = false;
+          this.inventoryOverflowEl.textContent = `${satchelOnly} items stored in satchel reserves.`;
+        } else {
+          this.inventoryOverflowEl.hidden = true;
+          this.inventoryOverflowEl.textContent = '';
+        }
+      }
+    }
+
+    selectHotbarSlot(index, announce = true) {
+      if (!Number.isInteger(index) || index < 0 || index >= this.hotbar.length) {
+        return;
+      }
+      this.selectedHotbarIndex = index;
+      this.updateHotbarUi();
+      if (announce) {
+        const slot = this.hotbar[index];
+        const label = slot?.item ? formatInventoryLabel(slot.item, slot.quantity) : 'Empty slot';
+        this.showHint(`Selected ${label}`);
+      }
+    }
+
+    cycleHotbar(direction) {
+      const next = (this.selectedHotbarIndex + direction + this.hotbar.length) % this.hotbar.length;
+      this.selectHotbarSlot(next, true);
+    }
+
+    showHint(message) {
+      if (!this.playerHintEl || !message) return;
+      this.playerHintEl.textContent = message;
+    }
+
+    handleHotbarClick(event) {
+      const button = event.target.closest('[data-hotbar-slot]');
+      if (!button) return;
+      const index = Number.parseInt(button.dataset.hotbarSlot ?? '-1', 10);
+      if (!Number.isInteger(index)) return;
+      this.selectHotbarSlot(index, true);
+    }
+
+    handleCanvasWheel(event) {
+      if (!this.pointerLocked) return;
+      event.preventDefault();
+      const delta = event.deltaY > 0 ? 1 : -1;
+      this.cycleHotbar(delta);
+    }
+
+    handleCraftingInventoryClick(event) {
+      const button = event.target.closest('[data-item-id]');
+      if (!button) return;
+      const item = button.dataset.itemId;
+      if (!item) return;
+      const slotCount = this.getCraftingSlotCount();
+      if (this.craftingState.sequence.length >= slotCount) {
+        this.showHint('Sequence full — craft or clear to add more.');
+        return;
+      }
+      const available = this.getInventoryCountForItem(item);
+      const planned = this.craftingState.sequence.filter((entry) => entry === item).length;
+      if (planned >= available) {
+        this.showHint('Not enough resources in your satchel. Gather more.');
+        return;
+      }
+      this.craftingState.sequence.push(item);
+      this.refreshCraftingUi();
+    }
+
+    handleCraftSequenceClick(event) {
+      const button = event.target.closest('[data-sequence-index]');
+      if (!button) return;
+      const index = Number.parseInt(button.dataset.sequenceIndex ?? '-1', 10);
+      if (!Number.isInteger(index) || index < 0 || index >= this.craftingState.sequence.length) {
+        return;
+      }
+      this.craftingState.sequence.splice(index, 1);
+      this.refreshCraftingUi();
+    }
+
+    handleClearCraft() {
+      if (!this.craftingState.sequence.length) return;
+      this.craftingState.sequence = [];
+      this.refreshCraftingUi();
+    }
+
+    handleCraftButton() {
+      if (!this.craftingState.sequence.length) {
+        this.showHint('Add items to the sequence to craft.');
+        return;
+      }
+      const key = this.craftingState.sequence.join(',');
+      const recipe = this.craftingRecipes.get(key);
+      if (!recipe) {
+        this.showHint('Sequence unstable. Try a different item order.');
+        return;
+      }
+      const counts = new Map();
+      this.craftingState.sequence.forEach((item) => {
+        counts.set(item, (counts.get(item) ?? 0) + 1);
+      });
+      for (const [item, required] of counts.entries()) {
+        if (this.getInventoryCountForItem(item) < required) {
+          this.showHint('Not enough materials. Gather or reclaim resources.');
+          return;
+        }
+      }
+      counts.forEach((required, item) => {
+        this.removeItemFromInventory(item, required);
+      });
+      this.addItemToInventory(recipe.id, 1);
+      this.craftingState.sequence = [];
+      this.craftedRecipes.add(recipe.id);
+      this.craftingState.unlocked.set(key, recipe);
+      this.score += recipe.score;
+      this.showHint(`${recipe.label} crafted!`);
+      this.refreshCraftingUi();
+      this.updateHud();
+      this.scheduleScoreSync('recipe-crafted');
+      this.audio.play('craftChime', { volume: 0.6 });
+    }
+
+    handleCraftSuggestionClick(event) {
+      const button = event.target.closest('[data-recipe-key]');
+      if (!button) return;
+      const key = button.dataset.recipeKey;
+      if (!key) return;
+      const parts = key.split(',').filter(Boolean);
+      this.craftingState.sequence = parts.slice(0, this.getCraftingSlotCount());
+      this.refreshCraftingUi();
+    }
+
+    handleCraftSearchInput(event) {
+      this.craftingState.searchTerm = (event.target?.value || '').toLowerCase();
+      this.updateCraftingSearchResults();
+    }
+
+    handleOpenCrafting(event) {
+      if (event?.preventDefault) {
+        event.preventDefault();
+      }
+      this.toggleCraftingModal(true);
+    }
+
+    handleCloseCrafting(event) {
+      if (event?.preventDefault) {
+        event.preventDefault();
+      }
+      this.toggleCraftingModal(false);
+    }
+
+    handleInventorySort(event) {
+      if (event?.preventDefault) {
+        event.preventDefault();
+      }
+      this.sortInventoryByQuantity();
+      this.updateInventoryUi();
+      this.showHint('Inventory sorted.');
+      this.inventorySortButton?.setAttribute('aria-pressed', 'true');
+    }
+
+    handleInventoryToggle(event) {
+      if (event?.preventDefault) {
+        event.preventDefault();
+      }
+      const willOpen = this.inventoryModal?.hidden !== false;
+      this.toggleInventoryModal(willOpen);
+    }
+
+    getInventoryCountForItem(item) {
+      if (!item) return 0;
+      let total = 0;
+      this.hotbar.forEach((slot) => {
+        if (slot.item === item) {
+          total += slot.quantity;
+        }
+      });
+      total += this.satchel.get(item) ?? 0;
+      return total;
+    }
+
+    getCraftingSlotCount() {
+      const count = Number.parseInt(this.craftSequenceEl?.dataset.slotCount ?? '0', 10);
+      return Number.isInteger(count) && count > 0 ? count : 7;
+    }
+
+    toggleCraftingModal(visible) {
+      if (!this.craftingModal) return;
+      if (visible) {
+        this.craftingModal.hidden = false;
+        this.craftingModal.setAttribute('aria-hidden', 'false');
+        document.exitPointerLock?.();
+        this.refreshCraftingUi();
+      } else {
+        this.craftingModal.hidden = true;
+        this.craftingModal.setAttribute('aria-hidden', 'true');
+        this.toggleCraftingSearch(false);
+        this.canvas.focus({ preventScroll: true });
+      }
+      if (this.craftLauncherButton) {
+        this.craftLauncherButton.setAttribute('aria-expanded', visible ? 'true' : 'false');
+      }
+    }
+
+    toggleInventoryModal(visible) {
+      if (!this.inventoryModal) return;
+      if (visible) {
+        this.inventoryModal.hidden = false;
+        this.inventoryModal.setAttribute('aria-hidden', 'false');
+        document.exitPointerLock?.();
+        this.updateInventoryModal();
+        this.inventorySortButton?.setAttribute('aria-pressed', 'false');
+      } else {
+        this.inventoryModal.hidden = true;
+        this.inventoryModal.setAttribute('aria-hidden', 'true');
+        this.canvas.focus({ preventScroll: true });
+        this.inventorySortButton?.setAttribute('aria-pressed', 'false');
+      }
+      this.openInventoryButtons.forEach((btn) => {
+        if (!btn) return;
+        btn.setAttribute('aria-expanded', visible ? 'true' : 'false');
+        if (btn.tagName === 'BUTTON') {
+          btn.textContent = visible ? 'Close Inventory' : 'Open Inventory';
+        }
+      });
+    }
+
+    toggleCraftingSearch(visible) {
+      if (!this.craftingSearchPanel) return;
+      if (visible) {
+        this.craftingSearchPanel.hidden = false;
+        this.craftingSearchPanel.setAttribute('aria-hidden', 'false');
+        this.updateCraftingSearchResults();
+        this.craftingSearchInput?.focus();
+      } else {
+        this.craftingSearchPanel.hidden = true;
+        this.craftingSearchPanel.setAttribute('aria-hidden', 'true');
+        this.craftingState.searchTerm = '';
+      }
+    }
+
+    refreshCraftingUi() {
+      this.updateCraftingSequenceUi();
+      this.updateCraftingInventoryUi();
+      this.updateCraftingSuggestions();
+      this.updateCraftButtonState();
+    }
+
+    updateCraftingSequenceUi() {
+      if (!this.craftSequenceEl) return;
+      const slotCount = this.getCraftingSlotCount();
+      const fragment = document.createDocumentFragment();
+      for (let i = 0; i < slotCount; i += 1) {
+        const item = this.craftingState.sequence[i] ?? null;
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'crafting-sequence__slot';
+        button.dataset.sequenceIndex = i;
+        if (item) {
+          button.textContent = formatInventoryLabel(item, 1);
+          button.setAttribute('aria-label', `Remove ${getItemDefinition(item).label} from sequence`);
+        } else {
+          button.textContent = '·';
+          button.setAttribute('aria-label', 'Empty sequence slot');
+        }
+        fragment.appendChild(button);
+      }
+      this.craftSequenceEl.innerHTML = '';
+      this.craftSequenceEl.appendChild(fragment);
+    }
+
+    updateCraftingSuggestions() {
+      if (!this.craftSuggestionsEl) return;
+      const fragment = document.createDocumentFragment();
+      const entries = Array.from(this.craftingState.unlocked.entries());
+      entries.sort((a, b) => a[1].label.localeCompare(b[1].label));
+      entries.forEach(([key, recipe]) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'crafting-suggestions__item';
+        button.dataset.recipeKey = key;
+        button.textContent = `${recipe.label} (${key.replace(/,/g, ' → ')})`;
+        const li = document.createElement('li');
+        li.appendChild(button);
+        fragment.appendChild(li);
+      });
+      if (!entries.length) {
+        const empty = document.createElement('li');
+        empty.textContent = 'Discover recipes to unlock quick sequences.';
+        fragment.appendChild(empty);
+      }
+      this.craftSuggestionsEl.innerHTML = '';
+      this.craftSuggestionsEl.appendChild(fragment);
+    }
+
+    updateCraftButtonState() {
+      if (!this.craftButton) return;
+      const key = this.craftingState.sequence.join(',');
+      const recipe = this.craftingRecipes.get(key);
+      let enabled = Boolean(recipe);
+      if (enabled && recipe) {
+        const counts = new Map();
+        this.craftingState.sequence.forEach((item) => {
+          counts.set(item, (counts.get(item) ?? 0) + 1);
+        });
+        for (const [item, required] of counts.entries()) {
+          if (this.getInventoryCountForItem(item) < required) {
+            enabled = false;
+            break;
+          }
+        }
+      }
+      this.craftButton.disabled = !enabled;
+    }
+
+    updateCraftingSearchResults() {
+      if (!this.craftingSearchResultsEl) return;
+      const term = (this.craftingState.searchTerm || '').trim();
+      const results = [];
+      this.craftingRecipes.forEach((recipe, key) => {
+        if (!term || recipe.label.toLowerCase().includes(term) || key.includes(term)) {
+          results.push({ key, recipe });
+        }
+      });
+      const fragment = document.createDocumentFragment();
+      results.slice(0, 12).forEach(({ key, recipe }) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'crafting-search__result';
+        button.dataset.recipeKey = key;
+        button.textContent = `${recipe.label} — ${key.replace(/,/g, ' → ')}`;
+        const li = document.createElement('li');
+        li.appendChild(button);
+        fragment.appendChild(li);
+      });
+      if (!results.length) {
+        const li = document.createElement('li');
+        li.className = 'crafting-search__empty';
+        li.textContent = 'No recipes match that phrase.';
+        fragment.appendChild(li);
+      }
+      this.craftingSearchResultsEl.innerHTML = '';
+      this.craftingSearchResultsEl.appendChild(fragment);
+    }
+
+    sortInventoryByQuantity() {
+      const items = this.hotbar.filter((slot) => slot.item);
+      items.sort((a, b) => b.quantity - a.quantity);
+      const reordered = [];
+      items.forEach((slot) => {
+        reordered.push({ item: slot.item, quantity: slot.quantity });
+      });
+      while (reordered.length < this.hotbar.length) {
+        reordered.push({ item: null, quantity: 0 });
+      }
+      this.hotbar = reordered;
+      this.selectedHotbarIndex = 0;
+    }
+
     updateHud() {
       const { heartsEl, scoreTotalEl, scoreRecipesEl, scoreDimensionsEl } = this.ui;
       if (heartsEl) {
@@ -1837,11 +2756,12 @@
         scoreTotalEl.textContent = Math.round(this.score).toString();
       }
       if (scoreRecipesEl) {
-        scoreRecipesEl.textContent = `${this.portalActivations}`;
+        scoreRecipesEl.textContent = `${this.craftedRecipes.size}`;
       }
       if (scoreDimensionsEl) {
         scoreDimensionsEl.textContent = `${this.currentDimensionIndex + 1}`;
       }
+      this.updateInventoryUi();
       this.updateDimensionInfoPanel();
       this.updatePortalProgress();
     }
