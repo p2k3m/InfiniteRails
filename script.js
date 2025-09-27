@@ -6564,7 +6564,110 @@
     return false;
   }
 
-  function sanitizeSceneUniforms() {
+    function ensureSceneUniformValuePresence() {
+      if (!scene || typeof scene.traverse !== 'function') {
+        return false;
+      }
+
+      let modified = false;
+      const visitedMaterials = new Set();
+
+      const normalizeUniformContainer = (material, uniforms) => {
+        if (!uniforms || typeof uniforms !== 'object') {
+          return false;
+        }
+
+        let container = uniforms;
+        let updated = false;
+        const guarded = guardUniformContainer(uniforms);
+        if (guarded && guarded !== uniforms) {
+          container = guarded;
+          if (material && material.uniforms !== guarded) {
+            try {
+              material.uniforms = guarded;
+            } catch (assignError) {
+              // Ignore assignment failures; we'll still attempt to normalise the proxy.
+            }
+          }
+          updated = true;
+        }
+
+        Object.keys(container).forEach((key) => {
+          if (!key || RESERVED_UNIFORM_CONTAINER_KEYS.has(key)) {
+            return;
+          }
+
+          const entry = container[key];
+          if (!entry || typeof entry !== 'object') {
+            container[key] = { value: null };
+            updated = true;
+            return;
+          }
+
+          if (!Object.prototype.hasOwnProperty.call(entry, 'value')) {
+            if (!assignPortalUniformValue(entry, null)) {
+              container[key] = { value: null };
+            }
+            updated = true;
+            return;
+          }
+
+          if (typeof entry.value === 'undefined') {
+            if (!assignPortalUniformValue(entry, null)) {
+              entry.value = null;
+            }
+            updated = true;
+          }
+        });
+
+        if (updated && material && typeof material === 'object') {
+          if ('uniformsNeedUpdate' in material) {
+            material.uniformsNeedUpdate = true;
+          }
+          if ('needsUpdate' in material) {
+            material.needsUpdate = true;
+          }
+        }
+
+        return updated;
+      };
+
+      const inspectMaterial = (material) => {
+        if (!material || visitedMaterials.has(material)) {
+          return;
+        }
+        visitedMaterials.add(material);
+
+        const uniforms = material.uniforms;
+        if (normalizeUniformContainer(material, uniforms)) {
+          modified = true;
+        }
+      };
+
+      const collectMaterial = (candidate, cb) => {
+        if (!candidate) {
+          return;
+        }
+        if (Array.isArray(candidate)) {
+          candidate.forEach((entry) => collectMaterial(entry, cb));
+          return;
+        }
+        cb(candidate);
+      };
+
+      scene.traverse((object) => {
+        if (!object) {
+          return;
+        }
+        collectMaterial(object.material, inspectMaterial);
+        collectMaterial(object.customDepthMaterial, inspectMaterial);
+        collectMaterial(object.customDistanceMaterial, inspectMaterial);
+      });
+
+      return modified;
+    }
+
+    function sanitizeSceneUniforms() {
         if (!scene || typeof scene.traverse !== 'function') {
           return false;
         }
@@ -9924,6 +10027,11 @@
             rendererRecoveryFrames = Math.max(rendererRecoveryFrames, 1);
             return;
           }
+        }
+        if (ensureSceneUniformValuePresence()) {
+          rendererRecoveryFrames = Math.max(rendererRecoveryFrames, 1);
+          pendingUniformSanitizations = Math.max(pendingUniformSanitizations, 1);
+          return;
         }
         if (pendingUniformSanitizations === 0 && sceneHasUniformIntegrityIssues()) {
           const sanitized = sanitizeSceneUniforms();
