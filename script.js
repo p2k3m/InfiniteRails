@@ -2090,6 +2090,7 @@
     let rimLight;
     let playerLocator;
     let playerHintTimer = null;
+    const visualFallbackNotices = new Set();
     let lastDimensionHintKey = null;
 
     let previewGroup;
@@ -2228,6 +2229,9 @@
     });
 
     dismissBriefingButton?.addEventListener('click', () => {
+      if (state?.ui) {
+        state.ui.briefingAcknowledged = true;
+      }
       hideGameBriefing();
       canvas?.focus();
     });
@@ -2985,6 +2989,17 @@
       playerHintEl.removeAttribute('data-variant');
     }
 
+    function announceVisualFallback(key, message) {
+      if (!message || visualFallbackNotices.has(key)) {
+        return;
+      }
+      visualFallbackNotices.add(key);
+      showPlayerHint(message, {
+        variant: 'warning',
+        duration: 10000,
+      });
+    }
+
     const DEFAULT_BRIEFING_STEPS = [
       'Collect wood and stone with Space, F, or a tap while facing a resource tile.',
       'Open the hammer icon to craft a Stone Pickaxe and unlock new recipes.',
@@ -3036,7 +3051,9 @@
 
     function showGameBriefing(options = {}) {
       if (!gameBriefingEl) return;
-      const { autoHide = true, duration = 14000 } = options;
+      const hasAcknowledged = Boolean(state?.ui?.briefingAcknowledged);
+      const autoHide = options.autoHide ?? hasAcknowledged;
+      const duration = options.duration ?? (hasAcknowledged ? 14000 : 20000);
       renderGameBriefingSteps();
       if (gameBriefingTimer) {
         clearTimeout(gameBriefingTimer);
@@ -3752,7 +3769,7 @@
       renderer.setPixelRatio(window.devicePixelRatio ?? 1);
       renderer.outputColorSpace = THREE.SRGBColorSpace;
       renderer.toneMapping = THREE.ACESFilmicToneMapping;
-      renderer.toneMappingExposure = 1.18;
+      renderer.toneMappingExposure = 0.98;
       renderer.setClearColor(new THREE.Color('#060b18'), 1);
 
       scene = new THREE.Scene();
@@ -3940,6 +3957,10 @@
         console.warn(
           'Portal shaders unavailable on this device; using emissive fallback materials instead.',
           error
+        );
+        announceVisualFallback(
+          'portal-shader',
+          'Portal glow effects are disabled because your GPU rejected the shader. Gates still work – visuals are just simplified.'
         );
       } finally {
         disposeTestResources();
@@ -9892,6 +9913,13 @@
       playerMesh = placeholder;
       playerMeshParts = null;
       resetPlayerAnimationState();
+      announceVisualFallback(
+        'player-model',
+        'Your device blocked the detailed explorer model, so a simplified avatar is active. Enable WebGL or switch browsers for full visuals.'
+      );
+      if (state?.ui) {
+        state.ui.fallbackNoticeShown = true;
+      }
     }
 
     function parseEmbeddedModel(key, onLoad, onError) {
@@ -11339,7 +11367,7 @@
       );
       sunLight.target.position.set(playerScene.x, playerHeight - 0.6, playerScene.z);
       sunLight.target.updateMatrixWorld();
-      sunLight.intensity = 0.35 + dayStrength * 1.65;
+      sunLight.intensity = 0.3 + dayStrength * 1.2;
 
       const moonAngle = sunAngle + Math.PI;
       const moonElevation = Math.sin(moonAngle);
@@ -11355,7 +11383,7 @@
       moonLight.target.updateMatrixWorld();
       moonLight.intensity = 0.2 + nightStrength * 0.8;
 
-      hemiLight.intensity = 0.55 + dayStrength * 0.75;
+      hemiLight.intensity = 0.5 + dayStrength * 0.55;
       hemiLight.color.lerpColors(lightingState.nightSky, lightingState.daySky, dayStrength);
       hemiLight.groundColor.lerpColors(lightingState.groundNight, lightingState.groundDay, dayStrength);
 
@@ -11982,6 +12010,8 @@
         inventorySortMode: 'default',
         tarOverlayLevel: 0,
         movementHintDismissed: false,
+        briefingAcknowledged: false,
+        fallbackNoticeShown: false,
       },
       persistence: {
         autoSaveAccumulator: 0,
@@ -13017,7 +13047,8 @@
         const summary = tasks[0] ?? info.description;
         showPlayerHint(`Now entering ${info.name}. ${summary}`);
         if (state.isRunning) {
-          showGameBriefing({ autoHide: true });
+          const shouldAutoHide = Boolean(state?.ui?.briefingAcknowledged);
+          showGameBriefing({ autoHide: shouldAutoHide });
         }
         lastDimensionHintKey = hintKey;
       }

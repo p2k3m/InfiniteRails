@@ -476,12 +476,15 @@ body:not(.game-active) .manu-logo {
   position: fixed;
   inset: 0;
   pointer-events: none;
-  background: radial-gradient(circle at 50% 35%, rgba(77, 164, 255, 0.35), transparent 65%),
-    radial-gradient(circle at 20% 65%, rgba(82, 224, 163, 0.18), transparent 70%);
-  mix-blend-mode: screen;
-  opacity: calc(0.32 + (1 - var(--time-phase)) * 0.38);
+  background:
+    radial-gradient(circle at 48% 32%, rgba(77, 164, 255, 0.22), transparent 62%),
+    radial-gradient(circle at 22% 68%, rgba(82, 224, 163, 0.14), transparent 70%),
+    linear-gradient(180deg, rgba(9, 20, 36, 0.65), rgba(4, 11, 23, 0.85));
+  mix-blend-mode: normal;
+  opacity: calc(0.2 + (1 - var(--time-phase)) * 0.25);
+  filter: saturate(0.85);
   animation: pulse 14s ease-in-out infinite;
-  transition: background 0.8s ease, opacity 0.8s ease;
+  transition: background 0.8s ease, opacity 0.8s ease, filter 0.8s ease;
   z-index: -1;
 }
 
