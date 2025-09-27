@@ -6349,15 +6349,19 @@
 
     function createPortalFallbackMaterial(accentColor, active = false) {
       const accent = new THREE.Color(accentColor ?? '#7b6bff');
-      const baseColor = new THREE.Color('#1a1f39').lerp(accent, active ? 0.65 : 0.5);
+      const baseColor = new THREE.Color('#060b16').lerp(accent, active ? 0.45 : 0.35);
+      // The fallback needs to stay visible on very low-end GPUs without overwhelming
+      // the scene with a solid white glow. A darker base colour combined with a dimmed
+      // emissive term keeps the gate readable while allowing Steve and the terrain to
+      // remain visible behind the transparent surface.
       return new THREE.MeshStandardMaterial({
         color: baseColor,
-        emissive: accent,
-        emissiveIntensity: active ? 0.6 : 0.35,
+        emissive: accent.clone().multiplyScalar(active ? 0.4 : 0.25),
+        emissiveIntensity: 1,
         transparent: true,
-        opacity: active ? 0.7 : 0.45,
-        metalness: 0.35,
-        roughness: 0.4,
+        opacity: active ? 0.4 : 0.28,
+        metalness: 0.12,
+        roughness: 0.55,
         side: THREE.DoubleSide,
         depthWrite: false,
       });
