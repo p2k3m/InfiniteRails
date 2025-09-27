@@ -513,9 +513,18 @@
       if (window.APP_CONFIG?.forceAdvanced) return false;
       if (window.APP_CONFIG?.forceSimpleMode) return true;
       if (window.APP_CONFIG?.defaultMode) {
-        return window.APP_CONFIG.defaultMode === 'simple';
+        if (window.APP_CONFIG.defaultMode === 'advanced') return false;
+        if (window.APP_CONFIG.defaultMode === 'simple') return true;
       }
-      return false;
+      const simpleAvailable = Boolean(window.SimpleExperience?.create);
+      const advancedAvailable = Boolean(window.APP_CONFIG?.enableAdvancedExperience);
+      if (!simpleAvailable) {
+        return false;
+      }
+      if (!advancedAvailable) {
+        return true;
+      }
+      return window.APP_CONFIG?.preferAdvanced !== true;
     }
 
     function setupSimpleExperienceIntegrations(experience) {
