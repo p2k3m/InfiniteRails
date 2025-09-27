@@ -3721,6 +3721,7 @@
       createPlayerLocator();
       syncCameraToPlayer({ idleBob: 0, walkBob: 0, movementStrength: 0 });
       updateLighting(0);
+      validatePortalShaderSupport();
       const uniformsReady = sanitizeSceneUniforms();
       if (!uniformsReady) {
         pendingUniformSanitizations = Math.max(pendingUniformSanitizations, 2);
@@ -3728,6 +3729,94 @@
       rendererRecoveryFrames = Math.max(rendererRecoveryFrames, 1);
       console.log('Scene loaded');
       return true;
+    }
+
+    function validatePortalShaderSupport() {
+      if (!portalShaderSupport || !renderer || typeof THREE?.ShaderMaterial !== 'function') {
+        portalShaderSupport = false;
+        return;
+      }
+
+      let testMaterial = null;
+      let testScene = null;
+      let testCamera = null;
+      let testMesh = null;
+
+      const disposeTestResources = () => {
+        if (testMesh && testScene) {
+          testScene.remove(testMesh);
+        }
+        if (testMaterial) {
+          try {
+            testMaterial.dispose?.();
+          } catch (disposeError) {
+            // Ignore disposal issues for the capability probe.
+          }
+        }
+        if (testMesh?.geometry) {
+          try {
+            testMesh.geometry.dispose?.();
+          } catch (geometryDisposeError) {
+            // Ignore geometry disposal issues for the capability probe.
+          }
+        }
+        testMaterial = null;
+        testScene = null;
+        testCamera = null;
+        testMesh = null;
+      };
+
+      try {
+        const uniforms = {
+          uTime: { value: 0 },
+          uActivation: { value: 0.8 },
+          uColor: { value: new THREE.Color('#7b6bff') },
+          uOpacity: { value: 0.75 },
+        };
+
+        testMaterial = new THREE.ShaderMaterial({
+          uniforms,
+          vertexShader: PORTAL_VERTEX_SHADER,
+          fragmentShader: PORTAL_FRAGMENT_SHADER,
+          transparent: true,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        });
+
+        const guardedUniforms = guardUniformContainer(testMaterial.uniforms);
+        if (guardedUniforms && guardedUniforms !== testMaterial.uniforms) {
+          testMaterial.uniforms = guardedUniforms;
+        }
+
+        if (!hasValidPortalUniformStructure(testMaterial.uniforms)) {
+          throw new Error('Portal shader uniforms invalid after initialisation.');
+        }
+
+        testScene = new THREE.Scene();
+        testCamera = new THREE.PerspectiveCamera(45, 1, 0.1, 10);
+        testCamera.position.z = 2.4;
+        testMesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1.6), testMaterial);
+        testScene.add(testMesh);
+
+        if (typeof renderer.compile === 'function') {
+          renderer.compile(testScene, testCamera);
+        }
+
+        renderer.render(testScene, testCamera);
+
+        if (!hasValidPortalUniformStructure(testMaterial.uniforms)) {
+          throw new Error('Portal shader uniforms became invalid after compilation.');
+        }
+      } catch (error) {
+        portalShaderSupport = false;
+        console.warn(
+          'Portal shaders unavailable on this device; using emissive fallback materials instead.',
+          error
+        );
+      } finally {
+        disposeTestResources();
+      }
     }
 
     function buildProceduralIsland() {
