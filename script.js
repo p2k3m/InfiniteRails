@@ -500,6 +500,7 @@
     const landingSignInPanel = document.getElementById('landingSignInPanel');
     const scoreboardListEl = document.getElementById('scoreboardList');
     const scoreboardStatusEl = document.getElementById('scoreboardStatus');
+    const refreshScoresButton = document.getElementById('refreshScores');
 
     function shouldStartSimpleMode() {
       if (typeof window === 'undefined') return false;
@@ -555,7 +556,6 @@
     let gapiScriptPromise = null;
     let googleAuthPromise = null;
     let googleAuthInstance = null;
-    const refreshScoresButton = document.getElementById('refreshScores');
     const leaderboardModal = document.getElementById('leaderboardModal');
     const openLeaderboardButton = document.getElementById('openLeaderboard');
     const closeLeaderboardButton = document.getElementById('closeLeaderboard');
