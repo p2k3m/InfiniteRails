@@ -6800,7 +6800,36 @@
             if (!material || replacements.has(material)) {
               return;
             }
-            if (hasValidPortalUniformStructure(material.uniforms)) {
+
+            let rendererUniformsInvalid = false;
+            if (renderer?.properties?.get) {
+              let materialProperties = null;
+              try {
+                materialProperties = renderer.properties.get(material) ?? null;
+              } catch (propertiesError) {
+                materialProperties = null;
+              }
+
+              const rendererUniforms =
+                materialProperties && typeof materialProperties.uniforms === 'object'
+                  ? materialProperties.uniforms
+                  : null;
+              const programUniforms =
+                materialProperties &&
+                materialProperties.program &&
+                typeof materialProperties.program.getUniforms === 'function'
+                  ? materialProperties.program.getUniforms()
+                  : null;
+
+              rendererUniformsInvalid =
+                uniformContainerNeedsSanitization(rendererUniforms) ||
+                uniformContainerNeedsSanitization(programUniforms);
+            }
+
+            if (
+              hasValidPortalUniformStructure(material.uniforms) &&
+              !rendererUniformsInvalid
+            ) {
               return;
             }
 
