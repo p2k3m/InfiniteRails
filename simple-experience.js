@@ -1,7 +1,7 @@
 (function () {
   const WORLD_SIZE = 64;
   const BLOCK_SIZE = 1;
-  const PLAYER_EYE_HEIGHT = 1.7;
+  const PLAYER_EYE_HEIGHT = 1.8;
   const PLAYER_BASE_SPEED = 4.5;
   const PLAYER_INERTIA = 0.88;
   const DAY_LENGTH_SECONDS = 600;
@@ -380,7 +380,8 @@
       this.pointerLocked = false;
       this.yaw = 0;
       this.pitch = 0;
-      this.elapsed = 0;
+      // Begin the day/night cycle at mid-day so the HUD daylight bar starts at 50%.
+      this.elapsed = DAY_LENGTH_SECONDS * 0.5;
       this.health = FALLBACK_HEALTH;
       this.score = 0;
       this.blocksMined = 0;
@@ -922,6 +923,7 @@
       this.playerRig.position.set(0, PLAYER_EYE_HEIGHT, 12);
       this.playerRig.add(this.camera);
       this.scene.add(this.playerRig);
+      this.camera.lookAt(new THREE.Vector3(0, PLAYER_EYE_HEIGHT, -10));
 
       this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: true });
       this.renderer.outputColorSpace = THREE.SRGBColorSpace;
