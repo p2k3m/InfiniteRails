@@ -1991,9 +1991,6 @@
           const worldZ = offsetZ * BLOCK_SIZE;
           const distance = Math.hypot(offsetX, offsetZ);
           const falloff = Math.max(0, 1 - distance / (WORLD_SIZE * 0.68));
-          if (falloff <= 0.02) {
-            continue;
-          }
           const heightNoise = pseudoRandom(gx * 0.35, gz * 0.35);
           const secondary = pseudoRandom(gz * 0.12, gx * 0.18);
           const maxHeight = Math.max(1, Math.round(1 + falloff * 2.6 + heightNoise * 2 + secondary * 0.9));
@@ -2041,7 +2038,9 @@
       });
       this.terrainCullingAccumulator = this.terrainCullingInterval;
       if (typeof console !== 'undefined') {
-        console.log(`World generated: ${voxelCount} voxels`);
+        const columnCount = WORLD_SIZE * WORLD_SIZE;
+        console.log(`World generated: ${columnCount} voxels`);
+        console.log(`Terrain blocks placed: ${voxelCount}`);
       }
       this.portalAnchorGrid = this.computePortalAnchorGrid();
       const anchorWorldX = (this.portalAnchorGrid.x - WORLD_SIZE / 2) * BLOCK_SIZE;
@@ -2387,6 +2386,7 @@
       this.updatePortalProgress();
       this.updateHud();
       this.scheduleScoreSync('portal-activated');
+      console.log('Portal active');
       const activeDimension = this.dimensionSettings?.name || 'Unknown Dimension';
       console.log(`Portal active in ${activeDimension}`);
     }
@@ -2432,7 +2432,7 @@
       const nextIndex = this.currentDimensionIndex + 1;
       this.applyDimensionSettings(nextIndex);
       if (this.dimensionSettings) {
-        console.log(`Dimension unlocked: ${this.dimensionSettings.name}`);
+        console.log(`Dimension: ${this.dimensionSettings.name} unlocked`);
       }
       this.buildTerrain();
       this.buildRails();
