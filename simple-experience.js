@@ -26,6 +26,11 @@
 
   const RECIPE_UNLOCK_STORAGE_KEY = 'infinite-rails-recipe-unlocks';
 
+  const PORTAL_MECHANICS =
+    (typeof window !== 'undefined' && window.PortalMechanics) ||
+    (typeof globalThis !== 'undefined' && globalThis.PortalMechanics) ||
+    null;
+
   const MODEL_URLS = {
     arm: 'assets/arm.gltf',
     steve: 'assets/steve.gltf',
@@ -305,6 +310,7 @@
       this.railsGroup = null;
       this.portalGroup = null;
       this.zombieGroup = null;
+      this.portalMechanics = PORTAL_MECHANICS;
       this.playerRig = null;
       this.handGroup = null;
       this.handMaterials = [];
@@ -381,9 +387,12 @@
       this.blocksPlaced = 0;
       this.portalBlocksPlaced = 0;
       this.portalActivated = false;
+      this.portalReady = false;
       this.portalMesh = null;
       this.portalActivations = 0;
       this.portalHintShown = false;
+      this.portalState = null;
+      this.portalIgnitionLog = [];
       this.victoryAchieved = false;
       this.currentDimensionIndex = 0;
       this.dimensionSettings = DIMENSION_THEME[0];
@@ -1538,6 +1547,10 @@
         this.advanceDimension();
         return;
       }
+      if (this.portalReady && this.isPlayerNearPortalFrame()) {
+        this.ignitePortal('torch');
+        return;
+      }
       this.placeBlock();
     }
 
@@ -2201,6 +2214,7 @@
       this.portalFrameSlots.clear();
       this.restorePortalInteriorBlocks();
       this.portalHiddenInterior = [];
+      this.portalReady = false;
       const anchor = this.portalAnchorGrid || this.computePortalAnchorGrid();
       const layout = this.portalFrameLayout || this.createPortalFrameLayout();
       const initial = this.initialHeightMap;
@@ -2296,6 +2310,105 @@
       this.portalHiddenInterior = [];
     }
 
+    getPortalAnchorWorldPosition(target = this.tmpVector3) {
+      const THREE = this.THREE;
+      const anchor = this.portalAnchorGrid || this.computePortalAnchorGrid();
+      if (!anchor) {
+        if (target?.set) {
+          target.set(0, 0, 0);
+        } else {
+          target.x = 0;
+          target.y = 0;
+          target.z = 0;
+        }
+        return target;
+      }
+      const gridX = Math.max(0, Math.min(WORLD_SIZE - 1, anchor.x));
+      const gridZ = Math.max(0, Math.min(WORLD_SIZE - 1, anchor.z));
+      const baseHeight = this.initialHeightMap?.[gridX]?.[gridZ] ?? 0;
+      const worldX = (gridX - WORLD_SIZE / 2) * BLOCK_SIZE;
+      const worldZ = (gridZ - WORLD_SIZE / 2) * BLOCK_SIZE;
+      const worldY = (baseHeight + 1.5) * BLOCK_SIZE;
+      if (target?.set && THREE?.Vector3 && target instanceof THREE.Vector3) {
+        target.set(worldX, worldY, worldZ);
+      } else if (target) {
+        target.x = worldX;
+        target.y = worldY;
+        target.z = worldZ;
+      }
+      return target;
+    }
+
+    isPlayerNearPortalFrame() {
+      const anchorWorld = this.getPortalAnchorWorldPosition(this.tmpVector3);
+      const cameraPosition = this.getCameraWorldPosition(this.tmpVector2);
+      const distance = anchorWorld.distanceTo ? anchorWorld.distanceTo(cameraPosition) : null;
+      if (distance === null || Number.isNaN(distance)) {
+        return false;
+      }
+      return distance <= PORTAL_INTERACTION_RANGE;
+    }
+
+    getPortalFootprint() {
+      const anchor = this.portalAnchorGrid || this.computePortalAnchorGrid();
+      if (!anchor) {
+        return null;
+      }
+      const gridX = Math.max(0, Math.min(WORLD_SIZE - 1, anchor.x));
+      const gridZ = Math.max(0, Math.min(WORLD_SIZE - 1, anchor.z));
+      const baseHeight = this.initialHeightMap?.[gridX]?.[gridZ] ?? 0;
+      const frame = [];
+      const interior = [];
+      for (let xOffset = -1; xOffset <= 1; xOffset += 1) {
+        for (let relY = 0; relY <= 3; relY += 1) {
+          const entry = {
+            x: gridX + xOffset,
+            y: baseHeight + relY,
+            z: gridZ,
+          };
+          if (Math.abs(xOffset) === 1 || relY === 0 || relY === 3) {
+            frame.push(entry);
+          } else if (relY > 0 && relY < 3) {
+            interior.push(entry);
+          }
+        }
+      }
+      return {
+        frame,
+        interior,
+        orientation: 'horizontal',
+        bounds: { width: 3, height: 4 },
+      };
+    }
+
+    ignitePortal(tool = 'torch') {
+      if (!this.portalReady || this.portalActivated) {
+        return;
+      }
+      const footprint = this.getPortalFootprint();
+      let events = [];
+      if (this.portalMechanics?.ignitePortalFrame && footprint) {
+        try {
+          const result = this.portalMechanics.ignitePortalFrame(footprint, { tool });
+          if (Array.isArray(result?.events)) {
+            events = result.events.slice();
+            this.portalIgnitionLog = events.slice(0, 6);
+          }
+          if (result?.portal) {
+            this.portalState = result.portal;
+          }
+        } catch (error) {
+          console.warn('Portal ignition mechanics failed', error);
+        }
+      }
+      this.portalReady = false;
+      this.score += 5;
+      this.activatePortal();
+      const message = events.length ? events.join(' ') : 'Portal ignited — step through to travel.';
+      this.showHint(message);
+      this.scheduleScoreSync('portal-primed');
+    }
+
     updatePortalFrameStateForColumn(gx, gz) {
       if (!this.portalFrameSlots.size) {
         return;
@@ -2340,6 +2453,9 @@
         this.portalMesh = null;
       }
       this.portalActivated = false;
+      this.portalReady = false;
+      this.portalState = null;
+      this.portalIgnitionLog = [];
       this.restorePortalInteriorBlocks();
       this.updatePortalInteriorValidity();
       this.updatePortalProgress();
@@ -2358,9 +2474,10 @@
       const gridX = Math.max(0, Math.min(WORLD_SIZE - 1, anchor.x));
       const gridZ = Math.max(0, Math.min(WORLD_SIZE - 1, anchor.z));
       const baseHeight = this.initialHeightMap?.[gridX]?.[gridZ] ?? 0;
-      const worldX = (gridX - WORLD_SIZE / 2) * BLOCK_SIZE;
-      const worldZ = (gridZ - WORLD_SIZE / 2) * BLOCK_SIZE;
-      const worldY = (baseHeight + 1.5) * BLOCK_SIZE;
+      const anchorWorld = this.getPortalAnchorWorldPosition(this.tmpVector3);
+      const worldX = anchorWorld.x;
+      const worldY = anchorWorld.y;
+      const worldZ = anchorWorld.z;
       this.portalGroup.clear();
       this.portalActivated = true;
       if (!this.portalPlaneGeometry) {
@@ -2400,26 +2517,35 @@
 
     checkPortalActivation() {
       const required = this.portalFrameRequiredCount || PORTAL_BLOCK_REQUIREMENT;
+      const ready = required > 0 && this.portalFrameInteriorValid && this.portalBlocksPlaced >= required;
       if (this.portalActivated) {
-        if (this.portalBlocksPlaced < required || !this.portalFrameInteriorValid) {
+        if (!ready) {
           this.deactivatePortal();
         } else {
           this.updatePortalProgress();
         }
         return;
       }
-      if (required > 0 && this.portalFrameInteriorValid && this.portalBlocksPlaced >= required) {
-        this.activatePortal();
-        this.score += 5;
-        this.updateHud();
-      } else {
+      if (!ready) {
         const progress = required > 0 ? this.portalBlocksPlaced / required : 0;
         if (!this.portalHintShown && progress >= 0.5) {
           this.portalHintShown = true;
           this.score += 1;
+          this.updateHud();
         }
+        this.portalReady = false;
         this.updatePortalProgress();
+        return;
       }
+      if (!this.portalReady) {
+        this.portalReady = true;
+        this.portalHintShown = true;
+        this.portalIgnitionLog = [];
+        this.score += 1;
+        this.updateHud();
+        this.showHint('Portal frame complete — press F to ignite your torch.');
+      }
+      this.updatePortalProgress();
     }
 
     advanceDimension() {
@@ -2430,7 +2556,33 @@
         return;
       }
       const nextIndex = this.currentDimensionIndex + 1;
+      const nextSettings = DIMENSION_THEME[nextIndex] || null;
+      let pointsAwarded = 5;
+      let portalLog = '';
+      let transitionResult = null;
+      if (this.portalMechanics?.enterPortal) {
+        try {
+          const result = this.portalMechanics.enterPortal(this.portalState || { active: true }, {
+            name: nextSettings?.name || `Dimension ${nextIndex + 1}`,
+            id: nextSettings?.id || `dimension-${nextIndex + 1}`,
+            physics: { gravity: nextSettings?.gravity ?? this.gravityScale, shaderProfile: nextSettings?.id ?? 'default' },
+            unlockPoints: 5,
+          });
+          transitionResult = result;
+          if (result?.pointsAwarded !== undefined) {
+            pointsAwarded = result.pointsAwarded;
+          }
+          if (result?.log) {
+            portalLog = result.log;
+          }
+        } catch (error) {
+          console.warn('Portal transition mechanics failed', error);
+        }
+      }
       this.applyDimensionSettings(nextIndex);
+      if (transitionResult?.physics?.gravity !== undefined) {
+        this.gravityScale = transitionResult.physics.gravity;
+      }
       if (this.dimensionSettings) {
         console.log(`Dimension: ${this.dimensionSettings.name} unlocked`);
       }
@@ -2441,10 +2593,16 @@
       this.clearZombies();
       this.clearGolems();
       this.lastGolemSpawn = this.elapsed;
-      this.score += 5;
+      if (Number.isFinite(pointsAwarded)) {
+        this.score += pointsAwarded;
+      }
       this.updateHud();
       this.scheduleScoreSync('dimension-advanced');
       this.audio.play('bubble', { volume: 0.5 });
+      if (portalLog) {
+        this.showHint(portalLog);
+      }
+      this.portalState = null;
     }
 
     triggerVictory() {
@@ -2589,6 +2747,8 @@
       if (event.code === 'KeyF') {
         if (this.portalActivated && this.isPlayerNearPortal()) {
           this.advanceDimension();
+        } else if (this.portalReady && this.isPlayerNearPortalFrame()) {
+          this.ignitePortal('torch');
         }
         event.preventDefault();
       }
@@ -3923,6 +4083,8 @@
           portalProgressLabel.textContent = 'Eternal Ingot secured';
         } else if (this.portalActivated) {
           portalProgressLabel.textContent = 'Portal stabilised';
+        } else if (this.portalReady) {
+          portalProgressLabel.textContent = 'Portal ready — press F to ignite';
         } else if (!this.portalFrameInteriorValid && this.portalBlocksPlaced > 0) {
           portalProgressLabel.textContent = 'Clear the portal interior';
         } else {
@@ -3931,7 +4093,9 @@
       }
       if (portalProgressBar) {
         let displayProgress = this.victoryAchieved ? 1 : progress;
-        if (!this.portalFrameInteriorValid && !this.portalActivated) {
+        if (this.portalReady && !this.portalActivated) {
+          displayProgress = 1;
+        } else if (!this.portalFrameInteriorValid && !this.portalActivated) {
           displayProgress = Math.min(displayProgress, 0.5);
         }
         portalProgressBar.style.setProperty('--progress', displayProgress.toFixed(2));
