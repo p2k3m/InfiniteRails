@@ -9,94 +9,74 @@ using automated coding assistants, the verbatim task prompts from the brief are
 archived in [`coding-agent-prompts.md`](./coding-agent-prompts.md) so they can be
 shared directly with your tooling when a checklist item needs to be revisited.
 
+> **Reality check (April 2024)** – The prior version of this roadmap erroneously
+> marked every item as shipped even though the project still renders an empty
+> scene. All sections below now reflect the true status of the codebase. Use the
+> [portals-of-dimension plan](./portals-of-dimension-plan.md) for the detailed
+> engineering breakdown behind each unchecked box.
+
 ## Rendering & World Simulation
 
-- [x] Initialize a Three.js powered render loop using the bundled r161 build
-      (see `SimpleExperience.start()` which creates the renderer, lights, and
-      animation loop before exposing the sandbox). See
-      [`simple-experience.js`](../simple-experience.js).
-- [x] Populate a 64×64 voxel island with lighting, skybox, and day/night cycle
-      (procedural generation takes place in `buildTerrain()`/`buildRails()` and
-      the day/night cycle is advanced inside `updateDayNightCycle`). See
-      [`simple-experience.js`](../simple-experience.js).
-- [x] Ensure the render loop is delta-time driven and holds 60 FPS on mid-tier
-      devices. `tick()` pulls a shared `THREE.Clock` delta and clamps the loop
-      to 60 FPS while logging performance counters. See
-      [`simple-experience.js`](../simple-experience.js).
+- [ ] Initialise a Three.js-powered render loop using the bundled r161 build
+      and ensure it survives CDN failure. No render loop currently runs.
+- [ ] Populate a 64×64 voxel island with lighting, skybox, and day/night cycle.
+      The world group is empty and nothing is drawn to the canvas.
+- [ ] Deliver a delta-time driven loop that can sustain 60 FPS on mid-tier
+      devices. Frame pacing is absent and there is no performance telemetry.
 
 ## Player Experience
 
-- [x] Load and display the Steve GLTF model in first-person view (arms/hands
-      visible). `loadHandModels()` and `upgradePlayerModel()` attach the model
-      to the camera rig for the sandbox. See
-      [`simple-experience.js`](../simple-experience.js).
-- [x] Bind WASD + mouse look + mobile virtual joystick for locomotion. Desktop
-      keyboard/mouse listeners live in `bindDesktopControls()` and mobile touch
-      control is handled via `bindMobileControls()`. See
-      [`simple-experience.js`](../simple-experience.js).
-- [x] Implement mining, block placement, and inventory slot updates using
-      raycasting. `handlePrimaryAction()`/`handleSecondaryAction()` perform the
-      raycasts and update the hotbar state. See
-      [`simple-experience.js`](../simple-experience.js).
+- [ ] Load and display the Steve GLTF model in first-person view (arms/hands
+      visible). No avatar is currently rendered.
+- [ ] Bind WASD + mouse look + mobile virtual joystick for locomotion. Event
+      listeners exist but do not manipulate the scene.
+- [ ] Implement mining, block placement, and inventory updates using
+      raycasting. Mining and placement buttons are non-functional.
 
 ## Entities & Combat
 
-- [x] Spawn zombies during the night cycle and implement basic chase AI.
-      `maybeSpawnZombie()` gates spawns on daylight percentage and
-      `updateZombies()` drives pursuit behaviour. See
-      [`simple-experience.js`](../simple-experience.js).
-- [x] Spawn allied iron golems that defend the player. `maybeSpawnGolem()` and
-      `updateGolems()` orchestrate allied behaviour each tick. See
-      [`simple-experience.js`](../simple-experience.js).
-- [x] Deduct hearts on zombie contact and trigger respawn after five hits.
-      `applyZombieStrike()` and `respawnPlayer()` are invoked from
-      `checkZombieCollisions()`. See [`simple-experience.js`](../simple-experience.js).
+- [ ] Spawn zombies during the night cycle and implement chase AI. There are no
+      hostile entities at present.
+- [ ] Spawn allied iron golems that defend the player. Friendly AI has not been
+      created.
+- [ ] Deduct hearts on zombie contact and trigger respawn after five hits. The
+      HUD never updates because damage is not tracked.
 
 ## Crafting & Progression
 
-- [x] Implement hotbar inventory and 3×3 crafting modal with recipe validation.
-      `updateCraftingUi()` reflects drag events while `completeCraftingSequence`
-      validates recipes. See [`simple-experience.js`](../simple-experience.js).
-- [x] Award score for successful recipes and dimension unlocks. The sandbox
-      increments totals within `grantRecipeScore()` and `advanceDimension()`. See
-      [`simple-experience.js`](../simple-experience.js).
-- [x] Build portal frames that open new dimensions with custom rules and
-      transition shaders. `activatePortal()` creates the animated surface and
-      `advanceDimension()` applies realm-specific physics. See
-      [`simple-experience.js`](../simple-experience.js).
+- [ ] Implement hotbar inventory and 3×3 crafting modal with recipe validation.
+      The UI renders but cannot be interacted with.
+- [ ] Award score for successful recipes and dimension unlocks. Scores stay at
+      zero because nothing modifies them.
+- [ ] Build portal frames that open new dimensions with custom rules and
+      transition shaders. Portal logic is unimplemented.
 
 ## Backend, UI, and Polish
 
-- [x] Sync scores to the AWS backend and refresh the leaderboard modal. The
-      sandbox defers to `loadScoreboard()`/`syncScore()` for Dynamo-ready API
-      calls. See [`simple-experience.js`](../simple-experience.js).
-- [x] Wire Google Sign-In to attribute runs and persist unlocks. The identity
-      harness in `setupSimpleExperienceIntegrations()` handles GIS buttons,
-      fallback flows, and persistence. See [`script.js`](../script.js).
-- [x] Add responsive HUD feedback, tooltips, and ambient audio cues. HUD wiring
-      lives in `updateHud()`/`updateTooltips()` and audio cues are orchestrated
-      via `this.audio`. See [`simple-experience.js`](../simple-experience.js).
+- [ ] Sync scores to the AWS backend and refresh the leaderboard modal. No
+      runtime calls are made yet.
+- [ ] Wire Google Sign-In to attribute runs and persist unlocks. UI buttons
+      exist but the flow is stubbed.
+- [ ] Add responsive HUD feedback, tooltips, and ambient audio cues. HUD values
+      stay static and no audio is played.
 
 ## QA & Deployment
 
-- [x] Document automated validation steps and smoke tests for the browser
-      build. See [`docs/validation-matrix.md`](./validation-matrix.md).
-- [x] Ensure deploy pipeline verifies assets and reports FPS health checks. The
-      GitHub Actions workflow now calls out FPS metrics in its health summary.
-      See [`docs/validation-matrix.md`](./validation-matrix.md) for coverage and
-      [`.github/workflows/deploy.yml`](../.github/workflows/deploy.yml) for
-      deployment wiring.
+- [ ] Document automated validation steps and smoke tests for the browser
+      build. The validation matrix needs to be refreshed once features land.
+- [ ] Ensure the deploy pipeline verifies assets and reports FPS health checks.
+      No automated performance reporting exists yet.
 
 ---
 
 ### Additional follow-ups
 
-- [ ] Continue iterating on the advanced renderer so it reaches feature parity
-      with the sandbox before flipping the default flag.
-- [ ] Add automated regression for mobile virtual joystick gestures to mirror
-      the existing WASD Puppeteer run.
-- [ ] Expand shader recovery tests around the portal material to catch missing
-      uniforms earlier in development builds.
+- [ ] Continue iterating on the renderer until it matches the specifications in
+      the design brief.
+- [ ] Add automated regression for mobile virtual joystick gestures once the
+      controls exist.
+- [ ] Expand shader recovery tests around the portal material after portals are
+      implemented.
 
 ---
 

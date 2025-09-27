@@ -1,22 +1,22 @@
 # Spec Compliance Summary: Infinite Rails — Portals of Dimension
 
-The table below maps each requirement from the "Comprehensive Analysis and Enhancement Specifications for Infinite Rails" brief to concrete implementations in the repository. Citations point to the shipped code or markup that satisfies the behaviour.
+The previous revision of this document incorrectly claimed full compliance with the design brief. In reality the repository lacks the majority of the requested gameplay systems. This page now functions as a gap analysis so stakeholders can see what still needs to be delivered.
 
-| Spec Area | Implementation Evidence |
-| --- | --- |
-| **Initialization & Onboarding** | `SimpleExperience.start()` boots the renderer, hides the intro modal, presents a five-second controls briefing, and focuses the canvas for immediate play.【F:simple-experience.js†L504-L559】 The viewport ships with a dedicated tutorial overlay inside `index.html` that calls out WASD, mining, and portal creation controls.【F:index.html†L134-L197】 |
-| **Procedural World & Lighting** | `setupScene()` instantiates the Three.js scene, camera, lights, and renderer, while `buildTerrain()` generates a 64×64 voxel island and logs the 4,096-block grid to the console to confirm population.【F:simple-experience.js†L900-L961】【F:simple-experience.js†L1971-L2051】 Day/night sun orbits run every frame via `updateSunCycle()` to deliver the requested 10-minute daylight loop.【F:simple-experience.js†L2857-L2880】 |
-| **Player Visibility & First-Person Perspective** | `loadPlayerCharacter()` attaches the Steve GLTF to the camera rig, plays the idle animation, and ensures fallback cubes render if the asset fails—logging “Steve visible in scene” once loaded.【F:simple-experience.js†L1740-L1877】 |
-| **Movement, Input & Mining/Placement** | Keyboard, pointer lock, and mobile handlers cover WASD movement, jumping, mouse-look, raycast mining, block placement, and a virtual joystick for touch. Mining feeds inventory updates and HUD hints.【F:simple-experience.js†L1326-L1557】【F:simple-experience.js†L2483-L2620】 |
-| **Entities, Combat & Survival** | `spawnZombiesForNight()` and `updateZombies()` spawn Minecraft-style enemies after dusk, steering toward the player and deducting half-heart damage on contact; `spawnGolemsIfNeeded()` adds allied defenders with intercept logic.【F:simple-experience.js†L2904-L3093】 Hearts, oxygen bubbles, and damage overlays update inside `updateHud()` and `animateDamageOverlay()` to reflect survival state.【F:simple-experience.js†L3097-L3174】【F:simple-experience.js†L3897-L3970】 |
-| **Crafting, Inventory & Score Feedback** | Drag-and-drop crafting sequences validate recipes, award +2 points, unlock hotbar items, and update scoreboard tallies. Inventory slots stack to 99 items, mirroring the spec’s hotbar rules.【F:simple-experience.js†L3271-L3655】 |
-| **Portals, Dimensions & Progression** | Portal detection scans for 4×3 frames, activates shader-driven transitions, increments dimension indices, and adjusts gravity/lighting per realm. The Netherite dimension installs collapsing rails and Eternal Ingot victory flow before triggering the celebration modal.【F:simple-experience.js†L2100-L2462】【F:simple-experience.js†L3735-L3964】 |
-| **Backend Sync & SSO Hooks** | The sandbox polls `GET /scores`, posts leaderboard updates on unlock events, and merges responses into the UI. Google SSO wiring in `script.js` mirrors the spec by provisioning GIS buttons, persisting identity, and syncing to DynamoDB-ready endpoints.【F:simple-experience.js†L593-L710】【F:simple-experience.js†L760-L872】【F:script.js†L760-L1010】 |
-| **UI Feedback & Accessibility** | HUD tooltips, objective panels, and aria-aware modals in `index.html` surface the mission brief, leaderboard, crafting panels, and settings toggles described in the spec.【F:index.html†L40-L410】 |
-| **Performance & Asset Optimisation** | Delta-time pacing clamps animation frames, chunk-level frustum culling skips off-screen voxels, and cached GLTF assets prevent redundant fetches—all contributing to the 60 FPS target with lazy-loaded models.【F:simple-experience.js†L1923-L2051】【F:simple-experience.js†L2656-L2799】 |
+| Spec Area | Current Status | Gap Summary |
+| --- | --- | --- |
+| **Initialization & Onboarding** | ❌ Not implemented | The intro UI renders but no tutorial overlay, pointer lock, or camera focus logic exists. Players receive no controls briefing on load. |
+| **Procedural World & Lighting** | ❌ Not implemented | Three.js initialises, yet the scene contains no voxel meshes, lights, or skybox. The day/night cycle and sun orbit are missing. |
+| **Player Visibility & First-Person Perspective** | ❌ Not implemented | No player model (Steve or fallback) is loaded, leaving the scene empty and the camera detached from any avatar. |
+| **Movement, Input & Mining/Placement** | ❌ Not implemented | WASD, mouse look, mining, placement, and mobile joystick controls are unbound; hotbar/inventory never change. |
+| **Entities, Combat & Survival** | ❌ Not implemented | There are no zombies, golems, health deductions, oxygen bubbles, or respawn flows. Hearts stay static. |
+| **Crafting, Inventory & Score Feedback** | ❌ Not implemented | The crafting modal is decorative. Recipes, scoring, and hotbar management are absent. |
+| **Portals, Dimensions & Progression** | ❌ Not implemented | Portal frames cannot be constructed or activated. Realm-specific physics, the Netherite boss, and victory flow do not exist. |
+| **Backend Sync & SSO Hooks** | ⚠️ Partially scaffolded | Serverless handlers are present, but the frontend never calls `/users` or `/scores` because gameplay hooks are missing. Google SSO buttons render without completing the auth flow. |
+| **UI Feedback & Accessibility** | ⚠️ Partially scaffolded | HUD panels render static placeholder copy. Tooltips, leaderboard data, and responsive states require implementation. |
+| **Performance & Asset Optimisation** | ❌ Not implemented | No delta-time pacing, frustum culling, or asset caching exists. Performance targets are unmet because the scene is empty. |
 
-## Additional Notes
+## Next steps
 
-- Audio cues route through Howler.js with graceful fallbacks when the library is unavailable, matching the spec’s request for ambient mining and combat sounds.【F:simple-experience.js†L1231-L1334】
-- Score synchronisation defers to offline local storage when `APP_CONFIG.apiBaseUrl` is unset, ensuring consistent UX regardless of backend availability.【F:simple-experience.js†L593-L710】
-- The compliance evidence is additive to the existing `docs/feature-verification.md` deep dive and will be updated as new portal rules or mechanics land.
+- Track implementation progress in [docs/enhancement-roadmap.md](./enhancement-roadmap.md).
+- Use [docs/portals-of-dimension-plan.md](./portals-of-dimension-plan.md) for per-system engineering guidance.
+- Update this compliance table once code lands that demonstrably satisfies each requirement.
