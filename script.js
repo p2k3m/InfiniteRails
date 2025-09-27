@@ -6796,6 +6796,89 @@
         }
       };
 
+      const rebuildCache = new Map();
+
+      const rebuildPortalMaterial = (material, metadata = {}) => {
+        if (!material) {
+          return null;
+        }
+
+        if (rebuildCache.has(material)) {
+          return rebuildCache.get(material);
+        }
+
+        let rendererUniformsInvalid = false;
+        if (renderer?.properties?.get) {
+          let materialProperties = null;
+          try {
+            materialProperties = renderer.properties.get(material) ?? null;
+          } catch (propertiesError) {
+            materialProperties = null;
+          }
+
+          const rendererUniforms =
+            materialProperties && typeof materialProperties.uniforms === 'object'
+              ? materialProperties.uniforms
+              : null;
+          const programUniforms =
+            materialProperties &&
+            materialProperties.program &&
+            typeof materialProperties.program.getUniforms === 'function'
+              ? materialProperties.program.getUniforms()
+              : null;
+
+          rendererUniformsInvalid =
+            uniformContainerNeedsSanitization(rendererUniforms) ||
+            uniformContainerNeedsSanitization(programUniforms);
+        }
+
+        if (hasValidPortalUniformStructure(material.uniforms) && !rendererUniformsInvalid) {
+          rebuildCache.set(material, null);
+          return null;
+        }
+
+        const inferredMetadata = metadata && typeof metadata === 'object' ? metadata : {};
+        const rebuildResult = recreatePortalSurfaceMaterialFromMetadata({
+          accentColor: inferredMetadata.accentColor ?? '#7b6bff',
+          isActive: Boolean(inferredMetadata.isActive),
+        });
+        const replacement = rebuildResult?.material ?? null;
+
+        if (!replacement) {
+          rebuildCache.set(material, null);
+          return null;
+        }
+
+        replacement.renderOrder = material.renderOrder ?? replacement.renderOrder ?? 2;
+        replacement.needsUpdate = true;
+        if ('uniformsNeedUpdate' in replacement) {
+          replacement.uniformsNeedUpdate = true;
+        }
+
+        ensurePortalShaderMaterialsHaveUniformValues(
+          [replacement],
+          { accentColor: rebuildResult?.accentColor, isActive: rebuildResult?.isActive },
+          { forceExpectPortal: true }
+        );
+
+        const boundLight = getRendererBoundLight(material);
+
+        removeRendererCacheForMaterial(material);
+        try {
+          material.dispose?.();
+        } catch (error) {
+          // Ignore material disposal failures.
+        }
+
+        if (boundLight) {
+          restoreRendererBoundLight(replacement, boundLight);
+        }
+
+        rebuildCache.set(material, replacement);
+        recovered = true;
+        return replacement;
+      };
+
       layers.forEach((row) => {
         if (!Array.isArray(row)) {
           return;
@@ -6811,70 +6894,6 @@
             isActive: Boolean(portalSurface?.isActive),
           };
 
-          const replacements = new Map();
-
-          const requestReplacement = (material) => {
-            if (!material || replacements.has(material)) {
-              return;
-            }
-
-            let rendererUniformsInvalid = false;
-            if (renderer?.properties?.get) {
-              let materialProperties = null;
-              try {
-                materialProperties = renderer.properties.get(material) ?? null;
-              } catch (propertiesError) {
-                materialProperties = null;
-              }
-
-              const rendererUniforms =
-                materialProperties && typeof materialProperties.uniforms === 'object'
-                  ? materialProperties.uniforms
-                  : null;
-              const programUniforms =
-                materialProperties &&
-                materialProperties.program &&
-                typeof materialProperties.program.getUniforms === 'function'
-                  ? materialProperties.program.getUniforms()
-                  : null;
-
-              rendererUniformsInvalid =
-                uniformContainerNeedsSanitization(rendererUniforms) ||
-                uniformContainerNeedsSanitization(programUniforms);
-            }
-
-            if (
-              hasValidPortalUniformStructure(material.uniforms) &&
-              !rendererUniformsInvalid
-            ) {
-              return;
-            }
-
-            const rebuildResult = recreatePortalSurfaceMaterialFromMetadata(metadata);
-            const replacement = rebuildResult?.material ?? null;
-            if (!replacement) {
-              return;
-            }
-
-            replacement.renderOrder =
-              material.renderOrder ?? replacement.renderOrder ?? 2;
-            replacement.needsUpdate = true;
-            if ('uniformsNeedUpdate' in replacement) {
-              replacement.uniformsNeedUpdate = true;
-            }
-
-            ensurePortalShaderMaterialsHaveUniformValues(
-              [replacement],
-              { accentColor: rebuildResult?.accentColor, isActive: rebuildResult?.isActive },
-              { forceExpectPortal: true }
-            );
-
-            replacements.set(material, replacement);
-            removeRendererCacheForMaterial(material);
-            material.dispose?.();
-            recovered = true;
-          };
-
           const { group } = renderInfo;
           if (group?.children) {
             group.children.forEach((child) => {
@@ -6883,8 +6902,7 @@
               }
 
               const applyReplacement = (oldMaterial, assign) => {
-                requestReplacement(oldMaterial);
-                const replacement = replacements.get(oldMaterial);
+                const replacement = rebuildPortalMaterial(oldMaterial, metadata);
                 if (!replacement) {
                   return;
                 }
@@ -6906,11 +6924,18 @@
             });
           }
 
-          if (replacements.size > 0) {
-            const updatedMaterials = Array.isArray(portalSurface.materials)
-              ? portalSurface.materials.map((material) => replacements.get(material) ?? material)
-              : [];
-            portalSurface.materials = updatedMaterials.filter(Boolean);
+          const knownMaterials = Array.isArray(portalSurface.materials)
+            ? portalSurface.materials.filter(Boolean)
+            : [];
+          const remappedMaterials = knownMaterials
+            .map((material) => rebuildCache.get(material) ?? material)
+            .filter(Boolean);
+          const materialsChanged =
+            remappedMaterials.length !== knownMaterials.length ||
+            remappedMaterials.some((material, idx) => material !== knownMaterials[idx]);
+
+          if (materialsChanged) {
+            portalSurface.materials = remappedMaterials;
 
             ensurePortalShaderMaterialsHaveUniformValues(portalSurface.materials, metadata, {
               forceExpectPortal: true,
@@ -6940,6 +6965,45 @@
           }
         });
       });
+
+      if (scene && typeof scene.traverse === 'function') {
+        const processed = new Set();
+        scene.traverse((object) => {
+          if (!object || processed.has(object)) {
+            return;
+          }
+          processed.add(object);
+
+          const applyToMaterial = (host, property, metadata) => {
+            if (!host || !property || !(property in host)) {
+              return;
+            }
+            const current = host[property];
+            if (!current) {
+              return;
+            }
+            if (Array.isArray(current)) {
+              current.forEach((mat, index) => {
+                const replacement = rebuildPortalMaterial(mat, metadata ?? mat?.userData?.portalSurface);
+                if (replacement) {
+                  current[index] = replacement;
+                  resyncPortalSurfaceMaterials(mat, replacement);
+                }
+              });
+              return;
+            }
+            const replacement = rebuildPortalMaterial(current, metadata ?? current?.userData?.portalSurface);
+            if (replacement) {
+              host[property] = replacement;
+              resyncPortalSurfaceMaterials(current, replacement);
+            }
+          };
+
+          applyToMaterial(object, 'material');
+          applyToMaterial(object, 'customDepthMaterial');
+          applyToMaterial(object, 'customDistanceMaterial');
+        });
+      }
 
       return recovered;
     }
