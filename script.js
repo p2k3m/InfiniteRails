@@ -7000,6 +7000,14 @@
               }
             }
 
+            const props =
+              renderer?.properties && typeof renderer.properties.get === 'function'
+                ? renderer.properties.get(mat)
+                : null;
+            const rendererUniformsCandidate =
+              props && typeof props.uniforms === 'object' ? props.uniforms : null;
+            const programInfo = props?.program?.getUniforms?.() ?? null;
+
             const rendererUniformsNeedSanitization =
               uniformContainerNeedsSanitization(rendererUniformsCandidate) ||
               uniformContainerNeedsSanitization(programInfo);
