@@ -6755,6 +6755,127 @@
     return true;
   }
 
+  function stabiliseRendererUniformCache(uniforms) {
+    if (!uniforms || typeof uniforms !== 'object') {
+      return false;
+    }
+
+    let cacheUpdated = false;
+
+    const ensureRendererUniformEntry = (entry, key) => {
+      let target = entry && typeof entry === 'object' ? entry : {};
+      let modified = target !== entry;
+
+      if (typeof target.setValue !== 'function') {
+        target.setValue = () => {};
+        modified = true;
+      }
+
+      if (typeof target.updateCache !== 'function') {
+        target.updateCache = () => {};
+        modified = true;
+      }
+
+      if (!Array.isArray(target.cache)) {
+        target.cache = [];
+        modified = true;
+      }
+
+      if (!target.uniform || typeof target.uniform !== 'object') {
+        target.uniform = { value: null };
+        modified = true;
+      } else {
+        if (!Object.prototype.hasOwnProperty.call(target.uniform, 'value')) {
+          target.uniform.value =
+            typeof target.uniform.value === 'undefined' ? null : target.uniform.value;
+          modified = true;
+        } else if (typeof target.uniform.value === 'undefined') {
+          target.uniform.value = null;
+          modified = true;
+        }
+      }
+
+      if (!Object.prototype.hasOwnProperty.call(target, 'value')) {
+        target.value = target.uniform?.value ?? null;
+        modified = true;
+      } else if (typeof target.value === 'undefined') {
+        target.value = null;
+        modified = true;
+      }
+
+      if (!Object.prototype.hasOwnProperty.call(target, 'id')) {
+        if (typeof key === 'string' || typeof key === 'number') {
+          target.id = `${key}`;
+        } else if (typeof target.name === 'string' || typeof target.name === 'number') {
+          target.id = `${target.name}`;
+        } else {
+          target.id = null;
+        }
+        modified = true;
+      } else if (typeof target.id === 'undefined') {
+        target.id = null;
+        modified = true;
+      }
+
+      if (modified) {
+        cacheUpdated = true;
+      }
+
+      return target;
+    };
+
+    const stabiliseArrayContainer = (container) => {
+      if (!Array.isArray(container)) {
+        return;
+      }
+      for (let index = 0; index < container.length; index += 1) {
+        if (!Object.prototype.hasOwnProperty.call(container, index)) {
+          continue;
+        }
+        const entry = container[index];
+        if (Array.isArray(entry)) {
+          stabiliseArrayContainer(entry);
+          continue;
+        }
+        if (!entry || typeof entry !== 'object' || hasInvalidUniformEntry(entry)) {
+          container[index] = ensureRendererUniformEntry(entry, index);
+        }
+      }
+    };
+
+    const stabiliseMapContainer = (container) => {
+      if (!container || typeof container !== 'object') {
+        return;
+      }
+      Object.keys(container).forEach((key) => {
+        if (RESERVED_UNIFORM_CONTAINER_KEYS.has(key)) {
+          return;
+        }
+        const entry = container[key];
+        if (Array.isArray(entry)) {
+          stabiliseArrayContainer(entry);
+          return;
+        }
+        if (!entry || typeof entry !== 'object' || hasInvalidUniformEntry(entry)) {
+          container[key] = ensureRendererUniformEntry(entry, key);
+        }
+      });
+    };
+
+    stabiliseArrayContainer(uniforms);
+    stabiliseMapContainer(uniforms);
+
+    if (Array.isArray(uniforms.seq)) {
+      stabiliseArrayContainer(uniforms.seq);
+    }
+
+    if (uniforms.map && typeof uniforms.map === 'object') {
+      stabiliseMapContainer(uniforms.map);
+    }
+
+    return cacheUpdated;
+  }
+
   function uniformContainerNeedsSanitization(uniforms) {
     if (!uniforms || typeof uniforms !== 'object') {
       return false;
@@ -6910,7 +7031,9 @@
             ? materialProperties.uniforms
             : null;
         if (uniformContainerNeedsSanitization(rendererUniforms)) {
-          modified = true;
+          if (stabiliseRendererUniformCache(rendererUniforms)) {
+            modified = true;
+          }
           return;
         }
 
@@ -6921,7 +7044,9 @@
             ? materialProperties.program.getUniforms()
             : null;
         if (uniformContainerNeedsSanitization(programUniforms)) {
-          modified = true;
+          if (stabiliseRendererUniformCache(programUniforms)) {
+            modified = true;
+          }
         }
       };
 
