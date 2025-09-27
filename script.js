@@ -6680,31 +6680,86 @@
             return false;
           }
 
-          const { seq } = uniforms;
-          if (!Array.isArray(seq) || seq.length === 0) {
-            return false;
-          }
+          let repaired = false;
 
-          const filtered = seq.filter((entry) => !hasInvalidUniformEntry(entry));
-          if (filtered.length === seq.length) {
-            return false;
-          }
+          const stabiliseEntry = (entry, key = null) => {
+            let target = entry;
+            if (!target || typeof target !== 'object') {
+              target = {
+                id: key ?? null,
+                cache: [],
+                setValue: () => {},
+                updateCache: () => {},
+                uniform: { value: null },
+                value: null,
+              };
+              repaired = true;
+              return target;
+            }
 
-          seq.length = 0;
-          filtered.forEach((entry) => {
-            seq.push(entry);
-          });
+            if (typeof target.setValue !== 'function') {
+              target.setValue = () => {};
+              repaired = true;
+            }
+            if (typeof target.updateCache !== 'function') {
+              target.updateCache = () => {};
+              repaired = true;
+            }
+            if (!Array.isArray(target.cache)) {
+              target.cache = [];
+              repaired = true;
+            }
+
+            if (!target.uniform || typeof target.uniform !== 'object') {
+              target.uniform = { value: null };
+              repaired = true;
+            } else if (!Object.prototype.hasOwnProperty.call(target.uniform, 'value')) {
+              target.uniform.value = Object.prototype.hasOwnProperty.call(target, 'value')
+                ? target.value
+                : null;
+              repaired = true;
+            } else if (typeof target.uniform.value === 'undefined') {
+              target.uniform.value = null;
+              repaired = true;
+            }
+
+            if (!Object.prototype.hasOwnProperty.call(target, 'value')) {
+              target.value =
+                target.uniform && typeof target.uniform === 'object'
+                  ? target.uniform.value ?? null
+                  : null;
+              repaired = true;
+            } else if (typeof target.value === 'undefined') {
+              target.value = null;
+              repaired = true;
+            }
+
+            if (!Object.prototype.hasOwnProperty.call(target, 'id') || target.id === undefined) {
+              target.id = key ?? target.name ?? null;
+            }
+
+            return target;
+          };
+
+          if (Array.isArray(uniforms.seq)) {
+            for (let i = 0; i < uniforms.seq.length; i += 1) {
+              const entry = uniforms.seq[i];
+              if (hasInvalidUniformEntry(entry)) {
+                uniforms.seq[i] = stabiliseEntry(entry, i);
+              }
+            }
+          }
 
           if (uniforms.map && typeof uniforms.map === 'object') {
             Object.keys(uniforms.map).forEach((key) => {
-              const value = uniforms.map[key];
-              if (hasInvalidUniformEntry(value)) {
-                delete uniforms.map[key];
+              const entry = uniforms.map[key];
+              if (hasInvalidUniformEntry(entry)) {
+                uniforms.map[key] = stabiliseEntry(entry, key);
               }
             });
           }
 
-          return true;
+          return repaired;
         };
 
         const sanitizeUniformEntry = (container, key, entry, options = {}) => {
