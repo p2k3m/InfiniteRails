@@ -1,13 +1,13 @@
 # Infinite Dimension: Portals Reimagined
 
-Infinite Dimension is a browser-based voxel survival-puzzle experience inspired by the "Comprehensive Analysis and Enhancement Specifications" brief. The playable sandbox renderer now boots a complete Minecraft-style prototype featuring:
+Infinite Dimension is a browser-based voxel survival-puzzle experience inspired by the "Comprehensive Analysis and Enhancement Specifications" brief. The advanced renderer now boots a complete Minecraft-style prototype featuring:
 
 - a Three.js render loop that carves out a 64×64 floating island with day/night lighting and shader-driven portals;
 - first-person controls with the Steve avatar, idle/walk animation mixers, mining and block placement, and virtual joystick support on mobile;
 - survival systems spanning health, bubbles, zombies, iron golems, crafting, scoring, and sequential dimension unlocks; and
 - backend-aware score syncing, Google Sign-In hooks, and responsive HUD/leaderboard overlays.
 
-Advanced renderer work is still underway, but explorers land inside the sandbox the moment the page loads. See [docs/portals-of-dimension-plan.md](docs/portals-of-dimension-plan.md) for the roadmap that bridges the sandbox and the long-term vision.
+Advanced renderer work is still underway, but explorers land inside the full 3D experience the moment the page loads. See [docs/portals-of-dimension-plan.md](docs/portals-of-dimension-plan.md) for the roadmap that bridges the sandbox and the long-term vision.
 
 ## Current status
 
@@ -47,10 +47,10 @@ deeper into the implementation details and validation steps.
 
 If you work with coding agents (for example GitHub Copilot or Code Interpreter) the verbatim prompts from the brief are archived in [`docs/coding-agent-prompts.md`](docs/coding-agent-prompts.md). Reusing those prompts keeps automated contributions aligned with the currently shipped sandbox systems.
 
-## Simplified sandbox mode
+## Sandbox fallback mode
 
-The legacy renderer and gameplay stack are still under heavy construction, so the fully interactive sandbox now boots by
-default. You can still opt into the experimental advanced renderer when you explicitly enable it. The sandbox:
+The legacy sandbox renderer remains available as a safety net for low-power devices or debugging sessions. Although the advanced
+experience now loads by default, you can force the sandbox whenever you need a lighter-weight build. The sandbox:
 
 - draws a 64×64 voxel island with soft day/night lighting at 60 FPS, complete with a procedurally curved rail spine,
 - locks the camera to a first-person perspective with mouse look + `WASD` movement and jump physics that adapt to each realm,
@@ -62,11 +62,11 @@ Use the following switches to control which experience loads:
 
 | Mode | How to activate |
 | --- | --- |
-| Sandbox (default) | Load the page normally. You can also force it with `?mode=simple`, `?simple=1`, or by setting `APP_CONFIG.forceSimpleMode = true`. |
-| Advanced renderer | Append `?mode=advanced` (or `?advanced=1`), set `APP_CONFIG.forceAdvanced = true`, or enable it globally with `APP_CONFIG.enableAdvancedExperience = true`. |
+| Advanced renderer (default) | Load the page normally. You can also force it with `?mode=advanced`, `?advanced=1`, or by setting `APP_CONFIG.forceAdvanced = true`. |
+| Sandbox fallback | Append `?mode=simple` (or `?simple=1`), set `APP_CONFIG.forceSimpleMode = true`, or omit `APP_CONFIG.enableAdvancedExperience`. |
 
-The sandbox keeps the portal-building brief front-and-centre while the production renderer catches up. When advanced mode is
-ready, flip the flags above to continue development without losing the reliable fallback.
+The sandbox keeps the portal-building brief front-and-centre while the production renderer continues to mature. Flip the flags
+above whenever you want to regression-test the lightweight fallback without losing the reliable advanced build.
 
 ### Troubleshooting a blank viewport
 
@@ -106,7 +106,7 @@ Expose an `APP_CONFIG` object before loading `script.js` to wire up Google SSO a
 - **User metadata** – on sign-in the app POSTs to `${apiBaseUrl}/users` with the player’s Google ID, preferred name, device snapshot, and geolocation (if permission is granted). The handler can write directly to a DynamoDB table keyed by Google ID.
 - **Scoreboard** – the app loads scores via `GET ${apiBaseUrl}/scores` and upserts the player’s run with `POST ${apiBaseUrl}/scores`. The payload mirrors the UI fields: `name`, `score`, `dimensionCount`, `runTimeSeconds`, `inventoryCount`, plus optional `location` or `locationLabel` fields.
 - **Offline-friendly** – when `apiBaseUrl` is absent the UI persists identities and scores to `localStorage` and displays sample leaderboard entries so the page remains fully interactive.
-- **Mode selection** – omit `enableAdvancedExperience` to stay in the sandbox, or set it alongside `preferAdvanced`/`defaultMode` when you want the experimental renderer to boot automatically.
+- **Mode selection** – set `enableAdvancedExperience: false` or `forceSimpleMode: true` to force the sandbox, or rely on the default configuration (or `forceAdvanced: true`) to keep the full renderer active.
 
 ### Deploying the AWS backend
 
