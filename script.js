@@ -3616,14 +3616,31 @@
           const rendererLabel = debugInfo
             ? gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL)
             : gl.getParameter(gl.RENDERER);
-          if (
-            typeof rendererLabel === 'string' &&
-            rendererLabel.toLowerCase().includes('swiftshader')
-          ) {
-            portalShaderSupport = false;
+          if (typeof rendererLabel === 'string') {
+            const normalisedLabel = rendererLabel.toLowerCase();
+            const softwareRendererPatterns = [
+              'swiftshader',
+              'llvmpipe',
+              'software',
+              'basic render driver',
+              'mesa',
+            ];
+            if (softwareRendererPatterns.some((pattern) => normalisedLabel.includes(pattern))) {
+              portalShaderSupport = false;
+            }
           }
         } catch (contextError) {
           // Ignore renderer identification issues; fallback will be used if shaders fail.
+        }
+        if (portalShaderSupport) {
+          const capabilities = renderer.capabilities || {};
+          const isWebGL2 = Boolean(capabilities.isWebGL2);
+          const derivativesSupported = Boolean(
+            isWebGL2 || gl.getExtension('OES_standard_derivatives')
+          );
+          if (!derivativesSupported) {
+            portalShaderSupport = false;
+          }
         }
       } catch (error) {
         renderer = null;
