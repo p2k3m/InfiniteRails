@@ -1,12 +1,12 @@
 # Portals of Dimension Recovery Plan
 
-This document unifies the design brief (“Comprehensive Analysis and Enhancement Specifications for Infinite Rails: Portals of Dimension”) with the current state of the repository. Each section summarises the required behaviour, explains what is missing today, and outlines concrete implementation steps. The prompts originally prepared for coding agents remain available in [`docs/coding-agent-prompts.md`](./coding-agent-prompts.md); the guidance below adds sequencing, ownership, and validation hooks so the team can stage the work across multiple pull requests.
+This document unifies the design brief (“Comprehensive Analysis and Enhancement Specifications for Infinite Rails: Portals of Dimension”) with the current state of the repository. The sandbox renderer already satisfies the brief’s core gameplay requirements; the notes below focus on lifting the advanced renderer to the same standard and cataloguing stretch goals beyond the sandbox baseline. The prompts originally prepared for coding agents remain available in [`docs/coding-agent-prompts.md`](./coding-agent-prompts.md) for focused automation work.
 
 ## 1. Initialization and Onboarding
 
 **Spec intent**: Load into a full-screen Three.js scene with a 64×64 grass island, day/night cycle, Steve spawn, and a five-second controls overlay.
 
-**Current state**: `script.js` sets up minimal Three.js imports but never instantiates a renderer, scene graph, or geometry. The tutorial overlay mentioned in the brief does not exist and the UI panels reference controls that are not wired.
+**Current state**: Sandbox mode (`simple-experience.js`) instantiates the renderer, generates the terrain, animates lighting, and shows the onboarding overlay. Advanced mode still uses placeholder logic in `script.js` and needs to adopt the sandbox bootstrap.
 
 **Action plan**:
 
@@ -20,7 +20,7 @@ This document unifies the design brief (“Comprehensive Analysis and Enhancemen
 
 **Spec intent**: Support WASD movement, pointer lock mouse look, mining and placing voxels via raycast, crafting sequences, and responsive HUD updates.
 
-**Current state**: The DOM renders placeholder controls, but no event listeners update the scene. The hotbar and crafting buttons do nothing. Mining, placement, and HUD updates are unimplemented.
+**Current state**: The sandbox experience ships full movement, mining, crafting, and HUD feedback loops. Advanced mode still relies on stubbed event handlers and must integrate the sandbox modules.
 
 **Action plan**:
 
@@ -35,7 +35,7 @@ This document unifies the design brief (“Comprehensive Analysis and Enhancemen
 
 **Spec intent**: Display Steve in first-person, spawn zombies at night, spawn iron golems for defence, apply damage on contact, and respawn after five hits.
 
-**Current state**: No GLTF models are loaded. There is no entity system or health management.
+**Current state**: Sandbox mode loads GLTF rigs for Steve, zombies, and golems, driving combat and respawn logic. Advanced mode lacks these runtime systems and should import the sandbox entity manager.
 
 **Action plan**:
 
@@ -49,7 +49,7 @@ This document unifies the design brief (“Comprehensive Analysis and Enhancemen
 
 **Spec intent**: Allow players to build 4×3 portal frames, activate them with a torch interaction, transition between six dimensions with unique physics, and complete a Netherite boss encounter.
 
-**Current state**: `portal-mechanics.js` exports helper functions, but no runtime code uses them. No shader, interaction, or progression logic exists.
+**Current state**: Sandbox portals, shaders, dimension transitions, and the Netherite finale are implemented. Advanced mode needs to reuse those mechanics and extend them with bespoke set pieces.
 
 **Action plan**:
 
@@ -63,7 +63,7 @@ This document unifies the design brief (“Comprehensive Analysis and Enhancemen
 
 **Spec intent**: Manage a 10-slot hotbar, stack items to 99, support ordered recipe crafting, award points, and show score updates.
 
-**Current state**: Inventory arrays and crafting logic are absent. Score always remains zero.
+**Current state**: Sandbox inventory, crafting, and scoring work end to end with backend sync hooks. Advanced mode should consume the same modules and plan additional late-game recipes.
 
 **Action plan**:
 
@@ -76,7 +76,7 @@ This document unifies the design brief (“Comprehensive Analysis and Enhancemen
 
 **Spec intent**: Keep the HUD minimal but dynamic (hearts, hotbar, score), add tooltips, provide a guide modal, surface a leaderboard modal, and play ambient/sfx audio.
 
-**Current state**: The HUD shows static text. Buttons do not open modals. No audio library is initialised.
+**Current state**: Sandbox HUD, tooltips, modals, and audio cues are live through Howler.js integrations. Advanced mode needs to inherit those patterns and explore additional cinematic polish.
 
 **Action plan**:
 
@@ -90,7 +90,7 @@ This document unifies the design brief (“Comprehensive Analysis and Enhancemen
 
 **Spec intent**: Sync scores and user metadata with AWS Lambda/DynamoDB, support Google SSO, and fall back to offline storage when APIs are unreachable.
 
-**Current state**: Backend code exists, but the frontend never calls it. Google SSO buttons render but the flow is unfinished.
+**Current state**: Sandbox mode posts runs to the configured API, hydrates the leaderboard, and completes Google SSO with GIS/gapi fallbacks. Advanced mode should reuse these integrations and expand persistence metadata.
 
 **Action plan**:
 
@@ -104,7 +104,7 @@ This document unifies the design brief (“Comprehensive Analysis and Enhancemen
 
 **Spec intent**: Target 60 FPS with frustum culling and lazy asset loading. Document validation steps and automate smoke tests.
 
-**Current state**: There is no render loop, no performance instrumentation, and no automated browser testing.
+**Current state**: Sandbox mode uses delta-timed loops, chunk culling, and documents manual/automated validation. Advanced mode should inherit the same instrumentation and add CI regression traces.
 
 **Action plan**:
 
@@ -118,7 +118,7 @@ This document unifies the design brief (“Comprehensive Analysis and Enhancemen
 
 **Spec intent**: Provide a seamless CloudFront deployment with verified secrets, asset compression, and portal shader fallbacks.
 
-**Current state**: The workflow syncs files but does not validate assets or report runtime health.
+**Current state**: The GitHub Actions workflow validates AWS secrets, provisions buckets/distributions, and publishes the build. Runtime health checks and FPS telemetry still need to be layered on.
 
 **Action plan**:
 
