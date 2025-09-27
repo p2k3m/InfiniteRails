@@ -2083,6 +2083,8 @@
     let sunLight;
     let moonLight;
     let torchLight;
+    let ambientLight;
+    let rimLight;
     let playerLocator;
     let playerHintTimer = null;
     let lastDimensionHintKey = null;
@@ -2420,13 +2422,13 @@
     const particleSystems = [];
 
     const BASE_ATMOSPHERE = {
-      daySky: '#ffffff',
-      nightSky: '#333366',
-      duskSky: '#f7b07b',
-      groundDay: '#a0a0ff',
-      groundNight: '#1c1c3f',
-      fogColor: '#333366',
-      fogDensity: 0.055,
+      daySky: '#d5e9ff',
+      nightSky: '#0d1630',
+      duskSky: '#f4b47b',
+      groundDay: '#bcd2ff',
+      groundNight: '#10182f',
+      fogColor: '#10213c',
+      fogDensity: 0.045,
     };
 
     const lightingState = {
@@ -2437,6 +2439,11 @@
       groundNight: new THREE.Color(BASE_ATMOSPHERE.groundNight),
       dayStrength: 1,
       nightStrength: 0,
+    };
+
+    const rimLightColors = {
+      day: new THREE.Color('#7cc3ff'),
+      night: new THREE.Color('#3c5fd6'),
     };
 
     const identityState = {
@@ -3742,7 +3749,8 @@
       renderer.setPixelRatio(window.devicePixelRatio ?? 1);
       renderer.outputColorSpace = THREE.SRGBColorSpace;
       renderer.toneMapping = THREE.ACESFilmicToneMapping;
-      renderer.toneMappingExposure = 1;
+      renderer.toneMappingExposure = 1.18;
+      renderer.setClearColor(new THREE.Color('#060b18'), 1);
 
       scene = new THREE.Scene();
       scene.fog = new THREE.FogExp2(new THREE.Color(BASE_ATMOSPHERE.fogColor), BASE_ATMOSPHERE.fogDensity);
@@ -3781,10 +3789,10 @@
       enemyHighlightHelper.visible = false;
       scene.add(enemyHighlightHelper);
 
-      hemiLight = new THREE.HemisphereLight(0xffffff, 0xa0a0ff, 1.05);
+      hemiLight = new THREE.HemisphereLight(0xd5e8ff, 0x1a243f, 1.2);
       scene.add(hemiLight);
 
-      sunLight = new THREE.DirectionalLight(0xfff2d8, 1.4);
+      sunLight = new THREE.DirectionalLight(0xfff2d8, 1.6);
       sunLight.position.set(12, 16, 6);
       sunLight.target.position.set(0, 0, 0);
       sunLight.castShadow = true;
@@ -3803,11 +3811,21 @@
       scene.add(sunLight);
       scene.add(sunLight.target);
 
-      moonLight = new THREE.DirectionalLight(0x88aaff, 0.45);
+      moonLight = new THREE.DirectionalLight(0x5a74ff, 0.5);
       moonLight.position.set(-10, 10, -8);
       moonLight.target.position.set(0, 0, 0);
       scene.add(moonLight);
       scene.add(moonLight.target);
+
+      ambientLight = new THREE.AmbientLight(0x10213c, 0.3);
+      scene.add(ambientLight);
+
+      rimLight = new THREE.DirectionalLight(rimLightColors.day.clone(), 0.45);
+      rimLight.position.set(-14, 14, -6);
+      rimLight.target.position.set(0, 0, 0);
+      rimLight.castShadow = false;
+      scene.add(rimLight);
+      scene.add(rimLight.target);
 
       torchLight = new THREE.PointLight(0xffd27f, 0, 8, 2.4);
       torchLight.castShadow = true;
@@ -9823,9 +9841,13 @@
       group.name = name;
       const bodyMaterial = new THREE.MeshStandardMaterial({
         color: new THREE.Color(bodyColor),
-        metalness: 0.16,
-        roughness: 0.72,
+        metalness: 0.12,
+        roughness: 0.62,
       });
+      if (accentColor) {
+        bodyMaterial.emissive = new THREE.Color(accentColor).multiplyScalar(0.12);
+        bodyMaterial.emissiveIntensity = 0.25;
+      }
       const body = new THREE.Mesh(new THREE.BoxGeometry(bodyWidth, bodyHeight, bodyDepth), bodyMaterial);
       body.position.y = bodyHeight / 2;
       body.castShadow = true;
@@ -9834,12 +9856,12 @@
       if (headColor) {
         const headMaterial = new THREE.MeshStandardMaterial({
           color: new THREE.Color(headColor),
-          metalness: 0.12,
-          roughness: 0.68,
+          metalness: 0.08,
+          roughness: 0.6,
         });
         if (accentColor) {
           headMaterial.emissive = new THREE.Color(accentColor).multiplyScalar(0.25);
-          headMaterial.emissiveIntensity = 0.6;
+          headMaterial.emissiveIntensity = 0.5;
         }
         const head = new THREE.Mesh(new THREE.BoxGeometry(headSize, headSize, headSize), headMaterial);
         head.position.y = bodyHeight + headSize / 2;
@@ -9853,12 +9875,13 @@
     function useFallbackPlayerMesh() {
       if (!entityGroup) return;
       const placeholder = createPlaceholderHumanoid({
-        bodyColor: '#5b8cff',
-        headColor: '#f4d7b2',
+        bodyColor: '#4f7dff',
+        headColor: '#f0d7b8',
         bodyWidth: 0.62,
         bodyDepth: 0.46,
         bodyHeight: 1.4,
         headSize: 0.44,
+        accentColor: '#ffb657',
         name: 'player-fallback',
       });
       placeholder.position.y = 0;
@@ -9912,6 +9935,22 @@
           child.receiveShadow = true;
           if (child.material?.color?.isColor) {
             child.material.color.convertSRGBToLinear?.();
+            if (typeof child.material.roughness === 'number') {
+              child.material.roughness = THREE.MathUtils.clamp(
+                child.material.roughness * 0.85,
+                0.2,
+                0.8
+              );
+            }
+            if (typeof child.material.metalness === 'number') {
+              child.material.metalness = THREE.MathUtils.clamp(child.material.metalness * 0.6, 0, 0.5);
+            }
+            if (child.material.emissive?.isColor) {
+              tmpColorA.copy(child.material.color).multiplyScalar(0.32);
+              child.material.emissive.lerp(tmpColorA, 0.65);
+              child.material.emissiveIntensity = Math.max(child.material.emissiveIntensity ?? 0.2, 0.35);
+            }
+            child.material.needsUpdate = true;
           }
         }
       });
@@ -11297,7 +11336,7 @@
       );
       sunLight.target.position.set(playerScene.x, playerHeight - 0.6, playerScene.z);
       sunLight.target.updateMatrixWorld();
-      sunLight.intensity = 0.25 + dayStrength * 1.55;
+      sunLight.intensity = 0.35 + dayStrength * 1.65;
 
       const moonAngle = sunAngle + Math.PI;
       const moonElevation = Math.sin(moonAngle);
@@ -11311,11 +11350,32 @@
       );
       moonLight.target.position.copy(sunLight.target.position);
       moonLight.target.updateMatrixWorld();
-      moonLight.intensity = 0.18 + nightStrength * 0.7;
+      moonLight.intensity = 0.2 + nightStrength * 0.8;
 
-      hemiLight.intensity = 0.45 + dayStrength * 0.6;
+      hemiLight.intensity = 0.55 + dayStrength * 0.75;
       hemiLight.color.lerpColors(lightingState.nightSky, lightingState.daySky, dayStrength);
       hemiLight.groundColor.lerpColors(lightingState.groundNight, lightingState.groundDay, dayStrength);
+
+      if (ambientLight) {
+        const ambientStrength = 0.28 + dayStrength * 0.22;
+        ambientLight.intensity = ambientStrength;
+        tmpColorB.copy(lightingState.nightSky).lerp(lightingState.daySky, Math.min(1, dayStrength * 0.7 + 0.2));
+        ambientLight.color.copy(tmpColorB);
+      }
+
+      if (rimLight) {
+        const rimRadius = 18;
+        const rimAngle = sunAngle + Math.PI * 0.65;
+        rimLight.position.set(
+          playerScene.x + Math.cos(rimAngle) * rimRadius,
+          playerHeight + 9,
+          playerScene.z + Math.sin(rimAngle) * rimRadius
+        );
+        rimLight.target.position.set(playerScene.x, playerHeight + 0.6, playerScene.z);
+        rimLight.target.updateMatrixWorld();
+        rimLight.intensity = 0.35 + dayStrength * 0.55;
+        rimLight.color.lerpColors(rimLightColors.night, rimLightColors.day, Math.min(1, dayStrength + 0.1));
+      }
 
       const dawnDistance = Math.min(
         Math.abs(ratio) / (cycle.dayPortion || 1),

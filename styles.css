@@ -1,45 +1,45 @@
 :root {
   color-scheme: dark;
-  --bg-primary: #050912;
-  --bg-secondary: #0d182f;
-  --bg-tertiary: rgba(21, 40, 72, 0.85);
-  --accent: #49f2ff;
-  --accent-strong: #f7b733;
-  --accent-soft: rgba(73, 242, 255, 0.3);
-  --primary: #00ff88;
-  --bg-dark: #000011;
-  --glow: 0 0 10px var(--primary);
+  --bg-primary: #060b18;
+  --bg-secondary: #0e172a;
+  --bg-tertiary: rgba(18, 32, 54, 0.92);
+  --accent: #4da4ff;
+  --accent-strong: #ffb657;
+  --accent-soft: rgba(77, 164, 255, 0.28);
+  --primary: #52e0a3;
+  --bg-dark: #040913;
+  --glow: 0 0 14px rgba(82, 224, 163, 0.65);
   --dimension-primary: var(--accent);
-  --dimension-glow: rgba(73, 242, 255, 0.45);
+  --dimension-glow: rgba(77, 164, 255, 0.4);
   --logo-size-min: 36px;
   --logo-size-max: 72px;
   --logo-opacity: 0.85;
-  --tooltip-bg: rgba(5, 10, 24, 0.92);
-  --tooltip-text: #f8fbff;
-  --text-primary: #f2f5fa;
-  --text-secondary: rgba(242, 245, 250, 0.72);
-  --danger: #ff4976;
-  --success: #2bc26b;
-  --grid-line: rgba(73, 242, 255, 0.08);
-  --card-shadow: 0 20px 50px rgba(0, 0, 0, 0.35);
+  --tooltip-bg: rgba(5, 12, 28, 0.92);
+  --tooltip-text: #f5f7fb;
+  --text-primary: #f6f8fb;
+  --text-secondary: rgba(214, 226, 255, 0.76);
+  --danger: #ff5b7a;
+  --success: #34d399;
+  --grid-line: rgba(77, 164, 255, 0.1);
+  --card-shadow: 0 30px 80px rgba(3, 8, 20, 0.6);
   --manu-logo-max-size: 220px;
-  --page-background: radial-gradient(circle at 20% 20%, rgba(73, 242, 255, 0.2), transparent 45%),
-    radial-gradient(circle at 80% 10%, rgba(247, 183, 51, 0.2), transparent 55%),
-    linear-gradient(160deg, #050912, #0b1230 60%, #05131f 100%);
+  --page-background: radial-gradient(circle at 12% 18%, rgba(79, 167, 255, 0.18), transparent 50%),
+    radial-gradient(circle at 88% 12%, rgba(255, 182, 87, 0.12), transparent 55%),
+    linear-gradient(160deg, #060b18 0%, #09142a 55%, #071026 100%);
   --time-phase: 0;
-  --hud-panel-border: rgba(73, 242, 255, 0.28);
-  --hud-panel-shadow: 0 18px 36px rgba(0, 0, 0, 0.5);
-  --hud-panel-bg: rgba(6, 14, 28, 0.82);
-  --hud-panel-bg-alt: rgba(10, 22, 40, 0.72);
-  --hud-heart-color: #ff3b6b;
-  --hud-heart-glow: rgba(255, 77, 109, 0.55);
-  --hud-bubble-color: #2ec7ff;
-  --hud-bubble-color-rgb: 46, 199, 255;
-  --hud-bubble-highlight: rgba(255, 255, 255, 0.88);
-  --hud-score-gradient: linear-gradient(160deg, rgba(0, 0, 0, 0.92), rgba(51, 51, 51, 0.88));
-  --hud-score-text: #ffffff;
-  --hud-progress-track: rgba(0, 156, 204, 0.25);
-  --hud-progress-glow: rgba(73, 242, 255, 0.45);
+  --hud-panel-border: rgba(77, 164, 255, 0.32);
+  --hud-panel-shadow: 0 22px 50px rgba(7, 16, 32, 0.6);
+  --hud-panel-bg: rgba(8, 18, 34, 0.92);
+  --hud-panel-bg-alt: rgba(12, 26, 48, 0.88);
+  --hud-heart-color: #ff6f91;
+  --hud-heart-glow: rgba(255, 111, 145, 0.5);
+  --hud-bubble-color: #4bbbf5;
+  --hud-bubble-color-rgb: 75, 187, 245;
+  --hud-bubble-highlight: rgba(255, 255, 255, 0.82);
+  --hud-score-gradient: linear-gradient(160deg, rgba(12, 22, 40, 0.95), rgba(18, 32, 58, 0.92));
+  --hud-score-text: #f4f7fb;
+  --hud-progress-track: rgba(77, 164, 255, 0.22);
+  --hud-progress-glow: rgba(82, 224, 163, 0.45);
   font-size: 16px;
 }
 
@@ -130,36 +130,36 @@ body {
 }
 
 body.theme-grassland {
-  --primary: #228b22;
-  --glow: 0 0 10px rgba(34, 139, 34, 0.65);
-  --dimension-primary: #228b22;
-  --dimension-glow: rgba(34, 139, 34, 0.55);
-  --hud-panel-border: rgba(74, 222, 128, 0.45);
-  --hud-panel-shadow: 0 22px 46px rgba(74, 222, 128, 0.18);
-  --hud-panel-bg: rgba(8, 28, 16, 0.85);
-  --hud-panel-bg-alt: rgba(12, 36, 22, 0.88);
-  --hud-bubble-color: #35c8ff;
-  --hud-bubble-color-rgb: 53, 200, 255;
-  --hud-progress-track: rgba(58, 190, 122, 0.26);
-  --hud-progress-glow: rgba(74, 222, 128, 0.45);
+  --primary: #63d483;
+  --glow: 0 0 14px rgba(99, 212, 131, 0.5);
+  --dimension-primary: #63d483;
+  --dimension-glow: rgba(99, 212, 131, 0.4);
+  --hud-panel-border: rgba(99, 212, 131, 0.35);
+  --hud-panel-shadow: 0 24px 50px rgba(15, 40, 24, 0.4);
+  --hud-panel-bg: rgba(10, 26, 22, 0.9);
+  --hud-panel-bg-alt: rgba(14, 32, 26, 0.85);
+  --hud-bubble-color: #45c3ff;
+  --hud-bubble-color-rgb: 69, 195, 255;
+  --hud-progress-track: rgba(99, 212, 131, 0.25);
+  --hud-progress-glow: rgba(99, 212, 131, 0.5);
 }
 
 body.theme-netherite {
-  --primary: #ff4500;
-  --glow: 0 0 10px rgba(255, 69, 0, 0.65);
-  --dimension-primary: #ff4500;
-  --dimension-glow: rgba(255, 69, 0, 0.55);
-  --hud-panel-border: rgba(255, 118, 70, 0.48);
-  --hud-panel-shadow: 0 24px 54px rgba(255, 118, 70, 0.22);
-  --hud-panel-bg: rgba(28, 10, 10, 0.9);
-  --hud-panel-bg-alt: rgba(40, 12, 10, 0.9);
-  --hud-heart-glow: rgba(255, 102, 82, 0.75);
-  --hud-bubble-color: #ff8249;
-  --hud-bubble-color-rgb: 255, 130, 73;
-  --hud-bubble-highlight: rgba(255, 196, 150, 0.9);
-  --hud-score-gradient: linear-gradient(160deg, rgba(24, 4, 4, 0.95), rgba(63, 14, 0, 0.92));
-  --hud-progress-track: rgba(255, 118, 70, 0.24);
-  --hud-progress-glow: rgba(255, 118, 70, 0.48);
+  --primary: #ff7043;
+  --glow: 0 0 14px rgba(255, 112, 67, 0.55);
+  --dimension-primary: #ff7043;
+  --dimension-glow: rgba(255, 112, 67, 0.45);
+  --hud-panel-border: rgba(255, 139, 92, 0.4);
+  --hud-panel-shadow: 0 26px 56px rgba(72, 20, 12, 0.35);
+  --hud-panel-bg: rgba(38, 14, 12, 0.92);
+  --hud-panel-bg-alt: rgba(50, 16, 12, 0.9);
+  --hud-heart-glow: rgba(255, 135, 102, 0.7);
+  --hud-bubble-color: #ff9566;
+  --hud-bubble-color-rgb: 255, 149, 102;
+  --hud-bubble-highlight: rgba(255, 210, 189, 0.9);
+  --hud-score-gradient: linear-gradient(160deg, rgba(38, 12, 10, 0.95), rgba(72, 20, 12, 0.92));
+  --hud-progress-track: rgba(255, 149, 102, 0.26);
+  --hud-progress-glow: rgba(255, 149, 102, 0.5);
 }
 
 body.game-active {
@@ -476,9 +476,10 @@ body:not(.game-active) .manu-logo {
   position: fixed;
   inset: 0;
   pointer-events: none;
-  background: radial-gradient(circle at 50% 50%, var(--dimension-glow), transparent 60%);
+  background: radial-gradient(circle at 50% 35%, rgba(77, 164, 255, 0.35), transparent 65%),
+    radial-gradient(circle at 20% 65%, rgba(82, 224, 163, 0.18), transparent 70%);
   mix-blend-mode: screen;
-  opacity: calc(0.4 + (1 - var(--time-phase)) * 0.4);
+  opacity: calc(0.32 + (1 - var(--time-phase)) * 0.38);
   animation: pulse 14s ease-in-out infinite;
   transition: background 0.8s ease, opacity 0.8s ease;
   z-index: -1;
@@ -489,10 +490,10 @@ body::after {
   position: fixed;
   inset: 0;
   pointer-events: none;
-  background: radial-gradient(circle at 50% 10%, rgba(255, 255, 255, 0.08), transparent 60%),
-    radial-gradient(circle at 20% 30%, rgba(255, 255, 255, 0.04), transparent 65%),
-    linear-gradient(180deg, rgba(6, 12, 24, 0.65), rgba(6, 12, 24, 0));
-  opacity: calc(0.15 + var(--time-phase) * 0.55);
+  background: radial-gradient(circle at 30% 8%, rgba(255, 255, 255, 0.08), transparent 58%),
+    radial-gradient(circle at 78% 16%, rgba(255, 214, 170, 0.08), transparent 60%),
+    linear-gradient(200deg, rgba(6, 12, 24, 0.6), rgba(6, 12, 24, 0));
+  opacity: calc(0.18 + var(--time-phase) * 0.45);
   transition: opacity 0.8s ease;
   z-index: -2;
 }
@@ -626,8 +627,8 @@ body::after {
   align-self: start;
   padding: clamp(1.35rem, 2.4vw, 1.9rem);
   border-radius: 26px;
-  background: linear-gradient(165deg, rgba(7, 16, 30, 0.92), rgba(5, 12, 26, 0.7));
-  border: 1px solid rgba(73, 242, 255, 0.18);
+  background: linear-gradient(165deg, rgba(8, 16, 32, 0.92), rgba(6, 14, 28, 0.78));
+  border: 1px solid rgba(77, 164, 255, 0.2);
   box-shadow: var(--card-shadow);
   backdrop-filter: blur(16px);
   position: sticky;
@@ -673,14 +674,67 @@ body::after {
 }
 
 .objectives-panel__card {
-  background: linear-gradient(155deg, rgba(8, 18, 36, 0.75), rgba(6, 14, 28, 0.55));
+  background: linear-gradient(155deg, rgba(10, 22, 40, 0.82), rgba(8, 18, 32, 0.62));
   border-radius: 20px;
-  border: 1px solid rgba(73, 242, 255, 0.14);
+  border: 1px solid rgba(77, 164, 255, 0.2);
   padding: 1.1rem 1.25rem;
-  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.38);
+  box-shadow: 0 20px 48px rgba(4, 10, 24, 0.45);
   backdrop-filter: blur(12px);
   display: grid;
   gap: 0.75rem;
+}
+
+.objectives-panel__card--primer {
+  padding: 1.25rem 1.4rem;
+  background: linear-gradient(160deg, rgba(12, 24, 44, 0.92), rgba(10, 20, 34, 0.78));
+  border: 1px solid rgba(77, 164, 255, 0.28);
+  gap: 1.1rem;
+}
+
+.primer-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 1.15rem;
+}
+
+.primer-list__item {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: start;
+  gap: 0.9rem;
+}
+
+.primer-list__icon {
+  display: grid;
+  place-items: center;
+  width: 2.6rem;
+  height: 2.6rem;
+  border-radius: 14px;
+  background: rgba(77, 164, 255, 0.12);
+  box-shadow: inset 0 0 0 1px rgba(77, 164, 255, 0.25), 0 10px 24px rgba(3, 10, 24, 0.35);
+  color: var(--accent);
+  font-size: 1.35rem;
+}
+
+.primer-list__content h3 {
+  margin: 0 0 0.35rem;
+  font-size: 1rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-primary);
+}
+
+.primer-list__content p {
+  margin: 0;
+  font-size: 0.9rem;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+.primer-list__content strong {
+  color: var(--accent-strong);
 }
 
 .objectives-panel__card--hint {
@@ -688,6 +742,10 @@ body::after {
   background: transparent;
   border: none;
   box-shadow: none;
+}
+
+.objectives-panel__header--primer h2 {
+  color: var(--text-primary);
 }
 
 .logo-area h1 {
@@ -730,8 +788,8 @@ body::after {
   width: 46px;
   height: 46px;
   border-radius: 50%;
-  border: 2px solid rgba(73, 242, 255, 0.45);
-  background: radial-gradient(circle at 30% 30%, rgba(73, 242, 255, 0.32), rgba(73, 242, 255, 0.1));
+  border: 2px solid rgba(77, 164, 255, 0.45);
+  background: radial-gradient(circle at 30% 30%, rgba(77, 164, 255, 0.32), rgba(77, 164, 255, 0.1));
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -746,7 +804,7 @@ body::after {
   position: absolute;
   inset: -6px;
   border-radius: 50%;
-  background: radial-gradient(circle, rgba(73, 242, 255, 0.08), transparent 70%);
+  background: radial-gradient(circle, rgba(77, 164, 255, 0.1), transparent 70%);
   opacity: 0;
   transition: opacity 0.2s ease;
   pointer-events: none;
@@ -1191,8 +1249,8 @@ body.game-active #gameCanvas {
   border-radius: 26px;
   overflow: hidden;
   box-shadow: var(--card-shadow);
-  background: rgba(4, 9, 22, 0.75);
-  border: 1px solid rgba(73, 242, 255, 0.18);
+  background: linear-gradient(160deg, rgba(7, 14, 26, 0.88), rgba(10, 20, 36, 0.78));
+  border: 1px solid rgba(77, 164, 255, 0.22);
   display: grid;
   grid-template-areas: 'viewport';
   grid-template-rows: minmax(0, 1fr);
@@ -1206,7 +1264,7 @@ body.game-active #gameCanvas {
   width: 100%;
   height: 100%;
   display: block;
-  background: linear-gradient(180deg, rgba(10, 24, 48, 0.9), rgba(6, 14, 28, 0.9));
+  background: radial-gradient(circle at 50% 18%, rgba(22, 42, 72, 0.78), rgba(6, 12, 22, 0.96));
 }
 
 #gameCanvas:focus {
@@ -1344,6 +1402,17 @@ body.game-active #gameCanvas {
 
   .game-briefing__keys {
     font-size: 0.85rem;
+  }
+
+  .primer-list__item {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.75rem;
+  }
+
+  .primer-list__icon {
+    width: 2.4rem;
+    height: 2.4rem;
+    font-size: 1.2rem;
   }
 }
 
@@ -1559,8 +1628,8 @@ body.game-active #gameCanvas {
   padding: 1rem 1.25rem;
   border-radius: 8px;
   background: var(--hud-score-gradient);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  box-shadow: 0 22px 46px rgba(0, 0, 0, 0.5);
+  border: 1px solid rgba(77, 164, 255, 0.18);
+  box-shadow: 0 24px 50px rgba(4, 10, 24, 0.55);
   backdrop-filter: blur(12px);
   color: var(--hud-score-text);
   min-width: 240px;
@@ -4738,11 +4807,11 @@ body.colorblind-assist .subtitle-overlay {
 
 .player-hint {
   position: relative;
-  background: linear-gradient(155deg, rgba(6, 14, 28, 0.95), rgba(6, 14, 28, 0.65));
+  background: linear-gradient(160deg, rgba(10, 22, 40, 0.94), rgba(8, 18, 32, 0.72));
   border-radius: 20px;
   padding: 0.95rem 1.35rem;
-  border: 1px solid rgba(73, 242, 255, 0.25);
-  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
+  border: 1px solid rgba(77, 164, 255, 0.25);
+  box-shadow: 0 20px 46px rgba(4, 10, 24, 0.45);
   font-size: 0.95rem;
   line-height: 1.5;
   letter-spacing: 0.02em;
