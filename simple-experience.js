@@ -2,11 +2,90 @@
   const WORLD_SIZE = 48;
   const BLOCK_SIZE = 1;
   const PLAYER_EYE_HEIGHT = 1.7;
-  const PLAYER_SPEED = 4.5;
+  const PLAYER_BASE_SPEED = 4.5;
   const PLAYER_INERTIA = 0.88;
   const DAY_LENGTH_SECONDS = 600;
   const POINTER_SENSITIVITY = 0.0022;
   const FALLBACK_HEALTH = 10;
+  const PORTAL_BLOCK_REQUIREMENT = 12;
+  const PORTAL_INTERACTION_RANGE = 4.5;
+  const ZOMBIE_CONTACT_RANGE = 1.35;
+  const ZOMBIE_SPAWN_INTERVAL = 8;
+  const ZOMBIE_MAX_PER_DIMENSION = 4;
+  const DIMENSION_THEME = [
+    {
+      id: 'origin',
+      name: 'Origin Grassland',
+      palette: {
+        grass: '#69c368',
+        dirt: '#b07a42',
+        stone: '#9d9d9d',
+        rails: '#c9a14d',
+      },
+      fog: '#87ceeb',
+      sky: '#87ceeb',
+      sun: '#ffffff',
+      hemi: '#bddcff',
+      gravity: 1,
+      speedMultiplier: 1,
+      description:
+        'Gentle plains with forgiving gravity. Harvest and craft to stabilise the portal frame.',
+    },
+    {
+      id: 'rock',
+      name: 'Rock Frontier',
+      palette: {
+        grass: '#7b858a',
+        dirt: '#5d6468',
+        stone: '#3b4248',
+        rails: '#e0b072',
+      },
+      fog: '#65727c',
+      sky: '#4d565f',
+      sun: '#f6f1d9',
+      hemi: '#5b748a',
+      gravity: 1.35,
+      speedMultiplier: 0.92,
+      description:
+        'Heavier steps and denser air. Keep momentum up and beware of zombies charging along the rails.',
+    },
+    {
+      id: 'tar',
+      name: 'Tar Marsh',
+      palette: {
+        grass: '#3c3a45',
+        dirt: '#2d2b33',
+        stone: '#1f1e25',
+        rails: '#ffb347',
+      },
+      fog: '#1f1a21',
+      sky: '#261c2f',
+      sun: '#ffb347',
+      hemi: '#45364d',
+      gravity: 0.85,
+      speedMultiplier: 1.1,
+      description:
+        'Low gravity swamp. Use the extra lift to hop across gaps while night creatures emerge from the mist.',
+    },
+    {
+      id: 'netherite',
+      name: 'Netherite Terminus',
+      palette: {
+        grass: '#4c1f24',
+        dirt: '#321016',
+        stone: '#14070a',
+        rails: '#ff7043',
+      },
+      fog: '#160607',
+      sky: '#1a0304',
+      sun: '#ff7043',
+      hemi: '#471414',
+      gravity: 1.15,
+      speedMultiplier: 1,
+      description:
+        'Final gauntlet of collapsing rails. Activate the portal swiftly to claim the Eternal Ingot.',
+    },
+  ];
 
   function pseudoRandom(x, z) {
     const value = Math.sin(x * 127.1 + z * 311.7) * 43758.5453;
@@ -46,18 +125,54 @@
       this.sunLight = null;
       this.hemiLight = null;
       this.terrainGroup = null;
+      this.railsGroup = null;
+      this.portalGroup = null;
+      this.zombieGroup = null;
       this.columns = new Map();
       this.heightMap = Array.from({ length: WORLD_SIZE }, () => Array(WORLD_SIZE).fill(0));
       this.blockGeometry = new THREE.BoxGeometry(BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE);
+      this.railGeometry = new THREE.BoxGeometry(BLOCK_SIZE * 0.9, BLOCK_SIZE * 0.15, BLOCK_SIZE * 1.2);
       this.materials = {
         grass: new THREE.MeshStandardMaterial({ color: new THREE.Color('#69c368'), roughness: 0.7, metalness: 0.05 }),
         dirt: new THREE.MeshStandardMaterial({ color: new THREE.Color('#b07a42'), roughness: 0.95, metalness: 0.02 }),
         stone: new THREE.MeshStandardMaterial({ color: new THREE.Color('#9d9d9d'), roughness: 0.8, metalness: 0.18 }),
+        rails: new THREE.MeshStandardMaterial({ color: new THREE.Color('#c9a14d'), roughness: 0.35, metalness: 0.65 }),
+        zombie: new THREE.MeshStandardMaterial({ color: new THREE.Color('#2e7d32'), roughness: 0.8, metalness: 0.1 }),
+        portal: new THREE.ShaderMaterial({
+          transparent: true,
+          depthWrite: false,
+          uniforms: {
+            uTime: { value: 0 },
+            uColorA: { value: new THREE.Color('#7f5af0') },
+            uColorB: { value: new THREE.Color('#2cb67d') },
+          },
+          vertexShader: `
+            varying vec2 vUv;
+            void main() {
+              vUv = uv;
+              gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+            }
+          `,
+          fragmentShader: `
+            uniform float uTime;
+            uniform vec3 uColorA;
+            uniform vec3 uColorB;
+            varying vec2 vUv;
+            void main() {
+              float swirl = sin((vUv.x + vUv.y + uTime * 0.7) * 6.2831) * 0.5 + 0.5;
+              float vignette = smoothstep(0.95, 0.35, distance(vUv, vec2(0.5)));
+              vec3 color = mix(uColorA, uColorB, swirl) * vignette;
+              gl_FragColor = vec4(color, vignette);
+            }
+          `,
+        }),
       };
       this.keys = new Set();
       this.velocity = new THREE.Vector3();
       this.tmpForward = new THREE.Vector3();
       this.tmpRight = new THREE.Vector3();
+      this.tmpVector = new THREE.Vector3();
+      this.tmpVector2 = new THREE.Vector3();
       this.pointerLocked = false;
       this.yaw = 0;
       this.pitch = 0;
@@ -66,6 +181,27 @@
       this.score = 0;
       this.blocksMined = 0;
       this.blocksPlaced = 0;
+      this.portalBlocksPlaced = 0;
+      this.portalActivated = false;
+      this.portalMesh = null;
+      this.portalActivations = 0;
+      this.portalHintShown = false;
+      this.victoryAchieved = false;
+      this.currentDimensionIndex = 0;
+      this.dimensionSettings = DIMENSION_THEME[0];
+      this.currentSpeed = PLAYER_BASE_SPEED;
+      this.gravityScale = this.dimensionSettings.gravity;
+      this.verticalVelocity = 0;
+      this.isGrounded = false;
+      this.portalAnchor = new THREE.Vector3(0, 0, -WORLD_SIZE * 0.45);
+      this.zombies = [];
+      this.lastZombieSpawn = 0;
+      this.zombieIdCounter = 0;
+      this.zombieGeometry = null;
+      this.portalFrameGeometryVertical = null;
+      this.portalFrameGeometryHorizontal = null;
+      this.portalPlaneGeometry = null;
+      this.daylightIntensity = 1;
       this.raycaster = new THREE.Raycaster();
       this.animationFrame = null;
       this.started = false;
@@ -84,7 +220,10 @@
       if (this.started) return;
       this.started = true;
       this.setupScene();
+      this.applyDimensionSettings(this.currentDimensionIndex);
       this.buildTerrain();
+      this.buildRails();
+      this.refreshPortalState();
       this.positionPlayer();
       this.bindEvents();
       this.updateHud();
@@ -159,11 +298,55 @@
       this.scene.add(ambient);
 
       this.terrainGroup = new THREE.Group();
+      this.railsGroup = new THREE.Group();
+      this.portalGroup = new THREE.Group();
+      this.zombieGroup = new THREE.Group();
       this.scene.add(this.terrainGroup);
+      this.scene.add(this.railsGroup);
+      this.scene.add(this.portalGroup);
+      this.scene.add(this.zombieGroup);
+    }
+
+    applyDimensionSettings(index) {
+      const themeCount = DIMENSION_THEME.length;
+      const safeIndex = ((index % themeCount) + themeCount) % themeCount;
+      this.currentDimensionIndex = safeIndex;
+      const theme = DIMENSION_THEME[safeIndex] ?? DIMENSION_THEME[0];
+      this.dimensionSettings = theme;
+      this.currentSpeed = PLAYER_BASE_SPEED * (theme.speedMultiplier ?? 1);
+      this.gravityScale = theme.gravity ?? 1;
+
+      const { palette } = theme;
+      if (palette?.grass) this.materials.grass.color.set(palette.grass);
+      if (palette?.dirt) this.materials.dirt.color.set(palette.dirt);
+      if (palette?.stone) this.materials.stone.color.set(palette.stone);
+      if (palette?.rails) this.materials.rails.color.set(palette.rails);
+      if (palette?.rails) {
+        this.materials.portal.uniforms.uColorA.value.set(palette.rails);
+      }
+      if (palette?.grass) {
+        this.materials.portal.uniforms.uColorB.value.set(palette.grass);
+      }
+      if (this.scene?.background && theme.sky) {
+        this.scene.background.set(theme.sky);
+      }
+      if (this.scene?.fog && theme.fog) {
+        this.scene.fog.color.set(theme.fog);
+      }
+      if (this.hemiLight && theme.hemi) {
+        this.hemiLight.color.set(theme.hemi);
+      }
+      if (this.sunLight && theme.sun) {
+        this.sunLight.color.set(theme.sun);
+      }
+      this.updateDimensionInfoPanel();
     }
 
     buildTerrain() {
       const THREE = this.THREE;
+      this.columns.clear();
+      this.heightMap = Array.from({ length: WORLD_SIZE }, () => Array(WORLD_SIZE).fill(0));
+      this.terrainGroup.clear();
       const half = WORLD_SIZE / 2;
       for (let gx = 0; gx < WORLD_SIZE; gx += 1) {
         for (let gz = 0; gz < WORLD_SIZE; gz += 1) {
@@ -207,6 +390,150 @@
           this.columns.set(columnKey, column);
         }
       }
+      if (typeof console !== 'undefined') {
+        console.log(`World generated: ${this.terrainGroup.children.length} voxels`);
+      }
+    }
+
+    buildRails() {
+      const THREE = this.THREE;
+      this.railsGroup.clear();
+      const segments = 22;
+      const radius = WORLD_SIZE * 0.18;
+      for (let i = 0; i < segments; i += 1) {
+        const t = i / (segments - 1);
+        const angle = (t - 0.5) * Math.PI * 0.45;
+        const x = Math.sin(angle) * radius;
+        const z = -t * WORLD_SIZE * 0.65;
+        const ground = this.sampleGroundHeight(x, z);
+        const mesh = new THREE.Mesh(this.railGeometry, this.materials.rails);
+        mesh.castShadow = false;
+        mesh.receiveShadow = true;
+        mesh.position.set(x, ground + 0.1, z);
+        mesh.rotation.y = angle * 0.6;
+        mesh.matrixAutoUpdate = false;
+        mesh.updateMatrix();
+        this.railsGroup.add(mesh);
+      }
+    }
+
+    refreshPortalState() {
+      this.portalGroup.clear();
+      this.portalMesh = null;
+      this.portalBlocksPlaced = 0;
+      this.portalActivated = false;
+      this.portalHintShown = false;
+      this.updatePortalProgress();
+    }
+
+    activatePortal() {
+      const THREE = this.THREE;
+      this.portalGroup.clear();
+      this.portalActivated = true;
+      const anchorX = this.portalAnchor.x;
+      const anchorZ = this.portalAnchor.z;
+      const groundHeight = this.sampleGroundHeight(anchorX, anchorZ);
+      const anchorY = groundHeight + 1.6;
+      const frameMaterial = this.materials.stone;
+      if (!this.portalFrameGeometryVertical) {
+        this.portalFrameGeometryVertical = new THREE.BoxGeometry(0.4, 3.6, 0.4);
+      }
+      if (!this.portalFrameGeometryHorizontal) {
+        this.portalFrameGeometryHorizontal = new THREE.BoxGeometry(2.6, 0.4, 0.4);
+      }
+
+      const left = new THREE.Mesh(this.portalFrameGeometryVertical, frameMaterial);
+      left.position.set(anchorX - 1.2, anchorY, anchorZ);
+      left.castShadow = true;
+      left.receiveShadow = true;
+      this.portalGroup.add(left);
+
+      const right = left.clone();
+      right.position.x = anchorX + 1.2;
+      this.portalGroup.add(right);
+
+      const top = new THREE.Mesh(this.portalFrameGeometryHorizontal, frameMaterial);
+      top.position.set(anchorX, anchorY + 1.8, anchorZ);
+      top.castShadow = true;
+      top.receiveShadow = true;
+      this.portalGroup.add(top);
+
+      const bottom = top.clone();
+      bottom.position.y = anchorY - 1.8;
+      this.portalGroup.add(bottom);
+
+      if (!this.portalPlaneGeometry) {
+        this.portalPlaneGeometry = new THREE.PlaneGeometry(2.4, 3.2);
+      }
+      const portalMaterial = this.materials.portal.clone();
+      portalMaterial.uniforms = {
+        uTime: { value: 0 },
+        uColorA: { value: this.materials.portal.uniforms.uColorA.value.clone() },
+        uColorB: { value: this.materials.portal.uniforms.uColorB.value.clone() },
+      };
+      const plane = new THREE.Mesh(this.portalPlaneGeometry, portalMaterial);
+      plane.position.set(anchorX, anchorY, anchorZ + 0.02);
+      plane.rotation.y = Math.PI;
+      this.portalGroup.add(plane);
+      this.portalMesh = plane;
+      this.updatePortalProgress();
+      this.portalActivations = Math.max(this.portalActivations, 0);
+      this.portalHintShown = true;
+      this.updateHud();
+    }
+
+    isPlayerNearPortal() {
+      if (!this.portalMesh || !this.camera) return false;
+      const distance = this.portalMesh.position.distanceTo(this.camera.position);
+      return distance <= PORTAL_INTERACTION_RANGE;
+    }
+
+    checkPortalActivation() {
+      if (this.portalActivated) {
+        this.updatePortalProgress();
+        return;
+      }
+      if (this.portalBlocksPlaced >= PORTAL_BLOCK_REQUIREMENT) {
+        this.activatePortal();
+        this.score += 5;
+        this.updateHud();
+      } else {
+        const progress = this.portalBlocksPlaced / PORTAL_BLOCK_REQUIREMENT;
+        if (!this.portalHintShown && progress >= 0.5) {
+          this.portalHintShown = true;
+          this.score += 1;
+        }
+        this.updatePortalProgress();
+      }
+    }
+
+    advanceDimension() {
+      if (!this.portalActivated || this.victoryAchieved) return;
+      this.portalActivations += 1;
+      if (this.currentDimensionIndex >= DIMENSION_THEME.length - 1) {
+        this.triggerVictory();
+        return;
+      }
+      const nextIndex = this.currentDimensionIndex + 1;
+      this.applyDimensionSettings(nextIndex);
+      this.buildTerrain();
+      this.buildRails();
+      this.refreshPortalState();
+      this.positionPlayer();
+      this.clearZombies();
+      this.score += 8;
+      this.updateHud();
+    }
+
+    triggerVictory() {
+      this.victoryAchieved = true;
+      this.portalActivated = false;
+      this.portalGroup.clear();
+      this.portalMesh = null;
+      this.score += 25;
+      this.clearZombies();
+      this.updatePortalProgress();
+      this.updateHud();
     }
 
     positionPlayer() {
@@ -265,8 +592,18 @@
 
     handleKeyDown(event) {
       this.keys.add(event.code);
+      if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'Space'].includes(event.code)) {
+        event.preventDefault();
+      }
       if (event.code === 'KeyR') {
         this.resetPosition();
+        event.preventDefault();
+      }
+      if (event.code === 'KeyF') {
+        if (this.portalActivated && this.isPlayerNearPortal()) {
+          this.advanceDimension();
+        }
+        event.preventDefault();
       }
     }
 
@@ -294,6 +631,8 @@
 
     resetPosition() {
       this.velocity.set(0, 0, 0);
+      this.verticalVelocity = 0;
+      this.isGrounded = false;
       this.positionPlayer();
     }
 
@@ -307,6 +646,8 @@
       this.elapsed += delta;
       this.updateDayNightCycle();
       this.updateMovement(delta);
+      this.updateZombies(delta);
+      this.updatePortalAnimation(delta);
       this.renderer.render(this.scene, this.camera);
     }
 
@@ -321,17 +662,18 @@
       right.y = 0;
       if (right.lengthSq() > 0) right.normalize();
 
+      const speed = this.currentSpeed;
       if (this.keys.has('KeyW')) {
-        this.velocity.addScaledVector(forward, PLAYER_SPEED * delta);
+        this.velocity.addScaledVector(forward, speed * delta);
       }
       if (this.keys.has('KeyS')) {
-        this.velocity.addScaledVector(forward, -PLAYER_SPEED * delta);
+        this.velocity.addScaledVector(forward, -speed * delta);
       }
       if (this.keys.has('KeyA')) {
-        this.velocity.addScaledVector(right, -PLAYER_SPEED * delta);
+        this.velocity.addScaledVector(right, -speed * delta);
       }
       if (this.keys.has('KeyD')) {
-        this.velocity.addScaledVector(right, PLAYER_SPEED * delta);
+        this.velocity.addScaledVector(right, speed * delta);
       }
 
       this.velocity.multiplyScalar(PLAYER_INERTIA);
@@ -342,7 +684,20 @@
       this.camera.position.add(this.velocity);
 
       const groundHeight = this.sampleGroundHeight(this.camera.position.x, this.camera.position.z);
-      this.camera.position.y = groundHeight + PLAYER_EYE_HEIGHT;
+      if (this.keys.has('Space') && this.isGrounded) {
+        const jumpBoost = 4.6 + (1.5 - Math.min(1.5, this.gravityScale));
+        this.verticalVelocity = jumpBoost;
+        this.isGrounded = false;
+      }
+      const gravityForce = 22 * this.gravityScale;
+      this.verticalVelocity -= gravityForce * delta;
+      this.camera.position.y += this.verticalVelocity * delta;
+      const desiredHeight = groundHeight + PLAYER_EYE_HEIGHT;
+      if (this.camera.position.y <= desiredHeight) {
+        this.camera.position.y = desiredHeight;
+        this.verticalVelocity = 0;
+        this.isGrounded = true;
+      }
 
       const maxDistance = (WORLD_SIZE / 2 - 2) * BLOCK_SIZE;
       this.camera.position.x = THREE.MathUtils.clamp(this.camera.position.x, -maxDistance, maxDistance);
@@ -361,6 +716,7 @@
       const cycle = (this.elapsed % DAY_LENGTH_SECONDS) / DAY_LENGTH_SECONDS;
       const angle = cycle * Math.PI * 2;
       const intensity = Math.max(0.12, Math.sin(angle) * 0.5 + 0.55);
+      this.daylightIntensity = intensity;
       this.sunLight.position.set(Math.cos(angle) * 60, Math.sin(angle) * 45, Math.sin(angle * 0.7) * 40);
       this.sunLight.intensity = 0.6 + intensity * 0.8;
       this.hemiLight.intensity = 0.6 + intensity * 0.4;
@@ -368,9 +724,119 @@
         this.scene.fog.color.setHSL(0.55, 0.5, 0.7 - intensity * 0.2);
       }
       if (this.ui?.timeEl) {
-        const daylight = Math.round(intensity * 100);
-        this.ui.timeEl.textContent = `Daylight ${daylight}%`;
+        const daylight = Math.round(Math.min(1, Math.max(0, intensity)) * 100);
+        let label = 'Daylight';
+        if (intensity < 0.28) {
+          label = 'Nightfall';
+        } else if (intensity < 0.45) {
+          label = 'Dusk';
+        } else if (intensity > 0.85) {
+          label = 'Dawn';
+        }
+        this.ui.timeEl.textContent = `${label} ${daylight}%`;
       }
+    }
+
+    updatePortalAnimation(delta) {
+      if (!this.portalMesh) return;
+      const material = this.portalMesh.material;
+      if (material?.uniforms?.uTime) {
+        material.uniforms.uTime.value += delta * 1.2;
+      }
+    }
+
+    updateZombies(delta) {
+      if (!this.zombieGroup) return;
+      const THREE = this.THREE;
+      if (!this.isNight()) {
+        if (this.zombies.length) {
+          this.clearZombies();
+        }
+        return;
+      }
+      if (this.elapsed - this.lastZombieSpawn > ZOMBIE_SPAWN_INTERVAL && this.zombies.length < ZOMBIE_MAX_PER_DIMENSION) {
+        this.spawnZombie();
+        this.lastZombieSpawn = this.elapsed;
+      }
+      const playerPosition = this.camera?.position;
+      if (!playerPosition) return;
+      const tmpDir = this.tmpVector;
+      const tmpStep = this.tmpVector2;
+      for (const zombie of this.zombies) {
+        const { mesh } = zombie;
+        tmpDir.subVectors(playerPosition, mesh.position);
+        const distance = tmpDir.length();
+        if (distance > 0.001) {
+          tmpDir.normalize();
+          tmpStep.copy(tmpDir).multiplyScalar(zombie.speed * delta);
+          mesh.position.add(tmpStep);
+          mesh.rotation.y = Math.atan2(tmpDir.x, tmpDir.z);
+        }
+        const groundHeight = this.sampleGroundHeight(mesh.position.x, mesh.position.z);
+        mesh.position.y = THREE.MathUtils.lerp(mesh.position.y, groundHeight + 0.9, delta * 10);
+        if (distance < ZOMBIE_CONTACT_RANGE && this.elapsed - zombie.lastAttack > 1.2) {
+          this.damagePlayer(1);
+          zombie.lastAttack = this.elapsed;
+        }
+      }
+    }
+
+    isNight() {
+      return this.daylightIntensity < 0.32;
+    }
+
+    spawnZombie() {
+      const THREE = this.THREE;
+      if (!THREE) return;
+      const id = (this.zombieIdCounter += 1);
+      const angle = Math.random() * Math.PI * 2;
+      const radius = WORLD_SIZE * 0.45;
+      const x = Math.cos(angle) * radius;
+      const z = Math.sin(angle) * radius;
+      const ground = this.sampleGroundHeight(x, z);
+      if (!this.zombieGeometry) {
+        this.zombieGeometry = new THREE.BoxGeometry(0.9, 1.8, 0.9);
+      }
+      const material = this.materials.zombie.clone();
+      material.color.offsetHSL(0, (Math.random() - 0.5) * 0.1, (Math.random() - 0.5) * 0.1);
+      const mesh = new THREE.Mesh(this.zombieGeometry, material);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      mesh.position.set(x, ground + 0.9, z);
+      this.zombieGroup.add(mesh);
+      this.zombies.push({ id, mesh, speed: 2.4, lastAttack: this.elapsed });
+    }
+
+    clearZombies() {
+      for (const zombie of this.zombies) {
+        this.zombieGroup.remove(zombie.mesh);
+        zombie.mesh.material?.dispose?.();
+      }
+      this.zombieGroup.clear();
+      this.zombies = [];
+    }
+
+    damagePlayer(amount) {
+      const previous = this.health;
+      this.health = Math.max(0, this.health - amount);
+      if (this.health !== previous) {
+        this.updateHud();
+      }
+      if (this.health <= 0) {
+        this.handleDefeat();
+      }
+    }
+
+    handleDefeat() {
+      this.health = FALLBACK_HEALTH;
+      this.score = Math.max(0, this.score - 4);
+      this.portalBlocksPlaced = Math.max(0, this.portalBlocksPlaced - 3);
+      this.verticalVelocity = 0;
+      this.isGrounded = false;
+      this.positionPlayer();
+      this.clearZombies();
+      this.lastZombieSpawn = this.elapsed;
+      this.updateHud();
     }
 
     mineBlock() {
@@ -395,6 +861,8 @@
         const newTop = column[column.length - 1];
         newTop.material = this.materials.grass;
       }
+      this.portalBlocksPlaced = Math.max(0, this.portalBlocksPlaced - 1);
+      this.checkPortalActivation();
       this.updateHud();
     }
 
@@ -429,6 +897,8 @@
       this.heightMap[gx][gz] = column.length;
       this.blocksPlaced += 1;
       this.score = Math.max(0, this.score - 0.5);
+      this.portalBlocksPlaced += 1;
+      this.checkPortalActivation();
       this.updateHud();
     }
 
@@ -441,8 +911,7 @@
     }
 
     updateHud() {
-      const { heartsEl, scoreTotalEl, scoreRecipesEl, scoreDimensionsEl, dimensionInfoEl, portalProgressLabel, portalProgressBar }
- = this.ui;
+      const { heartsEl, scoreTotalEl, scoreRecipesEl, scoreDimensionsEl } = this.ui;
       if (heartsEl) {
         heartsEl.innerHTML = createHeartMarkup(this.health);
       }
@@ -450,22 +919,54 @@
         scoreTotalEl.textContent = Math.round(this.score).toString();
       }
       if (scoreRecipesEl) {
-        scoreRecipesEl.textContent = `${this.blocksMined}`;
+        scoreRecipesEl.textContent = `${this.portalActivations}`;
       }
       if (scoreDimensionsEl) {
-        scoreDimensionsEl.textContent = `${this.blocksPlaced}`;
+        scoreDimensionsEl.textContent = `${this.currentDimensionIndex + 1}`;
       }
-      if (dimensionInfoEl && !dimensionInfoEl.dataset.simpleInit) {
-        dimensionInfoEl.dataset.simpleInit = 'true';
+      this.updateDimensionInfoPanel();
+      this.updatePortalProgress();
+    }
+
+    updatePortalProgress() {
+      const { portalProgressLabel, portalProgressBar } = this.ui;
+      const progress = Math.min(1, this.portalBlocksPlaced / PORTAL_BLOCK_REQUIREMENT);
+      if (portalProgressLabel) {
+        if (this.victoryAchieved) {
+          portalProgressLabel.textContent = 'Eternal Ingot secured';
+        } else if (this.portalActivated) {
+          portalProgressLabel.textContent = 'Portal stabilised';
+        } else {
+          portalProgressLabel.textContent = `Portal frame ${Math.round(progress * 100)}%`;
+        }
+      }
+      if (portalProgressBar) {
+        const displayProgress = this.victoryAchieved ? 1 : progress;
+        portalProgressBar.style.setProperty('--progress', displayProgress.toFixed(2));
+      }
+    }
+
+    updateDimensionInfoPanel() {
+      const { dimensionInfoEl } = this.ui;
+      if (!dimensionInfoEl) return;
+      if (this.victoryAchieved) {
         dimensionInfoEl.innerHTML = `
-          <h3>Origin Grassland</h3>
-          <p>Explore the sandbox prototype. WASD to move, mouse to look, left-click to mine, right-click to place.</p>
+          <h3>Netherite Terminus</h3>
+          <p>You stabilised every dimension and recovered the Eternal Ingot. Reload to chase a faster run!</p>
         `;
+        return;
       }
-      if (portalProgressLabel && portalProgressBar) {
-        portalProgressLabel.textContent = 'Prototype Progress';
-        portalProgressBar.style.setProperty('--progress', '0.12');
-      }
+      const theme = this.dimensionSettings ?? DIMENSION_THEME[0];
+      dimensionInfoEl.dataset.simpleInit = 'true';
+      const gravity = (theme.gravity ?? 1).toFixed(2);
+      const speed = (theme.speedMultiplier ?? 1).toFixed(2);
+      dimensionInfoEl.innerHTML = `
+        <h3>${theme.name}</h3>
+        <p>${theme.description ?? ''}</p>
+        <p class="dimension-meta">Gravity ×${gravity} · Speed ×${speed} · Dimension ${
+          this.currentDimensionIndex + 1
+        }/${DIMENSION_THEME.length}</p>
+      `;
     }
   }
 
