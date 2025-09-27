@@ -515,6 +515,9 @@
     if (simpleModeEnabled && window.SimpleExperience?.create) {
       const simpleExperience = window.SimpleExperience.create({
         canvas,
+        apiBaseUrl: window.APP_CONFIG?.apiBaseUrl ?? null,
+        playerName:
+          (headerUserNameEl?.textContent || window.APP_CONFIG?.playerName || '').trim() || 'Explorer',
         ui: {
           introModal,
           startButton,
@@ -527,6 +530,9 @@
           scoreDimensionsEl,
           portalProgressLabel,
           portalProgressBar,
+          scoreboardListEl,
+          scoreboardStatusEl,
+          refreshScoresButton,
         },
       });
       const launchSimple = () => {
