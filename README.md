@@ -38,10 +38,11 @@ momentum toward the full experience described in the brief.
 The legacy renderer and gameplay stack are still under heavy construction. To ensure explorers always land in a responsive,
 playable space, the page now boots into a lightweight **sandbox mode** by default. This mode:
 
-- draws a 48×48 voxel island with soft day/night lighting at 60 FPS,
-- locks the camera to a first-person perspective with mouse look + `WASD` movement,
-- supports mining (left-click) and block placement (right-click) with realtime HUD updates, and
-- keeps the existing HUD elements alive so hearts, daylight percentage, and score counters remain informative.
+- draws a 48×48 voxel island with soft day/night lighting at 60 FPS, complete with a procedurally curved rail spine,
+- locks the camera to a first-person perspective with mouse look + `WASD` movement and jump physics that adapt to each realm,
+- supports mining (left-click) and block placement (right-click) with realtime HUD updates and portal progress feedback,
+- rewards completing a 12-block frame by spawning an animated portal that advances the dimension palette and physics, and
+- keeps the existing HUD elements alive so hearts, daylight percentage, zombie alerts, and score counters remain informative.
 
 Use the following switches to control which experience loads:
 
