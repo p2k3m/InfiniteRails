@@ -10898,6 +10898,7 @@
 
     function updateEntities() {
       const now = performance.now();
+      let movementStrength = 0;
       if (playerMesh) {
         const { x, z } = worldToScene(state.player.x, state.player.y);
         const height = tileSurfaceHeight(state.player.x, state.player.y);
@@ -10906,7 +10907,7 @@
         const movementDelta = now - (state.lastMoveAt || 0);
         const pressedStrength = state.pressedKeys?.size ? 0.75 : 0;
         const recentMoveStrength = THREE.MathUtils.clamp(1 - movementDelta / 360, 0, 1);
-        const movementStrength = Math.min(1, Math.max(pressedStrength, recentMoveStrength));
+        movementStrength = Math.min(1, Math.max(pressedStrength, recentMoveStrength));
         const walkCycle = now / 240;
         const idleBob = Math.sin(now / 1200) * 0.02;
         const bob = Math.sin(walkCycle) * 0.08 * movementStrength;
