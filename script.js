@@ -473,6 +473,9 @@
     const handOverlayIcon = document.getElementById('handOverlayIcon');
     const colorBlindToggle = document.getElementById('colorBlindMode');
     const subtitleToggle = document.getElementById('subtitleToggle');
+    const gameBriefingEl = document.getElementById('gameBriefing');
+    const dismissBriefingButton = document.getElementById('dismissBriefing');
+    const gameBriefingStepsEl = document.getElementById('gameBriefingSteps');
     const settingsVolumeInputs = {
       master: document.getElementById('masterVolume'),
       music: document.getElementById('musicVolume'),
@@ -522,6 +525,8 @@
           introModal,
           startButton,
           hudRootEl,
+          gameBriefing: gameBriefingEl,
+          dismissBriefingButton,
           heartsEl,
           timeEl,
           dimensionInfoEl,
@@ -972,9 +977,6 @@
       }
     }
     const playerHintEl = document.getElementById('playerHint');
-    const gameBriefingEl = document.getElementById('gameBriefing');
-    const gameBriefingStepsEl = document.getElementById('gameBriefingSteps');
-    const dismissBriefingButton = document.getElementById('dismissBriefing');
     const drowningVignetteEl = document.getElementById('drowningVignette');
     const tarOverlayEl = document.getElementById('tarOverlay');
     const dimensionTransitionEl = document.getElementById('dimensionTransition');

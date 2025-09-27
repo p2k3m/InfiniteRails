@@ -1294,12 +1294,12 @@ body.game-active #gameCanvas {
   position: absolute;
   top: clamp(1.5rem, 5vh, 3rem);
   left: 50%;
-  transform: translateX(-50%);
+  transform: translate(-50%, 1.25rem);
   width: min(92%, 520px);
   z-index: 60;
   pointer-events: none;
   opacity: 0;
-  transition: opacity 0.28s ease, transform 0.28s ease;
+  transition: opacity 0.32s ease, transform 0.4s cubic-bezier(0.22, 0.61, 0.36, 1);
 }
 
 .game-briefing.is-visible {
