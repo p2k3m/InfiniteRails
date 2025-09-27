@@ -18,6 +18,105 @@
   const GOLEM_SPAWN_INTERVAL = 26;
   const GOLEM_MAX_PER_DIMENSION = 2;
 
+  const GLTF_LOADER_URLS = [
+    'vendor/GLTFLoader.js',
+    'https://unpkg.com/three@0.161.0/examples/js/loaders/GLTFLoader.js',
+    'https://cdn.jsdelivr.net/npm/three@0.161.0/examples/js/loaders/GLTFLoader.js',
+  ];
+
+  const MODEL_URLS = {
+    arm: 'assets/arm.gltf',
+    zombie: 'assets/zombie.gltf',
+    golem: 'assets/iron_golem.gltf',
+  };
+
+  let cachedGltfLoaderPromise = null;
+
+  function loadExternalScript(url) {
+    return new Promise((resolve, reject) => {
+      if (typeof document === 'undefined') {
+        reject(new Error('Document is unavailable for script injection.'));
+        return;
+      }
+      const existing = document.querySelector(`script[data-src="${url}"]`);
+      if (existing) {
+        if (existing.hasAttribute('data-loaded')) {
+          resolve();
+          return;
+        }
+        existing.addEventListener('load', () => resolve(), { once: true });
+        existing.addEventListener(
+          'error',
+          () => reject(new Error(`Failed to load script: ${url}`)),
+          { once: true },
+        );
+        return;
+      }
+      const script = document.createElement('script');
+      script.src = url;
+      script.async = false;
+      script.dataset.src = url;
+      script.addEventListener('load', () => {
+        script.setAttribute('data-loaded', 'true');
+        resolve();
+      });
+      script.addEventListener('error', () => {
+        script.remove();
+        reject(new Error(`Failed to load script: ${url}`));
+      });
+      document.head.appendChild(script);
+    });
+  }
+
+  function tryLoadGltfLoader(index = 0) {
+    if (index >= GLTF_LOADER_URLS.length) {
+      return Promise.reject(new Error('Unable to load any GLTFLoader sources.'));
+    }
+    const url = GLTF_LOADER_URLS[index];
+    return loadExternalScript(url).catch(() => tryLoadGltfLoader(index + 1));
+  }
+
+  function ensureGltfLoader(THREE) {
+    if (!THREE) {
+      return Promise.reject(new Error('Three.js is unavailable; cannot initialise GLTFLoader.'));
+    }
+    if (THREE.GLTFLoader) {
+      return Promise.resolve(THREE.GLTFLoader);
+    }
+    if (!cachedGltfLoaderPromise) {
+      const scope = typeof window !== 'undefined' ? window : globalThis;
+      cachedGltfLoaderPromise = tryLoadGltfLoader()
+        .then(() => {
+          if (!THREE.GLTFLoader && scope?.GLTFLoaderModule?.GLTFLoader) {
+            THREE.GLTFLoader = scope.GLTFLoaderModule.GLTFLoader;
+          }
+          if (!THREE.GLTFLoader) {
+            throw new Error('GLTFLoader script loaded but did not register the loader.');
+          }
+          return THREE.GLTFLoader;
+        })
+        .catch((error) => {
+          cachedGltfLoaderPromise = null;
+          throw error;
+        });
+    }
+    return cachedGltfLoaderPromise;
+  }
+
+  function disposeObject3D(object) {
+    if (!object || typeof object.traverse !== 'function') return;
+    object.traverse((child) => {
+      if (child.isMesh) {
+        if (Array.isArray(child.material)) {
+          child.material.forEach((material) => material?.dispose?.());
+        } else {
+          child.material?.dispose?.();
+        }
+        child.geometry?.dispose?.();
+      }
+    });
+  }
+
   const ITEM_DEFINITIONS = {
     'grass-block': { label: 'Grass Block', icon: '🟩', placeable: true },
     dirt: { label: 'Soil Chunk', icon: '🟫', placeable: true },
@@ -163,8 +262,12 @@
       this.playerRig = null;
       this.handGroup = null;
       this.handMaterials = [];
+      this.handMaterialsDynamic = true;
+      this.handModelLoaded = false;
       this.handSwingStrength = 0;
       this.handSwingTimer = 0;
+      this.modelPromises = new Map();
+      this.loadedModels = new Map();
       this.scoreboardListEl = this.ui.scoreboardListEl || null;
       this.scoreboardStatusEl = this.ui.scoreboardStatusEl || null;
       this.refreshScoresButton = this.ui.refreshScoresButton || null;
@@ -322,6 +425,8 @@
       if (this.started) return;
       this.started = true;
       this.setupScene();
+      this.preloadCharacterModels();
+      this.loadFirstPersonArms();
       this.initializeScoreboardUi();
       this.applyDimensionSettings(this.currentDimensionIndex);
       this.buildTerrain();
@@ -1203,6 +1308,9 @@
       this.handGroup = new THREE.Group();
       this.handGroup.position.set(0.42, -0.46, -0.8);
       this.handGroup.rotation.set(-0.55, 0, 0);
+      this.handMaterials = [];
+      this.handMaterialsDynamic = true;
+      this.handModelLoaded = false;
 
       const handGeometry = new THREE.BoxGeometry(0.24, 0.46, 0.24);
       const sleeveGeometry = new THREE.BoxGeometry(0.26, 0.22, 0.26);
@@ -1242,6 +1350,179 @@
       this.handMaterials = [left.palm.material, right.palm.material, left.sleeve.material, right.sleeve.material];
     }
 
+    preloadCharacterModels() {
+      this.loadModel('arm').catch(() => {});
+      this.loadModel('zombie').catch(() => {});
+      this.loadModel('golem').catch(() => {});
+    }
+
+    loadModel(key, overrideUrl) {
+      const THREE = this.THREE;
+      const url = overrideUrl || MODEL_URLS[key];
+      if (!url) {
+        return Promise.reject(new Error(`No model URL configured for key "${key}".`));
+      }
+      if (this.loadedModels.has(key)) {
+        return Promise.resolve(this.loadedModels.get(key));
+      }
+      if (this.modelPromises.has(key)) {
+        return this.modelPromises.get(key);
+      }
+      const promise = ensureGltfLoader(THREE)
+        .then((LoaderClass) => {
+          return new Promise((resolve, reject) => {
+            try {
+              const loader = new LoaderClass();
+              loader.load(
+                url,
+                (gltf) => {
+                  resolve({ scene: gltf.scene, animations: gltf.animations || [] });
+                },
+                undefined,
+                (error) => reject(error || new Error(`Failed to load GLTF: ${url}`)),
+              );
+            } catch (error) {
+              reject(error);
+            }
+          });
+        })
+        .then((payload) => {
+          if (!payload?.scene) {
+            throw new Error(`Model at ${url} is missing a scene graph.`);
+          }
+          payload.scene.traverse((child) => {
+            if (child.isMesh) {
+              child.castShadow = true;
+              child.receiveShadow = true;
+            }
+          });
+          this.loadedModels.set(key, payload);
+          return payload;
+        })
+        .catch((error) => {
+          console.warn(`Failed to load model "${key}" from ${url}`, error);
+          this.modelPromises.delete(key);
+          throw error;
+        });
+      this.modelPromises.set(key, promise);
+      return promise;
+    }
+
+    async cloneModelScene(key, overrideUrl) {
+      try {
+        const payload = await this.loadModel(key, overrideUrl);
+        if (!payload?.scene) {
+          return null;
+        }
+        const clone = payload.scene.clone(true);
+        clone.traverse((child) => {
+          if (child.isMesh) {
+            if (Array.isArray(child.material)) {
+              child.material = child.material.map((material) => (material?.clone ? material.clone() : material));
+            } else if (child.material?.clone) {
+              child.material = child.material.clone();
+            }
+            child.castShadow = true;
+            child.receiveShadow = true;
+          }
+        });
+        return { scene: clone, animations: payload.animations };
+      } catch (error) {
+        return null;
+      }
+    }
+
+    async loadFirstPersonArms() {
+      if (!this.handGroup) return;
+      const asset = await this.cloneModelScene('arm');
+      if (!asset?.scene) {
+        return;
+      }
+      this.handGroup.clear();
+      const leftArm = asset.scene;
+      leftArm.position.set(-0.32, -0.1, -0.58);
+      leftArm.rotation.set(-0.32, 0.32, 0.12);
+      const rightAsset = await this.cloneModelScene('arm');
+      if (!rightAsset?.scene) {
+        this.handGroup.add(leftArm);
+        this.handMaterials = [];
+        leftArm.traverse((child) => {
+          if (child.isMesh && child.material) {
+            if (Array.isArray(child.material)) {
+              this.handMaterials.push(...child.material.filter(Boolean));
+            } else {
+              this.handMaterials.push(child.material);
+            }
+          }
+        });
+        this.handMaterialsDynamic = false;
+        this.handModelLoaded = true;
+        return;
+      }
+      const rightArm = rightAsset.scene;
+      rightArm.position.set(0.32, -0.1, -0.58);
+      rightArm.rotation.set(-0.32, -0.32, -0.12);
+      rightArm.rotation.y = Math.PI;
+      this.handGroup.add(leftArm);
+      this.handGroup.add(rightArm);
+      this.handMaterials = [];
+      this.handGroup.traverse((child) => {
+        if (child.isMesh && child.material) {
+          if (Array.isArray(child.material)) {
+            this.handMaterials.push(...child.material.filter(Boolean));
+          } else {
+            this.handMaterials.push(child.material);
+          }
+        }
+      });
+      this.handMaterialsDynamic = false;
+      this.handModelLoaded = true;
+    }
+
+    upgradeZombie(zombie) {
+      this.cloneModelScene('zombie')
+        .then((asset) => {
+          if (!asset?.scene || !this.zombieGroup) return;
+          if (!this.zombies.includes(zombie)) return;
+          const placeholder = zombie.mesh;
+          const model = asset.scene;
+          model.name = `ZombieModel-${zombie.id}`;
+          model.position.copy(placeholder.position);
+          model.rotation.copy(placeholder.rotation);
+          model.scale.setScalar(0.95);
+          this.zombieGroup.add(model);
+          this.zombieGroup.remove(placeholder);
+          disposeObject3D(placeholder);
+          zombie.mesh = model;
+          zombie.placeholder = false;
+        })
+        .catch((error) => {
+          console.warn('Failed to upgrade zombie model', error);
+        });
+    }
+
+    upgradeGolem(golem) {
+      this.cloneModelScene('golem')
+        .then((asset) => {
+          if (!asset?.scene || !this.golemGroup) return;
+          if (!this.golems.includes(golem)) return;
+          const placeholder = golem.mesh;
+          const model = asset.scene;
+          model.name = `GolemModel-${golem.id ?? 'actor'}`;
+          model.position.copy(placeholder.position);
+          model.rotation.copy(placeholder.rotation);
+          model.scale.setScalar(1.1);
+          this.golemGroup.add(model);
+          this.golemGroup.remove(placeholder);
+          disposeObject3D(placeholder);
+          golem.mesh = model;
+          golem.placeholder = false;
+        })
+        .catch((error) => {
+          console.warn('Failed to upgrade golem model', error);
+        });
+    }
+
     applyDimensionSettings(index) {
       const themeCount = DIMENSION_THEME.length;
       const safeIndex = ((index % themeCount) + themeCount) % themeCount;
@@ -1262,7 +1543,7 @@
       if (palette?.grass) {
         this.materials.portal.uniforms.uColorB.value.set(palette.grass);
       }
-      if (this.handMaterials.length) {
+      if (this.handMaterialsDynamic && this.handMaterials.length) {
         const palmColor = palette?.grass || '#82c7ff';
         const sleeveColor = palette?.rails || '#2563eb';
         this.handMaterials.forEach((material, index) => {
@@ -1347,7 +1628,8 @@
         }
       }
       if (typeof console !== 'undefined') {
-        console.log(`World generated: ${WORLD_SIZE ** 2} columns, ${voxelCount} voxels`);
+        const columnCount = WORLD_SIZE * WORLD_SIZE;
+        console.log(`World generated: ${columnCount} columns (${voxelCount} voxels)`);
       }
     }
 
@@ -1897,13 +2179,15 @@
       mesh.receiveShadow = true;
       mesh.position.set(x, ground + 0.9, z);
       this.zombieGroup.add(mesh);
-      this.zombies.push({ id, mesh, speed: 2.4, lastAttack: this.elapsed });
+      const zombie = { id, mesh, speed: 2.4, lastAttack: this.elapsed, placeholder: true };
+      this.zombies.push(zombie);
+      this.upgradeZombie(zombie);
     }
 
     clearZombies() {
       for (const zombie of this.zombies) {
         this.zombieGroup.remove(zombie.mesh);
-        zombie.mesh.material?.dispose?.();
+        disposeObject3D(zombie.mesh);
       }
       this.zombieGroup.clear();
       this.zombies = [];
@@ -1916,7 +2200,7 @@
         this.zombies.splice(index, 1);
       }
       this.zombieGroup.remove(target.mesh);
-      target.mesh.material?.dispose?.();
+      disposeObject3D(target.mesh);
     }
 
     findNearestZombie(position) {
@@ -1977,7 +2261,15 @@
       const ground = this.sampleGroundHeight(x, z);
       actor.position.set(x, ground + 1, z);
       this.golemGroup.add(actor);
-      this.golems.push({ id: `golem-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, mesh: actor, cooldown: 0, speed: 3.1 });
+      const golem = {
+        id: `golem-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        mesh: actor,
+        cooldown: 0,
+        speed: 3.1,
+        placeholder: true,
+      };
+      this.golems.push(golem);
+      this.upgradeGolem(golem);
       this.lastGolemSpawn = this.elapsed;
       this.showHint('An iron golem joins your defense.');
     }
@@ -2028,6 +2320,7 @@
       if (!this.golems.length) return;
       for (const golem of this.golems) {
         this.golemGroup.remove(golem.mesh);
+        disposeObject3D(golem.mesh);
       }
       this.golemGroup?.clear?.();
       this.golems = [];
