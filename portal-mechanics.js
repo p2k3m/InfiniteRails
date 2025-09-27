@@ -135,7 +135,7 @@ function getPortalMechanicsSummary() {
   };
 }
 
-module.exports = {
+const api = {
   FRAME_WIDTH,
   FRAME_HEIGHT,
   buildPortalFrame,
@@ -144,3 +144,17 @@ module.exports = {
   enterPortal,
   getPortalMechanicsSummary,
 };
+
+if (typeof module !== 'undefined' && typeof module.exports !== 'undefined') {
+  module.exports = api;
+}
+
+const globalScope =
+  (typeof window !== 'undefined' && window) ||
+  (typeof globalThis !== 'undefined' && globalThis) ||
+  (typeof global !== 'undefined' && global) ||
+  null;
+
+if (globalScope && !globalScope.PortalMechanics) {
+  globalScope.PortalMechanics = api;
+}
