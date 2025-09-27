@@ -49,8 +49,8 @@ If you work with coding agents (for example GitHub Copilot or Code Interpreter) 
 
 ## Simplified sandbox mode
 
-The legacy renderer and gameplay stack are still under heavy construction. To ensure explorers always land in a responsive,
-playable space, the page now boots into a lightweight **sandbox mode** by default. This mode:
+The legacy renderer and gameplay stack are still under heavy construction. The page now boots into the fully interactive
+renderer by default, but you can opt into a lightweight **sandbox mode** whenever you need a focused testing space. The sandbox:
 
 - draws a 64×64 voxel island with soft day/night lighting at 60 FPS, complete with a procedurally curved rail spine,
 - locks the camera to a first-person perspective with mouse look + `WASD` movement and jump physics that adapt to each realm,
@@ -62,8 +62,8 @@ Use the following switches to control which experience loads:
 
 | Mode | How to activate |
 | --- | --- |
-| Sandbox (default) | Load the page normally. You can also force it with `?mode=simple` or by setting `APP_CONFIG.forceSimpleMode = true`. |
-| Advanced preview | Append `?mode=advanced` (or `?advanced=1`) to the URL or set `APP_CONFIG.forceAdvanced = true`. |
+| Advanced renderer (default) | Load the page normally. You can also force it with `?mode=advanced`, `?advanced=1`, or by setting `APP_CONFIG.forceAdvanced = true`. |
+| Sandbox | Append `?mode=simple` (or `?simple=1`), set `APP_CONFIG.forceSimpleMode = true`, or provide `APP_CONFIG.defaultMode = 'simple'`. |
 
 The sandbox keeps the portal-building brief front-and-centre while the production renderer catches up. When advanced mode is
 ready, flip the flags above to continue development without losing the reliable fallback.
@@ -84,6 +84,8 @@ Expose an `APP_CONFIG` object before loading `script.js` to wire up Google SSO a
   window.APP_CONFIG = {
     apiBaseUrl: 'https://your-api.example.com',
     googleClientId: 'GOOGLE_OAUTH_CLIENT_ID.apps.googleusercontent.com',
+    // Optional: set to 'simple' to launch the sandbox by default.
+    defaultMode: 'advanced',
   };
 </script>
 ```

@@ -512,7 +512,10 @@
       if (params.get('simple') === '1') return true;
       if (window.APP_CONFIG?.forceAdvanced) return false;
       if (window.APP_CONFIG?.forceSimpleMode) return true;
-      return true;
+      if (window.APP_CONFIG?.defaultMode) {
+        return window.APP_CONFIG.defaultMode === 'simple';
+      }
+      return false;
     }
 
     function setupSimpleExperienceIntegrations(experience) {
