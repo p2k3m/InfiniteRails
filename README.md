@@ -68,6 +68,17 @@ Use the following switches to control which experience loads:
 The sandbox keeps the portal-building brief front-and-centre while the production renderer catches up. When advanced mode is
 ready, flip the flags above to continue development without losing the reliable fallback.
 
+### Troubleshooting a blank viewport
+
+If you load the page and only see the HUD without the voxel world, run through the quick checks below:
+
+1. **Force the sandbox.** Append `?mode=simple` (or set `APP_CONFIG.forceSimpleMode = true`) to bypass any lingering advanced-mode flags that might have been left in `localStorage` or injected configs.
+2. **Verify asset paths.** Confirm the `assets/` directory is being served alongside `index.html`; the sandbox streams GLTF rigs and textures from those relative URLs and will refuse to start if they 404.
+3. **Inspect the console.** Shader-uniform or WebGL context errors will be logged with actionable recovery tips—clear the cache and reload once the offending asset has been restored.
+4. **Disable browser extensions.** Content blockers can prevent pointer-lock or audio initialisation; retry in a private window if input still appears frozen.
+
+These steps restore the intended first-person sandbox when a deployment or cached configuration temporarily forces the unfinished renderer path.
+
 ## Controls
 
 | Platform | Input |
