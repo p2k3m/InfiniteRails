@@ -7465,6 +7465,37 @@
               renderer?.properties && typeof renderer.properties.get === 'function'
                 ? renderer.properties.get(mat)
                 : null;
+            const uniformsList =
+              Array.isArray(props?.uniformsList) && props.uniformsList.length > 0
+                ? props.uniformsList
+                : null;
+            if (uniformsList) {
+              const listHasInvalidEntry = uniformsList.some((entry) => {
+                if (!entry || typeof entry !== 'object') {
+                  return true;
+                }
+                const uniformRef = entry.uniform;
+                if (!uniformRef || typeof uniformRef !== 'object') {
+                  return true;
+                }
+                if (!Object.prototype.hasOwnProperty.call(uniformRef, 'value')) {
+                  return true;
+                }
+                return typeof uniformRef.value === 'undefined';
+              });
+              if (listHasInvalidEntry) {
+                if (renderer?.properties?.remove) {
+                  try {
+                    renderer.properties.remove(mat);
+                  } catch (removeError) {
+                    // Ignore removal failures; renderer will rebuild the cache on the next frame.
+                  }
+                }
+                sanitized = true;
+                rendererReset = true;
+                return;
+              }
+            }
             const rendererUniformsCandidate =
               props && typeof props.uniforms === 'object' ? props.uniforms : null;
             const programInfo = props?.program?.getUniforms?.() ?? null;
