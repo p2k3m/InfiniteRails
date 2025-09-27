@@ -5579,6 +5579,97 @@
         uniforms = {};
       }
 
+      const isUniformsGroup =
+        uniforms.isUniformsGroup === true ||
+        (Array.isArray(uniforms.seq) && typeof uniforms.map === 'object');
+
+      const ensureUniformsGroupEntry = (key, resolvedDefault) => {
+        if (!uniforms.map || typeof uniforms.map !== 'object') {
+          uniforms.map = {};
+        }
+        if (!Array.isArray(uniforms.seq)) {
+          uniforms.seq = [];
+        }
+
+        let container = uniforms.map[key];
+        let containerModified = false;
+
+        const ensureContainerShape = () => {
+          if (!container || typeof container !== 'object') {
+            const uniform = { value: resolvedDefault };
+            container = {
+              id: `${key}`,
+              name: `${key}`,
+              cache: [],
+              uniform,
+              value: resolvedDefault,
+              setValue(value) {
+                this.value = value;
+                if (this.uniform && typeof this.uniform === 'object') {
+                  this.uniform.value = value;
+                }
+                return this;
+              },
+              updateCache() {},
+            };
+            containerModified = true;
+          }
+
+          if (!container.uniform || typeof container.uniform !== 'object') {
+            container.uniform = { value: resolvedDefault };
+            containerModified = true;
+          }
+
+          if (!Array.isArray(container.cache)) {
+            container.cache = [];
+            containerModified = true;
+          }
+
+          if (typeof container.setValue !== 'function') {
+            container.setValue = function setValue(value) {
+              this.value = value;
+              if (this.uniform && typeof this.uniform === 'object') {
+                this.uniform.value = value;
+              }
+              return this;
+            };
+            containerModified = true;
+          }
+
+          if (typeof container.updateCache !== 'function') {
+            container.updateCache = () => {};
+            containerModified = true;
+          }
+
+          if (!Object.prototype.hasOwnProperty.call(container, 'value')) {
+            container.value = resolvedDefault;
+            containerModified = true;
+          }
+
+          if (!Object.prototype.hasOwnProperty.call(container.uniform, 'value')) {
+            container.uniform.value = resolvedDefault;
+            containerModified = true;
+          }
+
+          return container;
+        };
+
+        const targetContainer = ensureContainerShape();
+
+        if (!uniforms.map[key] || uniforms.map[key] !== targetContainer) {
+          uniforms.map[key] = targetContainer;
+          containerModified = true;
+        }
+
+        if (!uniforms.seq.includes(targetContainer)) {
+          uniforms.seq.push(targetContainer);
+          containerModified = true;
+        }
+
+        const uniformEntry = targetContainer.uniform;
+        return { uniformEntry, containerModified, container: targetContainer };
+      };
+
       const guardedUniforms = guardUniformContainer(uniforms);
       if (guardedUniforms && guardedUniforms !== uniforms) {
         uniforms = guardedUniforms;
@@ -5600,12 +5691,39 @@
           return null;
         }
         const resolvedDefault = resolveDefault(defaultValue);
+
+        if (isUniformsGroup) {
+          const { uniformEntry, containerModified, container } = ensureUniformsGroupEntry(
+            key,
+            resolvedDefault
+          );
+          if (!uniformEntry || typeof uniformEntry !== 'object') {
+            return null;
+          }
+          if (!Object.prototype.hasOwnProperty.call(uniformEntry, 'value')) {
+            uniformEntry.value = resolvedDefault;
+            modified = true;
+          } else if (typeof uniformEntry.value === 'undefined') {
+            uniformEntry.value = resolvedDefault;
+            modified = true;
+          }
+          if (container && container.value !== uniformEntry.value) {
+            container.value = uniformEntry.value;
+            modified = true;
+          }
+          if (containerModified) {
+            modified = true;
+          }
+          return uniformEntry;
+        }
+
         const replaceEntry = () => {
           const replacement = { value: resolvedDefault };
           uniforms[key] = replacement;
           modified = true;
           return replacement;
         };
+
         let entry = uniforms[key];
         if (!entry || typeof entry !== 'object') {
           return replaceEntry();
@@ -5636,15 +5754,40 @@
         return entry;
       };
 
-      Object.keys(uniforms).forEach((key) => {
-        if (RESERVED_UNIFORM_CONTAINER_KEYS.has(key)) {
+      const iterateUniformKeys = () => {
+        if (isUniformsGroup) {
+          if (uniforms.map && typeof uniforms.map === 'object') {
+            Object.keys(uniforms.map).forEach((key) => {
+              if (RESERVED_UNIFORM_CONTAINER_KEYS.has(key)) {
+                return;
+              }
+              const entryContainer = uniforms.map[key];
+              const uniform =
+                entryContainer && typeof entryContainer === 'object'
+                  ? entryContainer.uniform && typeof entryContainer.uniform === 'object'
+                    ? entryContainer.uniform
+                    : entryContainer
+                  : null;
+              if (!uniform || typeof uniform !== 'object' || !Object.prototype.hasOwnProperty.call(uniform, 'value')) {
+                ensureUniformEntry(key, null);
+              }
+            });
+          }
           return;
         }
-        const entry = uniforms[key];
-        if (!entry || typeof entry !== 'object' || !Object.prototype.hasOwnProperty.call(entry, 'value')) {
-          ensureUniformEntry(key, null);
-        }
-      });
+
+        Object.keys(uniforms).forEach((key) => {
+          if (RESERVED_UNIFORM_CONTAINER_KEYS.has(key)) {
+            return;
+          }
+          const entry = uniforms[key];
+          if (!entry || typeof entry !== 'object' || !Object.prototype.hasOwnProperty.call(entry, 'value')) {
+            ensureUniformEntry(key, null);
+          }
+        });
+      };
+
+      iterateUniformKeys();
 
       missingKeys.forEach((key) => {
         ensureUniformEntry(key, null);
