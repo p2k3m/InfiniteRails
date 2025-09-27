@@ -203,6 +203,20 @@
       this.briefingFadeTimer = null;
       this.started = false;
       this.prevTime = null;
+      this.mobileControlsRoot = this.ui.mobileControls || null;
+      this.virtualJoystickEl = this.ui.virtualJoystick || null;
+      this.virtualJoystickThumb = this.ui.virtualJoystickThumb || null;
+      this.touchButtonStates = { up: false, down: false, left: false, right: false };
+      this.joystickVector = new THREE.Vector2();
+      this.joystickPointerId = null;
+      this.touchLookPointerId = null;
+      this.touchLookLast = null;
+      this.touchActionStart = 0;
+      this.touchActionPending = false;
+      this.touchJumpRequested = false;
+      this.mobileControlDisposers = [];
+      this.isTouchPreferred = this.detectTouchPreferred();
+      this.audio = this.createAudioController();
       this.onPointerLockChange = this.handlePointerLockChange.bind(this);
       this.onPointerLockError = this.handlePointerLockError.bind(this);
       this.onMouseMove = this.handleMouseMove.bind(this);
@@ -212,6 +226,15 @@
       this.onMouseDown = this.handleMouseDown.bind(this);
       this.preventContextMenu = (event) => event.preventDefault();
       this.onDismissBriefing = this.handleBriefingDismiss.bind(this);
+      this.onJoystickPointerDown = this.handleJoystickPointerDown.bind(this);
+      this.onJoystickPointerMove = this.handleJoystickPointerMove.bind(this);
+      this.onJoystickPointerUp = this.handleJoystickPointerUp.bind(this);
+      this.onTouchButtonPress = this.handleTouchButtonPress.bind(this);
+      this.onTouchButtonRelease = this.handleTouchButtonRelease.bind(this);
+      this.onPortalButton = this.handlePortalButton.bind(this);
+      this.onTouchLookPointerDown = this.handleTouchLookPointerDown.bind(this);
+      this.onTouchLookPointerMove = this.handleTouchLookPointerMove.bind(this);
+      this.onTouchLookPointerUp = this.handleTouchLookPointerUp.bind(this);
     }
 
     start() {
@@ -225,6 +248,7 @@
       this.refreshPortalState();
       this.positionPlayer();
       this.bindEvents();
+      this.initializeMobileControls();
       this.updateHud();
       this.hideIntro();
       this.showBriefingOverlay();
@@ -723,6 +747,334 @@
       return texture;
     }
 
+    detectTouchPreferred() {
+      if (typeof window === 'undefined') return false;
+      if (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) {
+        return true;
+      }
+      const nav = typeof navigator !== 'undefined' ? navigator : null;
+      if (nav?.maxTouchPoints && nav.maxTouchPoints > 0) {
+        return true;
+      }
+      return 'ontouchstart' in window;
+    }
+
+    createAudioController() {
+      const scope = typeof window !== 'undefined' ? window : typeof globalThis !== 'undefined' ? globalThis : null;
+      const samples = scope?.INFINITE_RAILS_EMBEDDED_ASSETS?.audioSamples || null;
+      const HowlCtor = scope?.Howl;
+      if (!samples || typeof HowlCtor !== 'function') {
+        return {
+          has: () => false,
+          play: () => {},
+          playRandom: () => {},
+          stopAll: () => {},
+          setMasterVolume: () => {},
+        };
+      }
+      const available = new Set(Object.keys(samples));
+      const cache = new Map();
+      const controller = {
+        has(name) {
+          return available.has(name);
+        },
+        play(name, options = {}) {
+          if (!available.has(name)) return;
+          let howl = cache.get(name);
+          if (!howl) {
+            howl = new HowlCtor({
+              src: [`data:audio/wav;base64,${samples[name]}`],
+              volume: options.volume ?? 1,
+              preload: true,
+            });
+            cache.set(name, howl);
+          }
+          if (options.volume !== undefined && typeof howl.volume === 'function') {
+            howl.volume(options.volume);
+          }
+          if (options.rate !== undefined && typeof howl.rate === 'function') {
+            howl.rate(options.rate);
+          }
+          if (options.loop !== undefined && typeof howl.loop === 'function') {
+            howl.loop(Boolean(options.loop));
+          }
+          howl.play();
+        },
+        playRandom(names = [], options = {}) {
+          const pool = names.filter((name) => available.has(name));
+          if (!pool.length) return;
+          const choice = pool[Math.floor(Math.random() * pool.length)];
+          controller.play(choice, options);
+        },
+        stopAll() {
+          cache.forEach((howl) => howl.stop?.());
+        },
+        setMasterVolume(volume) {
+          if (scope?.Howler?.volume) {
+            scope.Howler.volume(volume);
+          }
+        },
+      };
+      return controller;
+    }
+
+    initializeMobileControls() {
+      if (!this.mobileControlsRoot) {
+        return;
+      }
+      const controls = this.mobileControlsRoot;
+      this.teardownMobileControls();
+      const active = Boolean(this.isTouchPreferred);
+      controls.setAttribute('aria-hidden', active ? 'false' : 'true');
+      controls.dataset.active = active ? 'true' : 'false';
+      if (!active) {
+        return;
+      }
+      const blockDefault = (event) => event.preventDefault();
+      controls.addEventListener('contextmenu', blockDefault);
+      this.mobileControlDisposers.push(() => controls.removeEventListener('contextmenu', blockDefault));
+
+      const directionButtons = controls.querySelectorAll(
+        'button[data-action="up"], button[data-action="down"], button[data-action="left"], button[data-action="right"]'
+      );
+      directionButtons.forEach((button) => {
+        button.addEventListener('pointerdown', this.onTouchButtonPress, { passive: false });
+        button.addEventListener('pointerup', this.onTouchButtonRelease);
+        button.addEventListener('pointercancel', this.onTouchButtonRelease);
+        button.addEventListener('lostpointercapture', this.onTouchButtonRelease);
+        button.addEventListener('click', blockDefault);
+        this.mobileControlDisposers.push(() => {
+          button.removeEventListener('pointerdown', this.onTouchButtonPress);
+          button.removeEventListener('pointerup', this.onTouchButtonRelease);
+          button.removeEventListener('pointercancel', this.onTouchButtonRelease);
+          button.removeEventListener('lostpointercapture', this.onTouchButtonRelease);
+          button.removeEventListener('click', blockDefault);
+        });
+      });
+
+      const actionButton = controls.querySelector('button[data-action="action"]');
+      if (actionButton) {
+        const handlePointerDown = (event) => {
+          event.preventDefault();
+          this.touchActionPending = true;
+          this.touchActionStart = performance.now();
+        };
+        const handlePointerUp = (event) => {
+          event.preventDefault();
+          if (!this.touchActionPending) {
+            return;
+          }
+          this.touchActionPending = false;
+          const duration = performance.now() - this.touchActionStart;
+          if (duration > 260) {
+            this.touchJumpRequested = true;
+          } else {
+            this.mineBlock();
+          }
+        };
+        const handlePointerCancel = () => {
+          this.touchActionPending = false;
+        };
+        actionButton.addEventListener('pointerdown', handlePointerDown, { passive: false });
+        actionButton.addEventListener('pointerup', handlePointerUp);
+        actionButton.addEventListener('pointercancel', handlePointerCancel);
+        actionButton.addEventListener('click', blockDefault);
+        this.mobileControlDisposers.push(() => {
+          actionButton.removeEventListener('pointerdown', handlePointerDown);
+          actionButton.removeEventListener('pointerup', handlePointerUp);
+          actionButton.removeEventListener('pointercancel', handlePointerCancel);
+          actionButton.removeEventListener('click', blockDefault);
+        });
+      }
+
+      const portalButton = controls.querySelector('button[data-action="portal"]');
+      if (portalButton) {
+        portalButton.addEventListener('click', this.onPortalButton);
+        portalButton.addEventListener('pointerdown', blockDefault, { passive: false });
+        this.mobileControlDisposers.push(() => {
+          portalButton.removeEventListener('click', this.onPortalButton);
+          portalButton.removeEventListener('pointerdown', blockDefault);
+        });
+      }
+
+      if (this.virtualJoystickEl) {
+        this.virtualJoystickEl.setAttribute('aria-hidden', 'false');
+        this.virtualJoystickEl.addEventListener('pointerdown', this.onJoystickPointerDown, { passive: false });
+        window.addEventListener('pointermove', this.onJoystickPointerMove, { passive: false });
+        window.addEventListener('pointerup', this.onJoystickPointerUp);
+        window.addEventListener('pointercancel', this.onJoystickPointerUp);
+        this.mobileControlDisposers.push(() => {
+          this.virtualJoystickEl.removeEventListener('pointerdown', this.onJoystickPointerDown);
+          window.removeEventListener('pointermove', this.onJoystickPointerMove);
+          window.removeEventListener('pointerup', this.onJoystickPointerUp);
+          window.removeEventListener('pointercancel', this.onJoystickPointerUp);
+        });
+      }
+    }
+
+    teardownMobileControls() {
+      if (this.mobileControlDisposers.length) {
+        this.mobileControlDisposers.forEach((dispose) => {
+          try {
+            dispose();
+          } catch (error) {
+            console.warn('Failed to remove mobile control handler', error);
+          }
+        });
+      }
+      this.mobileControlDisposers = [];
+      this.touchButtonStates.up = false;
+      this.touchButtonStates.down = false;
+      this.touchButtonStates.left = false;
+      this.touchButtonStates.right = false;
+      this.touchActionPending = false;
+      this.touchJumpRequested = false;
+      this.resetJoystick();
+      if (this.mobileControlsRoot) {
+        this.mobileControlsRoot.dataset.active = 'false';
+        this.mobileControlsRoot.setAttribute('aria-hidden', 'true');
+      }
+      if (this.virtualJoystickEl) {
+        this.virtualJoystickEl.setAttribute('aria-hidden', 'true');
+      }
+    }
+
+    resetJoystick() {
+      this.joystickPointerId = null;
+      this.joystickVector.set(0, 0);
+      if (this.virtualJoystickThumb) {
+        this.virtualJoystickThumb.style.transform = 'translate(0px, 0px)';
+      }
+    }
+
+    handleJoystickPointerDown(event) {
+      if (event.pointerType && event.pointerType !== 'touch' && event.pointerType !== 'pen') {
+        return;
+      }
+      event.preventDefault();
+      this.joystickPointerId = event.pointerId ?? 'touch';
+      this.updateJoystickFromPointer(event);
+      this.virtualJoystickEl?.setPointerCapture?.(event.pointerId ?? 0);
+    }
+
+    handleJoystickPointerMove(event) {
+      if (this.joystickPointerId === null) return;
+      if (event.pointerId !== undefined && event.pointerId !== this.joystickPointerId) return;
+      if (event.pointerType && event.pointerType !== 'touch' && event.pointerType !== 'pen') return;
+      event.preventDefault();
+      this.updateJoystickFromPointer(event);
+    }
+
+    handleJoystickPointerUp(event) {
+      if (this.joystickPointerId === null) return;
+      if (event.pointerId !== undefined && event.pointerId !== this.joystickPointerId) return;
+      event.preventDefault();
+      this.virtualJoystickEl?.releasePointerCapture?.(event.pointerId ?? 0);
+      this.resetJoystick();
+    }
+
+    updateJoystickFromPointer(event) {
+      if (!this.virtualJoystickEl) return;
+      const rect = this.virtualJoystickEl.getBoundingClientRect();
+      const radius = rect.width / 2;
+      if (radius <= 0) return;
+      const centerX = rect.left + radius;
+      const centerY = rect.top + radius;
+      const dx = event.clientX - centerX;
+      const dy = event.clientY - centerY;
+      const distance = Math.min(Math.sqrt(dx * dx + dy * dy), radius);
+      const angle = Math.atan2(dy, dx);
+      const limitedX = Math.cos(angle) * distance;
+      const limitedY = Math.sin(angle) * distance;
+      const normalisedX = limitedX / radius;
+      const normalisedY = limitedY / radius;
+      this.joystickVector.set(normalisedX, normalisedY);
+      if (this.virtualJoystickThumb) {
+        const thumbRadius = radius * 0.65;
+        const thumbX = normalisedX * thumbRadius;
+        const thumbY = normalisedY * thumbRadius;
+        this.virtualJoystickThumb.style.transform = `translate(${thumbX.toFixed(1)}px, ${thumbY.toFixed(1)}px)`;
+      }
+    }
+
+    handleTouchButtonPress(event) {
+      if (event.pointerType && event.pointerType !== 'touch' && event.pointerType !== 'pen') {
+        return;
+      }
+      event.preventDefault();
+      const button = event.currentTarget;
+      if (!button) return;
+      button.setPointerCapture?.(event.pointerId ?? 0);
+      const action = button.dataset?.action;
+      if (!action) return;
+      if (action === 'up' || action === 'down' || action === 'left' || action === 'right') {
+        this.touchButtonStates[action] = true;
+      }
+    }
+
+    handleTouchButtonRelease(event) {
+      const button = event.currentTarget;
+      if (!button) return;
+      const action = button.dataset?.action;
+      if (!action) return;
+      if (action === 'up' || action === 'down' || action === 'left' || action === 'right') {
+        this.touchButtonStates[action] = false;
+      }
+    }
+
+    handlePortalButton(event) {
+      event.preventDefault();
+      if (this.portalActivated && this.isPlayerNearPortal()) {
+        this.advanceDimension();
+        return;
+      }
+      this.placeBlock();
+    }
+
+    handleTouchLookPointerDown(event) {
+      if (event.pointerType !== 'touch') {
+        return;
+      }
+      if (this.mobileControlsRoot?.contains(event.target)) {
+        return;
+      }
+      event.preventDefault();
+      this.touchLookPointerId = event.pointerId;
+      this.touchLookLast = { x: event.clientX, y: event.clientY };
+    }
+
+    handleTouchLookPointerMove(event) {
+      if (event.pointerType !== 'touch') {
+        return;
+      }
+      if (this.touchLookPointerId !== event.pointerId) {
+        return;
+      }
+      event.preventDefault();
+      if (!this.touchLookLast) {
+        this.touchLookLast = { x: event.clientX, y: event.clientY };
+        return;
+      }
+      const dx = event.clientX - this.touchLookLast.x;
+      const dy = event.clientY - this.touchLookLast.y;
+      this.touchLookLast = { x: event.clientX, y: event.clientY };
+      this.yaw -= dx * POINTER_SENSITIVITY * 0.9;
+      this.pitch -= dy * POINTER_SENSITIVITY * 0.9;
+      const maxPitch = Math.PI / 2 - 0.01;
+      this.pitch = Math.max(-maxPitch, Math.min(maxPitch, this.pitch));
+    }
+
+    handleTouchLookPointerUp(event) {
+      if (event.pointerType !== 'touch') {
+        return;
+      }
+      if (this.touchLookPointerId !== event.pointerId) {
+        return;
+      }
+      this.touchLookPointerId = null;
+      this.touchLookLast = null;
+    }
+
     applyTextureAnisotropy() {
       if (!this.renderer) return;
       const anisotropy = this.renderer.capabilities?.getMaxAnisotropy?.() ?? 1;
@@ -1015,6 +1367,7 @@
       this.score += 8;
       this.updateHud();
       this.scheduleScoreSync('dimension-advanced');
+      this.audio.play('bubble', { volume: 0.5 });
     }
 
     triggerVictory() {
@@ -1027,6 +1380,7 @@
       this.updatePortalProgress();
       this.updateHud();
       this.scheduleScoreSync('victory');
+      this.audio.play('victoryCheer', { volume: 0.75 });
     }
 
     positionPlayer() {
@@ -1048,6 +1402,10 @@
       document.addEventListener('mousemove', this.onMouseMove);
       document.addEventListener('mousedown', this.onMouseDown);
       window.addEventListener('resize', this.onResize);
+      this.canvas.addEventListener('pointerdown', this.onTouchLookPointerDown, { passive: false });
+      window.addEventListener('pointermove', this.onTouchLookPointerMove, { passive: false });
+      window.addEventListener('pointerup', this.onTouchLookPointerUp);
+      window.addEventListener('pointercancel', this.onTouchLookPointerUp);
       this.canvas.addEventListener('click', () => {
         if (document.pointerLockElement !== this.canvas) {
           this.canvas.requestPointerLock({ unadjustedMovement: true }).catch(() => {});
@@ -1064,7 +1422,12 @@
       document.removeEventListener('mousemove', this.onMouseMove);
       document.removeEventListener('mousedown', this.onMouseDown);
       window.removeEventListener('resize', this.onResize);
+      this.canvas.removeEventListener('pointerdown', this.onTouchLookPointerDown);
+      window.removeEventListener('pointermove', this.onTouchLookPointerMove);
+      window.removeEventListener('pointerup', this.onTouchLookPointerUp);
+      window.removeEventListener('pointercancel', this.onTouchLookPointerUp);
       this.canvas.removeEventListener('contextmenu', this.preventContextMenu);
+      this.teardownMobileControls();
     }
 
     handlePointerLockChange() {
@@ -1111,6 +1474,11 @@
       this.renderer.setSize(width, height, false);
       this.camera.aspect = width / height;
       this.camera.updateProjectionMatrix();
+      const touchPreference = this.detectTouchPreferred();
+      if (touchPreference !== this.isTouchPreferred) {
+        this.isTouchPreferred = touchPreference;
+        this.initializeMobileControls();
+      }
     }
 
     handleMouseDown(event) {
@@ -1171,6 +1539,19 @@
         this.velocity.addScaledVector(right, speed * delta);
       }
 
+      const joystickForward = this.THREE.MathUtils.clamp(-this.joystickVector.y, -1, 1);
+      const joystickRight = this.THREE.MathUtils.clamp(this.joystickVector.x, -1, 1);
+      const digitalForward = (this.touchButtonStates.up ? 1 : 0) - (this.touchButtonStates.down ? 1 : 0);
+      const digitalRight = (this.touchButtonStates.right ? 1 : 0) - (this.touchButtonStates.left ? 1 : 0);
+      const combinedForward = this.THREE.MathUtils.clamp(joystickForward + digitalForward, -1, 1);
+      const combinedRight = this.THREE.MathUtils.clamp(joystickRight + digitalRight, -1, 1);
+      if (Math.abs(combinedForward) > 0.001) {
+        this.velocity.addScaledVector(forward, speed * delta * combinedForward);
+      }
+      if (Math.abs(combinedRight) > 0.001) {
+        this.velocity.addScaledVector(right, speed * delta * combinedRight);
+      }
+
       this.velocity.multiplyScalar(PLAYER_INERTIA);
 
       const cameraQuaternion = new THREE.Quaternion().setFromEuler(new THREE.Euler(this.pitch, this.yaw, 0, 'YXZ'));
@@ -1179,11 +1560,12 @@
       this.camera.position.add(this.velocity);
 
       const groundHeight = this.sampleGroundHeight(this.camera.position.x, this.camera.position.z);
-      if (this.keys.has('Space') && this.isGrounded) {
+      if ((this.keys.has('Space') || this.touchJumpRequested) && this.isGrounded) {
         const jumpBoost = 4.6 + (1.5 - Math.min(1.5, this.gravityScale));
         this.verticalVelocity = jumpBoost;
         this.isGrounded = false;
       }
+      this.touchJumpRequested = false;
       const gravityForce = 22 * this.gravityScale;
       this.verticalVelocity -= gravityForce * delta;
       this.camera.position.y += this.verticalVelocity * delta;
@@ -1349,6 +1731,7 @@
       this.health = Math.max(0, this.health - amount);
       if (this.health !== previous) {
         this.updateHud();
+        this.audio.play('crunch', { volume: 0.55 + Math.random() * 0.2 });
       }
       if (this.health <= 0) {
         this.handleDefeat();
@@ -1366,6 +1749,7 @@
       this.lastZombieSpawn = this.elapsed;
       this.updateHud();
       this.scheduleScoreSync('respawn');
+      this.audio.play('bubble', { volume: 0.45 });
     }
 
     mineBlock() {
@@ -1393,6 +1777,10 @@
       this.portalBlocksPlaced = Math.max(0, this.portalBlocksPlaced - 1);
       this.checkPortalActivation();
       this.updateHud();
+      this.audio.playRandom(['miningA', 'miningB'], {
+        volume: 0.45 + Math.random() * 0.2,
+        rate: 0.92 + Math.random() * 0.12,
+      });
     }
 
     placeBlock() {
@@ -1429,6 +1817,7 @@
       this.portalBlocksPlaced += 1;
       this.checkPortalActivation();
       this.updateHud();
+      this.audio.play('crunch', { volume: 0.4 + Math.random() * 0.15 });
     }
 
     castFromCamera() {
