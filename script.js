@@ -12849,6 +12849,14 @@
       }
       updateStatusBars();
       updateDimensionOverlay();
+      // Prime the world meshes and shader uniforms before the first frame render.
+      try {
+        updateWorldMeshes();
+        sanitizeSceneUniforms();
+        ensureSceneUniformValuePresence();
+      } catch (initializationError) {
+        console.warn('Unable to pre-sanitise world uniforms before starting the run.', initializationError);
+      }
       requestAnimationFrame(loop);
       if (!progressSnapshot) {
         logEvent('You awaken on a floating island.');
