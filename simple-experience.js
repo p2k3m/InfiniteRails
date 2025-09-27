@@ -360,6 +360,14 @@
       this.tmpVector = new THREE.Vector3();
       this.tmpVector2 = new THREE.Vector3();
       this.tmpVector3 = new THREE.Vector3();
+      this.tmpQuaternion = new THREE.Quaternion();
+      this.cameraBaseOffset = new THREE.Vector3();
+      this.cameraShakeOffset = new THREE.Vector3();
+      this.cameraShakeRotation = new THREE.Euler();
+      this.cameraShakeNoise = new THREE.Vector3();
+      this.cameraShakeDuration = 0;
+      this.cameraShakeTime = 0;
+      this.cameraShakeIntensity = 0;
       this.pointerLocked = false;
       this.yaw = 0;
       this.pitch = 0;
@@ -837,6 +845,7 @@
         if (this.scoreboardStatusEl) {
           this.scoreboardStatusEl.textContent = 'Leaderboard synced';
         }
+        console.log('Score synced', { reason, score: entry.score });
       } catch (error) {
         console.warn('Unable to sync score to backend', error);
         if (this.scoreboardStatusEl) {
@@ -916,6 +925,14 @@
       this.loadPlayerCharacter().catch((error) => {
         console.warn('Player model failed to load; continuing with primitive hands.', error);
       });
+      this.refreshCameraBaseOffset();
+    }
+
+    refreshCameraBaseOffset() {
+      if (!this.camera || !this.cameraBaseOffset) {
+        return;
+      }
+      this.cameraBaseOffset.copy(this.camera.position);
     }
 
     createMaterials() {
@@ -1742,9 +1759,25 @@
         asset = await this.cloneModelScene('steve');
       } catch (error) {
         console.warn('Failed to load Steve model.', error);
-        return;
+        asset = null;
       }
       if (!asset?.scene) {
+        console.warn('Model load failed, using fallback cube');
+        const fallbackMaterial = new THREE.MeshStandardMaterial({ color: 0x3b82f6, metalness: 0.12, roughness: 0.58 });
+        const fallbackGeometry = new THREE.BoxGeometry(0.6, 1.8, 0.4);
+        const fallback = new THREE.Mesh(fallbackGeometry, fallbackMaterial);
+        fallback.name = 'PlayerAvatarFallback';
+        fallback.position.set(0, -PLAYER_EYE_HEIGHT, 0);
+        fallback.castShadow = true;
+        fallback.receiveShadow = true;
+        this.playerRig.add(fallback);
+        this.playerAvatar = fallback;
+        if (this.camera.parent !== fallback) {
+          fallback.add(this.camera);
+          this.camera.position.set(0, 0.08, 0.08);
+        }
+        this.refreshCameraBaseOffset();
+        console.log('Steve visible in scene (fallback)');
         return;
       }
       if (this.playerAvatar) {
@@ -1778,6 +1811,8 @@
       if (this.handGroup && this.handGroup.parent !== this.camera) {
         this.camera.add(this.handGroup);
       }
+
+      this.refreshCameraBaseOffset();
 
       if (this.playerMixer) {
         this.playerMixer.stopAllAction();
@@ -1898,6 +1933,7 @@
         this.sunLight.color.set(theme.sun);
       }
       this.updateDimensionInfoPanel();
+      console.log(`Dimension online: ${theme.name}`);
     }
 
     buildTerrain() {
@@ -2319,6 +2355,8 @@
       this.updatePortalProgress();
       this.updateHud();
       this.scheduleScoreSync('portal-activated');
+      const activeDimension = this.dimensionSettings?.name || 'Unknown Dimension';
+      console.log(`Portal active in ${activeDimension}`);
     }
 
     isPlayerNearPortal() {
@@ -2361,6 +2399,9 @@
       }
       const nextIndex = this.currentDimensionIndex + 1;
       this.applyDimensionSettings(nextIndex);
+      if (this.dimensionSettings) {
+        console.log(`Dimension unlocked: ${this.dimensionSettings.name}`);
+      }
       this.buildTerrain();
       this.buildRails();
       this.refreshPortalState();
@@ -2506,6 +2547,9 @@
       if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'Space'].includes(event.code)) {
         event.preventDefault();
       }
+      if (event.code === 'KeyW' && !event.repeat) {
+        console.log('Moving forward');
+      }
       if (event.code === 'KeyR') {
         this.resetPosition();
         event.preventDefault();
@@ -2587,6 +2631,7 @@
       this.elapsed += delta;
       this.updateDayNightCycle();
       this.updateMovement(delta);
+      this.updateCameraShake(delta);
       this.updateTerrainCulling(delta);
       this.updateZombies(delta);
       this.updateGolems(delta);
@@ -2663,6 +2708,48 @@
       const maxDistance = (WORLD_SIZE / 2 - 2) * BLOCK_SIZE;
       position.x = THREE.MathUtils.clamp(position.x, -maxDistance, maxDistance);
       position.z = THREE.MathUtils.clamp(position.z, -maxDistance, maxDistance);
+    }
+
+    updateCameraShake(delta) {
+      if (!this.camera || !this.cameraBaseOffset) {
+        return;
+      }
+      if (this.cameraShakeIntensity <= 0 || this.cameraShakeDuration <= 0) {
+        this.camera.position.copy(this.cameraBaseOffset);
+        this.cameraShakeOffset.set(0, 0, 0);
+        this.cameraShakeRotation.set(0, 0, 0);
+        this.cameraShakeDuration = 0;
+        this.cameraShakeTime = 0;
+        return;
+      }
+      this.cameraShakeTime += delta;
+      const progress = this.cameraShakeDuration > 0 ? this.cameraShakeTime / this.cameraShakeDuration : 1;
+      if (progress >= 1) {
+        this.cameraShakeIntensity = 0;
+        this.cameraShakeOffset.set(0, 0, 0);
+        this.cameraShakeRotation.set(0, 0, 0);
+        this.camera.position.copy(this.cameraBaseOffset);
+        this.cameraShakeDuration = 0;
+        this.cameraShakeTime = 0;
+        return;
+      }
+      const falloff = (1 - progress) * (1 - progress);
+      const strength = this.cameraShakeIntensity * falloff;
+      this.cameraShakeNoise.set(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5);
+      this.cameraShakeOffset.copy(this.cameraShakeNoise).multiplyScalar(0.08 * strength);
+      this.camera.position.copy(this.cameraBaseOffset).add(this.cameraShakeOffset);
+      this.cameraShakeRotation.set(this.cameraShakeOffset.y * 0.6, -this.cameraShakeOffset.x * 1.1, 0);
+      this.tmpQuaternion.setFromEuler(this.cameraShakeRotation);
+      this.camera.quaternion.multiply(this.tmpQuaternion);
+    }
+
+    triggerCameraImpulse(strength = 0.35, duration = 0.25) {
+      if (!this.camera || !this.cameraBaseOffset) {
+        return;
+      }
+      this.cameraShakeIntensity = Math.min(1.6, Math.max(strength, this.cameraShakeIntensity * 0.6 + strength));
+      this.cameraShakeDuration = Math.max(duration, 0.12);
+      this.cameraShakeTime = 0;
     }
 
     updateHands(delta) {
@@ -2842,6 +2929,7 @@
       const zombie = { id, mesh, speed: 2.4, lastAttack: this.elapsed, placeholder: true };
       this.zombies.push(zombie);
       this.upgradeZombie(zombie);
+      console.log('Zombie spawned, chasing');
     }
 
     clearZombies() {
@@ -2992,6 +3080,7 @@
       if (this.health !== previous) {
         this.updateHud();
         this.audio.play('crunch', { volume: 0.55 + Math.random() * 0.2 });
+        this.triggerCameraImpulse(0.6, 0.4);
       }
       if (this.health <= 0) {
         this.handleDefeat();
@@ -3011,6 +3100,7 @@
       this.updateHud();
       this.scheduleScoreSync('respawn');
       this.audio.play('bubble', { volume: 0.45 });
+      console.log('Respawn triggered');
     }
 
     mineBlock() {
@@ -3053,6 +3143,7 @@
         volume: 0.45 + Math.random() * 0.2,
         rate: 0.92 + Math.random() * 0.12,
       });
+      this.triggerCameraImpulse(0.45, 0.22);
     }
 
     placeBlock() {
@@ -3104,6 +3195,7 @@
       this.updatePortalFrameStateForColumn(gx, gz);
       this.updateHud();
       this.audio.play('crunch', { volume: 0.4 + Math.random() * 0.15 });
+      this.triggerCameraImpulse(0.32, 0.18);
     }
 
     castFromCamera() {
