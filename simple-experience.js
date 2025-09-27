@@ -967,6 +967,9 @@
         console.warn('Player model failed to load; continuing with primitive hands.', error);
       });
       this.refreshCameraBaseOffset();
+      if (typeof console !== 'undefined') {
+        console.log('Scene populated');
+      }
     }
 
     refreshCameraBaseOffset() {
