@@ -5708,6 +5708,8 @@
         uniforms.isUniformsGroup === true ||
         (Array.isArray(uniforms.seq) && typeof uniforms.map === 'object');
 
+      let cacheResetNeeded = false;
+
       const ensureUniformsGroupEntry = (key, resolvedDefault) => {
         if (!uniforms.map || typeof uniforms.map !== 'object') {
           uniforms.map = {};
@@ -5792,6 +5794,9 @@
         }
 
         const uniformEntry = targetContainer.uniform;
+        if (containerModified) {
+          cacheResetNeeded = true;
+        }
         return { uniformEntry, containerModified, container: targetContainer };
       };
 
@@ -5832,16 +5837,20 @@
           if (!Object.prototype.hasOwnProperty.call(uniformEntry, 'value')) {
             uniformEntry.value = resolvedDefault;
             modified = true;
+            cacheResetNeeded = true;
           } else if (typeof uniformEntry.value === 'undefined') {
             uniformEntry.value = resolvedDefault;
             modified = true;
+            cacheResetNeeded = true;
           }
           if (container && container.value !== uniformEntry.value) {
             container.value = uniformEntry.value;
             modified = true;
+            cacheResetNeeded = true;
           }
           if (containerModified) {
             modified = true;
+            cacheResetNeeded = true;
           }
           return uniformEntry;
         }
@@ -5850,6 +5859,7 @@
           const replacement = { value: resolvedDefault };
           uniforms[key] = replacement;
           modified = true;
+          cacheResetNeeded = true;
           return replacement;
         };
 
@@ -5862,6 +5872,7 @@
             try {
               entry.setValue(resolvedDefault);
               modified = true;
+              cacheResetNeeded = true;
               return entry;
             } catch (setError) {
               // Ignore failures and fall back to assignPortalUniformValue.
@@ -5869,6 +5880,7 @@
           }
           if (assignPortalUniformValue(entry, resolvedDefault)) {
             modified = true;
+            cacheResetNeeded = true;
             return entry;
           }
           return replaceEntry();
@@ -5876,6 +5888,7 @@
         if (typeof entry.value === 'undefined') {
           if (assignPortalUniformValue(entry, resolvedDefault)) {
             modified = true;
+            cacheResetNeeded = true;
             return entry;
           }
           return replaceEntry();
@@ -5935,6 +5948,7 @@
           if (typeof value !== 'number' || !Number.isFinite(value)) {
             entry.value = fallbackValue;
             modified = true;
+            cacheResetNeeded = true;
           }
         };
 
@@ -5964,6 +5978,7 @@
             if (!current || typeof current !== 'object' || current.isColor !== true) {
               entry.value = ensureColorInstance(fallbackValue);
               modified = true;
+              cacheResetNeeded = true;
             }
           } else {
             const normalized =
@@ -5973,6 +5988,7 @@
             if (typeof entry.value !== 'string' || !entry.value) {
               entry.value = normalized;
               modified = true;
+              cacheResetNeeded = true;
             }
           }
         };
@@ -5983,6 +5999,18 @@
         ensureColorUniformValue('uColor', () =>
           typeof THREE?.Color === 'function' ? new THREE.Color(accent) : accent
         );
+      }
+
+      if (cacheResetNeeded) {
+        const cacheReset = resetMaterialUniformCache(material);
+        if (!cacheReset) {
+          if ('uniformsNeedUpdate' in material) {
+            material.uniformsNeedUpdate = true;
+          }
+          if ('needsUpdate' in material) {
+            material.needsUpdate = true;
+          }
+        }
       }
 
       return modified;
