@@ -25,6 +25,14 @@ Infinite Dimension is a browser-based voxel survival-puzzle prototype built enti
 
 Refer to [`docs/validation-matrix.md`](docs/validation-matrix.md) for the complete mapping between requirements, validation methods, success criteria, and hands-on test scenarios used during regression.
 
+## Enhancement roadmap
+
+The design brief titled **“Comprehensive Analysis and Enhancement Specifications for Infinite Rails: Portals of Dimension”**
+introduces a broad slate of rendering, interaction, and backend improvements that build toward a fully interactive prototype.
+To keep progress visible, the actionable checklist extracted from that brief now lives in
+[`docs/enhancement-roadmap.md`](docs/enhancement-roadmap.md). Update that roadmap as features land so the team can quickly gauge
+momentum toward the full experience described in the brief.
+
 ## Controls
 
 | Platform | Input |
