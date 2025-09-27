@@ -7,7 +7,7 @@
   const DAY_LENGTH_SECONDS = 600;
   const POINTER_SENSITIVITY = 0.0022;
   const FALLBACK_HEALTH = 10;
-  const PORTAL_BLOCK_REQUIREMENT = 12;
+  const PORTAL_BLOCK_REQUIREMENT = 10;
   const PORTAL_INTERACTION_RANGE = 4.5;
   const ZOMBIE_CONTACT_RANGE = 1.35;
   const ZOMBIE_SPAWN_INTERVAL = 8;
@@ -381,6 +381,13 @@
       this.verticalVelocity = 0;
       this.isGrounded = false;
       this.portalAnchor = new THREE.Vector3(0, 0, -WORLD_SIZE * 0.45);
+      this.initialHeightMap = [];
+      this.portalAnchorGrid = this.computePortalAnchorGrid();
+      this.portalFrameLayout = this.createPortalFrameLayout();
+      this.portalFrameSlots = new Map();
+      this.portalFrameRequiredCount = PORTAL_BLOCK_REQUIREMENT;
+      this.portalFrameInteriorValid = false;
+      this.portalHiddenInterior = [];
       this.zombies = [];
       this.lastZombieSpawn = 0;
       this.zombieIdCounter = 0;
@@ -1887,6 +1894,7 @@
       const THREE = this.THREE;
       this.columns.clear();
       this.heightMap = Array.from({ length: WORLD_SIZE }, () => Array(WORLD_SIZE).fill(0));
+      this.initialHeightMap = Array.from({ length: WORLD_SIZE }, () => Array(WORLD_SIZE).fill(0));
       this.terrainGroup.clear();
       const half = WORLD_SIZE / 2;
       let voxelCount = 0;
@@ -1905,6 +1913,7 @@
           const secondary = pseudoRandom(gz * 0.12, gx * 0.18);
           const maxHeight = Math.max(1, Math.round(1 + falloff * 2.6 + heightNoise * 2 + secondary * 0.9));
           this.heightMap[gx][gz] = maxHeight;
+          this.initialHeightMap[gx][gz] = maxHeight;
           const columnKey = `${gx}|${gz}`;
           const column = [];
           for (let level = 0; level < maxHeight; level += 1) {
@@ -1944,6 +1953,12 @@
         const total = WORLD_SIZE * WORLD_SIZE;
         console.log(`World generated: ${total} voxels`);
       }
+      this.portalAnchorGrid = this.computePortalAnchorGrid();
+      const anchorWorldX = (this.portalAnchorGrid.x - WORLD_SIZE / 2) * BLOCK_SIZE;
+      const anchorWorldZ = (this.portalAnchorGrid.z - WORLD_SIZE / 2) * BLOCK_SIZE;
+      if (this.portalAnchor?.set) {
+        this.portalAnchor.set(anchorWorldX, 0, anchorWorldZ);
+      }
     }
 
     buildRails() {
@@ -1968,51 +1983,195 @@
       }
     }
 
-    refreshPortalState() {
-      this.portalGroup.clear();
-      this.portalMesh = null;
+    computePortalAnchorGrid() {
+      const half = WORLD_SIZE / 2;
+      const clampIndex = (value) => Math.max(0, Math.min(WORLD_SIZE - 1, value));
+      const xIndex = clampIndex(Math.round((this.portalAnchor?.x ?? 0) / BLOCK_SIZE + half));
+      const zIndex = clampIndex(Math.round((this.portalAnchor?.z ?? 0) / BLOCK_SIZE + half));
+      return { x: xIndex, z: zIndex };
+    }
+
+    createPortalFrameLayout() {
+      const layout = [];
+      for (let x = -1; x <= 1; x += 1) {
+        for (let y = 0; y < 4; y += 1) {
+          const required = Math.abs(x) === 1 || y === 0 || y === 3;
+          layout.push({ xOffset: x, y, required });
+        }
+      }
+      return layout;
+    }
+
+    getPortalSlotKey(gridX, gridZ, relY) {
+      return `${gridX}|${gridZ}|${relY}`;
+    }
+
+    resetPortalFrameState() {
+      this.portalFrameSlots.clear();
+      this.restorePortalInteriorBlocks();
+      this.portalHiddenInterior = [];
+      const anchor = this.portalAnchorGrid || this.computePortalAnchorGrid();
+      const layout = this.portalFrameLayout || this.createPortalFrameLayout();
+      const initial = this.initialHeightMap;
+      let requiredCount = 0;
+      layout.forEach(({ xOffset, y, required }) => {
+        if (!required) return;
+        const gridX = Math.max(0, Math.min(WORLD_SIZE - 1, anchor.x + xOffset));
+        const gridZ = Math.max(0, Math.min(WORLD_SIZE - 1, anchor.z));
+        const slotKey = this.getPortalSlotKey(gridX, gridZ, y);
+        const baseHeight = initial?.[gridX]?.[gridZ] ?? 0;
+        this.portalFrameSlots.set(slotKey, {
+          gridX,
+          gridZ,
+          relY: y,
+          baseHeight,
+          filled: false,
+        });
+        requiredCount += 1;
+      });
+      this.portalFrameRequiredCount = requiredCount || PORTAL_BLOCK_REQUIREMENT;
       this.portalBlocksPlaced = 0;
-      this.portalActivated = false;
-      this.portalHintShown = false;
+      this.portalFrameInteriorValid = this.checkPortalInterior();
       this.updatePortalProgress();
+    }
+
+    updatePortalInteriorValidity() {
+      const previous = this.portalFrameInteriorValid;
+      this.portalFrameInteriorValid = this.checkPortalInterior();
+      return previous !== this.portalFrameInteriorValid;
+    }
+
+    checkPortalInterior() {
+      const anchor = this.portalAnchorGrid || this.computePortalAnchorGrid();
+      if (!anchor) {
+        return false;
+      }
+      const gridX = Math.max(0, Math.min(WORLD_SIZE - 1, anchor.x));
+      const gridZ = Math.max(0, Math.min(WORLD_SIZE - 1, anchor.z));
+      const baseHeight = this.initialHeightMap?.[gridX]?.[gridZ];
+      if (baseHeight === undefined) {
+        return true;
+      }
+      const columnKey = `${gridX}|${gridZ}`;
+      const column = this.columns.get(columnKey) ?? [];
+      for (let relY = 1; relY <= 2; relY += 1) {
+        const index = baseHeight + relY;
+        const mesh = column[index];
+        if (mesh) {
+          const blockType = mesh.userData?.blockType;
+          if (blockType === 'stone' || mesh.userData?.hiddenForPortal) {
+            continue;
+          }
+          return false;
+        }
+      }
+      return true;
+    }
+
+    hidePortalInteriorBlocks() {
+      this.restorePortalInteriorBlocks();
+      this.portalHiddenInterior = [];
+      const anchor = this.portalAnchorGrid || this.computePortalAnchorGrid();
+      const gridX = Math.max(0, Math.min(WORLD_SIZE - 1, anchor.x));
+      const gridZ = Math.max(0, Math.min(WORLD_SIZE - 1, anchor.z));
+      const baseHeight = this.initialHeightMap?.[gridX]?.[gridZ] ?? 0;
+      const columnKey = `${gridX}|${gridZ}`;
+      const column = this.columns.get(columnKey) ?? [];
+      for (let relY = 1; relY <= 2; relY += 1) {
+        const index = baseHeight + relY;
+        const mesh = column[index];
+        if (mesh && mesh.visible !== false) {
+          mesh.visible = false;
+          if (mesh.userData) {
+            mesh.userData.hiddenForPortal = true;
+          }
+          this.portalHiddenInterior.push(mesh);
+        }
+      }
+    }
+
+    restorePortalInteriorBlocks() {
+      if (!Array.isArray(this.portalHiddenInterior) || !this.portalHiddenInterior.length) {
+        this.portalHiddenInterior = [];
+        return;
+      }
+      this.portalHiddenInterior.forEach((mesh) => {
+        if (!mesh) return;
+        mesh.visible = true;
+        if (mesh.userData) {
+          delete mesh.userData.hiddenForPortal;
+        }
+      });
+      this.portalHiddenInterior = [];
+    }
+
+    updatePortalFrameStateForColumn(gx, gz) {
+      if (!this.portalFrameSlots.size) {
+        return;
+      }
+      let changed = false;
+      const columnKey = `${gx}|${gz}`;
+      const column = this.columns.get(columnKey) ?? [];
+      this.portalFrameSlots.forEach((slot) => {
+        if (slot.gridX !== gx || slot.gridZ !== gz) {
+          return;
+        }
+        const baseHeight = slot.baseHeight ?? this.initialHeightMap?.[slot.gridX]?.[slot.gridZ] ?? 0;
+        const targetIndex = baseHeight + slot.relY;
+        const mesh = column[targetIndex];
+        const valid = Boolean(mesh?.userData?.blockType) && mesh.userData.blockType === 'stone';
+        if (slot.filled !== valid) {
+          slot.filled = valid;
+          changed = true;
+        }
+      });
+      const interiorChanged = this.updatePortalInteriorValidity();
+      if (changed || interiorChanged) {
+        this.recalculatePortalFrameProgress();
+      }
+    }
+
+    recalculatePortalFrameProgress() {
+      let filled = 0;
+      this.portalFrameSlots.forEach((slot) => {
+        if (slot.filled) {
+          filled += 1;
+        }
+      });
+      this.portalBlocksPlaced = filled;
+      this.checkPortalActivation();
+    }
+
+    deactivatePortal() {
+      if (this.portalMesh) {
+        this.portalGroup.remove(this.portalMesh);
+        disposeObject3D(this.portalMesh);
+        this.portalMesh = null;
+      }
+      this.portalActivated = false;
+      this.restorePortalInteriorBlocks();
+      this.updatePortalInteriorValidity();
+      this.updatePortalProgress();
+    }
+
+    refreshPortalState() {
+      this.deactivatePortal();
+      this.portalGroup.clear();
+      this.portalHintShown = false;
+      this.resetPortalFrameState();
     }
 
     activatePortal() {
       const THREE = this.THREE;
+      const anchor = this.portalAnchorGrid || this.computePortalAnchorGrid();
+      const gridX = Math.max(0, Math.min(WORLD_SIZE - 1, anchor.x));
+      const gridZ = Math.max(0, Math.min(WORLD_SIZE - 1, anchor.z));
+      const baseHeight = this.initialHeightMap?.[gridX]?.[gridZ] ?? 0;
+      const worldX = (gridX - WORLD_SIZE / 2) * BLOCK_SIZE;
+      const worldZ = (gridZ - WORLD_SIZE / 2) * BLOCK_SIZE;
+      const worldY = (baseHeight + 1.5) * BLOCK_SIZE;
       this.portalGroup.clear();
       this.portalActivated = true;
-      const anchorX = this.portalAnchor.x;
-      const anchorZ = this.portalAnchor.z;
-      const groundHeight = this.sampleGroundHeight(anchorX, anchorZ);
-      const anchorY = groundHeight + 1.6;
-      const frameMaterial = this.materials.stone;
-      if (!this.portalFrameGeometryVertical) {
-        this.portalFrameGeometryVertical = new THREE.BoxGeometry(0.4, 3.6, 0.4);
-      }
-      if (!this.portalFrameGeometryHorizontal) {
-        this.portalFrameGeometryHorizontal = new THREE.BoxGeometry(2.6, 0.4, 0.4);
-      }
-
-      const left = new THREE.Mesh(this.portalFrameGeometryVertical, frameMaterial);
-      left.position.set(anchorX - 1.2, anchorY, anchorZ);
-      left.castShadow = true;
-      left.receiveShadow = true;
-      this.portalGroup.add(left);
-
-      const right = left.clone();
-      right.position.x = anchorX + 1.2;
-      this.portalGroup.add(right);
-
-      const top = new THREE.Mesh(this.portalFrameGeometryHorizontal, frameMaterial);
-      top.position.set(anchorX, anchorY + 1.8, anchorZ);
-      top.castShadow = true;
-      top.receiveShadow = true;
-      this.portalGroup.add(top);
-
-      const bottom = top.clone();
-      bottom.position.y = anchorY - 1.8;
-      this.portalGroup.add(bottom);
-
       if (!this.portalPlaneGeometry) {
         this.portalPlaneGeometry = new THREE.PlaneGeometry(2.4, 3.2);
       }
@@ -2023,13 +2182,17 @@
         uColorB: { value: this.materials.portal.uniforms.uColorB.value.clone() },
       };
       const plane = new THREE.Mesh(this.portalPlaneGeometry, portalMaterial);
-      plane.position.set(anchorX, anchorY, anchorZ + 0.02);
+      plane.position.set(worldX, worldY, worldZ + 0.02);
       plane.rotation.y = Math.PI;
+      plane.renderOrder = 2;
+      plane.castShadow = false;
+      plane.receiveShadow = false;
       this.portalGroup.add(plane);
       this.portalMesh = plane;
-      this.updatePortalProgress();
-      this.portalActivations = Math.max(this.portalActivations, 0);
+      this.hidePortalInteriorBlocks();
+      this.updatePortalInteriorValidity();
       this.portalHintShown = true;
+      this.updatePortalProgress();
       this.updateHud();
       this.scheduleScoreSync('portal-activated');
     }
@@ -2042,16 +2205,21 @@
     }
 
     checkPortalActivation() {
+      const required = this.portalFrameRequiredCount || PORTAL_BLOCK_REQUIREMENT;
       if (this.portalActivated) {
-        this.updatePortalProgress();
+        if (this.portalBlocksPlaced < required || !this.portalFrameInteriorValid) {
+          this.deactivatePortal();
+        } else {
+          this.updatePortalProgress();
+        }
         return;
       }
-      if (this.portalBlocksPlaced >= PORTAL_BLOCK_REQUIREMENT) {
+      if (required > 0 && this.portalFrameInteriorValid && this.portalBlocksPlaced >= required) {
         this.activatePortal();
         this.score += 5;
         this.updateHud();
       } else {
-        const progress = this.portalBlocksPlaced / PORTAL_BLOCK_REQUIREMENT;
+        const progress = required > 0 ? this.portalBlocksPlaced / required : 0;
         if (!this.portalHintShown && progress >= 0.5) {
           this.portalHintShown = true;
           this.score += 1;
@@ -2671,7 +2839,6 @@
     handleDefeat() {
       this.health = FALLBACK_HEALTH;
       this.score = Math.max(0, this.score - 4);
-      this.portalBlocksPlaced = Math.max(0, this.portalBlocksPlaced - 3);
       this.verticalVelocity = 0;
       this.isGrounded = false;
       this.positionPlayer();
@@ -2708,12 +2875,11 @@
         newTop.material = this.materials.grass;
         newTop.userData.blockType = 'grass-block';
       }
-      this.portalBlocksPlaced = Math.max(0, this.portalBlocksPlaced - 1);
+      this.updatePortalFrameStateForColumn(mesh.userData.gx, mesh.userData.gz);
       const drops = this.getDropsForBlock(blockType);
       if (drops.length) {
         this.collectDrops(drops);
       }
-      this.checkPortalActivation();
       this.updateHud();
       this.audio.playRandom(['miningA', 'miningB'], {
         volume: 0.45 + Math.random() * 0.2,
@@ -2764,8 +2930,7 @@
       this.heightMap[gx][gz] = column.length;
       this.blocksPlaced += 1;
       this.score = Math.max(0, this.score - 0.25);
-      this.portalBlocksPlaced += 1;
-      this.checkPortalActivation();
+      this.updatePortalFrameStateForColumn(gx, gz);
       this.updateHud();
       this.audio.play('crunch', { volume: 0.4 + Math.random() * 0.15 });
     }
@@ -3454,18 +3619,25 @@
 
     updatePortalProgress() {
       const { portalProgressLabel, portalProgressBar } = this.ui;
-      const progress = Math.min(1, this.portalBlocksPlaced / PORTAL_BLOCK_REQUIREMENT);
+      const required = this.portalFrameRequiredCount || PORTAL_BLOCK_REQUIREMENT;
+      const rawProgress = required > 0 ? this.portalBlocksPlaced / required : 0;
+      const progress = Math.min(1, Math.max(0, rawProgress));
       if (portalProgressLabel) {
         if (this.victoryAchieved) {
           portalProgressLabel.textContent = 'Eternal Ingot secured';
         } else if (this.portalActivated) {
           portalProgressLabel.textContent = 'Portal stabilised';
+        } else if (!this.portalFrameInteriorValid && this.portalBlocksPlaced > 0) {
+          portalProgressLabel.textContent = 'Clear the portal interior';
         } else {
           portalProgressLabel.textContent = `Portal frame ${Math.round(progress * 100)}%`;
         }
       }
       if (portalProgressBar) {
-        const displayProgress = this.victoryAchieved ? 1 : progress;
+        let displayProgress = this.victoryAchieved ? 1 : progress;
+        if (!this.portalFrameInteriorValid && !this.portalActivated) {
+          displayProgress = Math.min(displayProgress, 0.5);
+        }
         portalProgressBar.style.setProperty('--progress', displayProgress.toFixed(2));
       }
     }
