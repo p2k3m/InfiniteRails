@@ -49,8 +49,8 @@ If you work with coding agents (for example GitHub Copilot or Code Interpreter) 
 
 ## Simplified sandbox mode
 
-The legacy renderer and gameplay stack are still under heavy construction. The page now boots into the fully interactive
-renderer by default, but you can opt into a lightweight **sandbox mode** whenever you need a focused testing space. The sandbox:
+The legacy renderer and gameplay stack are still under heavy construction, so the fully interactive sandbox now boots by
+default. You can still opt into the experimental advanced renderer when you explicitly enable it. The sandbox:
 
 - draws a 64×64 voxel island with soft day/night lighting at 60 FPS, complete with a procedurally curved rail spine,
 - locks the camera to a first-person perspective with mouse look + `WASD` movement and jump physics that adapt to each realm,
@@ -62,8 +62,8 @@ Use the following switches to control which experience loads:
 
 | Mode | How to activate |
 | --- | --- |
-| Advanced renderer (default) | Load the page normally. You can also force it with `?mode=advanced`, `?advanced=1`, or by setting `APP_CONFIG.forceAdvanced = true`. |
-| Sandbox | Append `?mode=simple` (or `?simple=1`), set `APP_CONFIG.forceSimpleMode = true`, or provide `APP_CONFIG.defaultMode = 'simple'`. |
+| Sandbox (default) | Load the page normally. You can also force it with `?mode=simple`, `?simple=1`, or by setting `APP_CONFIG.forceSimpleMode = true`. |
+| Advanced renderer | Append `?mode=advanced` (or `?advanced=1`), set `APP_CONFIG.forceAdvanced = true`, or enable it globally with `APP_CONFIG.enableAdvancedExperience = true`. |
 
 The sandbox keeps the portal-building brief front-and-centre while the production renderer catches up. When advanced mode is
 ready, flip the flags above to continue development without losing the reliable fallback.
@@ -84,8 +84,9 @@ Expose an `APP_CONFIG` object before loading `script.js` to wire up Google SSO a
   window.APP_CONFIG = {
     apiBaseUrl: 'https://your-api.example.com',
     googleClientId: 'GOOGLE_OAUTH_CLIENT_ID.apps.googleusercontent.com',
-    // Optional: set to 'simple' to launch the sandbox by default.
-    defaultMode: 'advanced',
+    // Optional: enable the experimental renderer and make it the default.
+    enableAdvancedExperience: true,
+    preferAdvanced: true,
   };
 </script>
 ```
@@ -94,6 +95,7 @@ Expose an `APP_CONFIG` object before loading `script.js` to wire up Google SSO a
 - **User metadata** – on sign-in the app POSTs to `${apiBaseUrl}/users` with the player’s Google ID, preferred name, device snapshot, and geolocation (if permission is granted). The handler can write directly to a DynamoDB table keyed by Google ID.
 - **Scoreboard** – the app loads scores via `GET ${apiBaseUrl}/scores` and upserts the player’s run with `POST ${apiBaseUrl}/scores`. The payload mirrors the UI fields: `name`, `score`, `dimensionCount`, `runTimeSeconds`, `inventoryCount`, plus optional `location` or `locationLabel` fields.
 - **Offline-friendly** – when `apiBaseUrl` is absent the UI persists identities and scores to `localStorage` and displays sample leaderboard entries so the page remains fully interactive.
+- **Mode selection** – omit `enableAdvancedExperience` to stay in the sandbox, or set it alongside `preferAdvanced`/`defaultMode` when you want the experimental renderer to boot automatically.
 
 ### Deploying the AWS backend
 
