@@ -2058,7 +2058,13 @@
     let worldGroup;
     let worldTilesRoot;
     let environmentGroup;
-    const voxelIslandAssets = { mesh: null, geometry: null, material: null, texture: null };
+    const voxelIslandAssets = {
+      mesh: null,
+      geometry: null,
+      material: null,
+      texture: null,
+      instancingFallbackNotified: false,
+    };
     const voxelIslandDummy = new THREE.Object3D();
     let entityGroup;
     let particleGroup;
@@ -3968,6 +3974,26 @@
       }
     }
 
+    function supportsInstancedRendering() {
+      if (!renderer || typeof THREE?.InstancedMesh !== 'function') {
+        return false;
+      }
+      const capabilities = renderer.capabilities || {};
+      if (capabilities.isWebGL2) {
+        return true;
+      }
+      try {
+        if (renderer.extensions && typeof renderer.extensions.has === 'function') {
+          if (renderer.extensions.has('ANGLE_instanced_arrays')) {
+            return true;
+          }
+        }
+      } catch (error) {
+        console.warn('Failed to detect instanced rendering support.', error);
+      }
+      return false;
+    }
+
     function buildProceduralIsland() {
       if (!environmentGroup) return;
       if (voxelIslandAssets.mesh) {
@@ -4040,15 +4066,25 @@
         voxelIslandAssets.material.needsUpdate = true;
       }
 
-      const islandMesh = new THREE.InstancedMesh(
-        voxelIslandAssets.geometry,
-        voxelIslandAssets.material,
-        tileCount,
-      );
-      islandMesh.name = 'voxel-island';
-      islandMesh.castShadow = true;
-      islandMesh.receiveShadow = true;
-      islandMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      const instancingSupported = supportsInstancedRendering();
+      let islandMesh = null;
+      let fallbackGroup = null;
+
+      if (instancingSupported) {
+        islandMesh = new THREE.InstancedMesh(
+          voxelIslandAssets.geometry,
+          voxelIslandAssets.material,
+          tileCount,
+        );
+        islandMesh.name = 'voxel-island';
+        islandMesh.castShadow = true;
+        islandMesh.receiveShadow = true;
+        islandMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      } else {
+        fallbackGroup = new THREE.Group();
+        fallbackGroup.name = 'voxel-island';
+        fallbackGroup.userData = { ...(fallbackGroup.userData || {}), instancingFallback: true };
+      }
 
       let index = 0;
       const random = (x, z) => {
@@ -4078,13 +4114,41 @@
           voxelIslandDummy.scale.set(1, height, 1);
           voxelIslandDummy.rotation.set(0, 0, 0);
           voxelIslandDummy.updateMatrix();
-          islandMesh.setMatrixAt(index, voxelIslandDummy.matrix);
+          if (islandMesh) {
+            islandMesh.setMatrixAt(index, voxelIslandDummy.matrix);
+          } else if (fallbackGroup) {
+            const tileMesh = new THREE.Mesh(voxelIslandAssets.geometry, voxelIslandAssets.material);
+            tileMesh.matrixAutoUpdate = false;
+            tileMesh.matrix.copy(voxelIslandDummy.matrix);
+            tileMesh.castShadow = true;
+            tileMesh.receiveShadow = true;
+            fallbackGroup.add(tileMesh);
+          }
           index += 1;
         }
       }
-      islandMesh.instanceMatrix.needsUpdate = true;
-      environmentGroup.add(islandMesh);
-      voxelIslandAssets.mesh = islandMesh;
+      if (islandMesh) {
+        islandMesh.instanceMatrix.needsUpdate = true;
+        environmentGroup.add(islandMesh);
+        voxelIslandAssets.mesh = islandMesh;
+      } else if (fallbackGroup) {
+        fallbackGroup.traverse((child) => {
+          if (child.isMesh) {
+            child.castShadow = true;
+            child.receiveShadow = true;
+            child.updateMatrixWorld(true);
+          }
+        });
+        environmentGroup.add(fallbackGroup);
+        voxelIslandAssets.mesh = fallbackGroup;
+        if (!voxelIslandAssets.instancingFallbackNotified) {
+          announceVisualFallback(
+            'island-instancing',
+            'Your browser skips instanced 3D rendering, so the island uses a simplified mesh. Everything still plays the same.',
+          );
+          voxelIslandAssets.instancingFallbackNotified = true;
+        }
+      }
     }
 
     function previewRandom(x, y, salt = 0) {
