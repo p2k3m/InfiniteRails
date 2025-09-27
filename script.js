@@ -7210,7 +7210,7 @@
                   }
 
                   const ensuredKeys = new Set();
-                  const ensureMaterialUniformEntry = (rawKey) => {
+                  const ensureMaterialUniformEntry = (rawKey, sourceEntry = null, options = {}) => {
                     if (rawKey === null || typeof rawKey === 'undefined') {
                       return;
                     }
@@ -7219,16 +7219,89 @@
                       return;
                     }
                     ensuredKeys.add(key);
-                    const entry = mat.uniforms[key];
-                    if (
-                      !entry ||
-                      typeof entry !== 'object' ||
-                      !Object.prototype.hasOwnProperty.call(entry, 'value')
-                    ) {
-                      mat.uniforms[key] = {
-                        value: entry && typeof entry === 'object' ? entry.value ?? null : null,
+
+                    const { primary = false } = options;
+
+                    const linkRendererUniform = (uniformObject) => {
+                      if (!uniformObject || typeof uniformObject !== 'object') {
+                        return;
+                      }
+                      if (sourceEntry && typeof sourceEntry === 'object') {
+                        const current = sourceEntry.uniform;
+                        if (current !== uniformObject) {
+                          sourceEntry.uniform = uniformObject;
+                          updated = true;
+                        } else if (
+                          current &&
+                          typeof current === 'object' &&
+                          Object.prototype.hasOwnProperty.call(current, 'value') &&
+                          typeof current.value === 'undefined'
+                        ) {
+                          current.value = null;
+                          updated = true;
+                        }
+                      }
+                      if (
+                        rendererUniforms &&
+                        rendererUniforms.map &&
+                        typeof rendererUniforms.map === 'object'
+                      ) {
+                        const mappedEntry = rendererUniforms.map[key];
+                        if (mappedEntry && typeof mappedEntry === 'object') {
+                          if (mappedEntry.uniform !== uniformObject) {
+                            mappedEntry.uniform = uniformObject;
+                            updated = true;
+                          } else if (
+                            mappedEntry.uniform &&
+                            typeof mappedEntry.uniform === 'object' &&
+                            Object.prototype.hasOwnProperty.call(mappedEntry.uniform, 'value') &&
+                            typeof mappedEntry.uniform.value === 'undefined'
+                          ) {
+                            mappedEntry.uniform.value = null;
+                            updated = true;
+                          }
+                        }
+                      }
+                    };
+
+                    if (isRendererManagedUniform(key)) {
+                      if (primary) {
+                        linkRendererUniform({ value: null });
+                      }
+                      return;
+                    }
+
+                    let entry = mat.uniforms[key];
+                    if (!entry || typeof entry !== 'object') {
+                      entry = {
+                        value:
+                          entry && typeof entry === 'object' && Object.prototype.hasOwnProperty.call(entry, 'value')
+                            ? entry.value
+                            : null,
                       };
+                      mat.uniforms[key] = entry;
                       updated = true;
+                    } else if (!Object.prototype.hasOwnProperty.call(entry, 'value')) {
+                      let preservedValue = null;
+                      if (typeof entry.value !== 'undefined') {
+                        preservedValue = entry.value;
+                      } else if (typeof entry.clone === 'function') {
+                        try {
+                          preservedValue = entry.clone();
+                        } catch (cloneError) {
+                          preservedValue = null;
+                        }
+                      }
+                      entry = { value: preservedValue };
+                      mat.uniforms[key] = entry;
+                      updated = true;
+                    } else if (typeof entry.value === 'undefined') {
+                      entry.value = null;
+                      updated = true;
+                    }
+
+                    if (primary) {
+                      linkRendererUniform(entry);
                     }
                   };
 
@@ -7265,41 +7338,50 @@
                   };
 
                   const ensureMaterialUniform = (uniformId, uniformEntry = null) => {
-                    const candidates = new Set();
-                    if (typeof uniformId === 'string' || typeof uniformId === 'number') {
-                      enumerateUniformKeyCandidates(uniformId).forEach((key) =>
-                        candidates.add(key)
-                      );
-                    }
+                    const candidateMap = new Map();
+
+                    const registerCandidate = (value, primary = false) => {
+                      if (value === null || typeof value === 'undefined') {
+                        return;
+                      }
+                      const baseKey = `${value}`;
+                      if (!baseKey) {
+                        return;
+                      }
+                      const markCandidate = (key, markPrimary = false) => {
+                        if (!key) {
+                          return;
+                        }
+                        const existing = candidateMap.get(key);
+                        if (existing) {
+                          existing.primary = existing.primary || markPrimary;
+                        } else {
+                          candidateMap.set(key, { primary: markPrimary });
+                        }
+                      };
+
+                      markCandidate(baseKey, primary);
+                      enumerateUniformKeyCandidates(value).forEach((variant) => {
+                        if (variant !== baseKey) {
+                          markCandidate(variant, false);
+                        }
+                      });
+                    };
+
+                    registerCandidate(uniformId, true);
 
                     if (uniformEntry && typeof uniformEntry === 'object') {
-                      if (typeof uniformEntry.id === 'string' || typeof uniformEntry.id === 'number') {
-                        enumerateUniformKeyCandidates(uniformEntry.id).forEach((key) =>
-                          candidates.add(key)
-                        );
-                      }
-                      if (typeof uniformEntry.name === 'string' || typeof uniformEntry.name === 'number') {
-                        enumerateUniformKeyCandidates(uniformEntry.name).forEach((key) =>
-                          candidates.add(key)
-                        );
-                      }
-                      if (
-                        uniformEntry.uniform &&
-                        typeof uniformEntry.uniform === 'object' &&
-                        (typeof uniformEntry.uniform.id === 'string' ||
-                          typeof uniformEntry.uniform.id === 'number')
-                      ) {
-                        enumerateUniformKeyCandidates(uniformEntry.uniform.id).forEach((key) =>
-                          candidates.add(key)
-                        );
+                      registerCandidate(uniformEntry.id, true);
+                      registerCandidate(uniformEntry.name, true);
+                      if (uniformEntry.uniform && typeof uniformEntry.uniform === 'object') {
+                        registerCandidate(uniformEntry.uniform.id, true);
+                        registerCandidate(uniformEntry.uniform.name, true);
                       }
                     }
 
-                    if (!candidates.size) {
-                      return;
-                    }
-
-                    candidates.forEach((key) => ensureMaterialUniformEntry(key));
+                    candidateMap.forEach((meta, key) => {
+                      ensureMaterialUniformEntry(key, uniformEntry, { primary: meta.primary });
+                    });
                   };
 
                   if (Array.isArray(rendererUniforms.seq)) {
@@ -7313,7 +7395,8 @@
 
                   if (rendererUniforms.map && typeof rendererUniforms.map === 'object') {
                     Object.keys(rendererUniforms.map).forEach((key) => {
-                      ensureMaterialUniform(key);
+                      const entry = rendererUniforms.map[key];
+                      ensureMaterialUniform(key, entry && typeof entry === 'object' ? entry : null);
                     });
                   }
                 }
