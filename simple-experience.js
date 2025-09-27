@@ -24,6 +24,8 @@
     'https://cdn.jsdelivr.net/npm/three@0.161.0/examples/js/loaders/GLTFLoader.js',
   ];
 
+  const RECIPE_UNLOCK_STORAGE_KEY = 'infinite-rails-recipe-unlocks';
+
   const MODEL_URLS = {
     arm: 'assets/arm.gltf',
     zombie: 'assets/zombie.gltf',
@@ -163,6 +165,24 @@
         'Heavier steps and denser air. Keep momentum up and beware of zombies charging along the rails.',
     },
     {
+      id: 'stone',
+      name: 'Stone Bastion',
+      palette: {
+        grass: '#a0a8ad',
+        dirt: '#6c7479',
+        stone: '#525a60',
+        rails: '#d7b16f',
+      },
+      fog: '#6f7b84',
+      sky: '#5d6870',
+      sun: '#f0e8d2',
+      hemi: '#70808a',
+      gravity: 1.18,
+      speedMultiplier: 0.9,
+      description:
+        'Fortified cliffs that demand precise jumps. Blocks are dense but reward extra portal charge fragments.',
+    },
+    {
       id: 'tar',
       name: 'Tar Marsh',
       palette: {
@@ -179,6 +199,24 @@
       speedMultiplier: 1.1,
       description:
         'Low gravity swamp. Use the extra lift to hop across gaps while night creatures emerge from the mist.',
+    },
+    {
+      id: 'marble',
+      name: 'Marble Heights',
+      palette: {
+        grass: '#f3f6fb',
+        dirt: '#d7dce5',
+        stone: '#c0c7d4',
+        rails: '#ffd27f',
+      },
+      fog: '#cfd7e4',
+      sky: '#e3e8f4',
+      sun: '#ffffff',
+      hemi: '#d5deef',
+      gravity: 0.95,
+      speedMultiplier: 1.18,
+      description:
+        'Floating terraces of marble that accelerate explorers. Keep your footing while rails twist in the breeze.',
     },
     {
       id: 'netherite',
@@ -365,6 +403,7 @@
       };
       this.craftingRecipes = this.createCraftingRecipes();
       this.craftedRecipes = new Set();
+      this.restorePersistentUnlocks();
       this.animationFrame = null;
       this.briefingAutoHideTimer = null;
       this.briefingFadeTimer = null;
@@ -414,6 +453,7 @@
       this.onInventorySort = this.handleInventorySort.bind(this);
       this.onInventoryToggle = this.handleInventoryToggle.bind(this);
       this.onCraftingInventoryClick = this.handleCraftingInventoryClick.bind(this);
+      this.onVictoryReplay = this.handleVictoryReplay.bind(this);
       this.onCraftingModalBackdrop = (event) => {
         if (event?.target === this.craftingModal) {
           this.handleCloseCrafting(event);
@@ -691,6 +731,14 @@
       }
     }
 
+    getPlayerLeaderboardRank() {
+      const index = this.scoreEntries.findIndex((entry) => entry.id === this.sessionId);
+      if (index < 0) {
+        return null;
+      }
+      return index + 1;
+    }
+
     scheduleScoreSync(reason) {
       this.updateLocalScoreEntry(reason);
       if (!this.apiBaseUrl) {
@@ -920,6 +968,51 @@
           },
         ],
       ]);
+    }
+
+    restorePersistentUnlocks() {
+      if (typeof localStorage === 'undefined') {
+        return;
+      }
+      let payload = null;
+      try {
+        const raw = localStorage.getItem(RECIPE_UNLOCK_STORAGE_KEY);
+        if (!raw) {
+          return;
+        }
+        payload = JSON.parse(raw);
+      } catch (error) {
+        console.warn('Failed to parse stored recipe unlocks', error);
+        return;
+      }
+      const sequences = Array.isArray(payload?.sequences) ? payload.sequences : [];
+      const craftedIds = Array.isArray(payload?.craftedIds) ? payload.craftedIds : [];
+      sequences.forEach((key) => {
+        if (typeof key !== 'string' || !key) return;
+        const recipe = this.craftingRecipes.get(key);
+        if (recipe) {
+          this.craftingState.unlocked.set(key, recipe);
+        }
+      });
+      craftedIds.forEach((id) => {
+        if (typeof id !== 'string' || !id) return;
+        this.craftedRecipes.add(id);
+      });
+    }
+
+    savePersistentUnlocks() {
+      if (typeof localStorage === 'undefined') {
+        return;
+      }
+      try {
+        const data = {
+          sequences: Array.from(this.craftingState.unlocked.keys()),
+          craftedIds: Array.from(this.craftedRecipes.values()),
+        };
+        localStorage.setItem(RECIPE_UNLOCK_STORAGE_KEY, JSON.stringify(data));
+      } catch (error) {
+        console.warn('Failed to persist recipe unlocks', error);
+      }
     }
 
     createVoxelTexture(key, palette) {
@@ -1628,8 +1721,8 @@
         }
       }
       if (typeof console !== 'undefined') {
-        const columnCount = WORLD_SIZE * WORLD_SIZE;
-        console.log(`World generated: ${columnCount} columns (${voxelCount} voxels)`);
+        const total = WORLD_SIZE * WORLD_SIZE;
+        console.log(`World generated: ${total} voxels`);
       }
     }
 
@@ -1762,7 +1855,7 @@
       this.clearZombies();
       this.clearGolems();
       this.lastGolemSpawn = this.elapsed;
-      this.score += 8;
+      this.score += 5;
       this.updateHud();
       this.scheduleScoreSync('dimension-advanced');
       this.audio.play('bubble', { volume: 0.5 });
@@ -1832,6 +1925,7 @@
       this.openInventoryButtons.forEach((el) => {
         el.addEventListener('click', this.onInventoryToggle);
       });
+      this.ui?.dimensionInfoEl?.addEventListener('click', this.onVictoryReplay);
     }
 
     unbindEvents() {
@@ -1866,6 +1960,7 @@
       this.openInventoryButtons.forEach((el) => {
         el.removeEventListener('click', this.onInventoryToggle);
       });
+      this.ui?.dimensionInfoEl?.removeEventListener('click', this.onVictoryReplay);
       this.teardownMobileControls();
     }
 
@@ -2730,6 +2825,19 @@
       this.cycleHotbar(delta);
     }
 
+    handleVictoryReplay(event) {
+      const button = event?.target?.closest('[data-action="replay-run"]');
+      if (!button) {
+        return;
+      }
+      if (event?.preventDefault) {
+        event.preventDefault();
+      }
+      if (typeof window !== 'undefined' && typeof window.location?.reload === 'function') {
+        window.location.reload();
+      }
+    }
+
     handleCraftingInventoryClick(event) {
       const button = event.target.closest('[data-item-id]');
       if (!button) return;
@@ -2796,6 +2904,7 @@
       this.craftedRecipes.add(recipe.id);
       this.craftingState.unlocked.set(key, recipe);
       this.score += recipe.score;
+      this.savePersistentUnlocks();
       this.showHint(`${recipe.label} crafted!`);
       this.refreshCraftingUi();
       this.updateHud();
@@ -3081,9 +3190,17 @@
       const { dimensionInfoEl } = this.ui;
       if (!dimensionInfoEl) return;
       if (this.victoryAchieved) {
+        const rank = this.getPlayerLeaderboardRank();
+        const totalRuns = Math.max(this.scoreEntries.length, rank ?? 0);
+        const leaderboardLabel = rank
+          ? `Rank #${rank} of ${Math.max(totalRuns, rank)}`
+          : 'Unranked — connect to publish your run.';
+        const scoreLabel = Math.round(this.score);
         dimensionInfoEl.innerHTML = `
           <h3>Netherite Terminus</h3>
-          <p>You stabilised every dimension and recovered the Eternal Ingot. Reload to chase a faster run!</p>
+          <p>You stabilised every dimension and recovered the Eternal Ingot.</p>
+          <p class="dimension-meta">Score ${scoreLabel} · ${leaderboardLabel}</p>
+          <p><button type="button" class="victory-replay-button" data-action="replay-run">Replay Run</button></p>
         `;
         return;
       }
