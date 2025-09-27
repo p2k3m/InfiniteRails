@@ -7,7 +7,7 @@ Infinite Dimension is a browser-based voxel survival-puzzle experience inspired 
 - survival systems spanning health, bubbles, zombies, iron golems, crafting, scoring, and sequential dimension unlocks; and
 - backend-aware score syncing, Google Sign-In hooks, and responsive HUD/leaderboard overlays.
 
-Advanced renderer work is still underway, but explorers land inside the full 3D experience the moment the page loads. See [docs/portals-of-dimension-plan.md](docs/portals-of-dimension-plan.md) for the roadmap that bridges the sandbox and the long-term vision.
+Advanced renderer work is still underway, so the interactive sandbox renderer now boots by default to guarantee the full 3D experience the moment the page loads. See [docs/portals-of-dimension-plan.md](docs/portals-of-dimension-plan.md) for the roadmap that bridges the sandbox and the long-term vision.
 
 ## Current status
 
@@ -47,10 +47,9 @@ deeper into the implementation details and validation steps.
 
 If you work with coding agents (for example GitHub Copilot or Code Interpreter) the verbatim prompts from the brief are archived in [`docs/coding-agent-prompts.md`](docs/coding-agent-prompts.md). Reusing those prompts keeps automated contributions aligned with the currently shipped sandbox systems.
 
-## Sandbox fallback mode
+## Default sandbox renderer
 
-The legacy sandbox renderer remains available as a safety net for low-power devices or debugging sessions. Although the advanced
-experience now loads by default, you can force the sandbox whenever you need a lighter-weight build. The sandbox:
+The sandbox renderer remains the canonical experience while the experimental advanced renderer is hardened. It delivers the complete brief today and doubles as a safety net for low-power devices or debugging sessions. The sandbox:
 
 - draws a 64×64 voxel island with soft day/night lighting at 60 FPS, complete with a procedurally curved rail spine,
 - locks the camera to a first-person perspective with mouse look + `WASD` movement and jump physics that adapt to each realm,
@@ -62,11 +61,11 @@ Use the following switches to control which experience loads:
 
 | Mode | How to activate |
 | --- | --- |
-| Advanced renderer (default) | Load the page normally. You can also force it with `?mode=advanced`, `?advanced=1`, or by setting `APP_CONFIG.forceAdvanced = true`. |
-| Sandbox fallback | Append `?mode=simple` (or `?simple=1`), set `APP_CONFIG.forceSimpleMode = true`, or omit `APP_CONFIG.enableAdvancedExperience`. |
+| Sandbox renderer (default) | Load the page normally. The default `APP_CONFIG` shipped with the repo forces sandbox mode so the full experience is always available. |
+| Experimental advanced renderer | Append `?mode=advanced` (or `?advanced=1`), or set `APP_CONFIG.forceAdvanced = true`. Provide `enableAdvancedExperience: true` to opt into the work-in-progress renderer permanently. |
 
 The sandbox keeps the portal-building brief front-and-centre while the production renderer continues to mature. Flip the flags
-above whenever you want to regression-test the lightweight fallback without losing the reliable advanced build.
+above whenever you want to regression-test the work-in-progress advanced build without losing the reliable sandbox.
 
 ### Troubleshooting a blank viewport
 
@@ -95,7 +94,7 @@ Expose an `APP_CONFIG` object before loading `script.js` to wire up Google SSO a
   window.APP_CONFIG = {
     apiBaseUrl: 'https://your-api.example.com',
     googleClientId: 'GOOGLE_OAUTH_CLIENT_ID.apps.googleusercontent.com',
-    // Optional: enable the experimental renderer and make it the default.
+    // Optional: enable the experimental renderer and make it the default (overrides the sandbox-first config).
     enableAdvancedExperience: true,
     preferAdvanced: true,
   };
@@ -106,7 +105,7 @@ Expose an `APP_CONFIG` object before loading `script.js` to wire up Google SSO a
 - **User metadata** – on sign-in the app POSTs to `${apiBaseUrl}/users` with the player’s Google ID, preferred name, device snapshot, and geolocation (if permission is granted). The handler can write directly to a DynamoDB table keyed by Google ID.
 - **Scoreboard** – the app loads scores via `GET ${apiBaseUrl}/scores` and upserts the player’s run with `POST ${apiBaseUrl}/scores`. The payload mirrors the UI fields: `name`, `score`, `dimensionCount`, `runTimeSeconds`, `inventoryCount`, plus optional `location` or `locationLabel` fields.
 - **Offline-friendly** – when `apiBaseUrl` is absent the UI persists identities and scores to `localStorage` and displays sample leaderboard entries so the page remains fully interactive.
-- **Mode selection** – set `enableAdvancedExperience: false` or `forceSimpleMode: true` to force the sandbox, or rely on the default configuration (or `forceAdvanced: true`) to keep the full renderer active.
+- **Mode selection** – the bundled configuration already forces sandbox mode. Override with `enableAdvancedExperience: true` or `forceAdvanced: true` if you want to opt into the experimental renderer permanently.
 
 ### Deploying the AWS backend
 
