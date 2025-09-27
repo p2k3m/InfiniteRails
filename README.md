@@ -1,25 +1,28 @@
 # Infinite Dimension: Portals Reimagined
 
-Infinite Dimension is a browser-based voxel survival-puzzle prototype built entirely with vanilla HTML, CSS, and JavaScript. Gather resources, craft ordered recipes, stabilise portals, and brave bespoke rulesets in every dimension as you race to recover the Eternal Ingot. This iteration introduces a responsive profile hub, optional Google SSO, geolocation capture, and a DynamoDB-ready scoreboard that showcases every explorer’s run.
+Infinite Dimension is intended to be a browser-based voxel survival-puzzle experience. The current repository ships a static proof-of-concept UI with scoreboard panels and copy taken from the long-term design brief, but the interactive renderer, entities, and survival systems described in that brief have **not** been implemented yet. This README now documents the real status of the project and points to the consolidated action plan needed to reach the desired Minecraft-inspired prototype.
 
-## What’s new in this build
+## Current status
 
-- **Rebranded universe** – refreshed logo, typography, and copy bring the Infinite Dimension identity to life.
-- **Every-device layout** – headers, panels, and scorecards fluidly adapt from ultrawide monitors down to compact phones.
-- **Player Hub** – view the signed-in player’s name, location badge, and device fingerprint alongside the existing HUD.
-- **Google-powered sign-in** – authenticate with Google to unlock the shared scorecard and sync your metadata.
-- **DynamoDB-ready APIs** – the frontend posts user/device/location telemetry to `/users` and reads/writes scores at `/scores`.
-- **Live scoreboard** – explore top multiverse runs, complete with dimension counts, run time, inventory haul, and location tags.
-- **Serverless backend** – deployable AWS Lambda handlers and DynamoDB tables now live in `serverless/` for `/users` and `/scores`.
+- **Renderer** – A Three.js canvas is initialised, yet no voxel terrain, characters, or lighting are created. The page therefore appears empty apart from UI overlays.
+- **Input** – Keyboard and mouse listeners are stubbed out and do not move a player avatar. Mining, block placement, and crafting actions are missing.
+- **Entities** – No player, zombie, or golem models load. Combat, health depletion, and respawn logic are absent.
+- **Portals & progression** – Portal placement, dimension swaps, score rewards, and boss encounters are placeholders only.
+- **Backend sync** – AWS Lambda/DynamoDB infrastructure exists in `serverless/`, but the frontend never calls it because gameplay events that would trigger network activity do not occur.
 
-## Game Highlights
+The repository therefore represents an early staging ground rather than a working build. See [docs/portals-of-dimension-plan.md](docs/portals-of-dimension-plan.md) for the exhaustive implementation roadmap that reconciles the current code with the official "Comprehensive Analysis and Enhancement Specifications" brief.
 
-- **Living dimensions** – every portal material reshapes the world with new physics, hazards, and ambience.
-- **Order-based crafting** – drag items into a sequence to unlock equipment, igniters, and keys.
-- **Tactical survival** – manage hearts, oxygen, and day/night zombie assaults while guarding your rails.
-- **Dynamic UI** – responsive codex, animated progress indicators, and adaptive theming that reflects the active realm.
-- **Built-in guide** – open the in-game "Game Guide" for the full design document and survival walkthrough.
-- **Victory chase** – capture the Eternal Ingot in the collapsing Netherite dimension and return to the origin island.
+## Near-term objectives
+
+The most critical engineering work falls into five tracks:
+
+1. **Core rendering & performance** – generate the 64×64 voxel island, set up day/night lighting, load character models, and hit 60 FPS with frustum culling.
+2. **Player experience** – wire WASD + pointer lock, mobile joystick controls, mining/placement, and a functioning hotbar and crafting UI.
+3. **Entities & survival** – spawn hostile zombies and allied golems, deduct hearts, track oxygen, and handle respawns.
+4. **Portals & progression** – detect 4×3 frames, animate shader portals, deliver realm-specific physics, and build the Netherite boss encounter.
+5. **Backend & polish** – sync scores, surface leaderboards, wire Google SSO, add tooltips/audio, and document validation coverage.
+
+Progress against each track is maintained in [docs/enhancement-roadmap.md](docs/enhancement-roadmap.md). The roadmap reflects the real implementation state so reviewers can see which systems are still pending.
 
 ## Validation & test matrix
 
