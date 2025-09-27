@@ -6889,6 +6889,40 @@
         if (normalizeUniformContainer(material, uniforms)) {
           modified = true;
         }
+
+        if (!renderer?.properties?.get) {
+          return;
+        }
+
+        let materialProperties = null;
+        try {
+          materialProperties = renderer.properties.get(material) ?? null;
+        } catch (propertiesError) {
+          materialProperties = null;
+        }
+
+        if (!materialProperties || typeof materialProperties !== 'object') {
+          return;
+        }
+
+        const rendererUniforms =
+          materialProperties && typeof materialProperties.uniforms === 'object'
+            ? materialProperties.uniforms
+            : null;
+        if (uniformContainerNeedsSanitization(rendererUniforms)) {
+          modified = true;
+          return;
+        }
+
+        const programUniforms =
+          materialProperties &&
+          materialProperties.program &&
+          typeof materialProperties.program.getUniforms === 'function'
+            ? materialProperties.program.getUniforms()
+            : null;
+        if (uniformContainerNeedsSanitization(programUniforms)) {
+          modified = true;
+        }
       };
 
       const collectMaterial = (candidate, cb) => {
