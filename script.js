@@ -7472,6 +7472,18 @@
             }
             visitedMaterials.add(mat);
 
+            const portalMetadata = mat?.userData?.portalSurface ?? null;
+            const isShaderMaterial =
+              mat?.isShaderMaterial === true || mat?.type === 'ShaderMaterial';
+            const usesPortalShader = materialUsesPortalSurfaceShader(mat);
+            const hasPortalUniforms = hasValidPortalUniformStructure(mat.uniforms);
+            const expectsPortalUniforms =
+              usesPortalShader || hasPortalUniforms || (portalMetadata && isShaderMaterial);
+            if (expectsPortalUniforms && !hasPortalUniforms) {
+              invalid = true;
+              return;
+            }
+
             if (uniformContainerNeedsSanitization(mat.uniforms)) {
               invalid = true;
               return;
