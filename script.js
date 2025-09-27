@@ -6661,56 +6661,98 @@
         };
 
         const repairRendererUniformEntry = (container, key, entry) => {
-          let updatedEntry = entry;
-          let entryUpdated = false;
+          const result = {
+            updated: false,
+            requiresRendererReset: false,
+            removed: false,
+          };
 
-          if (!updatedEntry || typeof updatedEntry !== 'object') {
-            updatedEntry = {
-              id: key,
-              setValue: () => {},
-              updateCache: () => {},
-              cache: [],
-              uniform: { value: null },
-              value: null,
-            };
-            entryUpdated = true;
-          } else {
-            if (typeof updatedEntry.setValue !== 'function') {
-              updatedEntry.setValue = () => {};
-              entryUpdated = true;
+          const ensureArray = () => {
+            if (Array.isArray(entry.cache)) {
+              return true;
             }
-            if (typeof updatedEntry.updateCache !== 'function') {
-              updatedEntry.updateCache = () => {};
-              entryUpdated = true;
+            entry.cache = [];
+            result.updated = true;
+            return true;
+          };
+
+          const ensureFunction = (property) => {
+            if (typeof entry[property] === 'function') {
+              return true;
             }
-            if (!Array.isArray(updatedEntry.cache)) {
-              updatedEntry.cache = [];
-              entryUpdated = true;
+            entry[property] = () => {};
+            result.updated = true;
+            return true;
+          };
+
+          const ensureUniformObject = () => {
+            if (!entry.uniform || typeof entry.uniform !== 'object') {
+              try {
+                entry.uniform = { value: null };
+                result.updated = true;
+                result.requiresRendererReset = true;
+              } catch (assignError) {
+                result.removed = true;
+                result.requiresRendererReset = true;
+                return false;
+              }
             }
-            if (!updatedEntry.uniform || typeof updatedEntry.uniform !== 'object') {
-              updatedEntry.uniform = { value: null };
-              entryUpdated = true;
-            } else if (!Object.prototype.hasOwnProperty.call(updatedEntry.uniform, 'value')) {
-              updatedEntry.uniform.value =
-                typeof updatedEntry.uniform.value === 'undefined'
-                  ? null
-                  : updatedEntry.uniform.value;
-              entryUpdated = true;
+
+            if (!entry.uniform || typeof entry.uniform !== 'object') {
+              result.removed = true;
+              result.requiresRendererReset = true;
+              return false;
             }
-            if (!Object.prototype.hasOwnProperty.call(updatedEntry, 'value')) {
-              updatedEntry.value =
-                typeof updatedEntry.uniform?.value !== 'undefined'
-                  ? updatedEntry.uniform.value
-                  : null;
-              entryUpdated = true;
+
+            if (!Object.prototype.hasOwnProperty.call(entry.uniform, 'value')) {
+              try {
+                entry.uniform.value =
+                  typeof entry.uniform.value === 'undefined' ? null : entry.uniform.value;
+                result.updated = true;
+              } catch (valueAssignError) {
+                result.removed = true;
+                result.requiresRendererReset = true;
+                return false;
+              }
+            }
+
+            if (typeof entry.uniform.value === 'undefined') {
+              entry.uniform.value = null;
+              result.updated = true;
+            }
+
+            return true;
+          };
+
+          if (!entry || typeof entry !== 'object') {
+            result.updated = true;
+            result.requiresRendererReset = true;
+            result.removed = true;
+            return result;
+          }
+
+          ensureFunction('setValue');
+          ensureFunction('updateCache');
+          ensureArray();
+
+          const hasUniform = ensureUniformObject();
+          if (!hasUniform) {
+            return result;
+          }
+
+          if (!Object.prototype.hasOwnProperty.call(entry, 'value')) {
+            try {
+              entry.value =
+                typeof entry.uniform?.value !== 'undefined' ? entry.uniform.value : null;
+              result.updated = true;
+            } catch (entryAssignError) {
+              result.removed = true;
+              result.requiresRendererReset = true;
+              return result;
             }
           }
 
-          if (entryUpdated) {
-            container[key] = updatedEntry;
-          }
-
-          return entryUpdated;
+          return result;
         };
 
         const sanitizeUniformContainer = (uniforms) => {
@@ -6732,21 +6774,22 @@
             if (Array.isArray(uniforms.seq)) {
               for (let i = 0; i < uniforms.seq.length; i += 1) {
                 if (!Object.prototype.hasOwnProperty.call(uniforms.seq, i)) {
-                  uniforms.seq[i] = {
-                    id: `${i}`,
-                    setValue: () => {},
-                    updateCache: () => {},
-                    cache: [],
-                    uniform: { value: null },
-                    value: null,
-                  };
+                  uniforms.seq.splice(i, 1);
+                  i -= 1;
                   updated = true;
                   requiresRendererReset = true;
                   continue;
                 }
 
-                if (repairRendererUniformEntry(uniforms.seq, i, uniforms.seq[i])) {
+                const repairResult = repairRendererUniformEntry(uniforms.seq, i, uniforms.seq[i]);
+                if (repairResult.removed) {
+                  uniforms.seq.splice(i, 1);
+                  i -= 1;
+                }
+                if (repairResult.updated) {
                   updated = true;
+                }
+                if (repairResult.requiresRendererReset) {
                   requiresRendererReset = true;
                 }
               }
@@ -6754,8 +6797,14 @@
 
             if (uniforms.map && typeof uniforms.map === 'object') {
               Object.keys(uniforms.map).forEach((key) => {
-                if (repairRendererUniformEntry(uniforms.map, key, uniforms.map[key])) {
+                const repairResult = repairRendererUniformEntry(uniforms.map, key, uniforms.map[key]);
+                if (repairResult.removed) {
+                  delete uniforms.map[key];
+                }
+                if (repairResult.updated) {
                   updated = true;
+                }
+                if (repairResult.requiresRendererReset) {
                   requiresRendererReset = true;
                 }
               });
@@ -6816,12 +6865,17 @@
                 continue;
               }
               if (rendererManaged) {
-                const repaired = repairRendererUniformEntry(container, i, container[i]);
-                if (repaired) {
+                const repairResult = repairRendererUniformEntry(container, i, container[i]);
+                if (repairResult.removed) {
+                  container.splice(i, 1);
+                  i -= 1;
                   updated = true;
-                  if (markRendererReset) {
-                    requiresRendererReset = true;
-                  }
+                }
+                if (repairResult.updated) {
+                  updated = true;
+                }
+                if (markRendererReset && repairResult.requiresRendererReset) {
+                  requiresRendererReset = true;
                 }
               } else {
                 const result = sanitizeUniformEntry(container, i, container[i], {
@@ -7058,10 +7112,19 @@
                   };
 
                   let entry = rendererUniforms.map[key];
-                  const repaired = repairRendererUniformEntry(rendererUniforms.map, key, entry);
-                  if (repaired) {
+                  const repairResult = repairRendererUniformEntry(rendererUniforms.map, key, entry);
+                  if (repairResult.removed) {
+                    delete rendererUniforms.map[key];
                     rendererReset = true;
                     sanitized = true;
+                    return;
+                  }
+                  if (repairResult.updated) {
+                    rendererReset = true;
+                    sanitized = true;
+                  }
+                  if (repairResult.requiresRendererReset) {
+                    rendererReset = true;
                   }
                   entry = rendererUniforms.map[key];
                   if (!entry || typeof entry !== 'object') {
