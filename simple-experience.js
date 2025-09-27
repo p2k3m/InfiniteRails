@@ -112,13 +112,18 @@
 
   class SimpleExperience {
     constructor(options) {
+      if (!options || !options.canvas) {
+        throw new Error('SimpleExperience requires a target canvas element.');
+      }
       const THREE = window.THREE_GLOBAL || window.THREE;
       if (!THREE) {
         throw new Error('Three.js is required for the simplified experience.');
       }
       this.THREE = THREE;
       this.canvas = options.canvas;
-      this.ui = options.ui;
+      this.ui = options.ui || {};
+      this.apiBaseUrl = options.apiBaseUrl || null;
+      this.playerDisplayName = (options.playerName || '').trim() || 'Explorer';
       this.scene = null;
       this.camera = null;
       this.renderer = null;
@@ -128,6 +133,17 @@
       this.railsGroup = null;
       this.portalGroup = null;
       this.zombieGroup = null;
+      this.playerRig = null;
+      this.handGroup = null;
+      this.handMaterials = [];
+      this.handSwingStrength = 0;
+      this.handSwingTimer = 0;
+      this.scoreboardListEl = this.ui.scoreboardListEl || null;
+      this.scoreboardStatusEl = this.ui.scoreboardStatusEl || null;
+      this.refreshScoresButton = this.ui.refreshScoresButton || null;
+      this.scoreboardContainer = this.scoreboardListEl?.closest('#leaderboardTable') || null;
+      this.scoreboardEmptyEl =
+        (typeof document !== 'undefined' && document.getElementById('leaderboardEmptyMessage')) || null;
       this.columns = new Map();
       this.heightMap = Array.from({ length: WORLD_SIZE }, () => Array(WORLD_SIZE).fill(0));
       this.blockGeometry = new THREE.BoxGeometry(BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE);
@@ -198,6 +214,18 @@
       this.lastZombieSpawn = 0;
       this.zombieIdCounter = 0;
       this.zombieGeometry = null;
+      this.scoreboardUtils = window.ScoreboardUtils || null;
+      this.scoreEntries = [];
+      this.sessionId =
+        (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+          ? crypto.randomUUID()
+          : `run-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`);
+      this.scoreSyncInFlight = false;
+      this.pendingScoreSyncReason = null;
+      this.lastScoreSyncAt = 0;
+      this.scoreSyncCooldownSeconds = 6;
+      this.scoreboardHydrated = false;
+      this.scoreSyncHeartbeat = 0;
       this.portalFrameGeometryVertical = null;
       this.portalFrameGeometryHorizontal = null;
       this.portalPlaneGeometry = null;
@@ -220,6 +248,7 @@
       if (this.started) return;
       this.started = true;
       this.setupScene();
+      this.initializeScoreboardUi();
       this.applyDimensionSettings(this.currentDimensionIndex);
       this.buildTerrain();
       this.buildRails();
@@ -228,6 +257,8 @@
       this.bindEvents();
       this.updateHud();
       this.hideIntro();
+      this.updateLocalScoreEntry('start');
+      this.loadScoreboard();
       this.renderFrame(performance.now());
     }
 
@@ -250,6 +281,253 @@
       this.canvas.focus({ preventScroll: true });
     }
 
+    initializeScoreboardUi() {
+      if (this.refreshScoresButton) {
+        this.refreshScoresButton.addEventListener('click', () => {
+          this.loadScoreboard({ force: true });
+        });
+      }
+      if (this.scoreboardStatusEl) {
+        this.scoreboardStatusEl.textContent = 'Preparing leaderboard…';
+      }
+    }
+
+    async loadScoreboard({ force = false } = {}) {
+      if (!this.apiBaseUrl) {
+        if (force && this.scoreboardStatusEl) {
+          this.scoreboardStatusEl.textContent = 'Offline mode: connect an API to sync runs.';
+        }
+        if (!force && this.scoreboardStatusEl) {
+          this.scoreboardStatusEl.textContent =
+            'Local leaderboard active — set APP_CONFIG.apiBaseUrl to publish runs.';
+        }
+        if (!this.scoreboardHydrated) {
+          this.renderScoreboard();
+          this.scoreboardHydrated = true;
+        }
+        return;
+      }
+      if (this.scoreSyncInFlight && !force) {
+        return;
+      }
+      const baseUrl = this.apiBaseUrl.replace(/\/$/, '');
+      const url = `${baseUrl}/scores`;
+      if (this.scoreboardStatusEl) {
+        this.scoreboardStatusEl.textContent = 'Syncing leaderboard…';
+      }
+      if (this.refreshScoresButton) {
+        this.refreshScoresButton.dataset.loading = 'true';
+        this.refreshScoresButton.disabled = true;
+        this.refreshScoresButton.setAttribute('aria-busy', 'true');
+      }
+      try {
+        this.scoreSyncInFlight = true;
+        const response = await fetch(url, {
+          method: 'GET',
+          headers: { Accept: 'application/json' },
+          credentials: 'omit',
+        });
+        if (!response.ok) {
+          throw new Error(`Leaderboard request failed with ${response.status}`);
+        }
+        let payload = null;
+        try {
+          payload = await response.json();
+        } catch (parseError) {
+          payload = null;
+        }
+        const incoming = Array.isArray(payload?.items)
+          ? payload.items
+          : Array.isArray(payload)
+            ? payload
+            : [];
+        if (incoming.length) {
+          this.mergeScoreEntries(incoming);
+        }
+        if (this.scoreboardStatusEl) {
+          if (incoming.length) {
+            this.scoreboardStatusEl.textContent = 'Live multiverse rankings';
+          } else {
+            this.scoreboardStatusEl.textContent = 'No public runs yet — forge the first legend!';
+          }
+        }
+        this.scoreboardHydrated = true;
+      } catch (error) {
+        console.warn('Failed to load scoreboard data', error);
+        if (this.scoreboardStatusEl) {
+          this.scoreboardStatusEl.textContent = 'Leaderboard offline — tracking locally.';
+        }
+        if (!this.scoreboardHydrated) {
+          this.renderScoreboard();
+          this.scoreboardHydrated = true;
+        }
+      } finally {
+        this.scoreSyncInFlight = false;
+        if (this.refreshScoresButton) {
+          this.refreshScoresButton.dataset.loading = 'false';
+          this.refreshScoresButton.disabled = false;
+          this.refreshScoresButton.setAttribute('aria-busy', 'false');
+        }
+      }
+    }
+
+    updateLocalScoreEntry(reason) {
+      const entry = this.createRunSummary(reason);
+      this.mergeScoreEntries([entry]);
+    }
+
+    createRunSummary(reason) {
+      return {
+        id: this.sessionId,
+        name: this.playerDisplayName,
+        score: Math.round(this.score),
+        dimensionCount: Math.max(1, this.currentDimensionIndex + 1),
+        runTimeSeconds: Math.round(this.elapsed),
+        inventoryCount: Math.max(0, Math.round(this.blocksPlaced + this.blocksMined)),
+        locationLabel: 'Local session',
+        updatedAt: new Date().toISOString(),
+        reason,
+      };
+    }
+
+    mergeScoreEntries(entries) {
+      const utils = this.scoreboardUtils;
+      if (utils?.upsertScoreEntry && utils?.normalizeScoreEntries) {
+        let next = this.scoreEntries.slice();
+        for (const entry of entries) {
+          next = utils.upsertScoreEntry(next, entry);
+        }
+        this.scoreEntries = utils.normalizeScoreEntries(next);
+      } else {
+        const combined = [...this.scoreEntries, ...entries];
+        combined.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+        this.scoreEntries = combined;
+      }
+      this.renderScoreboard();
+    }
+
+    renderScoreboard() {
+      if (!this.scoreboardListEl) return;
+      const entries = this.scoreEntries.slice(0, 10);
+      const utils = this.scoreboardUtils;
+      const formatScore = utils?.formatScoreNumber
+        ? utils.formatScoreNumber
+        : (value) => Math.round(value ?? 0).toLocaleString();
+      const formatRunTime = utils?.formatRunTime
+        ? utils.formatRunTime
+        : (seconds) => `${Math.round(seconds ?? 0)}s`;
+      const formatLocation = utils?.formatLocationLabel
+        ? (entry) => utils.formatLocationLabel(entry)
+        : (entry) => entry.locationLabel || '—';
+      if (!entries.length) {
+        this.scoreboardListEl.innerHTML = `
+          <tr>
+            <td colspan="8" class="leaderboard-empty-row">No runs tracked yet — start exploring!</td>
+          </tr>
+        `;
+        if (this.scoreboardContainer) {
+          this.scoreboardContainer.dataset.empty = 'true';
+        }
+        if (this.scoreboardEmptyEl) {
+          this.scoreboardEmptyEl.hidden = false;
+        }
+        return;
+      }
+      const rows = entries
+        .map((entry, index) => {
+          const rank = index + 1;
+          const updated = entry.updatedAt
+            ? new Date(entry.updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+            : '—';
+          return `
+            <tr>
+              <th scope="row" class="leaderboard-col-rank">${rank}</th>
+              <td>${entry.name ?? 'Explorer'}</td>
+              <td>${formatScore(entry.score)}</td>
+              <td>${formatRunTime(entry.runTimeSeconds)}</td>
+              <td>${entry.dimensionCount ?? 0}</td>
+              <td>${entry.inventoryCount ?? 0}</td>
+              <td>${formatLocation(entry)}</td>
+              <td>${updated}</td>
+            </tr>
+          `;
+        })
+        .join('');
+      this.scoreboardListEl.innerHTML = rows;
+      if (this.scoreboardContainer) {
+        this.scoreboardContainer.dataset.empty = 'false';
+      }
+      if (this.scoreboardEmptyEl) {
+        this.scoreboardEmptyEl.hidden = true;
+      }
+    }
+
+    scheduleScoreSync(reason) {
+      this.updateLocalScoreEntry(reason);
+      if (!this.apiBaseUrl) {
+        return;
+      }
+      this.pendingScoreSyncReason = reason;
+      this.flushScoreSync();
+    }
+
+    async flushScoreSync(force = false) {
+      if (!this.apiBaseUrl || (!force && this.scoreSyncInFlight)) {
+        return;
+      }
+      if (!this.pendingScoreSyncReason) {
+        const now = performance.now();
+        if (!force && now - this.lastScoreSyncAt < this.scoreSyncCooldownSeconds * 1000) {
+          return;
+        }
+      }
+      const reason = this.pendingScoreSyncReason ?? 'auto';
+      this.pendingScoreSyncReason = null;
+      const entry = this.createRunSummary(reason);
+      const baseUrl = this.apiBaseUrl.replace(/\/$/, '');
+      const url = `${baseUrl}/scores`;
+      try {
+        this.scoreSyncInFlight = true;
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Accept: 'application/json',
+          },
+          body: JSON.stringify(entry),
+          credentials: 'omit',
+        });
+        if (!response.ok) {
+          throw new Error(`Score sync failed with ${response.status}`);
+        }
+        let payload = null;
+        try {
+          payload = await response.json();
+        } catch (parseError) {
+          payload = null;
+        }
+        const entries = Array.isArray(payload?.items)
+          ? payload.items
+          : payload && typeof payload === 'object'
+            ? [payload]
+            : [entry];
+        this.mergeScoreEntries(entries);
+        this.lastScoreSyncAt = performance.now();
+        this.scoreSyncHeartbeat = 0;
+        if (this.scoreboardStatusEl) {
+          this.scoreboardStatusEl.textContent = 'Leaderboard synced';
+        }
+      } catch (error) {
+        console.warn('Unable to sync score to backend', error);
+        if (this.scoreboardStatusEl) {
+          this.scoreboardStatusEl.textContent = 'Sync failed — will retry shortly.';
+        }
+        this.pendingScoreSyncReason = reason;
+      } finally {
+        this.scoreSyncInFlight = false;
+      }
+    }
+
     stop() {
       if (this.animationFrame !== null) {
         cancelAnimationFrame(this.animationFrame);
@@ -268,6 +546,7 @@
       const height = this.canvas.clientHeight || this.canvas.height || 1;
       this.camera = new THREE.PerspectiveCamera(75, width / height, 0.1, 250);
       this.camera.position.set(0, PLAYER_EYE_HEIGHT, 12);
+      this.scene.add(this.camera);
 
       this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: true });
       this.renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -305,6 +584,56 @@
       this.scene.add(this.railsGroup);
       this.scene.add(this.portalGroup);
       this.scene.add(this.zombieGroup);
+      this.createFirstPersonHands();
+    }
+
+    createFirstPersonHands() {
+      const THREE = this.THREE;
+      if (!THREE || !this.camera) return;
+      this.playerRig = new THREE.Group();
+      this.playerRig.position.set(0, 0, 0);
+      this.camera.add(this.playerRig);
+
+      this.handGroup = new THREE.Group();
+      this.handGroup.position.set(0.42, -0.46, -0.8);
+      this.handGroup.rotation.set(-0.55, 0, 0);
+
+      const handGeometry = new THREE.BoxGeometry(0.24, 0.46, 0.24);
+      const sleeveGeometry = new THREE.BoxGeometry(0.26, 0.22, 0.26);
+      const baseMaterial = new THREE.MeshStandardMaterial({
+        color: new THREE.Color('#82c7ff'),
+        metalness: 0.1,
+        roughness: 0.55,
+      });
+      const sleeveMaterial = new THREE.MeshStandardMaterial({
+        color: new THREE.Color('#2563eb'),
+        metalness: 0.05,
+        roughness: 0.75,
+      });
+
+      const createHand = (side) => {
+        const hand = new THREE.Group();
+        const palm = new THREE.Mesh(handGeometry, baseMaterial.clone());
+        palm.castShadow = true;
+        palm.receiveShadow = true;
+        palm.position.set(0, -0.1, 0);
+        const sleeve = new THREE.Mesh(sleeveGeometry, sleeveMaterial.clone());
+        sleeve.castShadow = false;
+        sleeve.receiveShadow = true;
+        sleeve.position.set(0, 0.2, 0);
+        hand.add(sleeve);
+        hand.add(palm);
+        hand.position.set(side * 0.32, 0, 0);
+        hand.rotation.z = side * -0.12;
+        return { group: hand, palm, sleeve };
+      };
+
+      const left = createHand(-1);
+      const right = createHand(1);
+      this.handGroup.add(left.group);
+      this.handGroup.add(right.group);
+      this.playerRig.add(this.handGroup);
+      this.handMaterials = [left.palm.material, right.palm.material, left.sleeve.material, right.sleeve.material];
     }
 
     applyDimensionSettings(index) {
@@ -326,6 +655,18 @@
       }
       if (palette?.grass) {
         this.materials.portal.uniforms.uColorB.value.set(palette.grass);
+      }
+      if (this.handMaterials.length) {
+        const palmColor = palette?.grass || '#82c7ff';
+        const sleeveColor = palette?.rails || '#2563eb';
+        this.handMaterials.forEach((material, index) => {
+          if (!material?.color) return;
+          if (index <= 1) {
+            material.color.set(palmColor);
+          } else {
+            material.color.set(sleeveColor);
+          }
+        });
       }
       if (this.scene?.background && theme.sky) {
         this.scene.background.set(theme.sky);
@@ -480,6 +821,7 @@
       this.portalActivations = Math.max(this.portalActivations, 0);
       this.portalHintShown = true;
       this.updateHud();
+      this.scheduleScoreSync('portal-activated');
     }
 
     isPlayerNearPortal() {
@@ -523,6 +865,7 @@
       this.clearZombies();
       this.score += 8;
       this.updateHud();
+      this.scheduleScoreSync('dimension-advanced');
     }
 
     triggerVictory() {
@@ -534,6 +877,7 @@
       this.clearZombies();
       this.updatePortalProgress();
       this.updateHud();
+      this.scheduleScoreSync('victory');
     }
 
     positionPlayer() {
@@ -648,6 +992,8 @@
       this.updateMovement(delta);
       this.updateZombies(delta);
       this.updatePortalAnimation(delta);
+      this.updateHands(delta);
+      this.updateScoreSync(delta);
       this.renderer.render(this.scene, this.camera);
     }
 
@@ -702,6 +1048,39 @@
       const maxDistance = (WORLD_SIZE / 2 - 2) * BLOCK_SIZE;
       this.camera.position.x = THREE.MathUtils.clamp(this.camera.position.x, -maxDistance, maxDistance);
       this.camera.position.z = THREE.MathUtils.clamp(this.camera.position.z, -maxDistance, maxDistance);
+    }
+
+    updateHands(delta) {
+      if (!this.handGroup) return;
+      const THREE = this.THREE;
+      const speed = this.velocity.length();
+      const target = Math.min(1, speed * 3.2 + (this.isGrounded ? 0 : 0.25));
+      this.handSwingStrength = THREE.MathUtils.lerp(this.handSwingStrength, target, delta * 6.5);
+      this.handSwingTimer += delta * (4 + speed * 3);
+      const bob = Math.sin(this.handSwingTimer) * 0.05 * this.handSwingStrength;
+      const sway = Math.cos(this.handSwingTimer * 0.5) * 0.08 * this.handSwingStrength;
+      this.handGroup.position.set(0.42 + sway, -0.46 + bob, -0.8);
+      this.handGroup.rotation.set(-0.55 + bob * 1.8, sway * 0.6, sway * 0.15);
+    }
+
+    updateScoreSync(delta) {
+      if (!this.apiBaseUrl) return;
+      this.scoreSyncHeartbeat += delta;
+      const now = performance.now();
+      if (this.pendingScoreSyncReason && !this.scoreSyncInFlight) {
+        if (now - this.lastScoreSyncAt > this.scoreSyncCooldownSeconds * 1000) {
+          this.flushScoreSync();
+        }
+        return;
+      }
+      if (
+        !this.scoreSyncInFlight &&
+        this.scoreSyncHeartbeat >= this.scoreSyncCooldownSeconds * 2 &&
+        now - this.lastScoreSyncAt > this.scoreSyncCooldownSeconds * 1000
+      ) {
+        this.flushScoreSync(true);
+        this.scoreSyncHeartbeat = 0;
+      }
     }
 
     sampleGroundHeight(x, z) {
@@ -837,6 +1216,7 @@
       this.clearZombies();
       this.lastZombieSpawn = this.elapsed;
       this.updateHud();
+      this.scheduleScoreSync('respawn');
     }
 
     mineBlock() {
