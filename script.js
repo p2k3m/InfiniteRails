@@ -5919,27 +5919,31 @@
       return hasValidPortalUniformStructure(material.uniforms);
     }
 
-    function createPortalSurfaceMaterial(accentColor, active = false) {
-      const baseUniforms = guardUniformContainer({
-        uTime: { value: 0 },
-        uActivation: { value: active ? 1 : 0.18 },
-        uColor: { value: new THREE.Color(accentColor) },
-        uOpacity: { value: active ? 0.85 : 0.55 },
-      });
-      const material = new THREE.ShaderMaterial({
-        uniforms: baseUniforms,
-        vertexShader: PORTAL_VERTEX_SHADER,
-        fragmentShader: PORTAL_FRAGMENT_SHADER,
-        transparent: true,
-        depthWrite: false,
-        side: THREE.DoubleSide,
-        blending: THREE.AdditiveBlending,
-      });
-      material.extensions = material.extensions || {};
-      if (!hasValidPortalUniformStructure(material.uniforms)) {
-        material.dispose?.();
-        throw new Error('Portal shader uniforms unavailable');
-      }
+      function createPortalSurfaceMaterial(accentColor, active = false) {
+        const baseUniforms = {
+          uTime: { value: 0 },
+          uActivation: { value: active ? 1 : 0.18 },
+          uColor: { value: new THREE.Color(accentColor) },
+          uOpacity: { value: active ? 0.85 : 0.55 },
+        };
+        const material = new THREE.ShaderMaterial({
+          uniforms: baseUniforms,
+          vertexShader: PORTAL_VERTEX_SHADER,
+          fragmentShader: PORTAL_FRAGMENT_SHADER,
+          transparent: true,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          blending: THREE.AdditiveBlending,
+        });
+        material.extensions = material.extensions || {};
+        const guardedUniforms = guardUniformContainer(material.uniforms);
+        if (guardedUniforms && guardedUniforms !== material.uniforms) {
+          material.uniforms = guardedUniforms;
+        }
+        if (!hasValidPortalUniformStructure(material.uniforms)) {
+          material.dispose?.();
+          throw new Error('Portal shader uniforms unavailable');
+        }
       tagPortalSurfaceMaterial(material, accentColor, active);
       return { material, uniforms: material.uniforms };
     }
