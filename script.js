@@ -5294,6 +5294,14 @@
         return container;
       }
 
+      if (container.isUniformsGroup === true) {
+        return container;
+      }
+
+      if (Array.isArray(container.seq) && typeof container.map === 'object') {
+        return container;
+      }
+
       if (PORTAL_UNIFORM_PROXY_TARGETS.has(container)) {
         return container;
       }
