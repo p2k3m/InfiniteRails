@@ -7083,10 +7083,11 @@
           materialProperties && typeof materialProperties.uniforms === 'object'
             ? materialProperties.uniforms
             : null;
+        if (stabiliseRendererUniformCache(rendererUniforms)) {
+          modified = true;
+        }
         if (uniformContainerNeedsSanitization(rendererUniforms)) {
-          if (stabiliseRendererUniformCache(rendererUniforms)) {
-            modified = true;
-          }
+          modified = true;
           return;
         }
 
@@ -7096,10 +7097,11 @@
           typeof materialProperties.program.getUniforms === 'function'
             ? materialProperties.program.getUniforms()
             : null;
+        if (stabiliseRendererUniformCache(programUniforms)) {
+          modified = true;
+        }
         if (uniformContainerNeedsSanitization(programUniforms)) {
-          if (stabiliseRendererUniformCache(programUniforms)) {
-            modified = true;
-          }
+          modified = true;
         }
       };
 
