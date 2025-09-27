@@ -8344,49 +8344,92 @@
         let accentColor = cacheEntry?.accentColor ?? defaultAccent ?? '#7b6bff';
         let isActive = cacheEntry?.isActive ?? Boolean(defaultState);
 
-        if (!fallback) {
+        const ensureFallbackMaterial = () => {
+          if (fallback) {
+            if (child.renderOrder && fallback.renderOrder < child.renderOrder) {
+              fallback.renderOrder = child.renderOrder;
+            }
+            return fallback;
+          }
+
           const inferredState = inferPortalMaterialState(material, defaultAccent, defaultState);
           const hasPortalSignature = materialUsesPortalSurfaceShader(material);
           if (!inferredState && !material?.userData?.portalSurface && !hasPortalSignature) {
-            return false;
+            return null;
           }
 
           accentColor = inferredState?.accentColor ?? accentColor;
           isActive = inferredState?.isActive ?? isActive;
 
-          fallback = createPortalFallbackMaterial(accentColor, isActive);
-          fallback.renderOrder = child.renderOrder ?? 2;
-          if (fallback.renderOrder < (child.renderOrder ?? 2)) {
-            fallback.renderOrder = child.renderOrder ?? 2;
+          const created = createPortalFallbackMaterial(accentColor, isActive);
+          created.renderOrder = child.renderOrder ?? 2;
+          if (created.renderOrder < (child.renderOrder ?? 2)) {
+            created.renderOrder = child.renderOrder ?? 2;
           }
 
-          if (fallback?.userData) {
-            fallback.userData.portalSurface = {
+          if (created?.userData) {
+            created.userData.portalSurface = {
               accentColor,
               isActive,
             };
           }
 
+          fallback = created;
           handledMaterials.set(material, { fallback, accentColor, isActive });
-        } else if (child.renderOrder && fallback.renderOrder < child.renderOrder) {
-          fallback.renderOrder = child.renderOrder;
-        }
+          return fallback;
+        };
 
-        let replaced = false;
-        if (Array.isArray(child.material)) {
-          child.material = child.material.map((mat) => {
-            if (mat === material) {
-              replaced = true;
-              return fallback;
+        const replaceMaterialProperty = (property, useFallback = true) => {
+          if (!property || !(property in child)) {
+            return false;
+          }
+
+          const current = child[property];
+          let updated = false;
+
+          const resolveReplacement = () => {
+            if (!useFallback) {
+              return null;
             }
-            return mat;
-          });
-        } else if (child.material === material) {
-          child.material = fallback;
-          replaced = true;
-        }
+            return ensureFallbackMaterial();
+          };
 
-        if (!replaced) {
+          if (Array.isArray(current)) {
+            const next = current.map((entry) => {
+              if (entry === material) {
+                updated = true;
+                const replacement = resolveReplacement();
+                if (useFallback && !replacement) {
+                  updated = false;
+                  return entry;
+                }
+                return replacement;
+              }
+              return entry;
+            });
+            if (updated) {
+              child[property] = next;
+            }
+            return updated;
+          }
+
+          if (current === material) {
+            const replacement = resolveReplacement();
+            if (useFallback && !replacement) {
+              return false;
+            }
+            child[property] = replacement;
+            return true;
+          }
+
+          return false;
+        };
+
+        const replacedPrimary = replaceMaterialProperty('material', true);
+        const replacedDepth = replaceMaterialProperty('customDepthMaterial', false);
+        const replacedDistance = replaceMaterialProperty('customDistanceMaterial', false);
+
+        if (!replacedPrimary && !replacedDepth && !replacedDistance) {
           return false;
         }
 
@@ -8405,7 +8448,10 @@
             // Ignore dispose failures and continue with the fallback material.
           }
           if (boundLight) {
-            restoreRendererBoundLight(fallback, boundLight);
+            const replacement = fallback ?? null;
+            if (replacement) {
+              restoreRendererBoundLight(replacement, boundLight);
+            }
           }
           disposedMaterials.add(material);
         }
