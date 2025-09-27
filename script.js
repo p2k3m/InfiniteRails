@@ -515,6 +515,448 @@
       return true;
     }
 
+    function setupSimpleExperienceIntegrations(experience) {
+      if (!experience) return;
+      const appConfig = window.APP_CONFIG || {};
+      const IDENTITY_STORAGE_KEY = 'infinite-rails-simple-identity';
+      const identityState = {
+        signedIn: false,
+        googleBusy: false,
+        displayName: experience.playerDisplayName,
+        googleId: null,
+        googleAvatar: null,
+        location: null,
+        locationLabel: 'Location unavailable',
+        deviceLabel:
+          (typeof experience.getDeviceLabel === 'function'
+            ? experience.getDeviceLabel()
+            : experience.deviceLabel) || 'Device details pending',
+      };
+      let googleAuthInstance = null;
+      let googleAuthPromise = null;
+      let gsiScriptPromise = null;
+      let gsiInitialized = false;
+      let hydratingIdentity = false;
+
+      function persistIdentity() {
+        if (hydratingIdentity) return;
+        if (typeof localStorage === 'undefined') return;
+        try {
+          const payload = {
+            displayName: identityState.displayName,
+            googleId: identityState.googleId,
+            locationLabel: identityState.locationLabel,
+            location: identityState.location,
+          };
+          localStorage.setItem(IDENTITY_STORAGE_KEY, JSON.stringify(payload));
+        } catch (error) {
+          console.warn('Unable to persist identity profile.', error);
+        }
+      }
+
+      function updateIdentityUI() {
+        const displayName = identityState.displayName || 'Explorer';
+        const locationLabel = identityState.locationLabel || 'Location unavailable';
+        if (headerUserNameEl) {
+          headerUserNameEl.textContent = displayName;
+        }
+        if (headerUserLocationEl) {
+          headerUserLocationEl.textContent = locationLabel;
+        }
+        if (userNameDisplayEl) {
+          userNameDisplayEl.textContent = identityState.signedIn ? displayName : `Guest ${displayName}`;
+        }
+        if (userLocationDisplayEl) {
+          userLocationDisplayEl.textContent = locationLabel;
+        }
+        if (userDeviceDisplayEl) {
+          userDeviceDisplayEl.textContent = identityState.deviceLabel || 'Device details pending';
+        }
+        googleFallbackButtons.forEach((button) => {
+          if (!button) return;
+          const unavailable = !appConfig.googleClientId;
+          button.hidden = identityState.signedIn;
+          button.disabled = identityState.googleBusy || unavailable;
+          button.setAttribute('aria-busy', identityState.googleBusy ? 'true' : 'false');
+          if (unavailable) {
+            button.title = 'Google Sign-In unavailable in offline mode.';
+          } else {
+            button.removeAttribute('title');
+          }
+        });
+        googleButtonContainers.forEach((container) => {
+          if (!container) return;
+          container.hidden = identityState.signedIn || !appConfig.googleClientId;
+        });
+        googleSignOutButtons.forEach((button) => {
+          if (!button) return;
+          button.hidden = !identityState.signedIn;
+          button.disabled = identityState.googleBusy;
+          button.setAttribute('aria-busy', identityState.googleBusy ? 'true' : 'false');
+        });
+        if (landingSignInPanel) {
+          if (identityState.signedIn) {
+            landingSignInPanel.hidden = true;
+            landingSignInPanel.setAttribute('aria-hidden', 'true');
+          } else {
+            landingSignInPanel.hidden = false;
+            landingSignInPanel.setAttribute('aria-hidden', 'false');
+          }
+        }
+      }
+
+      function formatLocationLabel(location) {
+        if (!location) return 'Location unavailable';
+        if (location.label) return location.label;
+        const latitude = Number(location.latitude);
+        const longitude = Number(location.longitude);
+        if (Number.isFinite(latitude) && Number.isFinite(longitude)) {
+          return `Lat ${latitude.toFixed(1)}°, Lon ${longitude.toFixed(1)}°`;
+        }
+        if (location.error) {
+          return typeof location.error === 'string' ? location.error : 'Location unavailable';
+        }
+        return 'Location unavailable';
+      }
+
+      function setLocation(location) {
+        if (location?.error) {
+          identityState.location = null;
+          identityState.locationLabel = typeof location.error === 'string' ? location.error : 'Location unavailable';
+          experience.setPlayerLocation({ error: identityState.locationLabel });
+        } else if (location) {
+          const normalized = {
+            latitude: Number.isFinite(location.latitude) ? Number(location.latitude) : null,
+            longitude: Number.isFinite(location.longitude) ? Number(location.longitude) : null,
+            accuracy: Number.isFinite(location.accuracy) ? Number(location.accuracy) : null,
+          };
+          const label = formatLocationLabel({ ...normalized, label: location.label });
+          normalized.label = label;
+          identityState.location = normalized;
+          identityState.locationLabel = label;
+          experience.setPlayerLocation({ ...normalized });
+        } else {
+          identityState.location = null;
+          identityState.locationLabel = 'Location unavailable';
+          experience.setPlayerLocation(null);
+        }
+        updateIdentityUI();
+        persistIdentity();
+      }
+
+      function captureLocation(forcePrompt = false) {
+        if (typeof navigator === 'undefined' || !navigator.geolocation) {
+          return Promise.resolve(null);
+        }
+        return new Promise((resolve) => {
+          const options = {
+            enableHighAccuracy: Boolean(forcePrompt),
+            maximumAge: forcePrompt ? 0 : 300000,
+            timeout: forcePrompt ? 5000 : 3500,
+          };
+          try {
+            navigator.geolocation.getCurrentPosition(
+              (position) => {
+                resolve({
+                  latitude: position.coords.latitude,
+                  longitude: position.coords.longitude,
+                  accuracy: position.coords.accuracy,
+                });
+              },
+              (error) => {
+                resolve({ error: error?.message || 'Location unavailable' });
+              },
+              options,
+            );
+          } catch (error) {
+            resolve({ error: error?.message || 'Location unavailable' });
+          }
+        });
+      }
+
+      function decodeJwt(token) {
+        if (!token || typeof token !== 'string') return null;
+        try {
+          const [, payload] = token.split('.');
+          if (!payload) return null;
+          const normalized = payload.replace(/-/g, '+').replace(/_/g, '/');
+          const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '=');
+          const decoded = atob(padded);
+          const json = decodeURIComponent(
+            decoded
+              .split('')
+              .map((char) => `%${`00${char.charCodeAt(0).toString(16)}`.slice(-2)}`)
+              .join(''),
+          );
+          return JSON.parse(json);
+        } catch (error) {
+          console.warn('Failed to decode Google credential payload.', error);
+          return null;
+        }
+      }
+
+      function ensureGoogleIdentityScript() {
+        if (!appConfig.googleClientId) {
+          return Promise.reject(new Error('Missing Google client ID.'));
+        }
+        if (gsiScriptPromise) {
+          return gsiScriptPromise;
+        }
+        gsiScriptPromise = loadScript('https://accounts.google.com/gsi/client').catch((error) => {
+          gsiScriptPromise = null;
+          throw error;
+        });
+        return gsiScriptPromise;
+      }
+
+      function ensureGapiAuth() {
+        if (!appConfig.googleClientId) {
+          return Promise.resolve(null);
+        }
+        if (googleAuthInstance) {
+          return Promise.resolve(googleAuthInstance);
+        }
+        if (googleAuthPromise) {
+          return googleAuthPromise;
+        }
+        googleAuthPromise = loadScript('https://apis.google.com/js/api.js')
+          .then(
+            () =>
+              new Promise((resolve, reject) => {
+                if (!window.gapi?.load) {
+                  reject(new Error('Google API unavailable.'));
+                  return;
+                }
+                window.gapi.load('auth2', () => {
+                  try {
+                    const instance =
+                      window.gapi.auth2.getAuthInstance?.() ||
+                      window.gapi.auth2.init({
+                        client_id: appConfig.googleClientId,
+                      });
+                    instance
+                      .then(() => {
+                        googleAuthInstance = instance;
+                        resolve(instance);
+                      })
+                      .catch(reject);
+                  } catch (error) {
+                    reject(error);
+                  }
+                });
+              }),
+          )
+          .catch((error) => {
+            console.warn('Failed to load Google auth script.', error);
+            throw error;
+          })
+          .finally(() => {
+            googleAuthPromise = null;
+          });
+        return googleAuthPromise;
+      }
+
+      async function applyIdentity(profile) {
+        if (!profile) return;
+        identityState.signedIn = true;
+        identityState.displayName = profile.name?.trim() || identityState.displayName || 'Explorer';
+        identityState.googleId = profile.sub || profile.user_id || profile.id || null;
+        identityState.googleAvatar = profile.picture || null;
+        experience.setIdentity({
+          name: identityState.displayName,
+          googleId: identityState.googleId,
+          email: profile.email ?? null,
+          avatar: profile.picture ?? null,
+          location: identityState.location ? { ...identityState.location } : null,
+          locationLabel: identityState.locationLabel,
+        });
+        updateIdentityUI();
+        persistIdentity();
+        if (typeof experience.loadScoreboard === 'function') {
+          experience.loadScoreboard({ force: true }).catch(() => {});
+        }
+        if (!identityState.location || identityState.locationLabel === 'Location unavailable') {
+          const resolved = await captureLocation(true);
+          setLocation(resolved);
+        }
+      }
+
+      async function handleFallbackSignIn(event) {
+        event?.preventDefault?.();
+        if (!appConfig.googleClientId) {
+          alert('Google Sign-In is not configured for this deployment.');
+          return;
+        }
+        identityState.googleBusy = true;
+        updateIdentityUI();
+        try {
+          const auth = await ensureGapiAuth();
+          if (!auth) {
+            throw new Error('Google auth unavailable.');
+          }
+          let googleUser = auth.currentUser?.get?.();
+          if (!googleUser || !auth.isSignedIn?.get?.()) {
+            googleUser = await auth.signIn();
+          }
+          const profile = googleUser?.getBasicProfile?.();
+          if (!profile) {
+            throw new Error('Google profile unavailable.');
+          }
+          await applyIdentity({
+            sub: profile.getId?.(),
+            email: profile.getEmail?.() || null,
+            name: profile.getName?.() || profile.getGivenName?.() || 'Explorer',
+            picture: profile.getImageUrl?.() || null,
+          });
+        } catch (error) {
+          console.warn('Google Sign-In failed.', error);
+          alert('Google Sign-In failed. Please try again later.');
+        } finally {
+          identityState.googleBusy = false;
+          updateIdentityUI();
+        }
+      }
+
+      async function handleSignOut(event) {
+        event?.preventDefault?.();
+        if (!identityState.signedIn) return;
+        identityState.googleBusy = true;
+        updateIdentityUI();
+        try {
+          const auth = await ensureGapiAuth();
+          await auth?.signOut?.();
+        } catch (error) {
+          console.warn('Unable to sign out of Google.', error);
+        }
+        identityState.signedIn = false;
+        identityState.googleId = null;
+        identityState.googleAvatar = null;
+        identityState.displayName = experience.defaultPlayerName || 'Explorer';
+        experience.clearIdentity?.();
+        identityState.location = null;
+        identityState.locationLabel = 'Location unavailable';
+        experience.setPlayerLocation({ error: identityState.locationLabel });
+        if (window.google?.accounts?.id && gsiInitialized) {
+          try {
+            window.google.accounts.id.disableAutoSelect();
+          } catch (error) {
+            console.warn('Unable to disable Google auto-select.', error);
+          }
+        }
+        identityState.googleBusy = false;
+        updateIdentityUI();
+        persistIdentity();
+      }
+
+      function renderGoogleButtons() {
+        if (!appConfig.googleClientId) {
+          updateIdentityUI();
+          return;
+        }
+        ensureGoogleIdentityScript()
+          .then(() => {
+            if (!window.google?.accounts?.id) {
+              throw new Error('Google Identity Services did not initialise.');
+            }
+            const client = window.google.accounts.id;
+            client.initialize({
+              client_id: appConfig.googleClientId,
+              callback: async (response) => {
+                const profile = decodeJwt(response?.credential);
+                if (!profile) return;
+                identityState.googleBusy = true;
+                updateIdentityUI();
+                try {
+                  await applyIdentity(profile);
+                } finally {
+                  identityState.googleBusy = false;
+                  updateIdentityUI();
+                }
+              },
+            });
+            googleButtonContainers.forEach((container) => {
+              if (!container) return;
+              container.hidden = identityState.signedIn;
+              if (container.hidden) return;
+              container.innerHTML = '';
+              client.renderButton(container, {
+                theme: 'filled_blue',
+                size: 'medium',
+                shape: 'rectangular',
+                type: 'standard',
+              });
+            });
+            client.prompt();
+            gsiInitialized = true;
+          })
+          .catch((error) => {
+            console.warn('Google Identity Services unavailable.', error);
+            googleButtonContainers.forEach((container) => {
+              if (container) {
+                container.hidden = true;
+              }
+            });
+          });
+      }
+
+      function hydrateStoredIdentity() {
+        if (typeof localStorage === 'undefined') return;
+        let payload = null;
+        hydratingIdentity = true;
+        try {
+          const raw = localStorage.getItem(IDENTITY_STORAGE_KEY);
+          if (raw) {
+            payload = JSON.parse(raw);
+          }
+        } catch (error) {
+          console.warn('Unable to hydrate stored identity.', error);
+        }
+        if (!payload) {
+          hydratingIdentity = false;
+          updateIdentityUI();
+          return;
+        }
+        if (payload.displayName) {
+          identityState.displayName = payload.displayName;
+          experience.setIdentity({ name: payload.displayName, locationLabel: identityState.locationLabel });
+        }
+        if (payload.location) {
+          setLocation(payload.location);
+        } else if (payload.locationLabel) {
+          identityState.locationLabel = payload.locationLabel;
+        }
+        hydratingIdentity = false;
+        updateIdentityUI();
+      }
+
+      googleFallbackButtons.forEach((button) => {
+        button.addEventListener('click', handleFallbackSignIn);
+      });
+
+      googleSignOutButtons.forEach((button) => {
+        button.addEventListener('click', handleSignOut);
+      });
+
+      if (identityState.deviceLabel && userDeviceDisplayEl) {
+        userDeviceDisplayEl.textContent = identityState.deviceLabel;
+      }
+
+      hydrateStoredIdentity();
+      updateIdentityUI();
+
+      captureLocation(false)
+        .then((location) => {
+          if (location) {
+            setLocation(location);
+          }
+        })
+        .catch(() => {
+          setLocation({ error: 'Location unavailable' });
+        });
+
+      renderGoogleButtons();
+    }
+
     const simpleModeEnabled = shouldStartSimpleMode();
     if (simpleModeEnabled && window.SimpleExperience?.create) {
       const simpleExperience = window.SimpleExperience.create({
@@ -573,6 +1015,7 @@
         startButton.addEventListener('click', launchSimple, { once: true });
       }
       launchSimple();
+      setupSimpleExperienceIntegrations(simpleExperience);
       return;
     }
     let previousLeaderboardSnapshot = new Map();

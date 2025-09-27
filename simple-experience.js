@@ -288,6 +288,13 @@
       this.ui = options.ui || {};
       this.apiBaseUrl = options.apiBaseUrl || null;
       this.playerDisplayName = (options.playerName || '').trim() || 'Explorer';
+      this.defaultPlayerName = this.playerDisplayName;
+      this.playerGoogleId = null;
+      this.playerEmail = null;
+      this.playerAvatarUrl = null;
+      this.playerLocation = null;
+      this.playerLocationLabel = 'Location hidden';
+      this.deviceLabel = this.describeDevice();
       this.scene = null;
       this.camera = null;
       this.renderer = null;
@@ -646,14 +653,28 @@
     }
 
     createRunSummary(reason) {
+      const entryId = this.playerGoogleId || this.sessionId;
+      const locationLabel = this.playerLocationLabel || 'Location hidden';
+      const locationPayload = this.playerLocation
+        ? {
+            latitude: this.playerLocation.latitude ?? null,
+            longitude: this.playerLocation.longitude ?? null,
+            accuracy: this.playerLocation.accuracy ?? null,
+            label: this.playerLocation.label ?? locationLabel,
+          }
+        : null;
       return {
-        id: this.sessionId,
+        id: entryId,
+        googleId: this.playerGoogleId ?? null,
+        playerId: entryId,
         name: this.playerDisplayName,
         score: Math.round(this.score),
         dimensionCount: Math.max(1, this.currentDimensionIndex + 1),
         runTimeSeconds: Math.round(this.elapsed),
         inventoryCount: Math.max(0, this.getTotalInventoryCount()),
-        locationLabel: 'Local session',
+        location: locationPayload,
+        locationLabel,
+        device: this.deviceLabel,
         updatedAt: new Date().toISOString(),
         reason,
       };
@@ -1013,6 +1034,111 @@
       } catch (error) {
         console.warn('Failed to persist recipe unlocks', error);
       }
+    }
+
+    describeDevice() {
+      if (typeof navigator === 'undefined') {
+        return 'Device details pending';
+      }
+      const platform = navigator.userAgentData?.platform || navigator.platform || 'Unknown platform';
+      const brand = Array.isArray(navigator.userAgentData?.brands)
+        ? navigator.userAgentData.brands.map((entry) => entry.brand).join(' · ')
+        : navigator.vendor || '';
+      const userAgent = navigator.userAgent || '';
+      const labelParts = [platform.trim(), brand.trim(), userAgent.trim()].filter(Boolean);
+      return labelParts.length ? labelParts.join(' · ') : 'Device details pending';
+    }
+
+    getDeviceLabel() {
+      return this.deviceLabel;
+    }
+
+    inferLocationLabel(coords) {
+      if (!coords) {
+        return 'Location unavailable';
+      }
+      if (coords.error) {
+        return typeof coords.error === 'string' ? coords.error : 'Location unavailable';
+      }
+      const latitude = Number(coords.latitude);
+      const longitude = Number(coords.longitude);
+      if (Number.isFinite(latitude) && Number.isFinite(longitude)) {
+        const latLabel = latitude.toFixed(1);
+        const lonLabel = longitude.toFixed(1);
+        return `Lat ${latLabel}°, Lon ${lonLabel}°`;
+      }
+      return 'Location unavailable';
+    }
+
+    setPlayerLocation(location) {
+      if (!location) {
+        this.playerLocation = null;
+        this.playerLocationLabel = 'Location hidden';
+      } else if (location.error) {
+        this.playerLocation = { error: location.error };
+        this.playerLocationLabel = typeof location.error === 'string' ? location.error : 'Location hidden';
+      } else {
+        const latitude = Number(location.latitude);
+        const longitude = Number(location.longitude);
+        const accuracy = Number.isFinite(location.accuracy) ? Number(location.accuracy) : null;
+        const normalized = {
+          latitude: Number.isFinite(latitude) ? latitude : null,
+          longitude: Number.isFinite(longitude) ? longitude : null,
+          accuracy,
+        };
+        const label = location.label || this.inferLocationLabel(normalized);
+        normalized.label = label;
+        this.playerLocation = normalized;
+        this.playerLocationLabel = label;
+      }
+      if (this.started) {
+        this.updateHud();
+      }
+      this.updateLocalScoreEntry('location-update');
+      this.scheduleScoreSync('location-update');
+      this.renderScoreboard();
+    }
+
+    setIdentity(identity = {}) {
+      const previousId = this.playerGoogleId;
+      const name = typeof identity.name === 'string' ? identity.name.trim() : '';
+      if (name) {
+        this.playerDisplayName = name;
+      }
+      this.playerGoogleId = identity.googleId ?? null;
+      this.playerEmail = identity.email ?? null;
+      this.playerAvatarUrl = identity.avatar ?? null;
+      if (identity.location || identity.locationLabel) {
+        this.setPlayerLocation(identity.location || { label: identity.locationLabel });
+      }
+      if (identity.locationLabel && !identity.location) {
+        this.playerLocationLabel = identity.locationLabel;
+      }
+      if (this.started) {
+        this.updateHud();
+      }
+      this.updateLocalScoreEntry('identity-update');
+      this.scheduleScoreSync('identity-update');
+      if (previousId !== this.playerGoogleId && typeof this.loadScoreboard === 'function') {
+        this.loadScoreboard({ force: true }).catch(() => {});
+      } else {
+        this.renderScoreboard();
+      }
+    }
+
+    clearIdentity() {
+      this.playerGoogleId = null;
+      this.playerEmail = null;
+      this.playerAvatarUrl = null;
+      this.playerDisplayName = this.defaultPlayerName || 'Explorer';
+      this.playerLocation = null;
+      this.playerLocationLabel = 'Location hidden';
+      if (this.started) {
+        this.updateHud();
+      }
+      this.updateLocalScoreEntry('identity-cleared');
+      this.scheduleScoreSync('identity-cleared');
+      this.renderScoreboard();
     }
 
     createVoxelTexture(key, palette) {
