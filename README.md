@@ -33,6 +33,26 @@ To keep progress visible, the actionable checklist extracted from that brief now
 [`docs/enhancement-roadmap.md`](docs/enhancement-roadmap.md). Update that roadmap as features land so the team can quickly gauge
 momentum toward the full experience described in the brief.
 
+## Simplified sandbox mode
+
+The legacy renderer and gameplay stack are still under heavy construction. To ensure explorers always land in a responsive,
+playable space, the page now boots into a lightweight **sandbox mode** by default. This mode:
+
+- draws a 48×48 voxel island with soft day/night lighting at 60 FPS,
+- locks the camera to a first-person perspective with mouse look + `WASD` movement,
+- supports mining (left-click) and block placement (right-click) with realtime HUD updates, and
+- keeps the existing HUD elements alive so hearts, daylight percentage, and score counters remain informative.
+
+Use the following switches to control which experience loads:
+
+| Mode | How to activate |
+| --- | --- |
+| Sandbox (default) | Load the page normally. You can also force it with `?mode=simple` or by setting `APP_CONFIG.forceSimpleMode = true`. |
+| Advanced preview | Append `?mode=advanced` (or `?advanced=1`) to the URL or set `APP_CONFIG.forceAdvanced = true`. |
+
+The sandbox keeps the portal-building brief front-and-centre while the production renderer catches up. When advanced mode is
+ready, flip the flags above to continue development without losing the reliable fallback.
+
 ## Controls
 
 | Platform | Input |

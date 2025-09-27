@@ -497,6 +497,47 @@
     const landingSignInPanel = document.getElementById('landingSignInPanel');
     const scoreboardListEl = document.getElementById('scoreboardList');
     const scoreboardStatusEl = document.getElementById('scoreboardStatus');
+
+    function shouldStartSimpleMode() {
+      if (typeof window === 'undefined') return false;
+      const params = new URLSearchParams(window.location.search ?? '');
+      const explicitMode = params.get('mode');
+      if (explicitMode === 'advanced') return false;
+      if (explicitMode === 'simple') return true;
+      if (params.get('advanced') === '1') return false;
+      if (params.get('simple') === '1') return true;
+      if (window.APP_CONFIG?.forceAdvanced) return false;
+      if (window.APP_CONFIG?.forceSimpleMode) return true;
+      return true;
+    }
+
+    const simpleModeEnabled = shouldStartSimpleMode();
+    if (simpleModeEnabled && window.SimpleExperience?.create) {
+      const simpleExperience = window.SimpleExperience.create({
+        canvas,
+        ui: {
+          introModal,
+          startButton,
+          hudRootEl,
+          heartsEl,
+          timeEl,
+          dimensionInfoEl,
+          scoreTotalEl,
+          scoreRecipesEl,
+          scoreDimensionsEl,
+          portalProgressLabel,
+          portalProgressBar,
+        },
+      });
+      const launchSimple = () => {
+        simpleExperience.start();
+      };
+      if (startButton) {
+        startButton.addEventListener('click', launchSimple, { once: true });
+      }
+      launchSimple();
+      return;
+    }
     let previousLeaderboardSnapshot = new Map();
     let leaderboardHasRenderedOnce = false;
     let hudGoogleButton = null;
