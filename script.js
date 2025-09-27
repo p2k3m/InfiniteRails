@@ -3611,6 +3611,20 @@
         if (!gl || typeof gl.getParameter !== 'function') {
           throw new Error('WebGL context unavailable');
         }
+        try {
+          const debugInfo = gl.getExtension('WEBGL_debug_renderer_info');
+          const rendererLabel = debugInfo
+            ? gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL)
+            : gl.getParameter(gl.RENDERER);
+          if (
+            typeof rendererLabel === 'string' &&
+            rendererLabel.toLowerCase().includes('swiftshader')
+          ) {
+            portalShaderSupport = false;
+          }
+        } catch (contextError) {
+          // Ignore renderer identification issues; fallback will be used if shaders fail.
+        }
       } catch (error) {
         renderer = null;
         showDependencyError(
@@ -7826,7 +7840,7 @@
         return invalid;
       }
 
-      function rebuildInvalidMaterialUniforms(error) {
+    function rebuildInvalidMaterialUniforms(error) {
       if (!renderer || !scene || typeof renderer.properties?.get !== 'function') {
         return false;
       }
@@ -7899,20 +7913,32 @@
             return false;
           }
 
-        if (Object.prototype.hasOwnProperty.call(uniform, 'value')) {
-          return true;
-        }
+          if (Object.prototype.hasOwnProperty.call(uniform, 'value')) {
+            return typeof uniform.value !== 'undefined';
+          }
 
-        if (typeof uniform.setValue === 'function') {
-          return true;
-        }
+          if (uniform.uniform && typeof uniform.uniform === 'object') {
+            if (!Object.prototype.hasOwnProperty.call(uniform.uniform, 'value')) {
+              return false;
+            }
+            return typeof uniform.uniform.value !== 'undefined';
+          }
 
-        if (uniform.map && typeof uniform.map === 'object' && Array.isArray(uniform.seq)) {
-          return true;
-        }
+          if (typeof uniform.setValue === 'function') {
+            return (
+              uniform.uniform &&
+              typeof uniform.uniform === 'object' &&
+              Object.prototype.hasOwnProperty.call(uniform.uniform, 'value') &&
+              typeof uniform.uniform.value !== 'undefined'
+            );
+          }
 
-        return false;
-      };
+          if (uniform.map && typeof uniform.map === 'object' && Array.isArray(uniform.seq)) {
+            return true;
+          }
+
+          return false;
+        };
 
       let recovered = false;
 
@@ -8310,6 +8336,54 @@
         });
       });
       return recovered;
+    }
+
+    function resetRendererUniformCaches() {
+      if (!renderer?.properties?.remove || !scene?.traverse) {
+        return;
+      }
+
+      const visited = new Set();
+      scene.traverse((object) => {
+        if (!object) {
+          return;
+        }
+
+        const purgeMaterial = (material) => {
+          if (!material || visited.has(material)) {
+            return;
+          }
+          visited.add(material);
+          try {
+            renderer.properties.remove(material);
+          } catch (error) {
+            // Ignore cache removal failures; renderer will rebuild as needed.
+          }
+        };
+
+        const materials = [];
+        if (Array.isArray(object.material)) {
+          materials.push(...object.material);
+        } else if (object.material) {
+          materials.push(object.material);
+        }
+        if (object.customDepthMaterial) {
+          materials.push(object.customDepthMaterial);
+        }
+        if (object.customDistanceMaterial) {
+          materials.push(object.customDistanceMaterial);
+        }
+
+        materials.forEach(purgeMaterial);
+      });
+
+      if (renderer.renderLists?.dispose) {
+        try {
+          renderer.renderLists.dispose();
+        } catch (error) {
+          // Continue even if render list disposal fails.
+        }
+      }
     }
 
     function disablePortalSurfaceShaders(error) {
@@ -12304,6 +12378,7 @@
           ? progressSnapshot.dimensions.current
           : 'origin';
       teardownPreviewScene();
+      resetRendererUniformCaches();
       const context = ensureAudioContext();
       context?.resume?.().catch(() => {});
       if (window.Howler?.ctx?.state === 'suspended') {
