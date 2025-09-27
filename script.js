@@ -5031,10 +5031,14 @@
         let isValid = hasValidPortalUniformStructure(material.uniforms);
 
         const safeUniformContainer = (() => {
+          const previousUniforms = material.uniforms;
           const uniforms = guardUniformContainer(material.uniforms);
           if (uniforms && material.uniforms !== uniforms) {
             try {
               material.uniforms = uniforms;
+              if (material.uniforms === uniforms && previousUniforms !== uniforms) {
+                resetMaterialUniformCache(material);
+              }
             } catch (assignError) {
               // Ignore assignment failures – we'll fall back to the existing reference.
             }
@@ -5110,7 +5114,11 @@
             uOpacity: { value: isActive ? 0.85 : 0.55 },
           });
           try {
+            const previousUniforms = material.uniforms;
             material.uniforms = fallbackUniforms;
+            if (material.uniforms === fallbackUniforms && previousUniforms !== fallbackUniforms) {
+              resetMaterialUniformCache(material);
+            }
             isValid = hasValidPortalUniformStructure(material.uniforms);
             if (isValid) {
               if ('uniformsNeedUpdate' in material) {
@@ -5302,6 +5310,27 @@
 
     const PORTAL_UNIFORM_CONTAINER_PROXIES = new WeakMap();
     const PORTAL_UNIFORM_PROXY_TARGETS = new WeakMap();
+
+    function resetMaterialUniformCache(material) {
+      if (!material || typeof material !== 'object') {
+        return false;
+      }
+      if (!renderer || !renderer.properties || typeof renderer.properties.remove !== 'function') {
+        return false;
+      }
+      try {
+        renderer.properties.remove(material);
+      } catch (error) {
+        return false;
+      }
+      if ('uniformsNeedUpdate' in material) {
+        material.uniformsNeedUpdate = true;
+      }
+      if ('needsUpdate' in material) {
+        material.needsUpdate = true;
+      }
+      return true;
+    }
 
     function guardUniformContainer(container) {
       if (!container || typeof container !== 'object') {
@@ -5503,6 +5532,7 @@
         uniforms = {};
       }
 
+      const previousUniforms = material.uniforms;
       const guardedUniforms = guardUniformContainer(uniforms);
       if (guardedUniforms && guardedUniforms !== uniforms) {
         uniforms = guardedUniforms;
@@ -5511,6 +5541,9 @@
       if (material.uniforms !== uniforms) {
         try {
           material.uniforms = uniforms;
+          if (material.uniforms === uniforms && previousUniforms !== uniforms) {
+            resetMaterialUniformCache(material);
+          }
         } catch (assignError) {
           return { modified: false, requiresRendererReset: false };
         }
@@ -5670,6 +5703,7 @@
         return { uniformEntry, containerModified, container: targetContainer };
       };
 
+      const previousUniforms = material.uniforms;
       const guardedUniforms = guardUniformContainer(uniforms);
       if (guardedUniforms && guardedUniforms !== uniforms) {
         uniforms = guardedUniforms;
@@ -5678,6 +5712,9 @@
       if (material.uniforms !== uniforms) {
         try {
           material.uniforms = uniforms;
+          if (material.uniforms === uniforms && previousUniforms !== uniforms) {
+            resetMaterialUniformCache(material);
+          }
         } catch (assignError) {
           return false;
         }
@@ -5936,9 +5973,13 @@
           blending: THREE.AdditiveBlending,
         });
         material.extensions = material.extensions || {};
+        const previousUniforms = material.uniforms;
         const guardedUniforms = guardUniformContainer(material.uniforms);
         if (guardedUniforms && guardedUniforms !== material.uniforms) {
           material.uniforms = guardedUniforms;
+          if (material.uniforms === guardedUniforms && previousUniforms !== guardedUniforms) {
+            resetMaterialUniformCache(material);
+          }
         }
         if (!hasValidPortalUniformStructure(material.uniforms)) {
           material.dispose?.();
@@ -6395,7 +6436,11 @@
             }
             const guarded = guardUniformContainer(material.uniforms);
             if (guarded && material.uniforms !== guarded) {
+              const previousUniforms = material.uniforms;
               material.uniforms = guarded;
+              if (material.uniforms === guarded && previousUniforms !== guarded) {
+                resetMaterialUniformCache(material);
+              }
             }
             return guarded || material.uniforms;
           })
@@ -6653,7 +6698,11 @@
                 }
                 const guarded = guardUniformContainer(material.uniforms);
                 if (guarded && material.uniforms !== guarded) {
+                  const previousUniforms = material.uniforms;
                   material.uniforms = guarded;
+                  if (material.uniforms === guarded && previousUniforms !== guarded) {
+                    resetMaterialUniformCache(material);
+                  }
                 }
                 return guarded || material.uniforms;
               })
@@ -6952,7 +7001,11 @@
           container = guarded;
           if (material && material.uniforms !== guarded) {
             try {
+              const previousUniforms = material.uniforms;
               material.uniforms = guarded;
+              if (material.uniforms === guarded && previousUniforms !== guarded) {
+                resetMaterialUniformCache(material);
+              }
             } catch (assignError) {
               // Ignore assignment failures; we'll still attempt to normalise the proxy.
             }
