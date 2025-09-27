@@ -323,6 +323,9 @@
       this.scoreboardContainer = this.scoreboardListEl?.closest('#leaderboardTable') || null;
       this.scoreboardEmptyEl =
         (typeof document !== 'undefined' && document.getElementById('leaderboardEmptyMessage')) || null;
+      this.scoreboardPollIntervalSeconds = 45;
+      this.scoreboardPollTimer = 0;
+      this.lastScoreboardFetch = 0;
       this.hotbarEl = this.ui.hotbarEl || null;
       this.playerHintEl = this.ui.playerHintEl || null;
       this.craftingModal = this.ui.craftingModal || null;
@@ -600,6 +603,7 @@
 
     async loadScoreboard({ force = false } = {}) {
       if (!this.apiBaseUrl) {
+        this.scoreboardPollTimer = 0;
         if (force && this.scoreboardStatusEl) {
           this.scoreboardStatusEl.textContent = 'Offline mode: connect an API to sync runs.';
         }
@@ -618,6 +622,7 @@
       }
       const baseUrl = this.apiBaseUrl.replace(/\/$/, '');
       const url = `${baseUrl}/scores`;
+      this.lastScoreboardFetch = typeof performance !== 'undefined' ? performance.now() : Date.now();
       if (this.scoreboardStatusEl) {
         this.scoreboardStatusEl.textContent = 'Syncing leaderboard…';
       }
@@ -649,6 +654,8 @@
             : [];
         if (incoming.length) {
           this.mergeScoreEntries(incoming);
+        } else {
+          this.renderScoreboard();
         }
         if (this.scoreboardStatusEl) {
           if (incoming.length) {
@@ -658,6 +665,7 @@
           }
         }
         this.scoreboardHydrated = true;
+        this.scoreboardPollTimer = 0;
       } catch (error) {
         console.warn('Failed to load scoreboard data', error);
         if (this.scoreboardStatusEl) {
@@ -674,7 +682,31 @@
           this.refreshScoresButton.disabled = false;
           this.refreshScoresButton.setAttribute('aria-busy', 'false');
         }
+        this.scoreboardPollTimer = 0;
       }
+    }
+
+    updateScoreboardPolling(delta) {
+      if (!this.apiBaseUrl) {
+        return;
+      }
+      if (!this.scoreboardHydrated || this.scoreSyncInFlight) {
+        return;
+      }
+      if (typeof document !== 'undefined' && document.hidden) {
+        return;
+      }
+      this.scoreboardPollTimer += delta;
+      if (this.scoreboardPollTimer < this.scoreboardPollIntervalSeconds) {
+        return;
+      }
+      const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+      const elapsedSinceFetch = this.lastScoreboardFetch ? (now - this.lastScoreboardFetch) / 1000 : Infinity;
+      this.scoreboardPollTimer = 0;
+      if (elapsedSinceFetch < this.scoreboardPollIntervalSeconds * 0.5) {
+        return;
+      }
+      this.loadScoreboard();
     }
 
     updateLocalScoreEntry(reason) {
@@ -2639,6 +2671,7 @@
       this.updateHands(delta);
       this.updatePlayerAnimation(delta);
       this.updateScoreSync(delta);
+      this.updateScoreboardPolling(delta);
       this.renderer.render(this.scene, this.camera);
     }
 
