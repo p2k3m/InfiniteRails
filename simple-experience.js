@@ -28,6 +28,7 @@
 
   const MODEL_URLS = {
     arm: 'assets/arm.gltf',
+    steve: 'assets/steve.gltf',
     zombie: 'assets/zombie.gltf',
     golem: 'assets/iron_golem.gltf',
   };
@@ -309,6 +310,9 @@
       this.handMaterials = [];
       this.handMaterialsDynamic = true;
       this.handModelLoaded = false;
+      this.playerAvatar = null;
+      this.playerMixer = null;
+      this.playerIdleAction = null;
       this.handSwingStrength = 0;
       this.handSwingTimer = 0;
       this.modelPromises = new Map();
@@ -355,6 +359,7 @@
       this.tmpRight = new THREE.Vector3();
       this.tmpVector = new THREE.Vector3();
       this.tmpVector2 = new THREE.Vector3();
+      this.tmpVector3 = new THREE.Vector3();
       this.pointerLocked = false;
       this.yaw = 0;
       this.pitch = 0;
@@ -843,8 +848,13 @@
       const width = this.canvas.clientWidth || this.canvas.width || 1;
       const height = this.canvas.clientHeight || this.canvas.height || 1;
       this.camera = new THREE.PerspectiveCamera(75, width / height, 0.1, 250);
-      this.camera.position.set(0, PLAYER_EYE_HEIGHT, 12);
-      this.scene.add(this.camera);
+      this.camera.position.set(0, 0, 0);
+
+      this.playerRig = new THREE.Group();
+      this.playerRig.name = 'PlayerRig';
+      this.playerRig.position.set(0, PLAYER_EYE_HEIGHT, 12);
+      this.playerRig.add(this.camera);
+      this.scene.add(this.playerRig);
 
       this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: true });
       this.renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -886,6 +896,9 @@
       this.scene.add(this.zombieGroup);
       this.scene.add(this.golemGroup);
       this.createFirstPersonHands();
+      this.loadPlayerCharacter().catch((error) => {
+        console.warn('Player model failed to load; continuing with primitive hands.', error);
+      });
     }
 
     createMaterials() {
@@ -1520,9 +1533,14 @@
     createFirstPersonHands() {
       const THREE = this.THREE;
       if (!THREE || !this.camera) return;
-      this.playerRig = new THREE.Group();
-      this.playerRig.position.set(0, 0, 0);
-      this.camera.add(this.playerRig);
+      if (this.playerRig && this.camera.parent !== this.playerRig) {
+        this.camera.parent?.remove(this.camera);
+        this.playerRig.add(this.camera);
+      }
+
+      if (this.handGroup) {
+        this.camera.remove(this.handGroup);
+      }
 
       this.handGroup = new THREE.Group();
       this.handGroup.position.set(0.42, -0.46, -0.8);
@@ -1565,12 +1583,13 @@
       const right = createHand(1);
       this.handGroup.add(left.group);
       this.handGroup.add(right.group);
-      this.playerRig.add(this.handGroup);
+      this.camera.add(this.handGroup);
       this.handMaterials = [left.palm.material, right.palm.material, left.sleeve.material, right.sleeve.material];
     }
 
     preloadCharacterModels() {
       this.loadModel('arm').catch(() => {});
+      this.loadModel('steve').catch(() => {});
       this.loadModel('zombie').catch(() => {});
       this.loadModel('golem').catch(() => {});
     }
@@ -1696,6 +1715,81 @@
       });
       this.handMaterialsDynamic = false;
       this.handModelLoaded = true;
+    }
+
+    async loadPlayerCharacter() {
+      if (!this.playerRig) return;
+      const THREE = this.THREE;
+      let asset = null;
+      try {
+        asset = await this.cloneModelScene('steve');
+      } catch (error) {
+        console.warn('Failed to load Steve model.', error);
+        return;
+      }
+      if (!asset?.scene) {
+        return;
+      }
+      if (this.playerAvatar) {
+        this.playerRig.remove(this.playerAvatar);
+        disposeObject3D(this.playerAvatar);
+        this.playerAvatar = null;
+      }
+      const model = asset.scene;
+      model.name = 'PlayerAvatar';
+      model.position.set(0, -PLAYER_EYE_HEIGHT, 0);
+      model.scale.setScalar(0.98);
+      model.traverse((child) => {
+        if (child.isMesh) {
+          child.castShadow = true;
+          child.receiveShadow = true;
+        }
+      });
+      this.playerRig.add(model);
+      this.playerAvatar = model;
+
+      if (this.camera.parent !== model) {
+        const head = model.getObjectByName('HeadPivot') || model.getObjectByName('Head');
+        if (head && head.isObject3D) {
+          head.add(this.camera);
+          this.camera.position.set(0, 0.08, 0.04);
+        } else {
+          this.playerRig.add(this.camera);
+          this.camera.position.set(0, 0, 0);
+        }
+      }
+      if (this.handGroup && this.handGroup.parent !== this.camera) {
+        this.camera.add(this.handGroup);
+      }
+
+      if (this.playerMixer) {
+        this.playerMixer.stopAllAction();
+        this.playerMixer = null;
+        this.playerIdleAction = null;
+      }
+
+      let clip = null;
+      if (Array.isArray(asset.animations) && asset.animations.length) {
+        clip = asset.animations.find((animation) => `${animation?.name ?? ''}`.toLowerCase().includes('idle')) || asset.animations[0];
+      }
+      this.playerMixer = new THREE.AnimationMixer(model);
+      if (clip) {
+        this.playerIdleAction = this.playerMixer.clipAction(clip);
+      } else {
+        const idleTrack = new THREE.NumberKeyframeTrack('.rotation[y]', [0, 1.5, 3], [0, 0.1, 0]);
+        const bobTrack = new THREE.NumberKeyframeTrack(
+          '.position[y]',
+          [0, 1.5, 3],
+          [-PLAYER_EYE_HEIGHT, -PLAYER_EYE_HEIGHT + 0.05, -PLAYER_EYE_HEIGHT],
+        );
+        const proceduralClip = new THREE.AnimationClip('ProceduralIdle', 3, [idleTrack, bobTrack]);
+        this.playerIdleAction = this.playerMixer.clipAction(proceduralClip);
+      }
+      if (this.playerIdleAction) {
+        this.playerIdleAction.loop = THREE.LoopRepeat;
+        this.playerIdleAction.play();
+      }
+      console.log('Steve visible in scene');
     }
 
     upgradeZombie(zombie) {
@@ -1942,7 +2036,8 @@
 
     isPlayerNearPortal() {
       if (!this.portalMesh || !this.camera) return false;
-      const distance = this.portalMesh.position.distanceTo(this.camera.position);
+      const cameraPosition = this.getCameraWorldPosition(this.tmpVector3);
+      const distance = this.portalMesh.position.distanceTo(cameraPosition);
       return distance <= PORTAL_INTERACTION_RANGE;
     }
 
@@ -2006,9 +2101,17 @@
       const column = this.columns.get(spawnColumn);
       if (column && column.length) {
         const top = column[column.length - 1];
-        this.camera.position.set(top.position.x, top.position.y + PLAYER_EYE_HEIGHT, top.position.z + 2.5);
+        if (this.playerRig) {
+          this.playerRig.position.set(top.position.x, top.position.y + PLAYER_EYE_HEIGHT, top.position.z + 2.5);
+        } else if (this.camera) {
+          this.camera.position.set(top.position.x, top.position.y + PLAYER_EYE_HEIGHT, top.position.z + 2.5);
+        }
       } else {
-        this.camera.position.set(0, PLAYER_EYE_HEIGHT + 1, 0);
+        if (this.playerRig) {
+          this.playerRig.position.set(0, PLAYER_EYE_HEIGHT + 1, 0);
+        } else if (this.camera) {
+          this.camera.position.set(0, PLAYER_EYE_HEIGHT + 1, 0);
+        }
       }
     }
 
@@ -2196,6 +2299,7 @@
       this.updateGolems(delta);
       this.updatePortalAnimation(delta);
       this.updateHands(delta);
+      this.updatePlayerAnimation(delta);
       this.updateScoreSync(delta);
       this.renderer.render(this.scene, this.camera);
     }
@@ -2243,9 +2347,10 @@
       const cameraQuaternion = new THREE.Quaternion().setFromEuler(new THREE.Euler(this.pitch, this.yaw, 0, 'YXZ'));
       this.camera.quaternion.copy(cameraQuaternion);
 
-      this.camera.position.add(this.velocity);
+      const position = this.playerRig ? this.playerRig.position : this.camera.position;
+      position.add(this.velocity);
 
-      const groundHeight = this.sampleGroundHeight(this.camera.position.x, this.camera.position.z);
+      const groundHeight = this.sampleGroundHeight(position.x, position.z);
       if ((this.keys.has('Space') || this.touchJumpRequested) && this.isGrounded) {
         const jumpBoost = 4.6 + (1.5 - Math.min(1.5, this.gravityScale));
         this.verticalVelocity = jumpBoost;
@@ -2254,17 +2359,17 @@
       this.touchJumpRequested = false;
       const gravityForce = 22 * this.gravityScale;
       this.verticalVelocity -= gravityForce * delta;
-      this.camera.position.y += this.verticalVelocity * delta;
+      position.y += this.verticalVelocity * delta;
       const desiredHeight = groundHeight + PLAYER_EYE_HEIGHT;
-      if (this.camera.position.y <= desiredHeight) {
-        this.camera.position.y = desiredHeight;
+      if (position.y <= desiredHeight) {
+        position.y = desiredHeight;
         this.verticalVelocity = 0;
         this.isGrounded = true;
       }
 
       const maxDistance = (WORLD_SIZE / 2 - 2) * BLOCK_SIZE;
-      this.camera.position.x = THREE.MathUtils.clamp(this.camera.position.x, -maxDistance, maxDistance);
-      this.camera.position.z = THREE.MathUtils.clamp(this.camera.position.z, -maxDistance, maxDistance);
+      position.x = THREE.MathUtils.clamp(position.x, -maxDistance, maxDistance);
+      position.z = THREE.MathUtils.clamp(position.z, -maxDistance, maxDistance);
     }
 
     updateHands(delta) {
@@ -2278,6 +2383,11 @@
       const sway = Math.cos(this.handSwingTimer * 0.5) * 0.08 * this.handSwingStrength;
       this.handGroup.position.set(0.42 + sway, -0.46 + bob, -0.8);
       this.handGroup.rotation.set(-0.55 + bob * 1.8, sway * 0.6, sway * 0.15);
+    }
+
+    updatePlayerAnimation(delta) {
+      if (!this.playerMixer) return;
+      this.playerMixer.update(delta);
     }
 
     updateScoreSync(delta) {
@@ -2354,8 +2464,7 @@
         this.spawnZombie();
         this.lastZombieSpawn = this.elapsed;
       }
-      const playerPosition = this.camera?.position;
-      if (!playerPosition) return;
+      const playerPosition = this.getCameraWorldPosition(this.tmpVector3);
       const tmpDir = this.tmpVector;
       const tmpStep = this.tmpVector2;
       for (const zombie of this.zombies) {
@@ -2474,7 +2583,7 @@
       if (this.golems.length >= GOLEM_MAX_PER_DIMENSION) return;
       const actor = this.createGolemActor();
       if (!actor) return;
-      const base = this.camera?.position ?? new THREE.Vector3();
+      const base = this.getCameraWorldPosition(this.tmpVector3);
       const angle = Math.random() * Math.PI * 2;
       const radius = 6 + Math.random() * 4;
       const x = base.x + Math.cos(angle) * radius;
@@ -2507,7 +2616,7 @@
       }
       if (!this.golems.length) return;
       const THREE = this.THREE;
-      const playerPosition = this.camera?.position;
+      const playerPosition = this.getCameraWorldPosition(this.tmpVector3);
       for (const golem of this.golems) {
         golem.cooldown = Math.max(0, golem.cooldown - delta);
         const target = this.findNearestZombie(golem.mesh.position) ?? null;
@@ -2664,8 +2773,9 @@
     castFromCamera() {
       const THREE = this.THREE;
       if (!this.camera) return [];
-      const direction = new THREE.Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion);
-      this.raycaster.set(this.camera.position, direction.normalize());
+      const origin = this.getCameraWorldPosition(this.tmpVector3);
+      const direction = this.getCameraWorldDirection(this.tmpVector);
+      this.raycaster.set(origin, direction.normalize());
       return this.raycaster.intersectObjects(this.terrainGroup.children, false);
     }
 
@@ -2710,6 +2820,54 @@
       if (collectedAny) {
         this.updateHud();
       }
+    }
+
+    getCameraWorldPosition(target) {
+      const THREE = this.THREE;
+      const destination = target ?? (THREE ? new THREE.Vector3() : { x: 0, y: 0, z: 0 });
+      if (this.camera?.getWorldPosition) {
+        this.camera.getWorldPosition(destination);
+        return destination;
+      }
+      if (this.playerRig) {
+        destination.copy?.(this.playerRig.position);
+        if (!destination.copy) {
+          destination.x = this.playerRig.position.x;
+          destination.y = this.playerRig.position.y;
+          destination.z = this.playerRig.position.z;
+        }
+        return destination;
+      }
+      if (destination.set) {
+        destination.set(0, 0, 0);
+      } else {
+        destination.x = 0;
+        destination.y = 0;
+        destination.z = 0;
+      }
+      return destination;
+    }
+
+    getCameraWorldDirection(target) {
+      const THREE = this.THREE;
+      const destination = target ?? (THREE ? new THREE.Vector3() : { x: 0, y: 0, z: -1 });
+      if (this.camera?.getWorldDirection) {
+        this.camera.getWorldDirection(destination);
+        if (destination.normalize) destination.normalize();
+        return destination;
+      }
+      if (this.camera?.quaternion && destination.set) {
+        destination.set(0, 0, -1).applyQuaternion(this.camera.quaternion).normalize();
+        return destination;
+      }
+      if (destination.set) {
+        destination.set(0, 0, -1);
+      } else {
+        destination.x = 0;
+        destination.y = 0;
+        destination.z = -1;
+      }
+      return destination;
     }
 
     addItemToInventory(item, quantity = 1) {
