@@ -6732,7 +6732,145 @@
       }
     }
 
-      function resyncPortalSurfaceMaterials(oldMaterial, newMaterial) {
+    function attemptPortalShaderMaterialRecovery() {
+      if (!portalShaderSupport) {
+        return false;
+      }
+
+      const layers = Array.isArray(tileRenderState) ? tileRenderState : [];
+      let recovered = false;
+
+      const removeRendererCacheForMaterial = (material) => {
+        if (!renderer?.properties?.remove || !material) {
+          return;
+        }
+        try {
+          renderer.properties.remove(material);
+        } catch (error) {
+          // Ignore renderer cache removal failures – the renderer will rebuild its caches lazily.
+        }
+      };
+
+      layers.forEach((row) => {
+        if (!Array.isArray(row)) {
+          return;
+        }
+        row.forEach((renderInfo) => {
+          const portalSurface = renderInfo?.animations?.portalSurface;
+          if (!portalSurface) {
+            return;
+          }
+
+          const metadata = {
+            accentColor: portalSurface?.accentColor ?? '#7b6bff',
+            isActive: Boolean(portalSurface?.isActive),
+          };
+
+          const replacements = new Map();
+
+          const requestReplacement = (material) => {
+            if (!material || replacements.has(material)) {
+              return;
+            }
+            if (hasValidPortalUniformStructure(material.uniforms)) {
+              return;
+            }
+
+            const rebuildResult = recreatePortalSurfaceMaterialFromMetadata(metadata);
+            const replacement = rebuildResult?.material ?? null;
+            if (!replacement) {
+              return;
+            }
+
+            replacement.renderOrder =
+              material.renderOrder ?? replacement.renderOrder ?? 2;
+            replacement.needsUpdate = true;
+            if ('uniformsNeedUpdate' in replacement) {
+              replacement.uniformsNeedUpdate = true;
+            }
+
+            ensurePortalShaderMaterialsHaveUniformValues(
+              [replacement],
+              { accentColor: rebuildResult?.accentColor, isActive: rebuildResult?.isActive },
+              { forceExpectPortal: true }
+            );
+
+            replacements.set(material, replacement);
+            removeRendererCacheForMaterial(material);
+            material.dispose?.();
+            recovered = true;
+          };
+
+          const { group } = renderInfo;
+          if (group?.children) {
+            group.children.forEach((child) => {
+              if (!child) {
+                return;
+              }
+
+              const applyReplacement = (oldMaterial, assign) => {
+                requestReplacement(oldMaterial);
+                const replacement = replacements.get(oldMaterial);
+                if (!replacement) {
+                  return;
+                }
+                assign(replacement);
+                resyncPortalSurfaceMaterials(oldMaterial, replacement);
+              };
+
+              if (Array.isArray(child.material)) {
+                child.material.forEach((mat, index) => {
+                  applyReplacement(mat, (replacement) => {
+                    child.material[index] = replacement;
+                  });
+                });
+              } else if (child.material) {
+                applyReplacement(child.material, (replacement) => {
+                  child.material = replacement;
+                });
+              }
+            });
+          }
+
+          if (replacements.size > 0) {
+            const updatedMaterials = Array.isArray(portalSurface.materials)
+              ? portalSurface.materials.map((material) => replacements.get(material) ?? material)
+              : [];
+            portalSurface.materials = updatedMaterials.filter(Boolean);
+
+            ensurePortalShaderMaterialsHaveUniformValues(portalSurface.materials, metadata, {
+              forceExpectPortal: true,
+            });
+
+            const uniformSets = portalSurface.materials
+              .map((material) => {
+                if (!material || !material.uniforms) {
+                  return null;
+                }
+                const guarded = guardUniformContainer(material.uniforms);
+                if (guarded && material.uniforms !== guarded) {
+                  const previousUniforms = material.uniforms;
+                  material.uniforms = guarded;
+                  if (material.uniforms === guarded && previousUniforms !== guarded) {
+                    resetMaterialUniformCache(material);
+                  }
+                }
+                return guarded || material.uniforms;
+              })
+              .filter((uniforms) => hasValidPortalUniformStructure(uniforms));
+
+            portalSurface.uniformSets = uniformSets;
+            if (!hasValidPortalUniformStructure(portalSurface.uniforms)) {
+              portalSurface.uniforms = uniformSets[0] ?? portalSurface.uniforms ?? null;
+            }
+          }
+        });
+      });
+
+      return recovered;
+    }
+
+    function resyncPortalSurfaceMaterials(oldMaterial, newMaterial) {
         const layers = Array.isArray(tileRenderState) ? tileRenderState : [];
         for (let y = 0; y < layers.length; y += 1) {
           const row = layers[y];
@@ -10978,8 +11116,20 @@
               : '';
           if (uniformValueErrorMessage.includes("Cannot read properties of undefined (reading 'value')")) {
             const sanitizedNow = sanitizeSceneUniforms();
+            if (!sanitizedNow && attemptPortalShaderMaterialRecovery()) {
+              rendererRecoveryFrames = Math.max(rendererRecoveryFrames, 2);
+              pendingUniformSanitizations = Math.max(pendingUniformSanitizations, 3);
+              uniformSanitizationFailureStreak = 0;
+              return;
+            }
             uniformSanitizationFailureStreak += 1;
             if (uniformSanitizationFailureStreak >= 3) {
+              if (attemptPortalShaderMaterialRecovery()) {
+                rendererRecoveryFrames = Math.max(rendererRecoveryFrames, 2);
+                pendingUniformSanitizations = Math.max(pendingUniformSanitizations, 3);
+                uniformSanitizationFailureStreak = 0;
+                return;
+              }
               const disabled = disablePortalSurfaceShaders(
                 new Error(
                   'Renderer repeatedly encountered undefined shader uniforms despite sanitization attempts.'
