@@ -303,6 +303,7 @@
       this.deviceLabel = this.describeDevice();
       this.scene = null;
       this.camera = null;
+      this.cameraFrustumHeight = 6;
       this.renderer = null;
       this.sunLight = null;
       this.hemiLight = null;
@@ -378,7 +379,7 @@
       this.cameraShakeTime = 0;
       this.cameraShakeIntensity = 0;
       this.pointerLocked = false;
-      this.yaw = 0;
+      this.yaw = Math.PI;
       this.pitch = 0;
       // Begin the day/night cycle at mid-day so the HUD daylight bar starts at 50%.
       this.elapsed = DAY_LENGTH_SECONDS * 0.5;
@@ -916,15 +917,26 @@
 
       const width = this.canvas.clientWidth || this.canvas.width || 1;
       const height = this.canvas.clientHeight || this.canvas.height || 1;
-      this.camera = new THREE.PerspectiveCamera(75, width / height, 0.1, 250);
+      const aspect = width / Math.max(1, height);
+      const frustumHeight = this.cameraFrustumHeight ?? 6;
+      const frustumWidth = frustumHeight * aspect;
+      this.camera = new THREE.OrthographicCamera(
+        -frustumWidth / 2,
+        frustumWidth / 2,
+        frustumHeight / 2,
+        -frustumHeight / 2,
+        0.1,
+        250,
+      );
       this.camera.position.set(0, 0, 0);
 
       this.playerRig = new THREE.Group();
       this.playerRig.name = 'PlayerRig';
-      this.playerRig.position.set(0, PLAYER_EYE_HEIGHT, 12);
+      this.playerRig.position.set(0, PLAYER_EYE_HEIGHT, 0);
       this.playerRig.add(this.camera);
       this.scene.add(this.playerRig);
-      this.camera.lookAt(new THREE.Vector3(0, PLAYER_EYE_HEIGHT, -10));
+      this.camera.lookAt(new THREE.Vector3(0, PLAYER_EYE_HEIGHT, 10));
+      this.updateCameraFrustum(width, height);
 
       this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: true });
       this.renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -973,6 +985,21 @@
       if (typeof console !== 'undefined') {
         console.log('Scene populated');
       }
+    }
+
+    updateCameraFrustum(width, height) {
+      if (!this.camera || typeof width !== 'number' || typeof height !== 'number') {
+        return;
+      }
+      const safeHeight = Math.max(1, height);
+      const aspect = width / safeHeight;
+      const frustumHeight = this.cameraFrustumHeight ?? 6;
+      const frustumWidth = frustumHeight * aspect;
+      this.camera.left = -frustumWidth / 2;
+      this.camera.right = frustumWidth / 2;
+      this.camera.top = frustumHeight / 2;
+      this.camera.bottom = -frustumHeight / 2;
+      this.camera.updateProjectionMatrix();
     }
 
     refreshCameraBaseOffset() {
@@ -2630,10 +2657,12 @@
       const column = this.columns.get(spawnColumn);
       if (column && column.length) {
         const top = column[column.length - 1];
+        const spawnY = top.position.y + PLAYER_EYE_HEIGHT;
+        const spawnZ = top.position.z;
         if (this.playerRig) {
-          this.playerRig.position.set(top.position.x, top.position.y + PLAYER_EYE_HEIGHT, top.position.z + 2.5);
+          this.playerRig.position.set(top.position.x, spawnY, spawnZ);
         } else if (this.camera) {
-          this.camera.position.set(top.position.x, top.position.y + PLAYER_EYE_HEIGHT, top.position.z + 2.5);
+          this.camera.position.set(top.position.x, spawnY, spawnZ);
         }
       } else {
         if (this.playerRig) {
@@ -2794,8 +2823,7 @@
       const width = this.canvas.clientWidth || window.innerWidth || 1;
       const height = this.canvas.clientHeight || window.innerHeight || 1;
       this.renderer.setSize(width, height, false);
-      this.camera.aspect = width / height;
-      this.camera.updateProjectionMatrix();
+      this.updateCameraFrustum(width, height);
       const touchPreference = this.detectTouchPreferred();
       if (touchPreference !== this.isTouchPreferred) {
         this.isTouchPreferred = touchPreference;
