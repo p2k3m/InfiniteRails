@@ -2752,6 +2752,46 @@ body.sidebar-open .player-hint {
   color: rgba(245, 247, 251, 0.7);
 }
 
+.leaderboard-dimension-badges {
+  margin: 0.2rem 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.4rem;
+}
+
+.leaderboard-dimension-badges__item {
+  margin: 0;
+}
+
+.leaderboard-dimension-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  background: rgba(245, 247, 251, 0.08);
+  font-size: 0.72rem;
+  line-height: 1.1;
+  color: rgba(245, 247, 251, 0.88);
+  letter-spacing: 0.01em;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.05);
+}
+
+.leaderboard-dimension-badge__icon {
+  font-size: 0.9rem;
+  transform: translateY(-1px);
+}
+
+.leaderboard-dimension-badge__label {
+  white-space: nowrap;
+}
+
+.leaderboard-dimension-badges__item--empty .leaderboard-dimension-badge {
+  opacity: 0.6;
+}
+
 .leaderboard-table tbody td[data-cell='updated'] {
   font-size: 0.72rem;
   color: rgba(242, 245, 250, 0.6);

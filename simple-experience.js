@@ -248,6 +248,24 @@
     'portal-charge': { label: 'Portal Charge', icon: '🌀', placeable: false },
     'eternal-ingot': { label: 'Eternal Ingot', icon: '🔥', placeable: false },
   };
+  const DIMENSION_BADGE_SYMBOLS = {
+    origin: '🌱',
+    rock: '🪨',
+    stone: '⛏️',
+    tar: '⚫',
+    marble: '🏛️',
+    netherite: '🔥',
+  };
+  const DIMENSION_BADGE_SYNONYMS = {
+    origin: ['origin', 'grass', 'plains'],
+    rock: ['rock', 'basalt', 'ore'],
+    stone: ['stone', 'bastion', 'fortress'],
+    tar: ['tar', 'marsh', 'swamp'],
+    marble: ['marble', 'temple', 'atrium'],
+    netherite: ['nether', 'netherite', 'inferno'],
+  };
+  const DEFAULT_DIMENSION_BADGE_SYMBOL = '🌀';
+
   const DIMENSION_THEME = [
     {
       id: 'origin',
@@ -395,6 +413,15 @@
     return `<span class="hud-hearts" role="img" aria-label="${health / 2} hearts remaining">${pieces.join('')}</span>`;
   }
 
+  function escapeHtml(value) {
+    return String(value)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
   class SimpleExperience {
     constructor(options) {
       if (!options || !options.canvas) {
@@ -449,6 +476,7 @@
       this.handSwingTimer = 0;
       this.modelPromises = new Map();
       this.loadedModels = new Map();
+      this.dimensionBadgeSymbols = DIMENSION_BADGE_SYMBOLS;
       this.scoreboardListEl = this.ui.scoreboardListEl || null;
       this.scoreboardStatusEl = this.ui.scoreboardStatusEl || null;
       this.refreshScoresButton = this.ui.refreshScoresButton || null;
@@ -1072,7 +1100,6 @@
           const dimensionNames = Array.isArray(entry.dimensions)
             ? entry.dimensions.filter((name) => typeof name === 'string' && name.trim().length > 0)
             : [];
-          const dimensionLabel = entry.dimensionLabel || dimensionNames[dimensionNames.length - 1] || 'Origin';
           const dimensionTotal = Number.isFinite(entry.dimensionTotal)
             ? Math.max(1, Math.floor(entry.dimensionTotal))
             : DIMENSION_THEME.length;
@@ -1080,14 +1107,41 @@
             ? Math.max(1, Math.floor(entry.dimensionCount))
             : Math.max(1, dimensionNames.length || 1);
           const boundedCompleted = Math.min(completedDimensions, dimensionTotal);
-          const dimensionSummary = `${dimensionLabel} · ${boundedCompleted}/${dimensionTotal}`;
+          const badges = dimensionNames.length
+            ? dimensionNames
+                .map((label) => {
+                  const safeLabel = escapeHtml(label.trim());
+                  const symbol = escapeHtml(this.getDimensionBadgeSymbol(label));
+                  return `
+                    <li class="leaderboard-dimension-badges__item">
+                      <span class="leaderboard-dimension-badge">
+                        <span class="leaderboard-dimension-badge__icon" aria-hidden="true">${symbol}</span>
+                        <span class="leaderboard-dimension-badge__label">${safeLabel}</span>
+                      </span>
+                    </li>
+                  `;
+                })
+                .join('')
+            : `
+                <li class="leaderboard-dimension-badges__item leaderboard-dimension-badges__item--empty">
+                  <span class="leaderboard-dimension-badge">—</span>
+                </li>
+              `;
           return `
             <tr>
               <th scope="row" class="leaderboard-col-rank">${rank}</th>
               <td>${entry.name ?? 'Explorer'}</td>
               <td>${formatScore(entry.score)}</td>
               <td>${formatRunTime(entry.runTimeSeconds)}</td>
-              <td>${dimensionSummary}</td>
+              <td data-cell="dimensions">
+                <span class="leaderboard-dimension-count">${boundedCompleted}</span>
+                <ul class="leaderboard-dimension-badges" aria-label="Dimensions unlocked">
+                  ${badges}
+                </ul>
+                <span class="leaderboard-dimension-list sr-only">${escapeHtml(
+                  dimensionNames.length ? dimensionNames.join(', ') : 'No additional dimensions tracked',
+                )}</span>
+              </td>
               <td>${entry.inventoryCount ?? 0}</td>
               <td>${formatLocation(entry)}</td>
               <td>${updated}</td>
@@ -1102,6 +1156,31 @@
       if (this.scoreboardEmptyEl) {
         this.scoreboardEmptyEl.hidden = true;
       }
+    }
+
+    getDimensionBadgeSymbol(label) {
+      if (!label) {
+        return DEFAULT_DIMENSION_BADGE_SYMBOL;
+      }
+      const raw = String(label).trim();
+      if (!raw) {
+        return DEFAULT_DIMENSION_BADGE_SYMBOL;
+      }
+      const lower = raw.toLowerCase();
+      const matchedTheme = DIMENSION_THEME.find((dimension) => {
+        const id = dimension.id?.toLowerCase();
+        const name = dimension.name?.toLowerCase();
+        return lower === id || lower === name || lower.includes(id ?? '') || lower.includes(name ?? '');
+      });
+      if (matchedTheme && this.dimensionBadgeSymbols[matchedTheme.id]) {
+        return this.dimensionBadgeSymbols[matchedTheme.id];
+      }
+      for (const [key, synonyms] of Object.entries(DIMENSION_BADGE_SYNONYMS)) {
+        if (synonyms.some((token) => lower.includes(token))) {
+          return this.dimensionBadgeSymbols[key] ?? DEFAULT_DIMENSION_BADGE_SYMBOL;
+        }
+      }
+      return DEFAULT_DIMENSION_BADGE_SYMBOL;
     }
 
     getPlayerLeaderboardRank() {
