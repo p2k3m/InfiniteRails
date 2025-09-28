@@ -1091,6 +1091,54 @@
       this.renderScoreboard();
     }
 
+    getScoreEntryIdentifier(entry) {
+      if (!entry || typeof entry !== 'object') {
+        return null;
+      }
+      const candidate =
+        entry.id ??
+        entry.playerId ??
+        entry.player_id ??
+        entry.googleId ??
+        entry.google_id ??
+        entry.userId ??
+        entry.user_id ??
+        null;
+      if (candidate === null || candidate === undefined) {
+        return null;
+      }
+      const normalised = String(candidate).trim().toLowerCase();
+      return normalised || null;
+    }
+
+    getPlayerScoreEntryIds() {
+      const ids = [];
+      const normalise = (value) => {
+        if (value === null || value === undefined) {
+          return null;
+        }
+        const normalised = String(value).trim().toLowerCase();
+        return normalised || null;
+      };
+      const googleId = normalise(this.playerGoogleId);
+      const sessionId = normalise(this.sessionId);
+      if (googleId) ids.push(googleId);
+      if (sessionId) ids.push(sessionId);
+      return ids;
+    }
+
+    isPlayerScoreEntry(entry) {
+      const ids = this.getPlayerScoreEntryIds();
+      if (!ids.length) {
+        return false;
+      }
+      const identifier = this.getScoreEntryIdentifier(entry);
+      if (!identifier) {
+        return false;
+      }
+      return ids.includes(identifier);
+    }
+
     renderScoreboard() {
       if (!this.scoreboardListEl) return;
       const entries = this.scoreEntries.slice(0, 10);
@@ -1182,14 +1230,32 @@
                   <span class="leaderboard-dimension-badge">—</span>
                 </li>
               `;
+          const isPlayer = this.isPlayerScoreEntry(entry);
+          const rowClasses = ['leaderboard-row'];
+          if (isPlayer) {
+            rowClasses.push('leaderboard-row--player');
+          }
+          const rowAttributes = isPlayer ? ' data-player="true" aria-current="true"' : '';
+          const safeName = escapeHtml(entry.name ?? 'Explorer');
+          const explorerLabel = isPlayer
+            ? `${safeName} <span class="leaderboard-player-tag" aria-hidden="true">You</span><span class="sr-only"> (Current player)</span>`
+            : safeName;
+          const scoreDisplay = escapeHtml(formatScore(entry.score));
+          const runTimeDisplay = escapeHtml(formatRunTime(entry.runTimeSeconds));
+          const dimensionCountDisplay = escapeHtml(String(boundedCompleted));
+          const inventoryDisplay = escapeHtml(
+            String(Number.isFinite(entry.inventoryCount) ? Math.max(0, Math.round(entry.inventoryCount)) : 0),
+          );
+          const locationDisplay = escapeHtml(formatLocation(entry));
+          const updatedDisplay = escapeHtml(updated);
           return `
-            <tr>
+            <tr class="${rowClasses.join(' ')}"${rowAttributes}>
               <th scope="row" class="leaderboard-col-rank">${rank}</th>
-              <td>${entry.name ?? 'Explorer'}</td>
-              <td>${formatScore(entry.score)}</td>
-              <td>${formatRunTime(entry.runTimeSeconds)}</td>
+              <td>${explorerLabel}</td>
+              <td>${scoreDisplay}</td>
+              <td>${runTimeDisplay}</td>
               <td data-cell="dimensions">
-                <span class="leaderboard-dimension-count">${boundedCompleted}</span>
+                <span class="leaderboard-dimension-count">${dimensionCountDisplay}</span>
                 <ul class="leaderboard-dimension-badges" aria-label="Dimensions unlocked">
                   ${badges}
                 </ul>
@@ -1197,9 +1263,9 @@
                   dimensionNames.length ? dimensionNames.join(', ') : 'No additional dimensions tracked',
                 )}</span>
               </td>
-              <td>${entry.inventoryCount ?? 0}</td>
-              <td>${formatLocation(entry)}</td>
-              <td>${updated}</td>
+              <td>${inventoryDisplay}</td>
+              <td data-cell="location">${locationDisplay}</td>
+              <td data-cell="updated">${updatedDisplay}</td>
             </tr>
           `;
         })
@@ -1239,7 +1305,14 @@
     }
 
     getPlayerLeaderboardRank() {
-      const index = this.scoreEntries.findIndex((entry) => entry.id === this.sessionId);
+      const ids = this.getPlayerScoreEntryIds();
+      if (!ids.length) {
+        return null;
+      }
+      const index = this.scoreEntries.findIndex((entry) => {
+        const identifier = this.getScoreEntryIdentifier(entry);
+        return identifier && ids.includes(identifier);
+      });
       if (index < 0) {
         return null;
       }

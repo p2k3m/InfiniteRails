@@ -31,6 +31,7 @@ This digest captures the concrete code paths that power the interactive "Portals
 - Leaderboard data is fetched via `loadScoreboard()` and merged locally with `mergeScoreEntries()`, honouring APP_CONFIG.apiBaseUrl when present.【F:simple-experience.js†L792-L886】【F:simple-experience.js†L886-L956】
 - Run summaries are persisted through `scheduleScoreSync()` and REST `POST` calls when milestones are reached.【F:simple-experience.js†L3926-L3943】【F:simple-experience.js†L4076-L4084】
 - `script.js` exposes scoreboard utilities globally so both the advanced UI shell and simplified sandbox share consistent formatting rules.【F:script.js†L85-L156】
+- The local explorer is highlighted in the leaderboard with a "You" badge by `renderScoreboard()`, using Google ID or session fallbacks to match the active run.【F:simple-experience.js†L1108-L1193】
 
 ## Performance & Polish
 - A `THREE.Clock` driven delta loop keeps animations and physics stable while frustum culling removes off-screen chunks in `updateVisibility()`.【F:simple-experience.js†L2499-L2628】【F:simple-experience.js†L2628-L2712】
