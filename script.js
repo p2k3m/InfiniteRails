@@ -2849,13 +2849,11 @@
 
     const ZOMBIE_OUTLINE_COLOR = new THREE.Color('#ff5a7a');
     const GOLEM_OUTLINE_COLOR = new THREE.Color('#58b7ff');
-    const DAY_NIGHT_CYCLE_SECONDS = 20 * 60;
-    const DAY_PORTION = 0.7;
+    const DAY_NIGHT_CYCLE_SECONDS = 10 * 60;
+    const DAY_PORTION = 0.5;
     const NIGHT_PORTION = 1 - DAY_PORTION;
-    const DEFAULT_DAY_START_RATIO = Math.min(
-      Math.max(DAY_PORTION * 0.5, 0),
-      Math.max(Math.min(DAY_PORTION - 0.05, 0.95), 0.05)
-    );
+    const DEFAULT_DAY_START_RATIO = 0.5;
+    const DEFAULT_MOVE_DELAY_SECONDS = 1;
     const ZOMBIES_PER_CHUNK = 3;
     const ZOMBIE_CHUNK_SIZE = 16;
     const ZOMBIE_SPAWN_INTERVAL = 10;
@@ -4568,17 +4566,7 @@
       } = VOXEL_ISLAND_CONFIG;
       const halfSize = size / 2;
       const radius = Math.max(tileSize, size * radiusMultiplier);
-
-      let tileCount = 0;
-      for (let z = 0; z < size; z++) {
-        for (let x = 0; x < size; x++) {
-          const offsetX = x - halfSize + 0.5;
-          const offsetZ = z - halfSize + 0.5;
-          const distance = Math.hypot(offsetX, offsetZ);
-          if (distance > radius) continue;
-          tileCount += 1;
-        }
-      }
+      const tileCount = size * size;
 
       if (tileCount === 0) {
         return;
@@ -4650,9 +4638,8 @@
           const offsetX = x - halfSize + 0.5;
           const offsetZ = z - halfSize + 0.5;
           const distance = Math.hypot(offsetX, offsetZ);
-          if (distance > radius) continue;
-          const distanceRatio = THREE.MathUtils.clamp(distance / radius, 0, 1);
-          const falloff = Math.pow(1 - distanceRatio, falloffPower);
+          const distanceRatio = Math.min(distance / radius, 1);
+          const falloff = Math.pow(Math.max(0, 1 - distanceRatio), falloffPower);
           const variation = random(offsetX, offsetZ) * noiseScale;
           const height = THREE.MathUtils.clamp(
             minHeight + falloff * (maxHeight - minHeight) + variation,
@@ -4702,9 +4689,9 @@
           voxelIslandAssets.instancingFallbackNotified = true;
         }
       }
-      voxelIslandAssets.tileCount = index;
+      voxelIslandAssets.tileCount = tileCount;
       if (typeof console !== 'undefined') {
-        console.log(`World generated: ${index} voxels`);
+        console.log(`World generated: ${tileCount} voxels`);
       }
     }
 
@@ -12651,7 +12638,7 @@
           fogDensity: 0.055,
         },
         rules: {
-          moveDelay: 0.15,
+          moveDelay: DEFAULT_MOVE_DELAY_SECONDS,
         },
         generator: (state) => generateOriginIsland(state),
       },
@@ -12685,7 +12672,7 @@
           fogDensity: 0.01,
         },
         rules: {
-          moveDelay: 0.18,
+          moveDelay: DEFAULT_MOVE_DELAY_SECONDS * 1.2,
           onMove: (state, from, to, dir) => {
             if (to?.data?.slope && !state.player.isSliding) {
               state.player.isSliding = true;
@@ -12726,7 +12713,7 @@
           fogDensity: 0.06,
         },
         rules: {
-          moveDelay: 0.16,
+          moveDelay: DEFAULT_MOVE_DELAY_SECONDS * 1.07,
           update: (state, delta) => {
             state.railTimer += delta;
             if (state.railTimer >= 1.4) {
@@ -12769,7 +12756,7 @@
           fogDensity: 0.088,
         },
         rules: {
-          moveDelay: 0.28,
+          moveDelay: DEFAULT_MOVE_DELAY_SECONDS * 1.87,
           onMove: (state) => {
             state.player.tarStacks = Math.min((state.player.tarStacks || 0) + 1, 4);
             state.player.tarSlowTimer = 2.4;
@@ -12803,7 +12790,7 @@
           fogDensity: 0.045,
         },
         rules: {
-          moveDelay: 0.18,
+          moveDelay: DEFAULT_MOVE_DELAY_SECONDS * 1.2,
           onAction: (state, action) => {
             spawnMarbleEchoGhost();
             state.echoQueue.push({ at: state.elapsed + 5, action });
@@ -12847,7 +12834,7 @@
           fogDensity: 0.075,
         },
         rules: {
-          moveDelay: 0.14,
+          moveDelay: DEFAULT_MOVE_DELAY_SECONDS * 0.93,
           onMove: (state, from, to) => {
             if (!from) return;
             const tile = getTile(from.x, from.y);
@@ -12942,8 +12929,8 @@
       lootables: [],
       chests: [],
       lastMoveAt: 0,
-      moveDelay: 0.15,
-      baseMoveDelay: 0.15,
+      moveDelay: DEFAULT_MOVE_DELAY_SECONDS,
+      baseMoveDelay: DEFAULT_MOVE_DELAY_SECONDS,
       hooks: {
         onMove: [],
         onAction: [],
@@ -14634,7 +14621,7 @@
         state.dayCycle.waveCount = 0;
       }
       clearMarbleGhosts();
-      state.baseMoveDelay = dim.rules.moveDelay ?? 0.18;
+      state.baseMoveDelay = dim.rules.moveDelay ?? DEFAULT_MOVE_DELAY_SECONDS;
       state.moveDelay = state.baseMoveDelay;
       state.hooks.onMove = [];
       state.hooks.update = [];
@@ -15827,7 +15814,7 @@
     }
 
     function getMovementDelay(dx = 0, dy = 0) {
-      const baseDelay = state.baseMoveDelay ?? 0.18;
+      const baseDelay = state.baseMoveDelay ?? DEFAULT_MOVE_DELAY_SECONDS;
       const slowPenalty = (state.player?.tarStacks || 0) * 0.04;
       if (!state?.player) {
         return baseDelay + slowPenalty;
@@ -17110,8 +17097,12 @@
       if (!state?.pressedKeys) {
         state.pressedKeys = new Set();
       }
+      const wasPressed = state.pressedKeys.has(direction);
       if (pressed) {
         state.pressedKeys.add(direction);
+        if (direction === 'forward' && !wasPressed && typeof console !== 'undefined') {
+          console.log('Moving forward');
+        }
       } else {
         state.pressedKeys.delete(direction);
       }
