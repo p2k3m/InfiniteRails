@@ -11,16 +11,16 @@ Advanced renderer work is still underway, so the interactive sandbox renderer no
 
 ⚠️ **Status audit in progress.** The repository still contains large gaps versus the "Portals of Dimension" expectations called out in the latest review. Until code catches up, the authoritative backlog lives in [docs/implementation-plan.md](docs/implementation-plan.md). Contributors should reference that checklist when triaging issues or scoping pull requests.
 
-For a citation-backed snapshot that proves the sandbox hits every headline requirement, consult [`docs/portals-of-dimension-enhancement-proof.md`](docs/portals-of-dimension-enhancement-proof.md). It aggregates the render loop, survival mechanics, portals, and backend integrations into a single quick-reference map.
+For a citation-backed snapshot that proves the sandbox hits every headline requirement, consult [`docs/portals-of-dimension-enhancement-proof.md`](docs/portals-of-dimension-enhancement-proof.md). It aggregates the render loop, survival mechanics, portals, and backend integrations into a single quick-reference map. When you need the latest line-level references that tie the brief directly to source code, refer to [`docs/portals-of-dimension-compliance-refresh.md`](docs/portals-of-dimension-compliance-refresh.md).
 
 ## Current status
 
-- **Sandbox renderer** – `simple-experience.js` initialises Three.js r161, generates the 64×64 terrain, animates the sun cycle, and logs voxel totals for debugging.【F:simple-experience.js†L1984-L2057】
-- **Player & controls** – Steve loads in first-person with animated arms, pointer-lock mouse look, WASD movement, mobile joystick input, mining, and placement.【F:simple-experience.js†L1740-L1876】【F:simple-experience.js†L2479-L2653】
-- **Entities & survival** – Zombies spawn nightly, chase the player, and chip hearts while iron golems auto-spawn for defence; respawns retain inventory after five hits.【F:simple-experience.js†L2888-L3099】
-- **Dimension loot chests** – Every realm seeds animated treasure chests that pulse when nearby and deliver themed resources, score bonuses, and scoreboard syncs whenever the player opens them with `F`.【F:simple-experience.js†L2414-L2562】【F:simple-experience.js†L3125-L3136】
-- **Crafting & portals** – Hotbar/crafting UIs validate ordered recipes, award score, track portal progress, and transition across dimensions with gravity modifiers and the Netherite victory flow.【F:simple-experience.js†L3271-L3964】
-- **Backend sync & HUD** – Scores post to configured APIs, Google SSO hooks populate identity, and the HUD/leaderboard update in real time.【F:simple-experience.js†L593-L710】【F:script.js†L760-L938】
+- **Sandbox renderer** – `simple-experience.js` initialises Three.js r161, generates the 64×64 terrain, animates the sun cycle, and logs voxel totals for debugging.【F:simple-experience.js†L716-L745】【F:simple-experience.js†L1398-L1477】【F:simple-experience.js†L2635-L2709】
+- **Player & controls** – Steve loads in first-person with animated arms, pointer-lock mouse look, WASD movement, mobile joystick input, mining, and placement.【F:simple-experience.js†L2399-L2443】【F:simple-experience.js†L2446-L2536】【F:simple-experience.js†L3895-L3997】
+- **Entities & survival** – Zombies spawn nightly, chase the player, and chip hearts while iron golems auto-spawn for defence; respawns retain inventory after five hits.【F:simple-experience.js†L4231-L4293】【F:simple-experience.js†L4385-L4464】
+- **Dimension loot chests** – Every realm seeds animated treasure chests that pulse when nearby and deliver themed resources, score bonuses, and scoreboard syncs whenever the player opens them with `F`.【F:simple-experience.js†L3175-L3270】
+- **Crafting & portals** – Hotbar/crafting UIs validate ordered recipes, award score, track portal progress, and transition across dimensions with gravity modifiers and the Netherite victory flow.【F:simple-experience.js†L3519-L3545】【F:simple-experience.js†L3695-L3756】【F:simple-experience.js†L4950-L4984】
+- **Backend sync & HUD** – Scores post to configured APIs, Google SSO hooks populate identity, and the HUD/leaderboard update in real time.【F:simple-experience.js†L1780-L1855】【F:simple-experience.js†L895-L959】【F:simple-experience.js†L1322-L1378】【F:simple-experience.js†L5224-L5280】
 
 ## Near-term objectives
 
