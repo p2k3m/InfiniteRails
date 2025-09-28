@@ -2062,38 +2062,96 @@
         };
       }
       const available = new Set(Object.keys(samples));
+      const aliasSource = scope?.INFINITE_RAILS_AUDIO_ALIASES || null;
+      const aliasMap = new Map();
+      if (aliasSource && typeof aliasSource === 'object') {
+        Object.entries(aliasSource).forEach(([name, value]) => {
+          if (!name) return;
+          const entries = Array.isArray(value) ? value : [value];
+          const filtered = entries
+            .map((item) => (typeof item === 'string' ? item.trim() : ''))
+            .filter(Boolean);
+          if (filtered.length) {
+            aliasMap.set(name, filtered);
+          }
+        });
+      }
+      const aliasCache = new Map();
+      const aliasNotified = new Set();
+      const resolveAudioName = (name) => {
+        if (!name) return null;
+        if (available.has(name)) {
+          return name;
+        }
+        if (aliasCache.has(name)) {
+          return aliasCache.get(name);
+        }
+        const candidates = aliasMap.get(name);
+        if (!candidates || !candidates.length) {
+          aliasCache.set(name, null);
+          return null;
+        }
+        const resolved = candidates.find((candidate) => available.has(candidate)) || null;
+        aliasCache.set(name, resolved);
+        return resolved;
+      };
       const cache = new Map();
+      const playInternal = (requestedName, resolvedName, options = {}) => {
+        if (!resolvedName || !samples[resolvedName]) {
+          return;
+        }
+        let howl = cache.get(resolvedName);
+        if (!howl) {
+          howl = new HowlCtor({
+            src: [`data:audio/wav;base64,${samples[resolvedName]}`],
+            volume: options.volume ?? 1,
+            preload: true,
+          });
+          cache.set(resolvedName, howl);
+        }
+        if (options.volume !== undefined && typeof howl.volume === 'function') {
+          howl.volume(options.volume);
+        }
+        if (options.rate !== undefined && typeof howl.rate === 'function') {
+          howl.rate(options.rate);
+        }
+        if (options.loop !== undefined && typeof howl.loop === 'function') {
+          howl.loop(Boolean(options.loop));
+        }
+        howl.play();
+        if (
+          requestedName &&
+          requestedName !== resolvedName &&
+          !aliasNotified.has(requestedName) &&
+          typeof console !== 'undefined' &&
+          typeof console.debug === 'function'
+        ) {
+          console.debug(
+            `Audio sample "${requestedName}" unavailable — falling back to "${resolvedName}".`,
+          );
+          aliasNotified.add(requestedName);
+        }
+      };
       const controller = {
         has(name) {
-          return available.has(name);
+          return Boolean(resolveAudioName(name));
         },
         play(name, options = {}) {
-          if (!available.has(name)) return;
-          let howl = cache.get(name);
-          if (!howl) {
-            howl = new HowlCtor({
-              src: [`data:audio/wav;base64,${samples[name]}`],
-              volume: options.volume ?? 1,
-              preload: true,
-            });
-            cache.set(name, howl);
-          }
-          if (options.volume !== undefined && typeof howl.volume === 'function') {
-            howl.volume(options.volume);
-          }
-          if (options.rate !== undefined && typeof howl.rate === 'function') {
-            howl.rate(options.rate);
-          }
-          if (options.loop !== undefined && typeof howl.loop === 'function') {
-            howl.loop(Boolean(options.loop));
-          }
-          howl.play();
+          const resolved = resolveAudioName(name);
+          if (!resolved) return;
+          playInternal(name, resolved, options);
         },
         playRandom(names = [], options = {}) {
-          const pool = names.filter((name) => available.has(name));
+          const pool = [];
+          names.forEach((name) => {
+            const resolved = resolveAudioName(name);
+            if (resolved) {
+              pool.push({ requested: name, resolved });
+            }
+          });
           if (!pool.length) return;
           const choice = pool[Math.floor(Math.random() * pool.length)];
-          controller.play(choice, options);
+          playInternal(choice.requested, choice.resolved, options);
         },
         stopAll() {
           cache.forEach((howl) => howl.stop?.());
@@ -2102,6 +2160,10 @@
           if (scope?.Howler?.volume) {
             scope.Howler.volume(volume);
           }
+        },
+        _resolve(name) {
+          // Exposed for debugging and automated tests.
+          return resolveAudioName(name);
         },
       };
       return controller;
