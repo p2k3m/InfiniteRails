@@ -460,6 +460,10 @@
       this.lastScoreboardFetch = 0;
       this.hotbarEl = this.ui.hotbarEl || null;
       this.playerHintEl = this.ui.playerHintEl || null;
+      this.pointerHintEl = this.ui.pointerHintEl || null;
+      this.pointerHintActive = false;
+      this.pointerHintHideTimer = null;
+      this.pointerHintLastMessage = '';
       this.craftingModal = this.ui.craftingModal || null;
       this.craftSequenceEl = this.ui.craftSequenceEl || null;
       this.craftingInventoryEl = this.ui.craftingInventoryEl || null;
@@ -697,6 +701,7 @@
       this.evaluateBossChallenge();
       this.bindEvents();
       this.initializeMobileControls();
+      this.updatePointerHintForInputMode();
       this.updateHud();
       this.refreshCraftingUi();
       this.hideIntro();
@@ -775,6 +780,77 @@
         briefing.hidden = true;
         this.canvas.focus({ preventScroll: true });
       }, duration);
+    }
+
+    showPointerHint(message) {
+      if (!this.pointerHintEl) return;
+      if (this.detectTouchPreferred()) {
+        this.hidePointerHint(true);
+        return;
+      }
+      const text =
+        (typeof message === 'string' && message.trim()) ||
+        'Click the viewport to capture your mouse and look around.';
+      if (this.pointerHintEl.textContent !== text) {
+        this.pointerHintEl.textContent = text;
+      }
+      this.pointerHintEl.hidden = false;
+      this.pointerHintEl.setAttribute('aria-hidden', 'false');
+      // Force a reflow so the transition triggers reliably when toggling classes quickly.
+      void this.pointerHintEl.offsetWidth;
+      this.pointerHintEl.classList.add('is-visible');
+      this.pointerHintActive = true;
+      this.pointerHintLastMessage = text;
+      if (this.pointerHintHideTimer) {
+        clearTimeout(this.pointerHintHideTimer);
+        this.pointerHintHideTimer = null;
+      }
+    }
+
+    hidePointerHint(immediate = false) {
+      if (!this.pointerHintEl) return;
+      if (!this.pointerHintActive && !immediate) {
+        return;
+      }
+      const el = this.pointerHintEl;
+      const finalize = () => {
+        el.hidden = true;
+        el.removeEventListener('transitionend', finalize);
+        this.pointerHintLastMessage = '';
+      };
+      el.setAttribute('aria-hidden', 'true');
+      el.classList.remove('is-visible');
+      this.pointerHintActive = false;
+      if (this.pointerHintHideTimer) {
+        clearTimeout(this.pointerHintHideTimer);
+        this.pointerHintHideTimer = null;
+      }
+      if (immediate) {
+        el.hidden = true;
+        this.pointerHintLastMessage = '';
+        return;
+      }
+      el.addEventListener('transitionend', finalize, { once: true });
+      this.pointerHintHideTimer = setTimeout(finalize, 340);
+    }
+
+    updatePointerHintForInputMode(message) {
+      if (!this.pointerHintEl) return;
+      if (this.detectTouchPreferred()) {
+        this.hidePointerHint(true);
+        return;
+      }
+      if (document.pointerLockElement === this.canvas) {
+        this.hidePointerHint();
+        this.pointerHintLastMessage = '';
+        return;
+      }
+      const override = typeof message === 'string' ? message : null;
+      if (!override && this.pointerHintActive && this.pointerHintLastMessage) {
+        // Avoid re-triggering the animation if the hint is already visible with the same text.
+        return;
+      }
+      this.showPointerHint(override || this.pointerHintLastMessage || undefined);
     }
 
     initializeScoreboardUi() {
@@ -1109,6 +1185,7 @@
         this.animationFrame = null;
       }
       this.unbindEvents();
+      this.hidePointerHint(true);
     }
 
     setupScene() {
@@ -1704,8 +1781,10 @@
       controls.setAttribute('aria-hidden', active ? 'false' : 'true');
       controls.dataset.active = active ? 'true' : 'false';
       if (!active) {
+        this.updatePointerHintForInputMode();
         return;
       }
+      this.hidePointerHint(true);
       const blockDefault = (event) => event.preventDefault();
       controls.addEventListener('contextmenu', blockDefault);
       this.mobileControlDisposers.push(() => controls.removeEventListener('contextmenu', blockDefault));
@@ -1813,6 +1892,7 @@
       if (this.virtualJoystickEl) {
         this.virtualJoystickEl.setAttribute('aria-hidden', 'true');
       }
+      this.updatePointerHintForInputMode();
     }
 
     resetJoystick() {
@@ -3587,10 +3667,14 @@
 
     handlePointerLockChange() {
       this.pointerLocked = document.pointerLockElement === this.canvas;
+      this.updatePointerHintForInputMode();
     }
 
     handlePointerLockError() {
       this.pointerLocked = false;
+      this.updatePointerHintForInputMode(
+        'Pointer lock was blocked. Allow mouse capture in your browser settings.'
+      );
     }
 
     handleMouseMove(event) {
@@ -3668,6 +3752,7 @@
         this.isTouchPreferred = touchPreference;
         this.initializeMobileControls();
       }
+      this.updatePointerHintForInputMode();
     }
 
     handleMouseDown(event) {

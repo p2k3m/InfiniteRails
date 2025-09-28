@@ -468,6 +468,7 @@
     const closeSettingsButton = document.getElementById('closeSettings');
     const subtitleOverlay = document.getElementById('subtitleOverlay');
     const crosshairEl = document.getElementById('crosshair');
+    const pointerHintEl = document.getElementById('pointerHint');
     const handOverlayEl = document.getElementById('handOverlay');
     const handOverlayLabel = document.getElementById('handOverlayLabel');
     const handOverlayIcon = document.getElementById('handOverlayIcon');
@@ -1233,6 +1234,7 @@
             inventoryOverflowEl,
             closeInventoryButton,
             openInventoryButtons: [toggleExtendedBtn].filter(Boolean),
+            pointerHintEl,
           },
         });
       } catch (error) {
