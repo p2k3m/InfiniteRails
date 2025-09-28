@@ -24,8 +24,9 @@ This document maps the requested experience requirements to concrete implementat
 - When the Netherite gauntlet is cleared the dimension briefing converts into a victory summary that surfaces the run score, leaderboard rank (when available), and a replay button so players can jump back in immediately.【F:simple-experience.js†L4058-L4098】
 
 ## Backend Synchronisation and Scoreboard
-- Scores sync to the configured API using `fetch`, while the leaderboard modal polls and renders ranked runs. Player identity updates feed location and Google account data into score submissions.【F:simple-experience.js†L593-L710】【F:simple-experience.js†L1176-L1221】【F:script.js†L760-L938】
-- Score merges also power the in-world overlays: the victory state shows your live rank, while the portal progress HUD and hint system reference the latest sync results to keep explorers informed.【F:simple-experience.js†L4058-L4098】【F:simple-experience.js†L4040-L4089】
+- Scores sync to the configured API using `fetch`, while the leaderboard modal polls and renders ranked runs. Player identity updates feed location and Google account data into score submissions.【F:simple-experience.js†L734-L817】【F:simple-experience.js†L985-L1039】【F:simple-experience.js†L1335-L1388】【F:script.js†L760-L938】
+- Leaderboard rows highlight the most recent unlocked dimension alongside the completion ratio so explorers can quickly read each run's multiverse progress.【F:simple-experience.js†L900-L955】
+- Score merges also power the in-world overlays: the victory state shows your live rank, while the portal progress HUD and hint system reference the latest sync results to keep explorers informed.【F:simple-experience.js†L4480-L4520】
 
 ## Performance and Polish Considerations
 - Delta-based animation pacing, chunk-level frustum culling, and cached GLTF assets keep the experience close to the 60 FPS target.【F:simple-experience.js†L1984-L2059】【F:simple-experience.js†L2850-L3055】
