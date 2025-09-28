@@ -1,107 +1,101 @@
 # Infinite Rails: Portals of Dimension — Modernisation Plan
 
-This document captures the comprehensive feature backlog required to deliver the
-experience described in the "Portals of Dimension" specification.  It bridges
-the current repository state (static HUD with limited interactivity) and the
-expected Minecraft-inspired prototype (fully interactive voxel world running at
-60 FPS).
+The sandbox renderer that ships in `simple-experience.js` now satisfies the
+feature brief that originally lived in this backlog. It boots a fully interactive
+voxel island with immersive lighting, entities, crafting, portals, and backend
+sync so reviewers can play the intended Minecraft-inspired loop today.【F:simple-experience.js†L1417-L1496】【F:simple-experience.js†L2911-L2985】【F:simple-experience.js†L4339-L4359】【F:simple-experience.js†L4500-L4595】【F:simple-experience.js†L5250-L5334】
 
-The list is grouped by delivery streams.  Each stream has actionable tasks that
-can be picked up individually while still converging on the overall goal.
+Because the sandbox has reached parity with the specification, this plan now
+tracks the remaining work required to bring the experimental “advanced” renderer
+up to the same standard while hardening long-term tooling.
 
----
+## Status snapshot
 
-## 1. Rendering & World Simulation
+- **Rendering & world simulation** – The sandbox initialises its own Three.js
+  pipeline, builds a 64×64 floating island with voxel materials, and keeps a
+  600-second day/night orbit in sync with the HUD.【F:simple-experience.js†L1417-L1496】【F:simple-experience.js†L2911-L2985】【F:simple-experience.js†L4531-L4555】
+- **Player, entities, and combat** – First-person controls, zombies, iron
+  golems, and health management are live, including respawns after five hits and
+  nightly defence behaviour.【F:simple-experience.js†L4195-L4315】【F:simple-experience.js†L4565-L4758】
+- **Crafting, progression, and portals** – Drag-to-sequence crafting, recipe
+  unlocks, portal ignition, and dimension advancement reward score and persist
+  progress between sessions.【F:simple-experience.js†L5250-L5334】【F:simple-experience.js†L3795-L3821】
+- **Backend integration & HUD** – Score sync, leaderboard polling, Google
+  identity state, and responsive HUD updates are wired into the live experience
+  with retries and offline fallbacks.【F:simple-experience.js†L914-L1004】【F:simple-experience.js†L1322-L1404】【F:simple-experience.js†L5529-L5553】
 
-* [ ] Wire a dedicated Three.js bootstrap that guarantees renderer creation,
-      camera initialisation, and continuous `requestAnimationFrame` updates even
-      before the user interacts with the UI.
-* [ ] Generate a 64×64 voxel island with height noise, textured grass/dirt
-      blocks, and procedurally laid rails.
-* [ ] Implement day/night lighting by orbiting a directional light and
-      adjusting a skybox gradient over a ten-minute cycle.
-* [ ] Introduce first-person camera constraints (no roll, clamped pitch) with
-      adjustable field-of-view for desktop/mobile.
+## Remaining advanced renderer backlog
 
-## 2. Character & Entity Systems
+### 1. Rendering & world simulation
 
-* [ ] Load Steve, zombie, golem, and arm meshes via `GLTFLoader`, including
-      animation mixers for idle/walk cycles and graceful fallbacks when assets
-      fail to load.
-* [ ] Implement a lightweight entity manager that updates AI actors (zombies
-      chasing, golems defending) and cleans up disposed meshes.
-* [ ] Add collision volumes so hostile entities deduct half a heart per
-      contact, trigger respawns after five hits, and animate knockback.
+- [ ] Port the sandbox scene bootstrap (camera, lighting, fog, renderer
+      configuration) into the advanced renderer path so players see the voxel
+      island regardless of mode.【F:simple-experience.js†L1417-L1496】
+- [ ] Mirror the voxel terrain generator (including rail placement and chunk
+      culling) so the advanced scene surfaces the same 64×64 island layout with
+      frustum-aware performance safeguards.【F:simple-experience.js†L2911-L2985】【F:simple-experience.js†L4500-L4522】
+- [ ] Recreate the ten-minute day/night cycle in the advanced loop and hook it to
+      the existing HUD daylight meter.【F:simple-experience.js†L4531-L4555】
 
-## 3. Player Controls & Interaction
+### 2. Character & entity systems
 
-* [ ] Bind WASD + mouse-look controls using Pointer Lock, with joystick support
-      on mobile breakpoints.
-* [ ] Create block mining/placement through raycasting, inventory updates, and
-      subtle camera feedback.
-* [ ] Implement sprinting, jumping, and gravity adjustments per dimension.
+- [ ] Integrate the sandbox’s player rig and animation mixer so the advanced
+      renderer keeps the same first-person Steve arms and idle loop.【F:simple-experience.js†L1438-L1493】
+- [ ] Bring across zombie and golem actors, including their spawn cadence,
+      pursuit/defence heuristics, and collision damage plumbing.【F:simple-experience.js†L4565-L4758】
+- [ ] Share the respawn flow (inventory snapshot + heart restoration) so defeats
+      behave consistently across both renderers.
 
-## 4. Crafting, Inventory, & Progression
+### 3. Player controls & interaction
 
-* [ ] Replace static crafting modal with drag-to-slot sequencing, validating
-      recipes such as `stick + stick + stone → pickaxe` and updating score.
-* [ ] Persist recipe unlocks via `localStorage` and surface them inside the
-      crafting UI.
-* [ ] Track dimension progression (Grassland → Netherite), unlocking new
-      islands, loot chests, and portal physics per realm.
-* [ ] Implement Netherite boss rails collapse sequence culminating in the
-      Eternal Ingot victory condition.
+- [ ] Adopt the pointer-lock WASD implementation from the sandbox, including
+      joystick/touch fallbacks, to eliminate the “no input response” reports in
+      advanced mode.【F:simple-experience.js†L4195-L4339】
+- [ ] Wire block mining/placement, rail snapping, and chest interaction so the
+      advanced renderer honours the same raycasting affordances.
+- [ ] Ensure tutorial overlays, pointer hints, and pause behaviour respond to the
+      same events regardless of renderer.
 
-## 5. Portals & Dimension Transfer
+### 4. Crafting, inventory, & progression
 
-* [ ] Detect 4×3 block frames, animate shader-driven portal surfaces, and fade
-      scenes during transitions to new dimensions.
-* [ ] Integrate custom gravity multipliers, block palettes, and spawn tables per
-      dimension.
+- [ ] Reuse the drag-to-sequence crafting UI and recipe validation pipeline so
+      advanced-mode players earn the same score bonuses and unlock persistence.【F:simple-experience.js†L5250-L5334】
+- [ ] Synchronise hotbar/inventory mutations between renderers to keep inventory
+      counts accurate after mining or crafting.
+- [ ] Implement the Netherite realm collapse and Eternal Ingot victory flow
+      inside the advanced renderer so both modes share the endgame beats.
 
-## 6. Backend & Persistence
+### 5. Portals & dimension transfer
 
-* [ ] Connect Google SSO (gapi) to obtain player identity, sync session
-      metadata, and gracefully degrade when offline.
-* [ ] POST score snapshots to the existing AWS Lambda API whenever dimensions
-      unlock or major recipes are crafted; poll the leaderboard every 45
-      seconds.
-* [ ] Store recipe unlocks and identity hints in DynamoDB via the provided API.
+- [ ] Lift the portal frame detection and ignition logic (including shader-driven
+      swirl material) into the advanced renderer to unblock dimension hopping.【F:simple-experience.js†L3795-L3821】
+- [ ] Apply dimension-specific physics (gravity multipliers, loot tables) to the
+      advanced mode just as the sandbox currently does when `advanceDimension()`
+      is triggered.
 
-## 7. Audio & Polish
+### 6. Backend & persistence
 
-* [ ] Load looping ambience plus on-demand Howler.js sound effects for mining,
-      zombie groans, portal activation, and UI confirmations.
-* [ ] Animate HUD updates (hearts, score ticker, dimension panel) with CSS
-      transitions and aria-live messaging for accessibility.
-* [ ] Add responsive layout tweaks, including a virtual joystick and touch
-      prompts on mobile.
-* [ ] Document an asset optimisation pipeline (texture compression, GLTF Draco)
-      to keep the first meaningful paint under three seconds.
+- [ ] Share the scoreboard sync scheduler and Google identity plumbing between
+      renderers so score posts, leaderboard refreshes, and location capture work
+      no matter which mode initialises first.【F:simple-experience.js†L914-L1004】【F:simple-experience.js†L1322-L1404】
+- [ ] Extract the localStorage persistence helpers (identity snapshots, recipe
+      unlocks) into reusable modules consumed by both renderers.
 
-## 8. Validation & Tooling
+### 7. Audio & polish
 
-* [ ] Extend `docs/validation-matrix.md` with headless browser scenarios that
-      cover controls, crafting, portals, and victory flow.
-* [ ] Update CI workflows to lint game scripts, run smoke tests, and upload
-      compressed assets during deployments.
+- [ ] Wire Howler-backed ambience and SFX playback into the advanced renderer so
+      mining, zombie, and portal cues remain audible.【F:simple-experience.js†L2130-L2200】
+- [ ] Sync HUD animation hooks (score ticker, heart pulses, portal progress bar)
+      and ensure reduced-motion preferences are respected in both modes.【F:simple-experience.js†L5529-L5553】
+- [ ] Double-check responsive breakpoints and joystick overlays render in the
+      advanced mode for mobile players.【F:simple-experience.js†L4339-L4359】
 
----
+### 8. Validation & tooling
 
-### Execution Guidance for Coding Assistants
-
-Each stream can be tackled by preparing targeted prompts for automation tools
-like GitHub Copilot or ChatGPT Code Interpreter.  When delegating to a coding
-agent, include:
-
-1. **Context extract:** Short summary of relevant source files (e.g. sections of
-   `script.js`, `simple-experience.js`).
-2. **Specific acceptance criteria:** FPS targets, console log checkpoints, API
-   endpoints that must be hit.
-3. **Validation plan:** Commands to run locally (`npm run lint`, `npm test`),
-   manual steps ("press W and confirm `Moving forward` log"), or telemetry
-   expectation ("POST /scores with 200 response").
-
-Maintaining this structure ensures reproducibility and accelerates review
-cycles, while keeping parity with the ambitious specification supplied by the
-product brief.
+- [ ] Extend the Playwright smoke tests so they exercise both sandbox and
+      advanced renderers, covering pointer lock, crafting, portals, and victory
+      flow transitions.
+- [ ] Update CI workflows to run a shared lint/test suite for the renderer logic
+      and capture FPS/bundle size telemetry as part of regression testing.
+- [ ] Document parity checkpoints (e.g., screenshot diffs, console logs) required
+      before flipping the default mode back to the advanced renderer.
