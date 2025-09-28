@@ -1,96 +1,75 @@
-# Infinite Rails Enhancement Roadmap
+# Infinite Rails – Enhancement Roadmap
 
-This document captures the comprehensive feature and polish requests that
-accompanied the "Comprehensive Analysis and Enhancement Specifications for
-Infinite Rails: Portals of Dimension" brief. The checklist is grouped by the
-major systems discussed in the brief so that each improvement can be tracked and
-implemented iteratively without losing sight of the overall vision. For teams
-using automated coding assistants, the verbatim task prompts from the brief are
-archived in [`coding-agent-prompts.md`](./coding-agent-prompts.md) so they can be
-shared directly with your tooling when a checklist item needs to be revisited.
+This document summarises the comprehensive changes that are required to transform the current Infinite Rails prototype into the Minecraft-inspired experience described in the latest design brief. Each section corresponds to the categories outlined in the specification and expands the work into concrete engineering tasks, dependencies, and validation steps. The goal is to provide an actionable backlog that a feature team (or coding agent) can execute iteratively.
 
-> **Status update (April 2024)** – The sandbox renderer now satisfies the
-> "Comprehensive Analysis and Enhancement Specifications" brief. The checklist
-> below tracks parity work for the advanced renderer and highlights polish tasks
-> that extend beyond the sandbox implementation.
+> **Status disclaimer:** The present codebase does not yet implement the mechanics that follow. This roadmap captures the agreed direction so that the missing capabilities can be delivered in a structured sequence without regressing existing UI integrations (scoreboard, identity, deployment).
 
-## Rendering & World Simulation
+## 1. Rendering and World Generation
 
-- [x] Initialise a Three.js-powered render loop using the bundled r161 build
-      and ensure it survives CDN failure (`simple-experience.js`).【F:simple-experience.js†L1984-L2057】
-- [x] Populate a 64×64 voxel island with lighting, skybox, and day/night cycle
-      via sandbox terrain generation and light animation.【F:simple-experience.js†L1984-L2057】【F:simple-experience.js†L2656-L2799】
-- [x] Deliver a delta-time driven loop that can sustain 60 FPS on mid-tier
-      devices by pacing updates with clock deltas and frustum culling.【F:simple-experience.js†L2656-L2799】
-- [ ] Port these systems into the advanced renderer path so both modes share the
-      same world simulation.
+- [ ] Introduce a dedicated `RenderingPipeline` module that encapsulates Three.js initialisation, renderer configuration, and resize handling.
+- [ ] Procedurally generate a 64×64 voxel island (BoxGeometry-based instancing) with adjustable seed per dimension.
+- [ ] Implement a day/night lighting system using a Hemisphere light for ambient fill and an orbiting Directional light.
+- [ ] Target a consistent 60 FPS render loop (`THREE.Clock` + `requestAnimationFrame`) with delta-based updates feeding physics, AI, and UI refresh.
 
-## Player Experience
+## 2. Player Presence and Animation
 
-- [x] Load and display the Steve GLTF model in first-person view with animated
-      arms and fallback assets.【F:simple-experience.js†L1740-L1876】
-- [x] Bind WASD + mouse look + mobile virtual joystick for locomotion and
-      pointer lock interactions.【F:simple-experience.js†L2641-L2760】
-- [x] Implement mining, block placement, and inventory updates using
-      raycasting.【F:simple-experience.js†L3300-L3392】【F:simple-experience.js†L3494-L3520】
-- [ ] Align the advanced renderer controls with the sandbox implementation and
-      add cinematic camera beats for boss encounters.
+- [ ] Load the Steve-inspired GLTF rig and attach the camera to the head bone for first-person rendering.
+- [ ] Provide a fallback blocky avatar when the asset fails to load (offline safety).
+- [ ] Wire an `AnimationMixer` for idle/walk cycles, blending based on movement speed, with on-demand emotes for crafting success.
 
-## Entities & Combat
+## 3. Input and Mobility
 
-- [x] Spawn zombies during the night cycle with chase AI and collision damage.【F:simple-experience.js†L3080-L3135】
-- [x] Spawn allied iron golems that defend the player and intercept zombies.【F:simple-experience.js†L3191-L3257】
-- [x] Deduct hearts on zombie contact and trigger respawn after five hits while
-      updating the HUD.【F:simple-experience.js†L3270-L3297】【F:simple-experience.js†L3897-L3970】
-- [ ] Extend advanced-mode enemy compositions (e.g., ranged mobs) and add
-      difficulty scaling hooks.
+- [ ] Desktop controls: pointer-lock mouse look (yaw only), WASD/Space movement with gravity-aware jumps, left/right click mining and block placement.
+- [ ] Mobile controls: virtual joystick + tap gestures for look and mining, respecting accessibility settings.
+- [ ] Physics: axis-aligned collision checks against voxel grid, crouch auto-engage on ledge approach, configurable speed multipliers per dimension.
 
-## Crafting & Progression
+## 4. Entities and Combat Loop
 
-- [x] Implement hotbar inventory and the crafting modal with ordered recipe
-      validation.【F:simple-experience.js†L3271-L3655】
-- [x] Award score for successful recipes and dimension unlocks with HUD updates
-      and backend sync.【F:simple-experience.js†L3330-L3392】【F:simple-experience.js†L3753-L3964】
-- [x] Build portal frames that open new dimensions with shader transitions and
-      realm-specific physics.【F:simple-experience.js†L2108-L2462】
-- [ ] Design additional late-game recipes and cosmetic unlock systems that sync
-      via DynamoDB.
+- [ ] Spawn zombies at night using the combat utilities grid pathfinder; update their AI to chase the player while avoiding void tiles.
+- [ ] Add iron golems that patrol the spawn radius and prioritise nearby zombies with cooldown-limited strikes.
+- [ ] Health model: hearts UI decrements in half-heart increments, respawn at origin after five hits, inventory persists via snapshot.
 
-## Backend, UI, and Polish
+## 5. Crafting and Inventory Systems
 
-- [x] Sync scores to the AWS backend and refresh the leaderboard modal when an
-      API base URL is provided.【F:simple-experience.js†L593-L710】
-- [x] Wire Google Sign-In to attribute runs, persist identity, and merge saved
-      progress.【F:script.js†L720-L938】
-- [x] Add responsive HUD feedback, tooltips, audio cues, and accessibility
-      toggles.【F:index.html†L66-L204】【F:simple-experience.js†L3972-L4140】
-- [ ] Build telemetry dashboards (FPS, latency) in the deployment workflow and
-      expose in-game diagnostics for QA.
+- [ ] Represent the hotbar and satchel as data structures synchronised with the HUD; provide drag-and-drop in the crafting modal.
+- [ ] Validate crafting sequences against recipe definitions (`crafting.js`), award score increments, and animate success confetti.
+- [ ] Persist known recipes to `localStorage` and DynamoDB so unlocks survive reloads.
 
-## QA & Deployment
+## 6. Portals, Dimensions, and Progression
 
-- [x] Document automated validation steps and smoke tests for the browser build
-      (see validation matrix and feature verification docs).【F:docs/validation-matrix.md†L1-L63】【F:docs/feature-verification.md†L1-L24】
-- [x] Ensure the deploy pipeline verifies assets, provisions infra, and reports
-      status in the summary.【F:.github/workflows/deploy.yml†L1-L160】【F:.github/workflows/deploy.yml†L161-L240】
-- [ ] Capture automated FPS traces in CI and add regression alerts for
-      performance cliffs.
+- [ ] Detect valid 4×3 portal frames, trigger shader-based portal surfaces, and transition scenes while preserving player orientation.
+- [ ] Generate unique biome parameters per dimension (gravity, rail curvature, loot tables) and track progression order.
+- [ ] Implement the Netherite dimension boss encounter with collapsing rails, Eternal Ingot pickup, and victory modal activation.
+
+## 7. Backend Integration
+
+- [ ] Connect game events to the AWS API layer: POST score updates, GET leaderboard, sync identity after Google SSO.
+- [ ] Handle offline mode gracefully with queued updates and exponential backoff retries.
+- [ ] Extend the Serverless deployment workflow to verify asset availability (textures, GLTF, SFX) prior to publishing.
+
+## 8. Audio, UI Polish, and Accessibility
+
+- [ ] Integrate Howler.js-backed SFX (mining, footsteps, zombie groans) with mute toggle in settings.
+- [ ] Provide tooltips and tutorial overlays that fade after onboarding, plus responsive layout adaptations for mobile.
+- [ ] Add a footer crediting "Made by Manu" and ensure all controls have ARIA labels/tooltips.
+
+## 9. Validation and Tooling
+
+- [ ] Expand `docs/validation-matrix.md` with automated browser-based smoke tests (movement, crafting, portal activation).
+- [ ] Profile the render loop using Chrome Tracing to ensure frame time stays under 16 ms on mid-tier hardware.
+- [ ] Update GitHub Actions to run linting, bundle verification, and asset compression checks before deployment.
 
 ---
 
-### Additional follow-ups
+### Suggested Execution Order
 
-- [ ] Continue iterating on the renderer until it matches the specifications in
-      the design brief.
-- [ ] Add automated regression for mobile virtual joystick gestures once the
-      controls exist.
-- [ ] Expand shader recovery tests around the portal material after portals are
-      implemented.
+1. Rendering pipeline + player controls (Sections 1–3)
+2. Core gameplay loop (Sections 4–6)
+3. Backend, audio, and polish (Sections 7–8)
+4. Testing and deployment automation (Section 9)
 
----
+Each milestone should be validated in-browser and accompanied by telemetry hooks so that gameplay metrics can be surfaced in DynamoDB-backed leaderboards.
 
-> **Note**
-> This roadmap is intentionally granular so that individual improvements can be
-> implemented and reviewed across multiple pull requests. Each checkbox should
-> be checked off once the corresponding feature is working in the playable
-> prototype.
+### Tracking
+
+Use GitHub Projects (or Linear) to convert each checkbox into tasks with acceptance criteria, linking back to this roadmap for traceability.
