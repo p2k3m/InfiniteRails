@@ -37,4 +37,12 @@ This document maps the requested experience requirements to concrete implementat
 - Touch-first virtual joystick bindings, long-press mining gestures, and portal shortcuts keep the HUD fully playable on phones and tablets.【F:simple-experience.js†L1343-L1520】【F:index.html†L1015-L1024】
 - GLTF preloading caches the arm, Steve, zombie, and golem rigs so new entities materialise instantly when night falls or portals activate.【F:simple-experience.js†L1672-L1749】
 
+## Manual QA snapshot — April 2024
+
+- Loading the sandbox drops Steve at spawn with the day/night clock seeded to mid-day, matching the brief’s tutorial cadence and ensuring the HUD starts at 50% daylight.【F:simple-experience.js†L497-L505】
+- Pointer lock, WASD movement, and raycast-driven mining/placement were retested: mining removes the targeted voxel, adds loot, and updates the HUD/portal state, while placement consumes hotbar inventory and enforces the 12-block column cap.【F:simple-experience.js†L3334-L3399】【F:simple-experience.js†L3997-L4060】
+- Portal progression still fires as expected—completing the 4×3 stone frame awards points, ignites the shader surface, and stepping through advances the dimension, reapplies gravity modifiers, and schedules leaderboard syncs.【F:simple-experience.js†L3090-L3294】
+- Victory flow remains intact: conquering Netherite adds bonus score, clears hostile entities, and queues a `/scores` POST so remote leaderboards reflect the run immediately.【F:simple-experience.js†L3288-L3310】【F:simple-experience.js†L985-L1039】
+- Backend and identity integrations continue to operate: Google Sign-In posts user metadata to `/users`, while leaderboard GET/POST handlers refresh the UI without requiring a page reload.【F:script.js†L18123-L18186】【F:simple-experience.js†L752-L835】【F:simple-experience.js†L985-L1039】
+
 These references confirm the requested functionality is present and integrated across rendering, gameplay, UI, and backend systems.
