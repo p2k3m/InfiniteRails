@@ -1,6 +1,6 @@
 # Portals of Dimension Compliance Map
 
-This document traces every requirement from the "Comprehensive Analysis and Enhancement Specifications for Infinite Rails: Portals of Dimension" brief to the shipped implementation. Use it as the canonical cross-reference when auditing future changes.
+This document traces every requirement from the "Comprehensive Analysis and Enhancement Specifications for Infinite Rails: Portals of Dimension" brief to the shipped implementation. Use it as the canonical cross-reference when auditing future changes. The December 2024 verification addendum in `docs/portals-of-dimension-spec-verification-2024-12.md` links each bullet to the underlying code for fast spot-checks during compliance reviews.
 
 ## 1. Initialization and Onboarding
 - **Procedural island + render loop** – `SimpleExperience.start()` creates the Three.js renderer, seeds the 64×64 terrain, and logs the voxel count, guaranteeing an immediately populated scene.【F:simple-experience.js†L186-L205】【F:simple-experience.js†L1984-L2062】

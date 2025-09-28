@@ -52,6 +52,7 @@ Use it as a quick reference when planning manual or automated regression passes.
 | Requirement ID | Validation Method | Success Criteria | Test Scenarios |
 | --- | --- | --- | --- |
 | All VIS / GM | End-to-end playthrough with Puppeteer WASD macro and interaction timings. | Interactions responsive; no freezes (WASD drive moves Steve exactly 1 unit per keypress). | Scenario: Craft, die, respawn—verify screens/animations. |
+| DOC-01 | Documentation audit referencing the December 2024 spec verification addendum. | Addendum cross-links every rendering, combat, crafting, portal, and backend pointer to its implementation with code citations. | Read `docs/portals-of-dimension-spec-verification-2024-12.md` and confirm each briefed system is accounted for. |
 
 ## Security and deployment
 
