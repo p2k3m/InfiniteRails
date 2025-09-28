@@ -36,6 +36,7 @@ behaviour quickly.
 
 ## 8. Testing and Validation
 - **Automated coverage** – Combat, crafting, portal logic, and scoreboard utilities are unit tested via `tests/*.test.js`; smoke/E2E flows run through `tests/e2e-check.js` and the manual verification suite documented in `docs/validation-matrix.md`.【F:tests/crafting.test.js†L1-L120】【F:tests/combat-utils.test.js†L1-L120】【F:tests/portal-mechanics.test.js†L1-L66】【F:docs/validation-matrix.md†L1-L120】
+- **Runtime debug controls** – `SimpleExperience.exposeDebugInterface()` publishes `forceNight`, `spawnZombieWave`, `completePortalFrame`, `ignitePortal`, and `advanceDimension` helpers so automated tests can validate night combat, portal ignition, and dimension travel deterministically.【F:simple-experience.js†L5118-L5155】
 
 > All gaps noted in earlier audits remain tracked in
 > `docs/portals-of-dimension-plan.md` for future roadmap work.

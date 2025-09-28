@@ -64,6 +64,15 @@ async function run() {
       () => (window.__INFINITE_RAILS_DEBUG__?.getSnapshot?.()?.voxelColumns ?? 0) >= 4096,
       { timeout: 15000 },
     );
+    await page.evaluate(() => {
+      const debug = window.__INFINITE_RAILS_DEBUG__;
+      debug?.forceNight?.();
+      debug?.spawnZombieWave?.(3);
+    });
+    await page.waitForFunction(
+      () => (window.__INFINITE_RAILS_DEBUG__?.getSnapshot?.()?.zombieCount ?? 0) > 0,
+      { timeout: 10000 },
+    );
     const debugSnapshot = await page.evaluate(() =>
       window.__INFINITE_RAILS_DEBUG__?.getSnapshot ? window.__INFINITE_RAILS_DEBUG__.getSnapshot() : null,
     );
@@ -101,6 +110,25 @@ async function run() {
     if (!hudState.portalLabel) {
       throw new Error('Portal progress label did not populate.');
     }
+    if (!/Nightfall|Dusk/i.test(hudState.timeText)) {
+      throw new Error('Day/night indicator did not reflect forced night cycle.');
+    }
+    await page.evaluate(() => {
+      const debug = window.__INFINITE_RAILS_DEBUG__;
+      debug?.completePortalFrame?.();
+      debug?.ignitePortal?.();
+    });
+    await page.waitForFunction(
+      () => Boolean(window.__INFINITE_RAILS_DEBUG__?.getSnapshot?.()?.portalActivated),
+      { timeout: 8000 },
+    );
+    await page.evaluate(() => {
+      window.__INFINITE_RAILS_DEBUG__?.advanceDimension?.();
+    });
+    await page.waitForFunction(
+      () => (window.__INFINITE_RAILS_DEBUG__?.getSnapshot?.()?.dimensionIndex ?? 0) > 0,
+      { timeout: 10000 },
+    );
     const leaderboardRows = await page.evaluate(() =>
       Array.from(document.querySelectorAll('#scoreboardList tr')).filter((row) => row.textContent.trim().length > 0).length,
     );
@@ -115,6 +143,17 @@ async function run() {
     const dimensionLabels = /Origin|Rock|Stone|Tar|Marble|Netherite/i;
     if (!leaderboardSummaries.some((text) => dimensionLabels.test(text))) {
       throw new Error('Leaderboard rows did not include a dimension summary.');
+    }
+    const scoreHud = await page.evaluate(() => ({
+      total: Number.parseInt(document.querySelector('#scoreTotal')?.textContent ?? '0', 10),
+      recipes: Number.parseInt(document.querySelector('#scoreRecipes')?.textContent ?? '0', 10),
+      dimensions: Number.parseInt(document.querySelector('#scoreDimensions')?.textContent ?? '0', 10),
+    }));
+    if (!Number.isFinite(scoreHud.total) || scoreHud.total <= 0) {
+      throw new Error('Score HUD did not increment after portal activation.');
+    }
+    if (!Number.isFinite(scoreHud.dimensions) || scoreHud.dimensions < 1) {
+      throw new Error('Dimension counter did not reflect progression.');
     }
     if (!debugSnapshot.hudActive) {
       throw new Error('Debug snapshot indicates HUD inactive despite gameplay start.');

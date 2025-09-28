@@ -5122,6 +5122,11 @@
       scope.__INFINITE_RAILS_DEBUG__ = {
         experience: this,
         getSnapshot: () => this.getDebugSnapshot(),
+        forceNight: (seconds) => this.forceNightCycle(seconds),
+        spawnZombieWave: (count) => this.debugSpawnZombieWave(count),
+        completePortalFrame: () => this.debugCompletePortalFrame(),
+        ignitePortal: (tool) => this.debugIgnitePortal(tool),
+        advanceDimension: () => this.debugAdvanceDimension(),
       };
       try {
         scope.dispatchEvent(
@@ -5155,7 +5160,70 @@
         netheriteChallengeActive: Boolean(this.netheriteChallengeActive),
         netheriteCountdown: Math.max(0, Math.ceil(Math.max(0, this.netheriteCountdownSeconds - this.netheriteChallengeTimer))),
         eternalIngotCollected: Boolean(this.eternalIngotCollected),
+        daylight: this.daylightIntensity ?? 0,
       };
+    }
+
+    forceNightCycle(seconds = DAY_LENGTH_SECONDS * 0.75) {
+      if (!Number.isFinite(seconds)) {
+        seconds = DAY_LENGTH_SECONDS * 0.75;
+      }
+      this.elapsed = seconds % DAY_LENGTH_SECONDS;
+      this.updateDayNightCycle();
+      this.lastZombieSpawn = this.elapsed - ZOMBIE_SPAWN_INTERVAL - 0.1;
+      return this.daylightIntensity;
+    }
+
+    debugSpawnZombieWave(count = 1) {
+      const total = Math.max(1, Math.floor(count));
+      if (!this.isNight()) {
+        this.forceNightCycle();
+      }
+      let spawned = 0;
+      for (let i = 0; i < total; i += 1) {
+        if (this.zombies.length >= ZOMBIE_MAX_PER_DIMENSION) {
+          break;
+        }
+        this.spawnZombie();
+        spawned += 1;
+        this.elapsed += 0.05;
+      }
+      return spawned;
+    }
+
+    debugCompletePortalFrame() {
+      if (!this.portalFrameSlots?.size) {
+        this.resetPortalFrameState();
+      }
+      this.portalFrameSlots.forEach((slot) => {
+        slot.filled = true;
+      });
+      this.portalBlocksPlaced = this.portalFrameSlots.size;
+      this.portalFrameInteriorValid = true;
+      this.checkPortalActivation();
+      return this.portalReady;
+    }
+
+    debugIgnitePortal(tool = 'torch') {
+      if (!this.portalReady) {
+        this.debugCompletePortalFrame();
+      }
+      if (!this.portalActivated) {
+        this.ignitePortal(tool);
+      }
+      return this.portalActivated;
+    }
+
+    debugAdvanceDimension() {
+      const previousIndex = this.currentDimensionIndex;
+      if (!this.portalActivated) {
+        this.debugIgnitePortal();
+      }
+      if (!this.portalActivated) {
+        return false;
+      }
+      this.advanceDimension();
+      return this.currentDimensionIndex !== previousIndex;
     }
   }
 
