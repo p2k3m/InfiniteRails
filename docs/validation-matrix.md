@@ -57,3 +57,16 @@ Use it as a quick reference when planning manual or automated regression passes.
 | Requirement ID | Validation Method | Success Criteria | Test Scenarios |
 | --- | --- | --- | --- |
 | SEC-01 / DEP-01 | CI/CD workflow runs with security scans (`npm audit`, AWS GuardDuty); deployment verification automated via Puppeteer HTTPS ping. | • Deployments succeed (latest workflow green).<br>• No secrets are exposed.<br>• HTTPS is enforced and production URL reachable. | • Scenario: Push code, inspect the deployment URL, and verify secure access. |
+
+## Upcoming validation coverage (to be implemented)
+
+| Requirement ID | Validation Method | Success Criteria | Test Scenarios |
+| --- | --- | --- | --- |
+| VIS-04 | Automated screenshot comparison using Puppeteer golden images for the new voxel island. | Spawn island renders 4,096 voxels with <2% pixel deviation from baseline. | Launch experience, capture first frame after bootstrap, compare to golden. |
+| GM-06 | Pointer lock and mobile joystick integration tests. | WASD + pointer lock respond within 50 ms; mobile joystick reports normalized vectors. | Desktop: engage pointer lock and move forward; Mobile: drag joystick to move, confirm logs. |
+| GM-07 | Portal traversal and dimension physics differential testing. | Transition occurs <3 s, gravity modifiers applied per dimension, score increments by 5. | Build 4×3 frame, activate portal, walk through and measure timers/score. |
+| GM-08 | Netherite boss encounter puzzle automation. | Rail collapse timing matches design (first collapse at 5s, cadence 1.5s), Eternal Ingot collectible triggers victory modal. | Trigger boss fight, run scripted jumps to collect ingot, verify modal contents. |
+| MP-04 | API synchronization regression suite covering score POST/GET flows. | POST returns 200 with persisted score; GET reflects updated totals within 2s; localStorage mirrors identity. | Simulate Google SSO login, submit score, poll leaderboard for update. |
+| PERF-03 | Performance trace for asset streaming and frustum culling. | Asset streaming completes <3s, average FPS ≥60, <5 dropped frames over 10-minute session. | Load each dimension sequentially and record performance trace. |
+| AUD-02 | Howler.js audio mixdown verification. | Sound effects mix down to <0.5 dB variance between browsers; mute toggle responds instantly. | Trigger mining, zombie, and portal audio cues; toggle mute on/off. |
+

@@ -203,3 +203,11 @@ This repository ships with a GitHub Actions workflow that deploys the static sit
 4. The workflow automatically discovers the CloudFront distribution attached to the S3 origin, invalidates its cache, and exposes both the distribution ID and URL as job outputs. The URL is also written to the run summary for quick access.
 
 If no CloudFront distribution matches the S3 bucket, the workflow fails with instructions to create or tag one before redeploying.
+
+## Enhancement Roadmap
+
+The existing build focuses on the UI shell and backend connectivity. For an
+overview of the work required to align the experience with the design vision,
+review [`docs/enhancement-plan.md`](docs/enhancement-plan.md). It enumerates the
+rendering, gameplay, and backend milestones that need to be implemented to reach
+a fully interactive prototype.
