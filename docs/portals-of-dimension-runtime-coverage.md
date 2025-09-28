@@ -46,6 +46,13 @@ in the codebase each experience beat is fulfilled.
 * Day/night progression, health hearts, and portal progress bars are refreshed every frame by `updateHud()` and supporting
   helpers, matching the expected responsive UI. 【F:simple-experience.js†L3004-L3104】
 
-## 8. Remaining follow-ups
+## 8. Ambient audio and fallbacks
+* `SimpleExperience.createAudioController()` resolves gameplay cues such as `craftChime` and `zombieGroan` through the shared
+  alias table, ensuring mining, crafting, and combat sounds are available even when bespoke samples are missing from the offline
+  bundle. 【F:simple-experience.js†L2046-L2136】
+* `audio-aliases.js` stores the alias configuration on the global scope and exports it for tests so the fallback coverage stays
+  in sync with embedded samples. 【F:audio-aliases.js†L1-L20】
+
+## 9. Remaining follow-ups
 * Texture streaming currently expects assets to be present locally; CDN fallbacks should be audited before the next release.
 * Automated smoke coverage for `SimpleExperience.start()` is still pending and will be tracked in `tests/e2e-check.js`.
