@@ -91,6 +91,15 @@ async function run() {
     if (leaderboardRows === 0) {
       throw new Error('Leaderboard failed to populate with the current run.');
     }
+    const leaderboardSummaries = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('#scoreboardList tr'))
+        .map((row) => row.textContent.replace(/\s+/g, ' ').trim())
+        .filter((text) => text.length > 0),
+    );
+    const dimensionLabels = /Origin|Rock|Stone|Tar|Marble|Netherite/i;
+    if (!leaderboardSummaries.some((text) => dimensionLabels.test(text))) {
+      throw new Error('Leaderboard rows did not include a dimension summary.');
+    }
     if (!debugSnapshot.hudActive) {
       throw new Error('Debug snapshot indicates HUD inactive despite gameplay start.');
     }
