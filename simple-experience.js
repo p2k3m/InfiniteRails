@@ -244,6 +244,7 @@
     stick: { label: 'Stick', icon: '🪵', placeable: false },
     'stone-pickaxe': { label: 'Stone Pickaxe', icon: '⛏️', placeable: false, equipment: true },
     'portal-charge': { label: 'Portal Charge', icon: '🌀', placeable: false },
+    'eternal-ingot': { label: 'Eternal Ingot', icon: '🔥', placeable: false },
   };
   const DIMENSION_THEME = [
     {
@@ -527,6 +528,22 @@
       this.portalFrameRequiredCount = PORTAL_BLOCK_REQUIREMENT;
       this.portalFrameInteriorValid = false;
       this.portalHiddenInterior = [];
+      this.challengeGroup = null;
+      this.railSegments = [];
+      this.crumblingRails = [];
+      this.netheriteChallengePlanned = false;
+      this.netheriteChallengeActive = false;
+      this.netheriteChallengeTimer = 0;
+      this.netheriteCollapseInterval = 3.5;
+      this.netheriteNextCollapse = 0;
+      this.netheriteCollapseIndex = 0;
+      this.netheriteCountdownSeconds = 45;
+      this.netheriteCountdownDisplay = Infinity;
+      this.netheriteFailureAnnounced = false;
+      this.eternalIngot = null;
+      this.eternalIngotCollected = false;
+      this.eternalIngotSpin = 0;
+      this.eternalIngotBaseY = 0;
       this.terrainChunkSize = 8;
       this.terrainChunkGroups = [];
       this.terrainChunkMap = new Map();
@@ -642,6 +659,7 @@
       this.spawnDimensionChests();
       this.refreshPortalState();
       this.positionPlayer();
+      this.evaluateBossChallenge();
       this.bindEvents();
       this.initializeMobileControls();
       this.updateHud();
@@ -878,6 +896,7 @@
         device: this.deviceLabel,
         updatedAt: new Date().toISOString(),
         reason,
+        eternalIngot: Boolean(this.eternalIngotCollected),
       };
     }
 
@@ -1112,12 +1131,14 @@
       this.zombieGroup = new THREE.Group();
       this.golemGroup = new THREE.Group();
       this.chestGroup = new THREE.Group();
+      this.challengeGroup = new THREE.Group();
       this.scene.add(this.terrainGroup);
       this.scene.add(this.railsGroup);
       this.scene.add(this.portalGroup);
       this.scene.add(this.zombieGroup);
       this.scene.add(this.golemGroup);
       this.scene.add(this.chestGroup);
+      this.scene.add(this.challengeGroup);
       this.createFirstPersonHands();
       this.loadPlayerCharacter().catch((error) => {
         console.warn('Player model failed to load; continuing with primitive hands.', error);
@@ -2118,6 +2139,10 @@
       this.dimensionSettings = theme;
       this.currentSpeed = PLAYER_BASE_SPEED * (theme.speedMultiplier ?? 1);
       this.gravityScale = theme.gravity ?? 1;
+      this.netheriteChallengePlanned = theme.id === 'netherite';
+      if (!this.netheriteChallengePlanned) {
+        this.resetNetheriteChallenge();
+      }
 
       const { palette } = theme;
       if (palette?.grass) this.materials.grass.color.set(palette.grass);
@@ -2346,6 +2371,7 @@
     buildRails() {
       const THREE = this.THREE;
       this.railsGroup.clear();
+      this.railSegments = [];
       const segments = 22;
       const radius = WORLD_SIZE * 0.18;
       for (let i = 0; i < segments; i += 1) {
@@ -2361,8 +2387,273 @@
         mesh.rotation.y = angle * 0.6;
         mesh.matrixAutoUpdate = false;
         mesh.updateMatrix();
+        mesh.visible = true;
+        mesh.scale.set(1, 1, 1);
+        mesh.userData = {
+          type: 'rail-segment',
+          baseY: mesh.position.y,
+          collapseState: 'intact',
+          collapseTimer: 0,
+          collapseDuration: 2.6,
+          baseMatrixAutoUpdate: false,
+        };
         this.railsGroup.add(mesh);
+        this.railSegments.push(mesh);
       }
+    }
+
+    evaluateBossChallenge() {
+      if (this.victoryAchieved) {
+        this.resetNetheriteChallenge();
+        return;
+      }
+      if (this.netheriteChallengePlanned && this.railSegments.length) {
+        if (!this.netheriteChallengeActive) {
+          this.startNetheriteChallenge();
+        }
+      } else if (!this.netheriteChallengePlanned) {
+        this.resetNetheriteChallenge();
+      }
+    }
+
+    resetNetheriteChallenge() {
+      this.netheriteChallengeActive = false;
+      this.netheriteChallengeTimer = 0;
+      this.netheriteNextCollapse = 0;
+      this.netheriteCollapseIndex = 0;
+      this.netheriteCountdownDisplay = Infinity;
+      this.netheriteFailureAnnounced = false;
+      this.crumblingRails = [];
+      if (Array.isArray(this.railSegments)) {
+        this.railSegments.forEach((segment) => {
+          if (!segment) return;
+          if (segment.userData) {
+            segment.userData.collapseState = 'intact';
+            segment.userData.collapseTimer = 0;
+          }
+          if (segment.scale?.set) {
+            segment.scale.set(1, 1, 1);
+          }
+          if (segment.position && segment.userData && Number.isFinite(segment.userData.baseY)) {
+            segment.position.y = segment.userData.baseY;
+          }
+          if (segment.updateMatrix) {
+            segment.updateMatrix();
+          }
+          segment.visible = true;
+          segment.matrixAutoUpdate = false;
+        });
+      }
+      if (this.eternalIngot?.mesh) {
+        this.challengeGroup?.remove(this.eternalIngot.mesh);
+        disposeObject3D(this.eternalIngot.mesh);
+      }
+      if (this.eternalIngot?.light) {
+        this.challengeGroup?.remove(this.eternalIngot.light);
+      }
+      this.eternalIngot = null;
+      this.eternalIngotSpin = 0;
+      if (this.started) {
+        this.updatePortalProgress();
+        this.updateDimensionInfoPanel();
+      }
+    }
+
+    startNetheriteChallenge() {
+      if (!this.netheriteChallengePlanned || this.victoryAchieved) {
+        return;
+      }
+      if (!Array.isArray(this.railSegments) || !this.railSegments.length) {
+        this.netheriteChallengeActive = false;
+        return;
+      }
+      this.resetNetheriteChallenge();
+      this.netheriteChallengeActive = true;
+      this.netheriteChallengeTimer = 0;
+      this.netheriteCollapseIndex = 0;
+      this.netheriteNextCollapse = 6;
+      this.netheriteCountdownSeconds = 45;
+      this.netheriteCountdownDisplay = Infinity;
+      this.netheriteFailureAnnounced = false;
+      if (!this.victoryAchieved) {
+        this.eternalIngotCollected = false;
+      }
+      this.spawnEternalIngot();
+      this.showHint('Rails destabilising — reach the Eternal Ingot!');
+      this.scheduleScoreSync('netherite-challenge');
+      if (this.started) {
+        this.updatePortalProgress();
+        this.updateDimensionInfoPanel();
+      }
+    }
+
+    spawnEternalIngot() {
+      const THREE = this.THREE;
+      if (!THREE || !this.challengeGroup) return;
+      if (this.eternalIngot?.mesh) {
+        this.challengeGroup.remove(this.eternalIngot.mesh);
+        disposeObject3D(this.eternalIngot.mesh);
+      }
+      if (this.eternalIngot?.light) {
+        this.challengeGroup.remove(this.eternalIngot.light);
+      }
+      const anchor = this.railSegments?.[this.railSegments.length - 1] || null;
+      const base = anchor?.position?.clone?.() || new THREE.Vector3(0, 0, -WORLD_SIZE * 0.55);
+      if (!anchor) {
+        base.y = this.sampleGroundHeight(base.x, base.z) + 0.1;
+      }
+      const mesh = new THREE.Mesh(
+        CRYSTAL_GEOMETRY,
+        new THREE.MeshStandardMaterial({
+          color: '#ffbf5f',
+          emissive: '#ff8a3d',
+          emissiveIntensity: 0.9,
+          metalness: 0.35,
+          roughness: 0.3,
+        }),
+      );
+      mesh.name = 'EternalIngot';
+      mesh.castShadow = true;
+      mesh.receiveShadow = false;
+      mesh.position.copy(base);
+      mesh.position.y = (anchor?.userData?.baseY ?? base.y) + 1.6;
+      this.eternalIngotBaseY = mesh.position.y;
+      this.challengeGroup.add(mesh);
+      let light = null;
+      if (typeof THREE.PointLight === 'function') {
+        light = new THREE.PointLight(0xffa94d, 1.1, 12, 1.6);
+        light.position.copy(mesh.position);
+        this.challengeGroup.add(light);
+      }
+      this.eternalIngot = { mesh, light };
+      this.eternalIngotSpin = 0;
+    }
+
+    triggerRailCollapse(segment) {
+      if (!segment || !segment.userData) return;
+      if (segment.userData.collapseState === 'crumbling' || segment.userData.collapseState === 'collapsed') {
+        return;
+      }
+      segment.userData.collapseState = 'crumbling';
+      segment.userData.collapseTimer = 0;
+      segment.userData.collapseDuration = 2.4;
+      segment.userData.baseMatrixAutoUpdate = segment.matrixAutoUpdate;
+      segment.matrixAutoUpdate = true;
+      if (!this.crumblingRails.includes(segment)) {
+        this.crumblingRails.push(segment);
+      }
+    }
+
+    updateRailCollapseAnimations(delta) {
+      if (!this.crumblingRails.length) return;
+      const THREE = this.THREE;
+      const remaining = [];
+      for (const segment of this.crumblingRails) {
+        const data = segment.userData || {};
+        data.collapseTimer = (data.collapseTimer || 0) + delta;
+        const duration = Math.max(0.1, data.collapseDuration || 2.4);
+        const rawProgress = Math.min(1, data.collapseTimer / duration);
+        const eased = THREE.MathUtils.smootherstep
+          ? THREE.MathUtils.smootherstep(0, 1, rawProgress)
+          : rawProgress * rawProgress * (3 - 2 * rawProgress);
+        const scale = Math.max(0.05, 1 - eased);
+        if (segment.scale?.setScalar) {
+          segment.scale.setScalar(scale);
+        }
+        if (Number.isFinite(data.baseY)) {
+          segment.position.y = data.baseY - eased * 1.8;
+        }
+        if (segment.updateMatrix) {
+          segment.updateMatrix();
+        }
+        if (rawProgress >= 1) {
+          segment.visible = false;
+          segment.matrixAutoUpdate = data.baseMatrixAutoUpdate ?? false;
+          if (segment.scale?.set) {
+            segment.scale.set(1, 1, 1);
+          }
+          data.collapseState = 'collapsed';
+        } else {
+          remaining.push(segment);
+        }
+      }
+      this.crumblingRails = remaining;
+    }
+
+    updateEternalIngot(delta) {
+      if (!this.eternalIngot?.mesh) return;
+      const mesh = this.eternalIngot.mesh;
+      this.eternalIngotSpin += delta;
+      mesh.rotation.y += delta * 2.4;
+      const bob = Math.sin(this.eternalIngotSpin * 3) * 0.18;
+      mesh.position.y = this.eternalIngotBaseY + bob;
+      if (this.eternalIngot.light) {
+        this.eternalIngot.light.position.copy(mesh.position);
+        this.eternalIngot.light.intensity = 1 + Math.sin(this.eternalIngotSpin * 5) * 0.25;
+      }
+      const playerPosition = this.getCameraWorldPosition(this.tmpVector3);
+      if (playerPosition.distanceTo(mesh.position) < 1.4) {
+        this.collectEternalIngot();
+      }
+    }
+
+    updateNetheriteChallenge(delta) {
+      if (!this.netheriteChallengeActive) return;
+      this.netheriteChallengeTimer += delta;
+      this.updateRailCollapseAnimations(delta);
+      this.updateEternalIngot(delta);
+      if (!this.eternalIngotCollected && this.netheriteChallengeTimer >= this.netheriteNextCollapse) {
+        const candidates = this.railSegments.filter((segment) => segment?.userData?.collapseState === 'intact');
+        if (candidates.length) {
+          const targetIndex = Math.max(0, candidates.length - 1 - this.netheriteCollapseIndex);
+          const target = candidates[targetIndex] || candidates[candidates.length - 1];
+          this.triggerRailCollapse(target);
+          this.netheriteCollapseIndex += 1;
+        }
+        this.netheriteNextCollapse += this.netheriteCollapseInterval;
+      }
+      const remaining = Math.max(0, this.netheriteCountdownSeconds - this.netheriteChallengeTimer);
+      const seconds = Math.ceil(remaining);
+      if (seconds !== this.netheriteCountdownDisplay) {
+        this.netheriteCountdownDisplay = seconds;
+        this.updatePortalProgress();
+        this.updateDimensionInfoPanel();
+      }
+      if (remaining <= 0 && !this.netheriteFailureAnnounced && !this.eternalIngotCollected) {
+        this.netheriteFailureAnnounced = true;
+        this.handleNetheriteFailure();
+      }
+    }
+
+    collectEternalIngot() {
+      if (this.eternalIngotCollected) return;
+      this.eternalIngotCollected = true;
+      if (this.eternalIngot?.mesh) {
+        this.challengeGroup?.remove(this.eternalIngot.mesh);
+        disposeObject3D(this.eternalIngot.mesh);
+      }
+      if (this.eternalIngot?.light) {
+        this.challengeGroup?.remove(this.eternalIngot.light);
+      }
+      this.eternalIngot = null;
+      this.netheriteChallengeActive = false;
+      this.showHint('Eternal Ingot secured! Portal stabilising…');
+      this.collectDrops([{ item: 'eternal-ingot', quantity: 1 }]);
+      this.score += 12;
+      this.updateHud();
+      this.scheduleScoreSync('eternal-ingot');
+      this.triggerVictory();
+    }
+
+    handleNetheriteFailure() {
+      this.showHint('The Netherite rails collapsed! Respawning…');
+      this.scheduleScoreSync('netherite-collapse');
+      this.resetNetheriteChallenge();
+      this.handleDefeat();
+      this.buildRails();
+      this.spawnDimensionChests();
+      this.refreshPortalState();
+      this.evaluateBossChallenge();
     }
 
     getChestLootForDimension(dimensionId, index) {
@@ -2986,6 +3277,7 @@
       this.spawnDimensionChests();
       this.refreshPortalState();
       this.positionPlayer();
+      this.evaluateBossChallenge();
       this.clearZombies();
       this.clearGolems();
       this.lastGolemSpawn = this.elapsed;
@@ -3003,6 +3295,7 @@
 
     triggerVictory() {
       this.victoryAchieved = true;
+      this.resetNetheriteChallenge();
       this.portalActivated = false;
       this.portalGroup.clear();
       this.portalMesh = null;
@@ -3232,6 +3525,7 @@
       this.updateGolems(delta);
       this.updatePortalAnimation(delta);
       this.updateLootChests(delta);
+      this.updateNetheriteChallenge(delta);
       this.updateHands(delta);
       this.updatePlayerAnimation(delta);
       this.updateScoreSync(delta);
@@ -4485,6 +4779,11 @@
       if (portalProgressLabel) {
         if (this.victoryAchieved) {
           portalProgressLabel.textContent = 'Eternal Ingot secured';
+        } else if (this.netheriteChallengeActive && this.dimensionSettings?.id === 'netherite') {
+          const seconds = Number.isFinite(this.netheriteCountdownDisplay)
+            ? Math.max(0, this.netheriteCountdownDisplay)
+            : Math.ceil(Math.max(0, this.netheriteCountdownSeconds - this.netheriteChallengeTimer));
+          portalProgressLabel.textContent = `Collapse in ${seconds}s`;
         } else if (this.portalActivated) {
           portalProgressLabel.textContent = 'Portal stabilised';
         } else if (this.portalReady) {
@@ -4501,6 +4800,10 @@
           displayProgress = 1;
         } else if (!this.portalFrameInteriorValid && !this.portalActivated) {
           displayProgress = Math.min(displayProgress, 0.5);
+        } else if (this.netheriteChallengeActive && this.dimensionSettings?.id === 'netherite') {
+          const remaining = Math.max(0, this.netheriteCountdownSeconds - this.netheriteChallengeTimer);
+          const fraction = this.netheriteCountdownSeconds > 0 ? 1 - Math.min(1, remaining / this.netheriteCountdownSeconds) : 1;
+          displayProgress = Math.max(displayProgress, fraction);
         }
         portalProgressBar.style.setProperty('--progress', displayProgress.toFixed(2));
       }
@@ -4528,12 +4831,23 @@
       dimensionInfoEl.dataset.simpleInit = 'true';
       const gravity = (theme.gravity ?? 1).toFixed(2);
       const speed = (theme.speedMultiplier ?? 1).toFixed(2);
+      let meta = `Gravity ×${gravity} · Speed ×${speed} · Dimension ${
+        this.currentDimensionIndex + 1
+      }/${DIMENSION_THEME.length}`;
+      if (theme.id === 'netherite' && !this.victoryAchieved) {
+        if (this.netheriteChallengeActive && !this.eternalIngotCollected) {
+          const seconds = Number.isFinite(this.netheriteCountdownDisplay)
+            ? Math.max(0, this.netheriteCountdownDisplay)
+            : Math.ceil(Math.max(0, this.netheriteCountdownSeconds - this.netheriteChallengeTimer));
+          meta += ` · Collapse in ${seconds}s`;
+        } else if (this.eternalIngotCollected) {
+          meta += ' · Eternal Ingot secured';
+        }
+      }
       dimensionInfoEl.innerHTML = `
         <h3>${theme.name}</h3>
         <p>${theme.description ?? ''}</p>
-        <p class="dimension-meta">Gravity ×${gravity} · Speed ×${speed} · Dimension ${
-          this.currentDimensionIndex + 1
-        }/${DIMENSION_THEME.length}</p>
+        <p class="dimension-meta">${meta}</p>
       `;
     }
 
@@ -4576,6 +4890,9 @@
         sceneChildren: this.scene?.children?.length ?? 0,
         hudActive:
           typeof document !== 'undefined' ? document.body.classList.contains('game-active') : false,
+        netheriteChallengeActive: Boolean(this.netheriteChallengeActive),
+        netheriteCountdown: Math.max(0, Math.ceil(Math.max(0, this.netheriteCountdownSeconds - this.netheriteChallengeTimer))),
+        eternalIngotCollected: Boolean(this.eternalIngotCollected),
       };
     }
   }
