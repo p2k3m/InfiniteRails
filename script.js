@@ -18075,6 +18075,23 @@
     }
 
     const DIMENSION_NAME_CACHE = new Map();
+    const DIMENSION_BADGE_SYMBOLS = {
+      origin: '🌱',
+      rock: '🪨',
+      stone: '⛏️',
+      tar: '⚫',
+      marble: '🏛️',
+      netherite: '🔥',
+    };
+    const DIMENSION_BADGE_SYNONYMS = {
+      origin: ['origin', 'grass', 'plains'],
+      rock: ['rock', 'basalt', 'ore'],
+      stone: ['stone', 'bastion', 'fortress'],
+      tar: ['tar', 'marsh', 'swamp'],
+      marble: ['marble', 'temple', 'atrium'],
+      netherite: ['nether', 'netherite', 'inferno'],
+    };
+    const DEFAULT_DIMENSION_BADGE_SYMBOL = '🌀';
 
     function resolveDimensionDefinition(label) {
       if (typeof label !== 'string') {
@@ -18155,6 +18172,26 @@
       return formatted;
     }
 
+    function getDimensionBadgeSymbol(label) {
+      if (!label) {
+        return DEFAULT_DIMENSION_BADGE_SYMBOL;
+      }
+      const definition = typeof label === 'string' ? resolveDimensionDefinition(label) : null;
+      if (definition?.id && DIMENSION_BADGE_SYMBOLS[definition.id]) {
+        return DIMENSION_BADGE_SYMBOLS[definition.id];
+      }
+      const normalized = String(label).trim().toLowerCase();
+      if (!normalized) {
+        return DEFAULT_DIMENSION_BADGE_SYMBOL;
+      }
+      for (const [key, synonyms] of Object.entries(DIMENSION_BADGE_SYNONYMS)) {
+        if (synonyms.some((token) => normalized.includes(token))) {
+          return DIMENSION_BADGE_SYMBOLS[key] ?? DEFAULT_DIMENSION_BADGE_SYMBOL;
+        }
+      }
+      return DEFAULT_DIMENSION_BADGE_SYMBOL;
+    }
+
     function renderScoreboard(entries) {
       if (!scoreboardListEl) return;
       const previousSnapshot = previousLeaderboardSnapshot;
@@ -18232,15 +18269,43 @@
         countSpan.textContent = countValue.toString();
         dimensionCell.appendChild(countSpan);
         const dimensionLabels = extractLeaderboardDimensionLabels(entry);
-        const listSpan = document.createElement('span');
-        listSpan.className = 'leaderboard-dimension-list';
+        const badgesList = document.createElement('ul');
+        badgesList.className = 'leaderboard-dimension-badges';
+        badgesList.setAttribute('aria-label', 'Dimensions unlocked');
         if (dimensionLabels.length) {
-          listSpan.textContent = dimensionLabels.join(', ');
+          dimensionLabels.forEach((label) => {
+            const item = document.createElement('li');
+            item.className = 'leaderboard-dimension-badges__item';
+            const badge = document.createElement('span');
+            badge.className = 'leaderboard-dimension-badge';
+            const icon = document.createElement('span');
+            icon.className = 'leaderboard-dimension-badge__icon';
+            icon.textContent = getDimensionBadgeSymbol(label);
+            icon.setAttribute('aria-hidden', 'true');
+            const text = document.createElement('span');
+            text.className = 'leaderboard-dimension-badge__label';
+            text.textContent = label;
+            badge.appendChild(icon);
+            badge.appendChild(text);
+            item.appendChild(badge);
+            badgesList.appendChild(item);
+          });
         } else {
-          listSpan.textContent = '—';
-          listSpan.setAttribute('aria-hidden', 'true');
+          const item = document.createElement('li');
+          item.className = 'leaderboard-dimension-badges__item leaderboard-dimension-badges__item--empty';
+          const badge = document.createElement('span');
+          badge.className = 'leaderboard-dimension-badge';
+          badge.textContent = '—';
+          item.appendChild(badge);
+          badgesList.appendChild(item);
         }
-        dimensionCell.appendChild(listSpan);
+        const srList = document.createElement('span');
+        srList.className = 'leaderboard-dimension-list sr-only';
+        srList.textContent = dimensionLabels.length
+          ? dimensionLabels.join(', ')
+          : 'No additional dimensions tracked';
+        dimensionCell.appendChild(badgesList);
+        dimensionCell.appendChild(srList);
         row.appendChild(dimensionCell);
 
         const inventoryCell = document.createElement('td');
