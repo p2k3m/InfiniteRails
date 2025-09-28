@@ -524,6 +524,8 @@
       this.blockGeometry = new THREE.BoxGeometry(BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE);
       this.railGeometry = new THREE.BoxGeometry(BLOCK_SIZE * 0.9, BLOCK_SIZE * 0.15, BLOCK_SIZE * 1.2);
       this.textureCache = new Map();
+      this.textureLoader = null;
+      this.pendingTextureLoads = new Map();
       this.materials = this.createMaterials();
       this.keys = new Set();
       this.velocity = new THREE.Vector3();
@@ -1524,29 +1526,21 @@
         shadow: '#5b5f63',
         accent: '#a5a5a5',
       });
-      return {
-        grass: new THREE.MeshStandardMaterial({
+      const materials = {
+        grass: new THREE.MeshLambertMaterial({
           map: grassTexture,
           color: new THREE.Color('#ffffff'),
-          roughness: 0.72,
-          metalness: 0.04,
         }),
-        dirt: new THREE.MeshStandardMaterial({
+        dirt: new THREE.MeshLambertMaterial({
           map: dirtTexture,
           color: new THREE.Color('#ffffff'),
-          roughness: 0.92,
-          metalness: 0.03,
         }),
-        stone: new THREE.MeshStandardMaterial({
+        stone: new THREE.MeshLambertMaterial({
           map: stoneTexture,
           color: new THREE.Color('#ffffff'),
-          roughness: 0.82,
-          metalness: 0.16,
         }),
-        rails: new THREE.MeshStandardMaterial({
+        rails: new THREE.MeshLambertMaterial({
           color: new THREE.Color('#c9a14d'),
-          roughness: 0.35,
-          metalness: 0.65,
         }),
         zombie: new THREE.MeshStandardMaterial({
           color: new THREE.Color('#2e7d32'),
@@ -1582,6 +1576,10 @@
           `,
         }),
       };
+      this.queueExternalTextureUpgrade('grass', materials.grass);
+      this.queueExternalTextureUpgrade('dirt', materials.dirt);
+      this.queueExternalTextureUpgrade('stone', materials.stone);
+      return materials;
     }
 
     createCraftingRecipes() {
@@ -1910,6 +1908,132 @@
       texture.needsUpdate = true;
       this.textureCache.set(key, texture);
       return texture;
+    }
+
+    getExternalTextureSources(key) {
+      if (typeof window === 'undefined') {
+        return [];
+      }
+      const config = window.APP_CONFIG || {};
+      const explicit = config.textures && typeof config.textures === 'object' ? config.textures[key] : null;
+      const sources = [];
+      if (typeof explicit === 'string' && explicit.trim()) {
+        sources.push(explicit.trim());
+      } else if (Array.isArray(explicit)) {
+        explicit
+          .map((value) => (typeof value === 'string' ? value.trim() : ''))
+          .filter(Boolean)
+          .forEach((value) => sources.push(value));
+      }
+      const base = typeof config.textureBaseUrl === 'string' ? config.textureBaseUrl.trim() : '';
+      if (base) {
+        const normalised = base.endsWith('/') ? base.slice(0, -1) : base;
+        sources.push(`${normalised}/${key}.png`);
+      }
+      const manifest = config.textureManifest && typeof config.textureManifest === 'object' ? config.textureManifest : null;
+      if (manifest) {
+        const manifestEntry = manifest[key];
+        if (typeof manifestEntry === 'string' && manifestEntry.trim()) {
+          sources.push(manifestEntry.trim());
+        } else if (Array.isArray(manifestEntry)) {
+          manifestEntry
+            .map((value) => (typeof value === 'string' ? value.trim() : ''))
+            .filter(Boolean)
+            .forEach((value) => sources.push(value));
+        }
+      }
+      return sources.filter(Boolean);
+    }
+
+    prepareExternalTexture(texture) {
+      const THREE = this.THREE;
+      texture.colorSpace = THREE.SRGBColorSpace;
+      texture.anisotropy = 1;
+      texture.magFilter = THREE.NearestFilter;
+      texture.minFilter = THREE.NearestFilter;
+      texture.wrapS = THREE.RepeatWrapping;
+      texture.wrapT = THREE.RepeatWrapping;
+      texture.generateMipmaps = false;
+      texture.needsUpdate = true;
+    }
+
+    loadExternalVoxelTexture(key) {
+      const sources = this.getExternalTextureSources(key);
+      if (!sources.length) {
+        return null;
+      }
+      if (this.pendingTextureLoads.has(key)) {
+        return this.pendingTextureLoads.get(key);
+      }
+      const THREE = this.THREE;
+      if (!this.textureLoader) {
+        this.textureLoader = new THREE.TextureLoader();
+        if (typeof this.textureLoader.setCrossOrigin === 'function') {
+          this.textureLoader.setCrossOrigin('anonymous');
+        } else {
+          this.textureLoader.crossOrigin = 'anonymous';
+        }
+      }
+      const attemptLoad = (index) => {
+        if (index >= sources.length) {
+          return Promise.resolve(null);
+        }
+        const url = sources[index];
+        return new Promise((resolve) => {
+          this.textureLoader.load(
+            url,
+            (texture) => {
+              resolve({ texture, url });
+            },
+            undefined,
+            () => {
+              console.warn(`Failed to load texture ${url}; attempting fallback source.`);
+              resolve(null);
+            },
+          );
+        }).then((result) => {
+          if (result) {
+            return result;
+          }
+          return attemptLoad(index + 1);
+        });
+      };
+      const loadPromise = attemptLoad(0)
+        .then((result) => {
+          if (!result || !result.texture) {
+            return null;
+          }
+          this.prepareExternalTexture(result.texture);
+          console.log(`External texture loaded for ${key} from ${result.url}`);
+          return result.texture;
+        })
+        .catch((error) => {
+          console.warn(`Unable to stream external texture for ${key}`, error);
+          return null;
+        })
+        .finally(() => {
+          this.pendingTextureLoads.delete(key);
+        });
+      this.pendingTextureLoads.set(key, loadPromise);
+      return loadPromise;
+    }
+
+    queueExternalTextureUpgrade(key, material) {
+      const promise = this.loadExternalVoxelTexture(key);
+      if (!promise) {
+        return;
+      }
+      promise.then((texture) => {
+        if (!texture || !material) {
+          return;
+        }
+        this.textureCache.set(key, texture);
+        material.map = texture;
+        material.needsUpdate = true;
+        if (this.renderer) {
+          this.applyTextureAnisotropy();
+        }
+      });
     }
 
     detectTouchPreferred() {
