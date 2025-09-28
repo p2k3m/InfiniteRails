@@ -570,6 +570,15 @@
       this.elapsed = DAY_LENGTH_SECONDS * 0.5;
       this.health = FALLBACK_HEALTH;
       this.score = 0;
+      this.scoreBreakdown = {
+        recipes: 0,
+        dimensions: 0,
+        loot: 0,
+        exploration: 0,
+        combat: 0,
+        misc: 0,
+        penalties: 0,
+      };
       this.blocksMined = 0;
       this.blocksPlaced = 0;
       this.portalBlocksPlaced = 0;
@@ -1114,6 +1123,10 @@
         eternalIngot: Boolean(this.eternalIngotCollected),
         recipeCount,
         recipes: craftedRecipes,
+        recipePoints: Number(this.scoreBreakdown?.recipes ?? 0),
+        dimensionPoints: Number(this.scoreBreakdown?.dimensions ?? 0),
+        penalties: Number(this.scoreBreakdown?.penalties ?? 0),
+        breakdown: this.getScoreBreakdownSnapshot(),
       };
     }
 
@@ -3407,6 +3420,7 @@
       this.showHint('Eternal Ingot secured! Portal stabilising…');
       this.collectDrops([{ item: 'eternal-ingot', quantity: 1 }]);
       this.score += 12;
+      this.addScoreBreakdown('dimensions', 12);
       this.updateHud();
       this.scheduleScoreSync('eternal-ingot');
       this.triggerVictory();
@@ -3576,6 +3590,7 @@
         this.collectDrops(loot.items);
       }
       if (Number.isFinite(loot.score) && loot.score !== 0) {
+        this.addScoreBreakdown('loot', loot.score);
         this.score += loot.score;
       }
       this.updateHud();
@@ -3856,6 +3871,7 @@
       }
       this.portalReady = false;
       this.score += 5;
+      this.addScoreBreakdown('dimensions', 5);
       this.activatePortal();
       const message = events.length ? events.join(' ') : 'Portal ignited — step through to travel.';
       this.showHint(message);
@@ -3987,6 +4003,7 @@
         const progress = required > 0 ? this.portalBlocksPlaced / required : 0;
         if (!this.portalHintShown && progress >= 0.5) {
           this.portalHintShown = true;
+          this.addScoreBreakdown('dimensions', 1);
           this.score += 1;
           this.updateHud();
         }
@@ -3998,6 +4015,7 @@
         this.portalReady = true;
         this.portalHintShown = true;
         this.portalIgnitionLog = [];
+        this.addScoreBreakdown('dimensions', 1);
         this.score += 1;
         this.updateHud();
         this.showHint('Portal frame complete — press F to ignite your torch.');
@@ -4059,6 +4077,7 @@
       this.lastGolemSpawn = this.elapsed;
       if (Number.isFinite(pointsAwarded)) {
         this.score += pointsAwarded;
+        this.addScoreBreakdown('dimensions', pointsAwarded);
       }
       this.updateHud();
       this.scheduleScoreSync('dimension-advanced');
@@ -4081,6 +4100,7 @@
       this.portalGroup.clear();
       this.portalMesh = null;
       this.score += 25;
+      this.addScoreBreakdown('dimensions', 25);
       this.clearZombies();
       this.clearGolems();
       this.clearChests();
@@ -4796,6 +4816,7 @@
             this.removeZombie(target);
             golem.cooldown = 1.1;
             this.score += 0.5;
+            this.addScoreBreakdown('combat', 0.5);
             this.updateHud();
             this.audio.play('zombieGroan', { volume: 0.3 });
             this.showHint('Iron golem smashed a zombie!');
@@ -4831,6 +4852,10 @@
 
     handleDefeat() {
       this.health = FALLBACK_HEALTH;
+      const penalty = Math.min(4, Math.max(0, this.score ?? 0));
+      if (penalty > 0) {
+        this.addScoreBreakdown('penalties', penalty);
+      }
       this.score = Math.max(0, this.score - 4);
       this.verticalVelocity = 0;
       this.isGrounded = false;
@@ -4868,7 +4893,9 @@
       this.markTerrainChunkDirty(removedChunkKey);
       this.blocksMined += 1;
       const blockType = mesh.userData.blockType || 'stone';
-      this.score += blockType === 'stone' ? 1 : 0.75;
+      const blockScore = blockType === 'stone' ? 1 : 0.75;
+      this.score += blockScore;
+      this.addScoreBreakdown('exploration', blockScore);
       this.heightMap[mesh.userData.gx][mesh.userData.gz] = column.length;
       if (column.length) {
         const newTop = column[column.length - 1];
@@ -4933,6 +4960,10 @@
       this.columns.set(columnKey, column);
       this.heightMap[gx][gz] = column.length;
       this.blocksPlaced += 1;
+      const placementPenalty = Math.min(0.25, Math.max(0, this.score ?? 0));
+      if (placementPenalty > 0) {
+        this.addScoreBreakdown('penalties', placementPenalty);
+      }
       this.score = Math.max(0, this.score - 0.25);
       this.updatePortalFrameStateForColumn(gx, gz);
       this.updateHud();
@@ -5360,6 +5391,7 @@
       this.craftedRecipes.add(recipe.id);
       this.craftingState.unlocked.set(key, recipe);
       this.score += recipe.score;
+      this.addScoreBreakdown('recipes', recipe.score);
       this.savePersistentUnlocks();
       this.showHint(`${recipe.label} crafted!`);
       this.refreshCraftingUi();
@@ -5605,19 +5637,70 @@
       this.selectedHotbarIndex = 0;
     }
 
+    addScoreBreakdown(category, amount) {
+      if (!this.scoreBreakdown || typeof this.scoreBreakdown !== 'object') {
+        this.scoreBreakdown = {};
+      }
+      const key = typeof category === 'string' && category.trim() ? category.trim() : 'misc';
+      const numericAmount = Number(amount);
+      if (!Number.isFinite(numericAmount) || numericAmount === 0) {
+        return;
+      }
+      const previous = Number.isFinite(this.scoreBreakdown[key]) ? this.scoreBreakdown[key] : 0;
+      this.scoreBreakdown[key] = previous + numericAmount;
+    }
+
+    getScoreBreakdownSnapshot() {
+      const snapshot = {};
+      const source = this.scoreBreakdown && typeof this.scoreBreakdown === 'object' ? this.scoreBreakdown : {};
+      Object.entries(source).forEach(([key, value]) => {
+        if (typeof key !== 'string') return;
+        const trimmed = key.trim();
+        if (!trimmed) return;
+        const numeric = Number(value);
+        if (Number.isFinite(numeric)) {
+          snapshot[trimmed] = numeric;
+        }
+      });
+      return snapshot;
+    }
+
+    formatPointValue(value) {
+      const numeric = Math.max(0, Number(value) || 0);
+      if (!Number.isFinite(numeric)) {
+        return '0';
+      }
+      const maxFractionDigits = numeric < 1 ? 2 : numeric < 10 ? 1 : 0;
+      return numeric.toLocaleString(undefined, {
+        minimumFractionDigits: 0,
+        maximumFractionDigits: maxFractionDigits,
+      });
+    }
+
     updateHud() {
       const { heartsEl, scoreTotalEl, scoreRecipesEl, scoreDimensionsEl } = this.ui;
       if (heartsEl) {
         heartsEl.innerHTML = createHeartMarkup(this.health);
       }
       if (scoreTotalEl) {
-        scoreTotalEl.textContent = Math.round(this.score).toString();
+        const roundedScore = Math.round(this.score ?? 0);
+        scoreTotalEl.textContent = roundedScore.toLocaleString();
       }
       if (scoreRecipesEl) {
-        scoreRecipesEl.textContent = `${this.craftedRecipes.size}`;
+        const recipeCount = this.craftedRecipes?.size ?? 0;
+        const recipePoints = this.scoreBreakdown?.recipes ?? 0;
+        scoreRecipesEl.textContent = `${recipeCount} (+${this.formatPointValue(recipePoints)} pts)`;
       }
       if (scoreDimensionsEl) {
-        scoreDimensionsEl.textContent = `${this.currentDimensionIndex + 1}`;
+        const dimensionCount = Math.max(1, this.currentDimensionIndex + 1);
+        const dimensionPoints = this.scoreBreakdown?.dimensions ?? 0;
+        const penaltyPoints = this.scoreBreakdown?.penalties ?? 0;
+        let display = `${dimensionCount} (+${this.formatPointValue(dimensionPoints)} pts`;
+        if (penaltyPoints > 0) {
+          display += `, -${this.formatPointValue(penaltyPoints)} penalty`;
+        }
+        display += ')';
+        scoreDimensionsEl.textContent = display;
       }
       this.updateInventoryUi();
       this.updateDimensionInfoPanel();
@@ -5914,7 +5997,7 @@
             return `${pad(minutes)}:${pad(secs)}`;
           };
       if (this.victoryStatsEl) {
-        const statsMarkup = [
+        const stats = [
           { label: 'Final Score', value: summary.score.toLocaleString() },
           {
             label: 'Dimensions Stabilised',
@@ -5923,7 +6006,22 @@
           { label: 'Recipes Crafted', value: Number(summary.recipeCount || 0).toLocaleString() },
           { label: 'Run Time', value: formatRunTime(summary.runTimeSeconds) },
           { label: 'Leaderboard Rank', value: rank ? `#${rank}` : 'Offline' },
-        ]
+        ];
+        const breakdown = this.getScoreBreakdownSnapshot();
+        const formatBreakdownValue = (value) =>
+          this.formatPointValue
+            ? this.formatPointValue(value)
+            : Math.max(0, Number(value) || 0).toLocaleString();
+        if (breakdown.dimensions !== undefined) {
+          stats.push({ label: 'Dimension Score', value: formatBreakdownValue(breakdown.dimensions) });
+        }
+        if (breakdown.recipes !== undefined) {
+          stats.push({ label: 'Crafting Score', value: formatBreakdownValue(breakdown.recipes) });
+        }
+        if (breakdown.penalties) {
+          stats.push({ label: 'Penalties', value: `-${formatBreakdownValue(breakdown.penalties)}` });
+        }
+        const statsMarkup = stats
           .map(
             (stat) => `
           <div>

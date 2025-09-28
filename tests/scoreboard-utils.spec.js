@@ -35,6 +35,39 @@ describe('scoreboard-utils', () => {
     expect(normalised[2].dimensionLabels).toEqual(['Netherite', 'Origin']);
   });
 
+  it('retains breakdown metrics and point totals when provided', () => {
+    const entries = [
+      {
+        id: 'alpha',
+        score: 42,
+        breakdown: { recipes: 12, dimensions: 20, penalties: 3, loot: 7 },
+        recipePoints: 12,
+        dimensionPoints: 20,
+        penalties: 3,
+      },
+    ];
+
+    const [entry] = scoreboardUtils.normalizeScoreEntries(entries);
+
+    expect(entry.recipePoints).toBe(12);
+    expect(entry.dimensionPoints).toBe(20);
+    expect(entry.penalties).toBe(3);
+    expect(entry.breakdown).toMatchObject({ recipes: 12, dimensions: 20, penalties: 3, loot: 7 });
+  });
+
+  it('extracts breakdown fields from nested point objects without corrupting scores', () => {
+    const [entry] = scoreboardUtils.normalizeScoreEntries([
+      {
+        id: 'beta',
+        score: 18,
+        points: { recipes: 6, dimensions: 10, penalties: 2 },
+      },
+    ]);
+
+    expect(entry.score).toBe(18);
+    expect(entry.breakdown).toMatchObject({ recipes: 6, dimensions: 10, penalties: 2 });
+  });
+
   it('upserts entries preserving the highest score achieved', () => {
     const initial = [
       { id: 'player-1', score: 20, name: 'Explorer' },

@@ -64,24 +64,93 @@
     return labels;
   }
 
+  function toNumber(value, fallback = 0) {
+    if (value === null || value === undefined) {
+      return fallback;
+    }
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? numeric : fallback;
+  }
+
+  function extractBreakdown(entry) {
+    const breakdown = {};
+    if (!entry || typeof entry !== 'object') {
+      return breakdown;
+    }
+    const sources = [];
+    if (entry.breakdown && typeof entry.breakdown === 'object') {
+      sources.push(entry.breakdown);
+    }
+    if (entry.points && typeof entry.points === 'object') {
+      sources.push(entry.points);
+    }
+    sources.forEach((source) => {
+      Object.entries(source).forEach(([key, value]) => {
+        if (typeof key !== 'string') return;
+        const trimmed = key.trim();
+        if (!trimmed) return;
+        const numeric = Number(value);
+        if (Number.isFinite(numeric)) {
+          breakdown[trimmed] = numeric;
+        }
+      });
+    });
+    const fallbackPairs = [
+      ['recipes', entry.recipePoints ?? entry.recipeScore],
+      ['dimensions', entry.dimensionPoints ?? entry.dimensionScore],
+      ['penalties', entry.penalties ?? entry.penaltyPoints],
+      ['loot', entry.lootPoints],
+      ['exploration', entry.explorationPoints],
+      ['combat', entry.combatPoints],
+      ['misc', entry.miscPoints],
+    ];
+    fallbackPairs.forEach(([key, value]) => {
+      if (breakdown[key] !== undefined) return;
+      const numeric = Number(value);
+      if (Number.isFinite(numeric)) {
+        breakdown[key] = numeric;
+      }
+    });
+    return breakdown;
+  }
+
   function normalizeScoreEntries(entries = []) {
     return entries
-      .map((entry) => ({
-        id: entry.id ?? entry.googleId ?? entry.playerId ?? `guest-${Math.random().toString(36).slice(2)}`,
-        name: entry.name ?? entry.displayName ?? 'Explorer',
-        score: Number(entry.score ?? entry.points ?? 0),
-        dimensionCount: Number(entry.dimensionCount ?? entry.dimensions ?? entry.realms ?? 0),
-        runTimeSeconds: Number(entry.runTimeSeconds ?? entry.runtimeSeconds ?? entry.runtime ?? 0),
-        inventoryCount: Number(entry.inventoryCount ?? entry.resources ?? entry.items ?? 0),
-        location:
-          entry.location ??
-          (entry.latitude !== undefined && entry.longitude !== undefined
-            ? { latitude: entry.latitude, longitude: entry.longitude }
-            : null),
-        locationLabel: entry.locationLabel ?? entry.location?.label ?? entry.locationName ?? null,
-        updatedAt: entry.updatedAt ?? entry.lastUpdated ?? entry.updated_at ?? null,
-        dimensionLabels: normalizeDimensionLabels(entry),
-      }))
+      .map((entry) => {
+        const breakdown = extractBreakdown(entry);
+        const scoreCandidates = [entry.score, entry.points, entry.totalScore];
+        let scoreValue = 0;
+        for (const candidate of scoreCandidates) {
+          const numeric = Number(candidate);
+          if (Number.isFinite(numeric)) {
+            scoreValue = numeric;
+            break;
+          }
+        }
+        const dimensionPoints = Number.isFinite(breakdown.dimensions) ? breakdown.dimensions : 0;
+        const recipePoints = Number.isFinite(breakdown.recipes) ? breakdown.recipes : 0;
+        const penaltyPoints = Number.isFinite(breakdown.penalties) ? breakdown.penalties : 0;
+        return {
+          id: entry.id ?? entry.googleId ?? entry.playerId ?? `guest-${Math.random().toString(36).slice(2)}`,
+          name: entry.name ?? entry.displayName ?? 'Explorer',
+          score: scoreValue,
+          dimensionCount: toNumber(entry.dimensionCount ?? entry.dimensions ?? entry.realms, 0),
+          runTimeSeconds: toNumber(entry.runTimeSeconds ?? entry.runtimeSeconds ?? entry.runtime, 0),
+          inventoryCount: toNumber(entry.inventoryCount ?? entry.resources ?? entry.items, 0),
+          location:
+            entry.location ??
+            (entry.latitude !== undefined && entry.longitude !== undefined
+              ? { latitude: entry.latitude, longitude: entry.longitude }
+              : null),
+          locationLabel: entry.locationLabel ?? entry.location?.label ?? entry.locationName ?? null,
+          updatedAt: entry.updatedAt ?? entry.lastUpdated ?? entry.updated_at ?? null,
+          dimensionLabels: normalizeDimensionLabels(entry),
+          recipePoints,
+          dimensionPoints,
+          penalties: Math.max(0, penaltyPoints),
+          breakdown,
+        };
+      })
       .sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
   }
 
