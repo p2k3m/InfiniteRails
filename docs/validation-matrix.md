@@ -16,6 +16,7 @@ Use it as a quick reference when planning manual or automated regression passes.
 | --- | --- | --- | --- |
 | UI-01 | Browser load; click tests. | Landing loads in <2s; buttons navigate correctly; animations smooth. | Scenario: Open URL—see title, logo, start game to gameplay. |
 | UI-02 / UI-05 | Interaction simulation; guide review. | HUD non-obstructive; guide covers 100% controls; dynamics trigger as specified. | Scenario: First load—hints appear; open guide, interact demo. |
+| UI-06 | Visual inspection with console logging of HUD events. | Footer remains fixed, updates summary within 1s of dimension or score changes, and respects accessibility labels. | Scenario: Mine blocks to change score, ignite a portal, and observe footer swap from "explore" to "ready" to "transition" states. |
 
 ## Gameplay systems
 

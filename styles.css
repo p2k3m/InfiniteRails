@@ -5752,6 +5752,95 @@ body.game-active .hand-overlay {
   text-shadow: 0 0 8px rgba(0, 0, 0, 0.5);
 }
 
+.made-by-manu {
+  position: fixed;
+  inset: auto 0 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.9rem clamp(1.2rem, 4vw, 2.5rem);
+  background: linear-gradient(90deg, rgba(20, 30, 40, 0.92), rgba(10, 15, 25, 0.88));
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  box-shadow: 0 -14px 24px rgba(0, 0, 0, 0.45);
+  color: rgba(255, 255, 255, 0.86);
+  font-family: 'Chakra Petch', 'Exo 2', system-ui, sans-serif;
+  font-size: clamp(0.8rem, 1.4vw, 0.95rem);
+  letter-spacing: 0.05em;
+  backdrop-filter: blur(6px);
+}
+
+.made-by-manu__label {
+  font-weight: 700;
+  text-transform: uppercase;
+  font-size: clamp(0.75rem, 1.2vw, 0.9rem);
+  color: rgba(173, 216, 255, 0.9);
+  text-shadow: 0 0 8px rgba(0, 153, 255, 0.4);
+}
+
+.made-by-manu__summary {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.6rem;
+}
+
+.made-by-manu__metric {
+  font-weight: 600;
+  color: #ffffff;
+}
+
+.made-by-manu__status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding-left: 0.65rem;
+  border-left: 1px solid rgba(255, 255, 255, 0.1);
+  font-size: clamp(0.75rem, 1.3vw, 0.9rem);
+  color: rgba(200, 230, 255, 0.85);
+}
+
+.made-by-manu[data-state='victory'] {
+  background: linear-gradient(90deg, rgba(49, 20, 12, 0.95), rgba(128, 36, 20, 0.92));
+  border-top-color: rgba(255, 176, 0, 0.35);
+  box-shadow: 0 -16px 32px rgba(128, 36, 20, 0.45);
+}
+
+.made-by-manu[data-state='victory'] .made-by-manu__label {
+  color: rgba(255, 200, 120, 0.95);
+  text-shadow: 0 0 12px rgba(255, 160, 60, 0.55);
+}
+
+.made-by-manu[data-state='victory'] .made-by-manu__status {
+  color: rgba(255, 230, 204, 0.9);
+}
+
+.made-by-manu[data-state='ready'] .made-by-manu__status {
+  color: rgba(144, 238, 144, 0.9);
+}
+
+.made-by-manu[data-state='transition'] .made-by-manu__status {
+  color: rgba(255, 214, 153, 0.92);
+}
+
+.made-by-manu[data-state='explore'] .made-by-manu__status {
+  color: rgba(200, 230, 255, 0.85);
+}
+
+@media (max-width: 900px) {
+  .made-by-manu {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.4rem;
+    font-size: clamp(0.78rem, 2.6vw, 0.9rem);
+  }
+
+  .made-by-manu__status {
+    border-left: none;
+    padding-left: 0;
+  }
+}
+
 @media (max-width: 720px) {
   .hand-overlay {
     right: clamp(1rem, 5vw, 1.8rem);

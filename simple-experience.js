@@ -489,9 +489,14 @@
       this.hotbarEl = this.ui.hotbarEl || null;
       this.playerHintEl = this.ui.playerHintEl || null;
       this.pointerHintEl = this.ui.pointerHintEl || null;
+      this.footerEl = this.ui.footerEl || null;
+      this.footerScoreEl = this.ui.footerScoreEl || null;
+      this.footerDimensionEl = this.ui.footerDimensionEl || null;
+      this.footerStatusEl = this.ui.footerStatusEl || null;
       this.pointerHintActive = false;
       this.pointerHintHideTimer = null;
       this.pointerHintLastMessage = '';
+      this.lastHintMessage = '';
       this.craftingModal = this.ui.craftingModal || null;
       this.craftSequenceEl = this.ui.craftSequenceEl || null;
       this.craftingInventoryEl = this.ui.craftingInventoryEl || null;
@@ -4880,6 +4885,8 @@
     showHint(message) {
       if (!this.playerHintEl || !message) return;
       this.playerHintEl.textContent = message;
+      this.lastHintMessage = message;
+      this.updateFooterSummary();
     }
 
     handleHotbarClick(event) {
@@ -5238,6 +5245,7 @@
       this.updateInventoryUi();
       this.updateDimensionInfoPanel();
       this.updatePortalProgress();
+      this.updateFooterSummary();
     }
 
     updatePortalProgress() {
@@ -5276,6 +5284,50 @@
         }
         portalProgressBar.style.setProperty('--progress', displayProgress.toFixed(2));
       }
+    }
+
+    updateFooterSummary() {
+      if (!this.footerEl) return;
+      const scoreValue = Math.round(this.score ?? 0);
+      if (this.footerScoreEl) {
+        this.footerScoreEl.textContent = scoreValue.toLocaleString();
+      }
+      const currentTheme = this.dimensionSettings ?? DIMENSION_THEME[this.currentDimensionIndex] ?? null;
+      const dimensionName = currentTheme?.name ?? 'Unknown Realm';
+      if (this.footerDimensionEl) {
+        this.footerDimensionEl.textContent = dimensionName;
+      }
+      let statusMessage = '';
+      if (this.victoryAchieved) {
+        statusMessage = 'Eternal Ingot secured — portals stabilised.';
+      } else if (this.portalActivated) {
+        const nextName = this.getNextDimensionName();
+        statusMessage = nextName ? `Crossing to ${nextName}.` : 'Crossing to the next realm.';
+      } else if (this.portalReady) {
+        statusMessage = 'Portal ready — ignite with F to travel.';
+      } else if (this.lastHintMessage) {
+        statusMessage = this.lastHintMessage;
+      } else if (currentTheme?.description) {
+        statusMessage = currentTheme.description;
+      } else {
+        statusMessage = 'Stabilising the portal network.';
+      }
+      if (this.footerStatusEl) {
+        this.footerStatusEl.textContent = statusMessage;
+      }
+      const state = this.victoryAchieved
+        ? 'victory'
+        : this.portalActivated
+          ? 'transition'
+          : this.portalReady
+            ? 'ready'
+            : 'explore';
+      this.footerEl.dataset.state = state;
+    }
+
+    getNextDimensionName() {
+      const nextTheme = DIMENSION_THEME[this.currentDimensionIndex + 1];
+      return nextTheme?.name ?? null;
     }
 
     updateDimensionInfoPanel() {

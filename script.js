@@ -1294,6 +1294,10 @@
             closeInventoryButton,
             openInventoryButtons: [toggleExtendedBtn].filter(Boolean),
             pointerHintEl,
+            footerEl: document.getElementById('siteFooter'),
+            footerScoreEl: document.getElementById('footerScore'),
+            footerDimensionEl: document.getElementById('footerDimension'),
+            footerStatusEl: document.getElementById('footerStatus'),
           },
         });
       } catch (error) {
