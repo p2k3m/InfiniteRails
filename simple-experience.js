@@ -1020,9 +1020,36 @@
       const totalDimensions = DIMENSION_THEME.length;
       const unlockedCount = Math.max(1, this.currentDimensionIndex + 1);
       const safeCount = Math.min(unlockedCount, totalDimensions);
-      const unlockedDimensions = DIMENSION_THEME.slice(0, safeCount).map((dimension) => dimension.label);
-      const activeDimensionLabel =
-        this.dimensionSettings?.label || unlockedDimensions[unlockedDimensions.length - 1] || DIMENSION_THEME[0].label;
+      const unlockedDimensions = DIMENSION_THEME.slice(0, safeCount).map((dimension) => {
+        const name = typeof dimension?.name === 'string' ? dimension.name.trim() : '';
+        if (name.length > 0) {
+          return name;
+        }
+        const label = typeof dimension?.label === 'string' ? dimension.label.trim() : '';
+        if (label.length > 0) {
+          return label;
+        }
+        if (typeof dimension?.id === 'string' && dimension.id.trim().length > 0) {
+          return dimension.id.trim();
+        }
+        return 'Unknown Dimension';
+      });
+      const activeDimensionLabel = (() => {
+        const activeName = typeof this.dimensionSettings?.name === 'string' ? this.dimensionSettings.name.trim() : '';
+        if (activeName.length > 0) {
+          return activeName;
+        }
+        const activeLabel = typeof this.dimensionSettings?.label === 'string' ? this.dimensionSettings.label.trim() : '';
+        if (activeLabel.length > 0) {
+          return activeLabel;
+        }
+        const fallback = unlockedDimensions[unlockedDimensions.length - 1];
+        if (typeof fallback === 'string' && fallback.trim().length > 0) {
+          return fallback.trim();
+        }
+        const defaultName = typeof DIMENSION_THEME[0]?.name === 'string' ? DIMENSION_THEME[0].name.trim() : '';
+        return defaultName || 'Unknown Dimension';
+      })();
       const craftedRecipes = Array.from(this.craftedRecipes ?? []);
       const recipeCount = craftedRecipes.length;
       return {
@@ -1097,9 +1124,37 @@
           const updated = entry.updatedAt
             ? new Date(entry.updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
             : '—';
-          const dimensionNames = Array.isArray(entry.dimensions)
+          let dimensionNames = Array.isArray(entry.dimensions)
             ? entry.dimensions.filter((name) => typeof name === 'string' && name.trim().length > 0)
             : [];
+          if (!dimensionNames.length && Array.isArray(entry.dimensionNames)) {
+            dimensionNames = entry.dimensionNames.filter(
+              (name) => typeof name === 'string' && name.trim().length > 0,
+            );
+          }
+          if (!dimensionNames.length && Array.isArray(entry.dimensionLabels)) {
+            dimensionNames = entry.dimensionLabels.filter(
+              (name) => typeof name === 'string' && name.trim().length > 0,
+            );
+          }
+          if (
+            !dimensionNames.length &&
+            typeof entry.dimensionLabel === 'string' &&
+            entry.dimensionLabel.trim().length > 0
+          ) {
+            dimensionNames = [entry.dimensionLabel.trim()];
+          }
+          const dimensionNameSet = new Set();
+          const normalizedDimensionNames = [];
+          dimensionNames.forEach((label) => {
+            const trimmed = label.trim();
+            if (!trimmed || dimensionNameSet.has(trimmed.toLowerCase())) {
+              return;
+            }
+            dimensionNameSet.add(trimmed.toLowerCase());
+            normalizedDimensionNames.push(trimmed);
+          });
+          dimensionNames = normalizedDimensionNames;
           const dimensionTotal = Number.isFinite(entry.dimensionTotal)
             ? Math.max(1, Math.floor(entry.dimensionTotal))
             : DIMENSION_THEME.length;

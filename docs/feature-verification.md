@@ -26,6 +26,7 @@ This document maps the requested experience requirements to concrete implementat
 ## Backend Synchronisation and Scoreboard
 - Scores sync to the configured API using `fetch`, while the leaderboard modal polls and renders ranked runs. Player identity updates feed location and Google account data into score submissions.【F:simple-experience.js†L734-L817】【F:simple-experience.js†L985-L1039】【F:simple-experience.js†L1335-L1388】【F:script.js†L760-L938】
 - Leaderboard rows highlight the most recent unlocked dimension alongside the completion ratio so explorers can quickly read each run's multiverse progress.【F:simple-experience.js†L900-L955】
+- Dimension badges now derive their labels from run summaries and backend payloads alike, de-duplicating names so every row surfaces the unlocked realms even when the API omits verbose titles.【F:simple-experience.js†L1023-L1051】【F:simple-experience.js†L1127-L1157】
 - Score merges also power the in-world overlays: the victory state shows your live rank, while the portal progress HUD and hint system reference the latest sync results to keep explorers informed.【F:simple-experience.js†L4480-L4520】
 
 ## Performance and Polish Considerations
