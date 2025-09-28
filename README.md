@@ -7,7 +7,7 @@ Infinite Dimension is a browser-based voxel survival-puzzle experience inspired 
 - survival systems spanning health, bubbles, zombies, iron golems, crafting, scoring, and sequential dimension unlocks; and
 - backend-aware score syncing, Google Sign-In hooks, and responsive HUD/leaderboard overlays.
 
-Advanced renderer work is still underway, so the interactive sandbox renderer now boots by default to guarantee the full 3D experience the moment the page loads. See [docs/portals-of-dimension-plan.md](docs/portals-of-dimension-plan.md) for the roadmap that bridges the sandbox and the long-term vision.
+Advanced renderer work is still underway, so the interactive sandbox renderer now boots by default to guarantee the full 3D experience the moment the page loads. See [docs/portals-of-dimension-plan.md](docs/portals-of-dimension-plan.md) for the roadmap that bridges the sandbox and the long-term vision, and consult [docs/portals-of-dimension-fulfillment.md](docs/portals-of-dimension-fulfillment.md) for a citation-rich snapshot that ties each gameplay loop back to its shipped implementation.
 
 ## Current status
 
