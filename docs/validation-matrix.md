@@ -31,6 +31,7 @@ Use it as a quick reference when planning manual or automated regression passes.
 | Requirement ID | Validation Method | Success Criteria | Test Scenarios |
 | --- | --- | --- | --- |
 | MP-01 / MP-02 | AWS console queries combined with multi-device login tests; Puppeteer launches dual tabs for sync timing. | • State synchronises in under two seconds (observed 1.4s tab-to-tab).<br>• Leaderboard updates live using mock scores. | • Scenario: Log in on mobile, play a session, then switch to desktop—score persists. |
+| MP-03 | Browser geolocation prompt exercised via Playwright; verify localStorage snapshot. | • Location prompt appears on first launch.<br>• Leaderboard rows include anonymised lat/lon label on approval.<br>• Decline path stores “Location permission denied” without crashes. | • Scenario: Accept geolocation once, refresh, confirm stored coordinates hydrate UI before new request. |
 
 ## Audio experience
 

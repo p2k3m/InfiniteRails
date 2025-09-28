@@ -143,6 +143,8 @@
     (typeof globalThis !== 'undefined' && globalThis.PortalMechanics) ||
     null;
 
+  const IDENTITY_STORAGE_KEY = 'infinite-rails-simple-identity';
+
   const MODEL_URLS = {
     arm: 'assets/arm.gltf',
     steve: 'assets/steve.gltf',
@@ -413,6 +415,16 @@
       this.playerAvatarUrl = null;
       this.playerLocation = null;
       this.playerLocationLabel = 'Location hidden';
+      this.identityStorageKey = options.identityStorageKey || IDENTITY_STORAGE_KEY;
+      this.identityHydrating = false;
+      this.locationRequestCooldownSeconds = Math.max(
+        15,
+        Number.isFinite(options.locationRequestCooldownSeconds)
+          ? Number(options.locationRequestCooldownSeconds)
+          : 45,
+      );
+      this.lastLocationRequestAt = 0;
+      this.pendingLocationRequest = null;
       this.deviceLabel = this.describeDevice();
       this.scene = null;
       this.camera = null;
@@ -589,6 +601,7 @@
       this.craftingRecipes = this.createCraftingRecipes();
       this.craftedRecipes = new Set();
       this.restorePersistentUnlocks();
+      this.restoreIdentitySnapshot();
       this.animationFrame = null;
       this.briefingAutoHideTimer = null;
       this.briefingFadeTimer = null;
@@ -666,6 +679,9 @@
       this.refreshCraftingUi();
       this.hideIntro();
       this.showBriefingOverlay();
+      this.autoCaptureLocation({ updateOnFailure: true }).catch((error) => {
+        console.warn('Location capture failed', error);
+      });
       this.updateLocalScoreEntry('start');
       this.loadScoreboard();
       this.exposeDebugInterface();
@@ -1319,6 +1335,118 @@
       }
     }
 
+    restoreIdentitySnapshot() {
+      if (typeof localStorage === 'undefined') {
+        return;
+      }
+      this.identityHydrating = true;
+      try {
+        const raw = localStorage.getItem(this.identityStorageKey);
+        if (!raw) {
+          return;
+        }
+        let payload = null;
+        try {
+          payload = JSON.parse(raw);
+        } catch (error) {
+          console.warn('Failed to parse stored identity snapshot', error);
+          return;
+        }
+        if (!payload || typeof payload !== 'object') {
+          return;
+        }
+        if (typeof payload.displayName === 'string' && payload.displayName.trim().length > 0) {
+          this.playerDisplayName = payload.displayName.trim();
+          this.defaultPlayerName = this.playerDisplayName;
+        }
+        if (typeof payload.googleId === 'string' && payload.googleId.trim().length > 0) {
+          this.playerGoogleId = payload.googleId.trim();
+        }
+        if (payload.location && typeof payload.location === 'object') {
+          this.setPlayerLocation({ ...payload.location });
+        } else if (typeof payload.locationLabel === 'string' && payload.locationLabel.trim().length > 0) {
+          this.playerLocationLabel = payload.locationLabel.trim();
+        }
+      } finally {
+        this.identityHydrating = false;
+      }
+    }
+
+    persistIdentitySnapshot() {
+      if (this.identityHydrating || typeof localStorage === 'undefined') {
+        return;
+      }
+      try {
+        const payload = {
+          displayName: this.playerDisplayName,
+          googleId: this.playerGoogleId,
+          location: this.playerLocation,
+          locationLabel: this.playerLocationLabel,
+        };
+        localStorage.setItem(this.identityStorageKey, JSON.stringify(payload));
+      } catch (error) {
+        console.warn('Failed to persist identity snapshot', error);
+      }
+    }
+
+    autoCaptureLocation(options = {}) {
+      if (typeof navigator === 'undefined' || !navigator.geolocation) {
+        if (options.updateOnFailure !== false) {
+          this.setPlayerLocation({ error: 'Location unavailable' });
+        }
+        return Promise.resolve(null);
+      }
+      if (this.pendingLocationRequest) {
+        return this.pendingLocationRequest;
+      }
+      if (!options.force && this.playerLocation && !this.playerLocation.error) {
+        return Promise.resolve(this.playerLocation);
+      }
+      const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+      if (
+        !options.force &&
+        this.lastLocationRequestAt &&
+        now - this.lastLocationRequestAt < this.locationRequestCooldownSeconds * 1000
+      ) {
+        return Promise.resolve(this.playerLocation);
+      }
+      this.lastLocationRequestAt = now;
+      this.pendingLocationRequest = new Promise((resolve) => {
+        const handleSuccess = (position) => {
+          this.pendingLocationRequest = null;
+          const coords = position?.coords || {};
+          const payload = {
+            latitude: Number.isFinite(coords.latitude) ? coords.latitude : null,
+            longitude: Number.isFinite(coords.longitude) ? coords.longitude : null,
+            accuracy: Number.isFinite(coords.accuracy) ? coords.accuracy : null,
+          };
+          this.setPlayerLocation(payload);
+          this.persistIdentitySnapshot();
+          resolve(payload);
+        };
+        const handleError = (error) => {
+          this.pendingLocationRequest = null;
+          if (options.updateOnFailure !== false) {
+            const denied = error?.code === error?.PERMISSION_DENIED;
+            const label = denied ? 'Location permission denied' : 'Location unavailable';
+            this.setPlayerLocation({ error: label });
+            this.persistIdentitySnapshot();
+          }
+          resolve(null);
+        };
+        try {
+          navigator.geolocation.getCurrentPosition(handleSuccess, handleError, {
+            enableHighAccuracy: options.highAccuracy === true,
+            maximumAge: Number.isFinite(options.maximumAge) ? options.maximumAge : 60000,
+            timeout: Number.isFinite(options.timeout) ? options.timeout : 8000,
+          });
+        } catch (error) {
+          handleError(error);
+        }
+      });
+      return this.pendingLocationRequest;
+    }
+
     describeDevice() {
       if (typeof navigator === 'undefined') {
         return 'Device details pending';
@@ -1354,6 +1482,7 @@
     }
 
     setPlayerLocation(location) {
+      const hydrating = this.identityHydrating;
       if (!location) {
         this.playerLocation = null;
         this.playerLocationLabel = 'Location hidden';
@@ -1377,9 +1506,12 @@
       if (this.started) {
         this.updateHud();
       }
-      this.updateLocalScoreEntry('location-update');
-      this.scheduleScoreSync('location-update');
-      this.renderScoreboard();
+      if (!hydrating) {
+        this.updateLocalScoreEntry('location-update');
+        this.scheduleScoreSync('location-update');
+        this.renderScoreboard();
+      }
+      this.persistIdentitySnapshot();
     }
 
     setIdentity(identity = {}) {
@@ -1402,6 +1534,7 @@
       }
       this.updateLocalScoreEntry('identity-update');
       this.scheduleScoreSync('identity-update');
+      this.persistIdentitySnapshot();
       if (previousId !== this.playerGoogleId && typeof this.loadScoreboard === 'function') {
         this.loadScoreboard({ force: true }).catch(() => {});
       } else {
@@ -1422,6 +1555,7 @@
       this.updateLocalScoreEntry('identity-cleared');
       this.scheduleScoreSync('identity-cleared');
       this.renderScoreboard();
+      this.persistIdentitySnapshot();
     }
 
     createVoxelTexture(key, palette) {
