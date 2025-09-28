@@ -438,6 +438,15 @@
       }
       this.canvas = options.canvas;
       this.ui = options.ui || {};
+      this.victoryBannerEl = this.ui.victoryBanner || null;
+      this.victoryCelebrationEl = this.ui.victoryCelebration || null;
+      this.victoryConfettiEl = this.ui.victoryConfetti || null;
+      this.victoryFireworksEl = this.ui.victoryFireworks || null;
+      this.victoryMessageEl = this.ui.victoryMessageEl || null;
+      this.victoryStatsEl = this.ui.victoryStatsEl || null;
+      this.victoryShareButton = this.ui.victoryShareButton || null;
+      this.victoryCloseButton = this.ui.victoryCloseButton || null;
+      this.victoryShareStatusEl = this.ui.victoryShareStatusEl || null;
       this.apiBaseUrl = options.apiBaseUrl || null;
       this.playerDisplayName = (options.playerName || '').trim() || 'Explorer';
       this.defaultPlayerName = this.playerDisplayName;
@@ -656,6 +665,11 @@
       this.animationFrame = null;
       this.briefingAutoHideTimer = null;
       this.briefingFadeTimer = null;
+      this.victoryHideTimer = null;
+      this.victoryCelebrationActive = false;
+      this.victorySummary = null;
+      this.victoryShareBusy = false;
+      this.victoryEffectTimers = [];
       this.started = false;
       this.prevTime = null;
       this.mobileControlsRoot = this.ui.mobileControls || null;
@@ -671,6 +685,7 @@
       this.touchJumpRequested = false;
       this.mobileControlDisposers = [];
       this.isTouchPreferred = this.detectTouchPreferred();
+      this.prefersReducedMotion = this.detectReducedMotion();
       this.audio = this.createAudioController();
       this.onPointerLockChange = this.handlePointerLockChange.bind(this);
       this.onPointerLockError = this.handlePointerLockError.bind(this);
@@ -703,6 +718,8 @@
       this.onInventoryToggle = this.handleInventoryToggle.bind(this);
       this.onCraftingInventoryClick = this.handleCraftingInventoryClick.bind(this);
       this.onVictoryReplay = this.handleVictoryReplay.bind(this);
+      this.onVictoryClose = this.handleVictoryClose.bind(this);
+      this.onVictoryShare = this.handleVictoryShare.bind(this);
       this.onCraftingModalBackdrop = (event) => {
         if (event?.target === this.craftingModal) {
           this.handleCloseCrafting(event);
@@ -735,6 +752,12 @@
     start() {
       if (this.started) return;
       this.started = true;
+      this.clearVictoryEffectTimers();
+      this.hideVictoryCelebration(true);
+      this.hideVictoryBanner();
+      this.victorySummary = null;
+      this.victoryCelebrationActive = false;
+      this.victoryShareBusy = false;
       this.setupScene();
       this.preloadCharacterModels();
       this.loadFirstPersonArms();
@@ -1296,6 +1319,9 @@
       if (this.scoreboardEmptyEl) {
         this.scoreboardEmptyEl.hidden = true;
       }
+      if (this.victoryCelebrationActive) {
+        this.updateVictoryCelebrationStats();
+      }
     }
 
     getDimensionBadgeSymbol(label) {
@@ -1412,6 +1438,10 @@
       }
       this.unbindEvents();
       this.hidePointerHint(true);
+      this.clearVictoryEffectTimers();
+      this.hideVictoryCelebration(true);
+      this.hideVictoryBanner();
+      this.victoryShareBusy = false;
     }
 
     setupScene() {
@@ -2128,6 +2158,18 @@
         return true;
       }
       return 'ontouchstart' in window;
+    }
+
+    detectReducedMotion() {
+      if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+        return false;
+      }
+      try {
+        return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      } catch (error) {
+        console.debug('Unable to determine motion preferences', error);
+        return false;
+      }
     }
 
     createAudioController() {
@@ -4047,6 +4089,8 @@
       this.scheduleScoreSync('victory');
       this.audio.play('victoryCheer', { volume: 0.75 });
       this.emitGameEvent('victory', { summary: this.createRunSummary('victory') });
+      this.showVictoryCelebration();
+      this.showVictoryBanner('Eternal Ingot secured — celebrate and share your run.');
     }
 
     positionPlayer() {
@@ -4110,6 +4154,8 @@
         el.addEventListener('click', this.onInventoryToggle);
       });
       this.ui?.dimensionInfoEl?.addEventListener('click', this.onVictoryReplay);
+      this.victoryCloseButton?.addEventListener('click', this.onVictoryClose);
+      this.victoryShareButton?.addEventListener('click', this.onVictoryShare);
     }
 
     unbindEvents() {
@@ -4145,6 +4191,8 @@
         el.removeEventListener('click', this.onInventoryToggle);
       });
       this.ui?.dimensionInfoEl?.removeEventListener('click', this.onVictoryReplay);
+      this.victoryCloseButton?.removeEventListener('click', this.onVictoryClose);
+      this.victoryShareButton?.removeEventListener('click', this.onVictoryShare);
       this.teardownMobileControls();
     }
 
@@ -5699,6 +5747,330 @@
         <p>${theme.description ?? ''}</p>
         <p class="dimension-meta">${meta}</p>
       `;
+    }
+
+    showVictoryCelebration() {
+      const doc = typeof document !== 'undefined' ? document : null;
+      this.victorySummary = this.createRunSummary('victory');
+      this.victoryCelebrationActive = true;
+      this.victoryShareBusy = false;
+      if (this.victoryCelebrationEl) {
+        this.victoryCelebrationEl.hidden = false;
+        this.victoryCelebrationEl.setAttribute('aria-hidden', 'false');
+        this.victoryCelebrationEl.classList.remove('active');
+        void this.victoryCelebrationEl.offsetWidth;
+        this.victoryCelebrationEl.classList.add('active');
+      }
+      if (doc?.body) {
+        doc.body.classList.add('victory-celebration-active');
+      }
+      if (this.victoryShareStatusEl) {
+        this.victoryShareStatusEl.textContent = '';
+      }
+      if (this.victoryShareButton) {
+        this.victoryShareButton.disabled = false;
+        this.victoryShareButton.removeAttribute('aria-busy');
+      }
+      if (this.victoryCloseButton) {
+        this.victoryCloseButton.disabled = false;
+      }
+      this.clearVictoryEffectTimers();
+      this.prepareVictoryEffects();
+      this.updateVictoryCelebrationStats();
+      if (typeof requestAnimationFrame === 'function' && this.victoryShareButton?.focus) {
+        requestAnimationFrame(() => {
+          try {
+            this.victoryShareButton.focus({ preventScroll: true });
+          } catch (error) {
+            // Ignore focus issues if the browser prevents it.
+          }
+        });
+      }
+      this.updateFooterSummary();
+    }
+
+    hideVictoryCelebration(immediate = false) {
+      const doc = typeof document !== 'undefined' ? document : null;
+      if (!this.victoryCelebrationEl) {
+        this.victoryCelebrationActive = false;
+        return;
+      }
+      this.victoryCelebrationActive = false;
+      this.clearVictoryEffectTimers();
+      this.victoryCelebrationEl.classList.remove('active');
+      this.victoryCelebrationEl.setAttribute('aria-hidden', 'true');
+      const finalize = () => {
+        this.victoryCelebrationEl.hidden = true;
+        if (this.victoryConfettiEl) {
+          this.victoryConfettiEl.innerHTML = '';
+        }
+        if (this.victoryFireworksEl) {
+          this.victoryFireworksEl.innerHTML = '';
+        }
+      };
+      if (this.victoryHideTimer) {
+        clearTimeout(this.victoryHideTimer);
+        this.victoryHideTimer = null;
+      }
+      if (immediate) {
+        finalize();
+      } else {
+        this.victoryHideTimer = setTimeout(finalize, 360);
+      }
+      if (this.victoryShareStatusEl) {
+        this.victoryShareStatusEl.textContent = '';
+      }
+      if (this.victoryShareButton) {
+        this.victoryShareButton.disabled = false;
+        this.victoryShareButton.removeAttribute('aria-busy');
+      }
+      if (doc?.body) {
+        doc.body.classList.remove('victory-celebration-active');
+      }
+      this.updateFooterSummary();
+    }
+
+    clearVictoryEffectTimers() {
+      if (Array.isArray(this.victoryEffectTimers) && this.victoryEffectTimers.length) {
+        this.victoryEffectTimers.forEach((timer) => clearTimeout(timer));
+      }
+      this.victoryEffectTimers = [];
+    }
+
+    prepareVictoryEffects() {
+      if (this.prefersReducedMotion) {
+        if (this.victoryConfettiEl) {
+          this.victoryConfettiEl.innerHTML = '';
+        }
+        if (this.victoryFireworksEl) {
+          this.victoryFireworksEl.innerHTML = '';
+        }
+        return;
+      }
+      const doc = typeof document !== 'undefined' ? document : null;
+      if (!doc) {
+        return;
+      }
+      if (this.victoryConfettiEl) {
+        this.victoryConfettiEl.innerHTML = '';
+        const colors = ['#f7b333', '#78f2ff', '#ff5e8b', '#7bff85', '#b19cff'];
+        const pieces = 42;
+        for (let i = 0; i < pieces; i += 1) {
+          const piece = doc.createElement('div');
+          piece.className = 'victory-confetti__piece';
+          const color = colors[i % colors.length];
+          piece.style.setProperty('--x', `${Math.random() * 100}%`);
+          piece.style.setProperty('--offset-x', `${(Math.random() - 0.5) * 40}vw`);
+          piece.style.setProperty('--rotation', `${Math.floor(Math.random() * 540) - 180}deg`);
+          piece.style.setProperty('--duration', `${(2.4 + Math.random() * 1.4).toFixed(2)}s`);
+          piece.style.setProperty('--delay', `${(Math.random() * 0.8).toFixed(2)}s`);
+          piece.style.setProperty('--color', color);
+          this.victoryConfettiEl.appendChild(piece);
+        }
+      }
+      if (this.victoryFireworksEl) {
+        this.victoryFireworksEl.innerHTML = '';
+        const bursts = 3;
+        for (let i = 0; i < bursts; i += 1) {
+          const firework = doc.createElement('div');
+          firework.className = 'victory-firework';
+          firework.style.setProperty('--left', `${20 + Math.random() * 60}%`);
+          firework.style.setProperty('--duration', `${(1.6 + Math.random() * 0.6).toFixed(2)}s`);
+          firework.style.setProperty('--delay', `${(0.35 * i).toFixed(2)}s`);
+          firework.style.setProperty('--travel', `${(-35 - Math.random() * 28).toFixed(2)}vh`);
+          firework.style.setProperty('--hue', `${Math.floor(Math.random() * 360)}`);
+          const burst = doc.createElement('div');
+          burst.className = 'victory-firework__burst';
+          firework.appendChild(burst);
+          this.victoryFireworksEl.appendChild(firework);
+          const timer = setTimeout(() => {
+            firework.classList.add('burst');
+          }, 550 + Math.random() * 420 + i * 140);
+          this.victoryEffectTimers.push(timer);
+        }
+      }
+    }
+
+    updateVictoryCelebrationStats() {
+      if (!this.victoryCelebrationActive) {
+        return;
+      }
+      const summary = { ...(this.victorySummary || this.createRunSummary('victory')) };
+      summary.score = Math.round(this.score ?? summary.score ?? 0);
+      summary.dimensionCount = Math.min(DIMENSION_THEME.length, this.currentDimensionIndex + 1);
+      summary.dimensionTotal = DIMENSION_THEME.length;
+      summary.runTimeSeconds = Math.round(this.elapsed ?? summary.runTimeSeconds ?? 0);
+      summary.recipeCount = this.craftedRecipes?.size ?? summary.recipeCount ?? 0;
+      summary.dimensionLabel = this.dimensionSettings?.name ?? summary.dimensionLabel;
+      this.victorySummary = summary;
+      const rank = this.getPlayerLeaderboardRank();
+      const formatRunTime = this.scoreboardUtils?.formatRunTime
+        ? (seconds) => this.scoreboardUtils.formatRunTime(seconds)
+        : (seconds) => {
+            const total = Math.max(0, Math.round(seconds ?? 0));
+            const minutes = Math.floor(total / 60);
+            const secs = total % 60;
+            const pad = (value) => String(value).padStart(2, '0');
+            return `${pad(minutes)}:${pad(secs)}`;
+          };
+      if (this.victoryStatsEl) {
+        const statsMarkup = [
+          { label: 'Final Score', value: summary.score.toLocaleString() },
+          {
+            label: 'Dimensions Stabilised',
+            value: `${summary.dimensionCount}/${summary.dimensionTotal}`,
+          },
+          { label: 'Recipes Crafted', value: Number(summary.recipeCount || 0).toLocaleString() },
+          { label: 'Run Time', value: formatRunTime(summary.runTimeSeconds) },
+          { label: 'Leaderboard Rank', value: rank ? `#${rank}` : 'Offline' },
+        ]
+          .map(
+            (stat) => `
+          <div>
+            <dt>${escapeHtml(stat.label)}</dt>
+            <dd>${escapeHtml(String(stat.value))}</dd>
+          </div>
+        `,
+          )
+          .join('');
+        this.victoryStatsEl.innerHTML = statsMarkup;
+      }
+      if (this.victoryMessageEl) {
+        const dimensionText = summary.dimensionCount === 1 ? 'dimension' : 'dimensions';
+        const rankMessage = rank
+          ? `Rank #${rank} on the current leaderboard.`
+          : this.apiBaseUrl
+            ? 'Sign in to publish your run to the leaderboard.'
+            : 'Connect to the leaderboard to publish your run.';
+        this.victoryMessageEl.textContent = `You stabilised ${summary.dimensionCount} ${dimensionText} and recovered the Eternal Ingot. ${rankMessage}`;
+      }
+      if (this.victoryBannerEl?.classList.contains('visible')) {
+        const bannerMessage = rank
+          ? `Score ${summary.score.toLocaleString()} · Rank #${rank}`
+          : `Score ${summary.score.toLocaleString()} · Offline run`;
+        this.victoryBannerEl.innerHTML = `
+          <h3>Victory</h3>
+          <p>${escapeHtml(bannerMessage)}</p>
+        `;
+      }
+    }
+
+    handleVictoryClose(event) {
+      if (event?.preventDefault) {
+        event.preventDefault();
+      }
+      this.hideVictoryCelebration();
+      this.hideVictoryBanner();
+      this.showHint('Celebration closed — continue exploring!');
+      try {
+        this.canvas?.focus({ preventScroll: true });
+      } catch (error) {
+        // Ignore focus errors in browsers that block programmatic focus.
+      }
+      this.updatePointerHintForInputMode();
+    }
+
+    async handleVictoryShare(event) {
+      if (event?.preventDefault) {
+        event.preventDefault();
+      }
+      if (this.victoryShareBusy) {
+        return;
+      }
+      this.victoryShareBusy = true;
+      this.updateVictoryCelebrationStats();
+      const summary = { ...(this.victorySummary || this.createRunSummary('victory')) };
+      const rank = this.getPlayerLeaderboardRank();
+      const formatRunTime = this.scoreboardUtils?.formatRunTime
+        ? (seconds) => this.scoreboardUtils.formatRunTime(seconds)
+        : (seconds) => {
+            const total = Math.max(0, Math.round(seconds ?? 0));
+            const minutes = Math.floor(total / 60);
+            const secs = total % 60;
+            const pad = (value) => String(value).padStart(2, '0');
+            return `${pad(minutes)}:${pad(secs)}`;
+          };
+      const baseLines = [
+        `Secured the Eternal Ingot in Infinite Rails with ${summary.score.toLocaleString()} points!`,
+        `Stabilised ${summary.dimensionCount}/${summary.dimensionTotal} dimensions in ${formatRunTime(summary.runTimeSeconds)}.`,
+        rank ? `Current leaderboard rank: #${rank}.` : 'Offline run — connect to publish your rank.',
+      ];
+      const shareUrl = typeof window !== 'undefined' && window.location ? window.location.href : '';
+      const shareText = baseLines.join(' ');
+      const clipboardText = shareUrl ? `${shareText}\n${shareUrl}` : shareText;
+      const nav = typeof navigator !== 'undefined' ? navigator : null;
+      let statusMessage = '';
+      if (this.victoryShareButton) {
+        this.victoryShareButton.disabled = true;
+        this.victoryShareButton.setAttribute('aria-busy', 'true');
+      }
+      try {
+        if (nav?.share) {
+          const payload = { title: 'Infinite Rails Victory', text: shareText };
+          if (shareUrl) {
+            payload.url = shareUrl;
+          }
+          const canShare = typeof nav.canShare === 'function' ? nav.canShare(payload) : true;
+          if (canShare) {
+            await nav.share(payload);
+            statusMessage = 'Shared your victory!';
+          }
+        }
+        if (!statusMessage && nav?.clipboard?.writeText) {
+          await nav.clipboard.writeText(clipboardText);
+          statusMessage = 'Copied run summary to clipboard.';
+        }
+        if (!statusMessage) {
+          if (typeof window !== 'undefined' && typeof window.prompt === 'function') {
+            window.prompt('Copy your Infinite Rails victory summary:', clipboardText);
+            statusMessage = 'Share unsupported — summary ready to copy.';
+          } else {
+            statusMessage = `Share unsupported — copy this summary: ${clipboardText}`;
+          }
+        }
+        this.scheduleScoreSync('victory-share');
+      } catch (error) {
+        if (error?.name === 'AbortError') {
+          statusMessage = 'Share cancelled.';
+        } else {
+          console.warn('Victory share failed', error);
+          statusMessage = 'Share failed — copy your summary manually.';
+        }
+      } finally {
+        if (this.victoryShareButton) {
+          this.victoryShareButton.disabled = false;
+          this.victoryShareButton.removeAttribute('aria-busy');
+        }
+        this.victoryShareBusy = false;
+      }
+      if (statusMessage) {
+        if (this.victoryShareStatusEl) {
+          this.victoryShareStatusEl.textContent = statusMessage;
+        } else {
+          this.showHint(statusMessage);
+        }
+      }
+      this.updateFooterSummary();
+    }
+
+    showVictoryBanner(message) {
+      if (!this.victoryBannerEl) return;
+      const text = typeof message === 'string' && message.trim().length
+        ? message.trim()
+        : 'Victory achieved — Eternal Ingot secured!';
+      this.victoryBannerEl.innerHTML = `
+        <h3>Victory</h3>
+        <p>${escapeHtml(text)}</p>
+      `;
+      this.victoryBannerEl.classList.add('visible');
+      this.victoryBannerEl.setAttribute('aria-hidden', 'false');
+    }
+
+    hideVictoryBanner() {
+      if (!this.victoryBannerEl) return;
+      this.victoryBannerEl.classList.remove('visible');
+      this.victoryBannerEl.setAttribute('aria-hidden', 'true');
+      this.victoryBannerEl.innerHTML = '';
     }
 
     exposeDebugInterface() {
