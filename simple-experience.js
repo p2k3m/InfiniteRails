@@ -17,6 +17,118 @@
   const GOLEM_CONTACT_RANGE = 1.6;
   const GOLEM_SPAWN_INTERVAL = 26;
   const GOLEM_MAX_PER_DIMENSION = 2;
+  const CHEST_COUNT_PER_DIMENSION = 2;
+  const CHEST_INTERACT_RANGE = 1.8;
+  const CHEST_HINT_COOLDOWN = 4.5;
+
+  const DIMENSION_LOOT_TABLES = {
+    origin: [
+      {
+        items: [
+          { item: 'stick', quantity: 3 },
+          { item: 'stone', quantity: 1 },
+        ],
+        score: 2,
+        message: 'Starter cache recovered — craft your tools.',
+      },
+      {
+        items: [
+          { item: 'grass-block', quantity: 3 },
+          { item: 'dirt', quantity: 2 },
+        ],
+        score: 1.5,
+        message: 'Extra building stock secured from the chest.',
+      },
+    ],
+    rock: [
+      {
+        items: [
+          { item: 'stone', quantity: 4 },
+          { item: 'portal-charge', quantity: 1 },
+        ],
+        score: 3,
+        message: 'Dense rock cache pulsing with portal energy.',
+      },
+      {
+        items: [
+          { item: 'stone', quantity: 3 },
+          { item: 'stick', quantity: 1 },
+        ],
+        score: 2.5,
+        message: 'Rails reinforced with honed stone slabs.',
+      },
+    ],
+    stone: [
+      {
+        items: [
+          { item: 'portal-charge', quantity: 2 },
+          { item: 'stone', quantity: 2 },
+        ],
+        score: 3.5,
+        message: 'Portal charges hum with refined stone dust.',
+      },
+      {
+        items: [
+          { item: 'stone-pickaxe', quantity: 1 },
+          { item: 'portal-charge', quantity: 1 },
+        ],
+        score: 4,
+        message: 'A tempered pickaxe gleams inside the vault.',
+      },
+    ],
+    tar: [
+      {
+        items: [
+          { item: 'portal-charge', quantity: 2 },
+          { item: 'grass-block', quantity: 2 },
+        ],
+        score: 3,
+        message: 'Recovered supplies before the tar swallowed them.',
+      },
+      {
+        items: [
+          { item: 'stone', quantity: 2 },
+          { item: 'stick', quantity: 2 },
+        ],
+        score: 2.5,
+        message: 'Tar-soaked lumber salvaged for future rails.',
+      },
+    ],
+    marble: [
+      {
+        items: [
+          { item: 'portal-charge', quantity: 3 },
+        ],
+        score: 4.5,
+        message: 'Marble vault releases concentrated portal charge.',
+      },
+      {
+        items: [
+          { item: 'stone', quantity: 2 },
+          { item: 'grass-block', quantity: 2 },
+        ],
+        score: 3,
+        message: 'Lightweight marble bricks packed for construction.',
+      },
+    ],
+    netherite: [
+      {
+        items: [
+          { item: 'portal-charge', quantity: 4 },
+        ],
+        score: 5,
+        message: 'Eternal Ingot fragments resonate through the chest.',
+      },
+      {
+        items: [
+          { item: 'stone-pickaxe', quantity: 1 },
+          { item: 'portal-charge', quantity: 2 },
+        ],
+        score: 5,
+        message: 'Armaments secured for the final Netherite sprint.',
+      },
+    ],
+  };
 
   const GLTF_LOADER_URLS = [
     'vendor/GLTFLoader.js',
@@ -398,6 +510,11 @@
       this.victoryAchieved = false;
       this.currentDimensionIndex = 0;
       this.dimensionSettings = DIMENSION_THEME[0];
+      this.chestGroup = null;
+      this.chests = [];
+      this.activeChestId = null;
+      this.chestPulseTime = 0;
+      this.lastChestHintAt = 0;
       this.currentSpeed = PLAYER_BASE_SPEED;
       this.gravityScale = this.dimensionSettings.gravity;
       this.verticalVelocity = 0;
@@ -522,6 +639,7 @@
       this.applyDimensionSettings(this.currentDimensionIndex);
       this.buildTerrain();
       this.buildRails();
+      this.spawnDimensionChests();
       this.refreshPortalState();
       this.positionPlayer();
       this.bindEvents();
@@ -972,11 +1090,13 @@
       this.portalGroup = new THREE.Group();
       this.zombieGroup = new THREE.Group();
       this.golemGroup = new THREE.Group();
+      this.chestGroup = new THREE.Group();
       this.scene.add(this.terrainGroup);
       this.scene.add(this.railsGroup);
       this.scene.add(this.portalGroup);
       this.scene.add(this.zombieGroup);
       this.scene.add(this.golemGroup);
+      this.scene.add(this.chestGroup);
       this.createFirstPersonHands();
       this.loadPlayerCharacter().catch((error) => {
         console.warn('Player model failed to load; continuing with primitive hands.', error);
@@ -1576,6 +1696,9 @@
 
     handlePortalButton(event) {
       event.preventDefault();
+      if (this.tryOpenNearbyChest()) {
+        return;
+      }
       if (this.portalActivated && this.isPlayerNearPortal()) {
         this.advanceDimension();
         return;
@@ -2016,6 +2139,7 @@
 
     buildTerrain() {
       const THREE = this.THREE;
+      this.clearChests();
       this.columns.clear();
       this.heightMap = Array.from({ length: WORLD_SIZE }, () => Array(WORLD_SIZE).fill(0));
       this.initialHeightMap = Array.from({ length: WORLD_SIZE }, () => Array(WORLD_SIZE).fill(0));
@@ -2218,6 +2342,223 @@
         mesh.updateMatrix();
         this.railsGroup.add(mesh);
       }
+    }
+
+    getChestLootForDimension(dimensionId, index) {
+      const normalizedId = typeof dimensionId === 'string' ? dimensionId : 'origin';
+      const tables = DIMENSION_LOOT_TABLES[normalizedId] || DIMENSION_LOOT_TABLES.origin || [];
+      if (!tables.length) {
+        return { items: [], score: 0, message: '' };
+      }
+      const safeIndex = ((index % tables.length) + tables.length) % tables.length;
+      const entry = tables[safeIndex];
+      return {
+        items: Array.isArray(entry.items)
+          ? entry.items.map((item) => ({ item: item.item, quantity: item.quantity }))
+          : [],
+        score: Number.isFinite(entry.score) ? entry.score : 0,
+        message: entry.message || '',
+      };
+    }
+
+    createChestMesh(theme) {
+      const THREE = this.THREE;
+      const palette = theme?.palette ?? {};
+      const baseColor = palette.dirt || '#a66a33';
+      const accentColor = palette.rails || '#f5b041';
+      const group = new THREE.Group();
+      const baseMaterial = new THREE.MeshStandardMaterial({
+        color: baseColor,
+        roughness: 0.72,
+        metalness: 0.18,
+      });
+      const trimMaterial = new THREE.MeshStandardMaterial({
+        color: accentColor,
+        roughness: 0.4,
+        metalness: 0.68,
+        emissive: new THREE.Color(accentColor),
+        emissiveIntensity: 0.18,
+      });
+      const lockMaterial = trimMaterial.clone();
+      const body = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.5, 0.6), baseMaterial);
+      body.castShadow = true;
+      body.receiveShadow = true;
+      body.position.y = 0.25;
+      group.add(body);
+      const lidPivot = new THREE.Group();
+      lidPivot.position.set(0, 0.5, -0.3);
+      const lid = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.4, 0.6), baseMaterial.clone());
+      lid.position.set(0, 0, 0.3);
+      lid.castShadow = true;
+      lid.receiveShadow = true;
+      lidPivot.add(lid);
+      group.add(lidPivot);
+      const band = new THREE.Mesh(new THREE.BoxGeometry(0.94, 0.12, 0.12), trimMaterial);
+      band.position.set(0, 0.32, 0);
+      band.castShadow = true;
+      band.receiveShadow = true;
+      group.add(band);
+      const lock = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.22, 0.05), lockMaterial);
+      lock.position.set(0, 0.32, 0.33);
+      lock.castShadow = true;
+      lock.receiveShadow = true;
+      group.add(lock);
+      group.userData = {
+        lid,
+        lidPivot,
+        highlightMaterials: [trimMaterial, lockMaterial],
+      };
+      return group;
+    }
+
+    spawnDimensionChests() {
+      if (!this.chestGroup) return;
+      this.clearChests();
+      const theme = this.dimensionSettings || DIMENSION_THEME[0];
+      const chestCount = CHEST_COUNT_PER_DIMENSION;
+      const seedBase = (this.currentDimensionIndex + 1) * 97;
+      this.chestPulseTime = 0;
+      for (let i = 0; i < chestCount; i += 1) {
+        const randAngle = pseudoRandom(seedBase + i * 11.37, seedBase - i * 5.29);
+        const randRadius = pseudoRandom(seedBase * 0.41 + i * 3.17, seedBase * 0.77 - i * 2.61);
+        const angle = randAngle * Math.PI * 2;
+        const radius = Math.max(4, WORLD_SIZE * 0.18 * (0.65 + randRadius * 0.35));
+        const x = Math.cos(angle) * radius;
+        const z = Math.sin(angle) * radius;
+        const ground = this.sampleGroundHeight(x, z);
+        const mesh = this.createChestMesh(theme);
+        mesh.position.set(x, ground + 0.35, z);
+        mesh.name = `LootChest-${theme?.id || 'dimension'}-${i}`;
+        this.chestGroup.add(mesh);
+        const loot = this.getChestLootForDimension(theme?.id || 'origin', i);
+        const chest = {
+          id: `${theme?.id || 'dimension'}-${i}-${Date.now()}`,
+          mesh,
+          lidPivot: mesh.userData?.lidPivot ?? null,
+          lid: mesh.userData?.lid ?? null,
+          highlightMaterials: mesh.userData?.highlightMaterials ?? [],
+          baseY: mesh.position.y,
+          opened: false,
+          openProgress: 0,
+          loot,
+          pulseOffset: randAngle * Math.PI * 2,
+          glowLevel: 0.25,
+          hintShown: false,
+        };
+        this.chests.push(chest);
+      }
+      this.lastChestHintAt = this.elapsed;
+    }
+
+    clearChests() {
+      if (this.chestGroup) {
+        const children = Array.from(this.chestGroup.children);
+        children.forEach((child) => {
+          this.chestGroup.remove(child);
+          disposeObject3D(child);
+        });
+      }
+      this.chests = [];
+      this.activeChestId = null;
+    }
+
+    findInteractableChest(range = CHEST_INTERACT_RANGE) {
+      if (!this.chests.length) return null;
+      const playerPosition = this.getCameraWorldPosition(this.tmpVector3);
+      let best = null;
+      let bestDistance = range;
+      for (const chest of this.chests) {
+        if (!chest || chest.opened || !chest.mesh) continue;
+        const distance = chest.mesh.position.distanceTo(playerPosition);
+        if (!Number.isFinite(distance)) continue;
+        if (distance <= bestDistance) {
+          bestDistance = distance;
+          best = chest;
+        }
+      }
+      return best;
+    }
+
+    tryOpenNearbyChest() {
+      const chest = this.findInteractableChest();
+      if (!chest) {
+        return false;
+      }
+      this.openChest(chest);
+      return true;
+    }
+
+    openChest(chest) {
+      if (!chest || chest.opened) return;
+      chest.opened = true;
+      chest.openProgress = Math.max(chest.openProgress ?? 0, 0.01);
+      const loot = chest.loot || { items: [], score: 0, message: '' };
+      if (Array.isArray(loot.items) && loot.items.length) {
+        this.collectDrops(loot.items);
+      }
+      if (Number.isFinite(loot.score) && loot.score !== 0) {
+        this.score += loot.score;
+      }
+      this.updateHud();
+      this.scheduleScoreSync('loot-chest');
+      if (loot.message) {
+        this.showHint(loot.message);
+      }
+      this.audio.play('craftChime', { volume: 0.68 });
+      this.lastChestHintAt = this.elapsed;
+      console.log(`Loot chest opened: ${chest.id}`);
+    }
+
+    updateLootChests(delta) {
+      if (!this.chests.length) return;
+      const THREE = this.THREE;
+      this.chestPulseTime += delta;
+      const playerPosition = this.getCameraWorldPosition(this.tmpVector3);
+      let nearest = null;
+      let nearestDistance = Infinity;
+      for (const chest of this.chests) {
+        if (!chest?.mesh) continue;
+        const mesh = chest.mesh;
+        if (!Number.isFinite(chest.baseY)) {
+          chest.baseY = mesh.position.y;
+        }
+        const floatOffset = Math.sin(this.chestPulseTime * 2 + (chest.pulseOffset || 0)) * 0.05;
+        mesh.position.y = chest.baseY + Math.max(0, floatOffset);
+        if (chest.lidPivot) {
+          const target = chest.opened ? 1 : 0;
+          const speed = chest.opened ? 3.2 : 4.5;
+          chest.openProgress = THREE.MathUtils.lerp(chest.openProgress ?? 0, target, delta * speed);
+          const eased = chest.openProgress * chest.openProgress;
+          chest.lidPivot.rotation.x = -Math.PI * 0.6 * eased;
+        }
+        const distance = mesh.position.distanceTo(playerPosition);
+        if (!chest.opened && distance < nearestDistance) {
+          nearest = chest;
+          nearestDistance = distance;
+        }
+        let targetGlow = chest.opened ? 0.15 : 0.35;
+        if (!chest.opened && distance <= CHEST_INTERACT_RANGE + 0.6) {
+          targetGlow = 1.05;
+          if (
+            distance <= CHEST_INTERACT_RANGE &&
+            !chest.hintShown &&
+            this.elapsed - this.lastChestHintAt > CHEST_HINT_COOLDOWN
+          ) {
+            this.showHint('Press F to open the loot chest.');
+            chest.hintShown = true;
+            this.lastChestHintAt = this.elapsed;
+          }
+        }
+        chest.glowLevel = THREE.MathUtils.lerp(chest.glowLevel ?? 0.25, targetGlow, delta * 4.5);
+        if (Array.isArray(chest.highlightMaterials)) {
+          chest.highlightMaterials.forEach((material) => {
+            if (material?.emissiveIntensity !== undefined) {
+              material.emissiveIntensity = chest.glowLevel * 0.45;
+            }
+          });
+        }
+      }
+      this.activeChestId = nearest?.id ?? null;
     }
 
     computePortalAnchorGrid() {
@@ -2621,6 +2962,7 @@
       }
       this.buildTerrain();
       this.buildRails();
+      this.spawnDimensionChests();
       this.refreshPortalState();
       this.positionPlayer();
       this.clearZombies();
@@ -2646,6 +2988,7 @@
       this.score += 25;
       this.clearZombies();
       this.clearGolems();
+      this.clearChests();
       this.updatePortalProgress();
       this.updateHud();
       this.scheduleScoreSync('victory');
@@ -2780,6 +3123,11 @@
         event.preventDefault();
       }
       if (event.code === 'KeyF') {
+        const openedChest = this.tryOpenNearbyChest();
+        if (openedChest) {
+          event.preventDefault();
+          return;
+        }
         if (this.portalActivated && this.isPlayerNearPortal()) {
           this.advanceDimension();
         } else if (this.portalReady && this.isPlayerNearPortalFrame()) {
@@ -2862,6 +3210,7 @@
       this.updateZombies(delta);
       this.updateGolems(delta);
       this.updatePortalAnimation(delta);
+      this.updateLootChests(delta);
       this.updateHands(delta);
       this.updatePlayerAnimation(delta);
       this.updateScoreSync(delta);

@@ -14,6 +14,7 @@ Advanced renderer work is still underway, so the interactive sandbox renderer no
 - **Sandbox renderer** – `simple-experience.js` initialises Three.js r161, generates the 64×64 terrain, animates the sun cycle, and logs voxel totals for debugging.【F:simple-experience.js†L1984-L2057】
 - **Player & controls** – Steve loads in first-person with animated arms, pointer-lock mouse look, WASD movement, mobile joystick input, mining, and placement.【F:simple-experience.js†L1740-L1876】【F:simple-experience.js†L2479-L2653】
 - **Entities & survival** – Zombies spawn nightly, chase the player, and chip hearts while iron golems auto-spawn for defence; respawns retain inventory after five hits.【F:simple-experience.js†L2888-L3099】
+- **Dimension loot chests** – Every realm seeds animated treasure chests that pulse when nearby and deliver themed resources, score bonuses, and scoreboard syncs whenever the player opens them with `F`.【F:simple-experience.js†L2414-L2562】【F:simple-experience.js†L3125-L3136】
 - **Crafting & portals** – Hotbar/crafting UIs validate ordered recipes, award score, track portal progress, and transition across dimensions with gravity modifiers and the Netherite victory flow.【F:simple-experience.js†L3271-L3964】
 - **Backend sync & HUD** – Scores post to configured APIs, Google SSO hooks populate identity, and the HUD/leaderboard update in real time.【F:simple-experience.js†L593-L710】【F:script.js†L760-L938】
 
