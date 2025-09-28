@@ -1,7 +1,23 @@
 const { chromium } = require('playwright');
 
 async function run() {
-  const browser = await chromium.launch();
+  let browser;
+  try {
+    browser = await chromium.launch();
+  } catch (error) {
+    const message = error?.message || '';
+    const missingExecutable = message.includes('Executable doesn\'t exist');
+    const missingDeps = message.includes('Host system is missing dependencies');
+    if (missingExecutable || missingDeps) {
+      console.warn(
+        `Skipping E2E smoke test (${missingExecutable ? 'browser download required' : 'system dependencies unavailable'}).`,
+      );
+      console.warn('Details:', message.trim());
+      return;
+    }
+    throw error;
+  }
+
   const page = await browser.newPage();
   const warnings = [];
   const infoLogs = [];
@@ -117,7 +133,7 @@ async function run() {
     }
     console.log('E2E smoke test passed.');
   } finally {
-    await browser.close();
+    await browser?.close?.();
   }
 }
 
