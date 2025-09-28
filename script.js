@@ -22,6 +22,64 @@
   }
 
   function createScoreboardUtilsFallback() {
+    function normalizeDimensionLabels(entry) {
+      if (!entry || typeof entry !== 'object') {
+        return [];
+      }
+
+      const sources = [];
+      const addSource = (value) => {
+        if (!value) return;
+        if (Array.isArray(value)) {
+          if (value.length) {
+            sources.push(value);
+          }
+          return;
+        }
+        if (typeof value === 'string') {
+          const segments = value
+            .split(/[|,/\u2022\u2013\u2014]+/)
+            .map((segment) => segment.trim())
+            .filter(Boolean);
+          if (segments.length) {
+            sources.push(segments);
+          }
+        }
+      };
+
+      addSource(entry.dimensionLabels);
+      addSource(entry.dimensionNames);
+      addSource(entry.dimensionList);
+      addSource(Array.isArray(entry.dimensions) ? entry.dimensions : null);
+      addSource(Array.isArray(entry.realms) ? entry.realms : null);
+      addSource(entry.dimensionSummary);
+
+      const labels = [];
+      const seen = new Set();
+      sources.forEach((source) => {
+        source.forEach((item) => {
+          let label = null;
+          if (typeof item === 'string') {
+            label = item.trim();
+          } else if (item && typeof item === 'object') {
+            if (typeof item.name === 'string') {
+              label = item.name.trim();
+            } else if (typeof item.label === 'string') {
+              label = item.label.trim();
+            } else if (typeof item.id === 'string') {
+              label = item.id.trim();
+            }
+          }
+          if (label && !seen.has(label)) {
+            seen.add(label);
+            labels.push(label);
+          }
+        });
+      });
+
+      return labels;
+    }
+
     function normalizeScoreEntries(entries = []) {
       return entries
         .map((entry) => ({
@@ -38,6 +96,7 @@
               : null),
           locationLabel: entry.locationLabel ?? entry.location?.label ?? entry.locationName ?? null,
           updatedAt: entry.updatedAt ?? entry.lastUpdated ?? entry.updated_at ?? null,
+          dimensionLabels: normalizeDimensionLabels(entry),
         }))
         .sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
     }
@@ -17859,6 +17918,7 @@
         updatedAt: entry.updatedAt ?? null,
         name: entry.name ?? 'Explorer',
         locationLabel,
+        dimensionLabels: extractLeaderboardDimensionLabels(entry),
       };
     }
 
@@ -17871,7 +17931,9 @@
         previousEntry.inventoryCount !== nextEntry.inventoryCount ||
         previousEntry.updatedAt !== nextEntry.updatedAt ||
         previousEntry.name !== nextEntry.name ||
-        previousEntry.locationLabel !== nextEntry.locationLabel
+        previousEntry.locationLabel !== nextEntry.locationLabel ||
+        (previousEntry.dimensionLabels || []).join('|') !==
+          (nextEntry.dimensionLabels || []).join('|')
       );
     }
 
@@ -17893,6 +17955,87 @@
           row.classList.remove(highlightClass);
         }, 1200);
       }
+    }
+
+    const DIMENSION_NAME_CACHE = new Map();
+
+    function resolveDimensionDefinition(label) {
+      if (typeof label !== 'string') {
+        return null;
+      }
+      const trimmed = label.trim();
+      if (!trimmed) {
+        return null;
+      }
+      const lower = trimmed.toLowerCase();
+      if (DIMENSION_NAME_CACHE.has(lower)) {
+        return DIMENSION_NAME_CACHE.get(lower);
+      }
+      let definition = DIMENSIONS[lower] || null;
+      if (!definition) {
+        definition = Object.values(DIMENSIONS).find((dimension) =>
+          typeof dimension?.name === 'string' ? dimension.name.toLowerCase() === lower : false
+        );
+      }
+      DIMENSION_NAME_CACHE.set(lower, definition || null);
+      return definition || null;
+    }
+
+    function formatDimensionLabel(label) {
+      if (typeof label !== 'string') {
+        return null;
+      }
+      const trimmed = label.trim();
+      if (!trimmed) {
+        return null;
+      }
+      const definition = resolveDimensionDefinition(trimmed);
+      if (definition) {
+        if (definition.id === 'origin') {
+          const baseName = definition.name || trimmed;
+          return /origin/i.test(baseName) ? baseName : `Origin – ${baseName}`;
+        }
+        return definition.name || trimmed;
+      }
+      if (/origin/i.test(trimmed)) {
+        return trimmed;
+      }
+      return trimmed
+        .split(/\s+/)
+        .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+        .join(' ');
+    }
+
+    function extractLeaderboardDimensionLabels(entry) {
+      const sources = [];
+      if (entry && typeof entry === 'object') {
+        if (Array.isArray(entry.dimensionLabels)) {
+          sources.push(entry.dimensionLabels);
+        }
+        if (Array.isArray(entry.dimensions)) {
+          sources.push(entry.dimensions);
+        }
+        if (Array.isArray(entry.realms)) {
+          sources.push(entry.realms);
+        }
+      }
+      const formatted = [];
+      const seen = new Set();
+      sources.forEach((list) => {
+        list.forEach((value) => {
+          let label = null;
+          if (typeof value === 'string') {
+            label = formatDimensionLabel(value);
+          } else if (value && typeof value === 'object') {
+            label = formatDimensionLabel(value.name || value.label || value.id || '');
+          }
+          if (label && !seen.has(label)) {
+            seen.add(label);
+            formatted.push(label);
+          }
+        });
+      });
+      return formatted;
     }
 
     function renderScoreboard(entries) {
@@ -17965,7 +18108,22 @@
         row.appendChild(runTimeCell);
 
         const dimensionCell = document.createElement('td');
-        dimensionCell.textContent = String(entry.dimensionCount ?? 0);
+        dimensionCell.dataset.cell = 'dimensions';
+        const countValue = Number(entry.dimensionCount ?? 0);
+        const countSpan = document.createElement('span');
+        countSpan.className = 'leaderboard-dimension-count';
+        countSpan.textContent = countValue.toString();
+        dimensionCell.appendChild(countSpan);
+        const dimensionLabels = extractLeaderboardDimensionLabels(entry);
+        const listSpan = document.createElement('span');
+        listSpan.className = 'leaderboard-dimension-list';
+        if (dimensionLabels.length) {
+          listSpan.textContent = dimensionLabels.join(', ');
+        } else {
+          listSpan.textContent = '—';
+          listSpan.setAttribute('aria-hidden', 'true');
+        }
+        dimensionCell.appendChild(listSpan);
         row.appendChild(dimensionCell);
 
         const inventoryCell = document.createElement('td');
@@ -18528,6 +18686,12 @@
             inventoryCount: 36,
             locationLabel: 'Northern Citadel',
             updatedAt: new Date(Date.now() - 86400000).toISOString(),
+            dimensionLabels: [
+              'Origin – Grassland Threshold',
+              'Rock Dimension',
+              'Stone Dimension',
+              'Tar Dimension',
+            ],
           },
           {
             id: 'sample-zenith',
@@ -18538,6 +18702,7 @@
             inventoryCount: 28,
             locationLabel: 'Lunar Outpost',
             updatedAt: new Date(Date.now() - 172800000).toISOString(),
+            dimensionLabels: ['Origin – Grassland Threshold', 'Rock Dimension', 'Stone Dimension'],
           },
           {
             id: 'sample-orbit',
@@ -18548,6 +18713,7 @@
             inventoryCount: 24,
             locationLabel: 'Synthwave Reef',
             updatedAt: new Date(Date.now() - 259200000).toISOString(),
+            dimensionLabels: ['Origin – Grassland Threshold', 'Rock Dimension', 'Tar Dimension'],
           },
         ],
         source: 'sample',
@@ -18629,6 +18795,7 @@
         location: identityState.location && !identityState.location.error ? identityState.location : null,
         locationLabel: identityState.location?.label ?? null,
         updatedAt: new Date().toISOString(),
+        dimensionLabels: Array.isArray(snapshot.dimensions) ? snapshot.dimensions : [],
       };
       const nextEntries = upsertScoreEntry(identityState.scoreboard, entry).slice(0, 10);
       identityState.scoreboard = nextEntries;
@@ -18646,6 +18813,7 @@
               ...entry,
               googleId: identityState.googleProfile.sub,
               email: identityState.googleProfile.email,
+              dimensions: Array.isArray(snapshot.dimensions) ? snapshot.dimensions : undefined,
             }),
           });
         } catch (error) {
@@ -18670,11 +18838,21 @@
           ? Math.max(0, Math.round(summary.inventoryCount))
           : 0;
         const scoreValue = Math.round(summary.score ?? 0);
+        const dimensionLabels = [];
+        const seen = new Set();
+        ensureArrayOfStrings(summary.dimensions ?? [], { unique: false }).forEach((value) => {
+          const label = formatDimensionLabel(value);
+          if (label && !seen.has(label)) {
+            seen.add(label);
+            dimensionLabels.push(label);
+          }
+        });
         return {
           score: scoreValue,
           dimensionCount,
           runTimeSeconds,
           inventoryCount,
+          dimensions: dimensionLabels,
         };
       }
       const dimensionCount = state.scoreBreakdown?.dimensions?.size ?? new Set(state.dimensionHistory ?? []).size;
@@ -18684,11 +18862,30 @@
       const inventoryCount = inventoryBundles.reduce((sum, bundle) => sum + bundle.quantity, 0) + satchelCount;
       const totalScore =
         state.score ?? recipeCount * SCORE_POINTS.recipe + dimensionCount * SCORE_POINTS.dimension;
+      const dimensionLabels = [];
+      const seen = new Set();
+      const dimensionSources = [];
+      if (state.scoreBreakdown?.dimensions instanceof Set) {
+        dimensionSources.push(Array.from(state.scoreBreakdown.dimensions));
+      }
+      if (Array.isArray(state.dimensionHistory)) {
+        dimensionSources.push(state.dimensionHistory);
+      }
+      dimensionSources.forEach((list) => {
+        list.forEach((value) => {
+          const label = formatDimensionLabel(value);
+          if (label && !seen.has(label)) {
+            seen.add(label);
+            dimensionLabels.push(label);
+          }
+        });
+      });
       return {
         score: Math.round(totalScore),
         dimensionCount,
         runTimeSeconds: Math.round(state.elapsed ?? 0),
         inventoryCount,
+        dimensions: dimensionLabels,
       };
     }
 
