@@ -2631,6 +2631,11 @@ body.sidebar-open .player-hint {
   background-color: var(--leaderboard-row-highlight, rgba(73, 242, 255, 0.24));
 }
 
+.leaderboard-table tbody tr.leaderboard-row--player {
+  border-left: 3px solid rgba(44, 182, 125, 0.6);
+  background: linear-gradient(90deg, rgba(44, 182, 125, 0.18), rgba(44, 182, 125, 0));
+}
+
 .leaderboard-table tbody tr.leaderboard-row--new {
   --leaderboard-row-highlight: rgba(73, 242, 255, 0.24);
   --leaderboard-row-shadow: rgba(73, 242, 255, 0.45);

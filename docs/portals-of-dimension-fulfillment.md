@@ -24,6 +24,6 @@ This digest maps the highest-priority requirements from the "Comprehensive Analy
 
 ## Backend Sync and Leaderboards
 - Scoreboard widgets call `loadScoreboard()` to pull top runs (with offline fallbacks) and `scheduleScoreSync()`/`flushScoreSync()` to push updated summaries whenever the player crafts, unlocks dimensions, or completes the game.【F:simple-experience.js†L856-L1159】
-- Victory overlays query `getPlayerLeaderboardRank()` so the post-run panel highlights score, leaderboard standing, and the replay affordance without leaving the HUD stale.【F:simple-experience.js†L5074-L5113】
+- Victory overlays query `getPlayerLeaderboardRank()` so the post-run panel highlights score, leaderboard standing, and the replay affordance without leaving the HUD stale, and the celebration modal mirrors that rank via the scoreboard snapshot pipeline.【F:simple-experience.js†L5074-L5113】【F:script.js†L14698-L14745】
 
 With these systems in place, the sandbox renderer satisfies the actionable goals from the enhancement brief: a populated world, visible Steve avatar, reactive survival loop, crafting and portals, and live scoreboard plumbing. The document should be updated as additional advanced-renderer milestones ship so stakeholders can trace coverage at a glance.

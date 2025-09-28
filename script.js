@@ -3322,6 +3322,8 @@
       device: null,
       scoreboard: [],
       scoreboardSource: 'remote',
+      scoreboardTotal: 0,
+      playerRank: null,
       loadingScores: false,
       googleInitialized: false,
     };
@@ -14670,15 +14672,63 @@
       }
     }
 
+    function formatOrdinal(value) {
+      const number = Number(value);
+      if (!Number.isFinite(number)) {
+        return String(value);
+      }
+      const rounded = Math.round(number);
+      const mod100 = rounded % 100;
+      if (mod100 >= 11 && mod100 <= 13) {
+        return `${rounded}th`;
+      }
+      const mod10 = rounded % 10;
+      switch (mod10) {
+        case 1:
+          return `${rounded}st`;
+        case 2:
+          return `${rounded}nd`;
+        case 3:
+          return `${rounded}rd`;
+        default:
+          return `${rounded}th`;
+      }
+    }
+
     function updateVictoryCelebrationStats(snapshot) {
       if (!victoryStatsEl) return;
       const runtimeLabel = formatRunTime(snapshot.runTimeSeconds);
       const displayRuntime = runtimeLabel === '—' ? '0s' : runtimeLabel;
       const inventoryWord = snapshot.inventoryCount === 1 ? 'artifact' : 'artifacts';
+      const playerRankValue = Number.isFinite(identityState.playerRank) ? identityState.playerRank : null;
+      const totalEntriesRaw = Number.isFinite(identityState.scoreboardTotal)
+        ? identityState.scoreboardTotal
+        : identityState.scoreboard.length;
+      const totalEntries = Math.max(0, Number(totalEntriesRaw) || 0);
+      let rankDisplay = null;
+      if (playerRankValue) {
+        const ordinal = formatOrdinal(playerRankValue);
+        if (totalEntries && playerRankValue <= totalEntries) {
+          rankDisplay = totalEntries ? `${ordinal} of ${totalEntries}` : ordinal;
+        } else if (totalEntries) {
+          const visibleCount = identityState.scoreboard?.length || Math.min(totalEntries, 10);
+          rankDisplay = `${ordinal} (Top ${visibleCount} shown)`;
+        } else {
+          rankDisplay = ordinal;
+        }
+      } else if (identityState.googleProfile) {
+        rankDisplay = identityState.loadingScores ? 'Syncing…' : 'Awaiting leaderboard sync';
+      } else {
+        rankDisplay = 'Sign in to publish';
+      }
       victoryStatsEl.innerHTML = `
         <div>
           <dt>Final Score</dt>
           <dd>${formatScoreNumber(snapshot.score ?? 0)}</dd>
+        </div>
+        <div>
+          <dt>Leaderboard Rank</dt>
+          <dd>${rankDisplay}</dd>
         </div>
         <div>
           <dt>Dimensions Stabilised</dt>
@@ -18034,6 +18084,7 @@
         inventoryCount: Number(entry.inventoryCount ?? 0),
         updatedAt: entry.updatedAt ?? null,
         name: entry.name ?? 'Explorer',
+        rank: Number(entry.rank ?? 0),
         locationLabel,
         dimensionLabels: extractLeaderboardDimensionLabels(entry),
       };
@@ -18048,6 +18099,7 @@
         previousEntry.inventoryCount !== nextEntry.inventoryCount ||
         previousEntry.updatedAt !== nextEntry.updatedAt ||
         previousEntry.name !== nextEntry.name ||
+        previousEntry.rank !== nextEntry.rank ||
         previousEntry.locationLabel !== nextEntry.locationLabel ||
         (previousEntry.dimensionLabels || []).join('|') !==
           (nextEntry.dimensionLabels || []).join('|')
@@ -18211,12 +18263,10 @@
       }
 
       const rankMap = new Map();
-      entriesToDisplay
-        .slice()
-        .sort((a, b) => (b.score ?? 0) - (a.score ?? 0))
-        .forEach((entry, index) => {
-          rankMap.set(entry, index + 1);
-        });
+      entriesToDisplay.forEach((entry, index) => {
+        const rankValue = Number.isFinite(entry.rank) ? Number(entry.rank) : index + 1;
+        rankMap.set(entry, rankValue);
+      });
 
       const sortedEntries = entriesToDisplay.slice().sort((a, b) => {
         const { key, direction } = leaderboardSortState;
@@ -18244,7 +18294,8 @@
 
         const rankCell = document.createElement('td');
         rankCell.className = 'leaderboard-col-rank';
-        rankCell.textContent = (rankMap.get(entry) ?? index + 1).toString();
+        const rankValue = rankMap.get(entry) ?? index + 1;
+        rankCell.textContent = rankValue.toString();
         row.appendChild(rankCell);
 
         const nameCell = document.createElement('td');
@@ -18252,6 +18303,12 @@
         name.textContent = entry.name ?? 'Explorer';
         nameCell.appendChild(name);
         row.appendChild(nameCell);
+
+        const playerId = identityState.googleProfile?.sub ?? null;
+        if (playerId && getScoreEntryId(entry) === playerId) {
+          row.classList.add('leaderboard-row--player');
+          row.dataset.playerRank = rankValue.toString();
+        }
 
         const scoreCell = document.createElement('td');
         scoreCell.textContent = formatScoreNumber(entry.score);
@@ -18685,6 +18742,8 @@
       identityState.location = null;
       identityState.scoreboard = [];
       identityState.scoreboardSource = 'remote';
+      identityState.scoreboardTotal = 0;
+      identityState.playerRank = null;
       identityState.loadingScores = false;
       state.scoreSubmitted = false;
       try {
@@ -18910,23 +18969,66 @@
       }
     }
 
+    function getScoreEntryId(entry) {
+      if (!entry || typeof entry !== 'object') {
+        return null;
+      }
+      if (entry.id) return entry.id;
+      if (entry.googleId) return entry.googleId;
+      if (entry.playerId) return entry.playerId;
+      return null;
+    }
+
+    function storeScoreboardEntries(entries, source) {
+      const normalized = normalizeScoreEntries(entries ?? []);
+      identityState.scoreboardTotal = normalized.length;
+      const annotated = normalized.map((entry, index) => ({ ...entry, rank: index + 1 }));
+      const playerId = identityState.googleProfile?.sub ?? null;
+      let playerIndex = -1;
+      if (playerId) {
+        playerIndex = annotated.findIndex((entry) => getScoreEntryId(entry) === playerId);
+        identityState.playerRank = playerIndex >= 0 ? annotated[playerIndex].rank : null;
+      } else {
+        identityState.playerRank = null;
+      }
+
+      let displayed = annotated.slice(0, 10).map((entry) => ({ ...entry }));
+      if (playerIndex >= 0) {
+        const playerEntry = { ...annotated[playerIndex] };
+        const existingIndex = displayed.findIndex((entry) => getScoreEntryId(entry) === playerId);
+        if (existingIndex >= 0) {
+          displayed[existingIndex] = playerEntry;
+        } else if (playerIndex >= displayed.length) {
+          if (displayed.length >= 10) {
+            displayed[displayed.length - 1] = playerEntry;
+          } else {
+            displayed.push(playerEntry);
+          }
+        } else {
+          displayed[playerIndex] = playerEntry;
+        }
+      }
+
+      identityState.scoreboard = displayed;
+      if (source) {
+        identityState.scoreboardSource = source;
+      }
+      return { normalized: annotated, displayed };
+    }
+
     function primeOfflineScoreboard() {
       if (identityState.googleProfile) return;
       if (identityState.scoreboard.length) return;
       const localResult = loadLocalScores();
-      const normalizedEntries = normalizeScoreEntries(localResult.entries).slice(0, 10);
-      identityState.scoreboard = normalizedEntries;
-      identityState.scoreboardSource = localResult.source;
+      storeScoreboardEntries(localResult.entries, localResult.source);
     }
 
     function refreshOfflineScoreboard() {
       identityState.loadingScores = true;
       updateIdentityUI();
       const localResult = loadLocalScores();
-      const normalizedEntries = normalizeScoreEntries(localResult.entries).slice(0, 10);
       setTimeout(() => {
-        identityState.scoreboard = normalizedEntries;
-        identityState.scoreboardSource = localResult.source;
+        storeScoreboardEntries(localResult.entries, localResult.source);
         identityState.loadingScores = false;
         updateIdentityUI();
       }, 600);
@@ -18957,10 +19059,11 @@
           console.warn('Unable to load remote scoreboard.', error);
         }
       }
-      const fallbackResult = remoteResult ?? loadLocalScores();
-      const normalizedEntries = normalizeScoreEntries(fallbackResult.entries).slice(0, 10);
-      identityState.scoreboard = normalizedEntries;
-      identityState.scoreboardSource = remoteResult ? remoteResult.source : fallbackResult.source;
+      const result = remoteResult ?? loadLocalScores();
+      const { normalized } = storeScoreboardEntries(result.entries, result.source);
+      if (result.source === 'remote') {
+        saveLocalScores(normalized);
+      }
       identityState.loadingScores = false;
       updateIdentityUI();
     }
@@ -18979,12 +19082,13 @@
         updatedAt: new Date().toISOString(),
         dimensionLabels: Array.isArray(snapshot.dimensions) ? snapshot.dimensions : [],
       };
-      const nextEntries = upsertScoreEntry(identityState.scoreboard, entry).slice(0, 10);
-      identityState.scoreboard = nextEntries;
+      const updatedEntries = upsertScoreEntry(identityState.scoreboard, entry);
+      const source = appConfig.apiBaseUrl ? identityState.scoreboardSource : 'local';
+      const { normalized } = storeScoreboardEntries(updatedEntries, source);
       if (!appConfig.apiBaseUrl) {
         identityState.scoreboardSource = 'local';
       }
-      saveLocalScores(identityState.scoreboard);
+      saveLocalScores(normalized);
       updateIdentityUI();
       if (appConfig.apiBaseUrl) {
         try {

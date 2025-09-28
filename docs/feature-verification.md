@@ -21,7 +21,7 @@ This document maps the requested experience requirements to concrete implementat
 
 ## Portals, Dimensions, and Victory Conditions
 - Portal frames activate via interaction, trigger shader-driven transitions, and advance through sequential dimension palettes with gravity and speed modifiers. The Netherite dimension introduces collapsing rails culminating in the Eternal Ingot victory flow.【F:simple-experience.js†L2100-L2462】【F:simple-experience.js†L3735-L3964】
-- When the Netherite gauntlet is cleared the dimension briefing converts into a victory summary that surfaces the run score, leaderboard rank (when available), and a replay button so players can jump back in immediately.【F:simple-experience.js†L4058-L4098】
+- When the Netherite gauntlet is cleared the dimension briefing converts into a victory summary that surfaces the run score, leaderboard rank (when available), and a replay button so players can jump back in immediately, while the global celebration modal echoes the same rank pulled from the stored scoreboard snapshot.【F:simple-experience.js†L4058-L4098】【F:script.js†L14698-L14745】
 
 ## Backend Synchronisation and Scoreboard
 - Scores sync to the configured API using `fetch`, while the leaderboard modal polls and renders ranked runs. Player identity updates feed location and Google account data into score submissions.【F:simple-experience.js†L734-L817】【F:simple-experience.js†L985-L1039】【F:simple-experience.js†L1335-L1388】【F:script.js†L760-L938】
