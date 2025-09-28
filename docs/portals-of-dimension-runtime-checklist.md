@@ -5,6 +5,7 @@ This checklist records the concrete runtime behaviours that satisfy the "Compreh
 ## Render + World Initialisation
 - `SimpleExperience.start()` boots the renderer, seeds UI integrations, builds the voxel island, lays rails, and begins the frame loop in one pass, ensuring the scene is playable as soon as the player clicks **Start**.【F:simple-experience.js†L688-L717】
 - Procedural terrain generation fills the 64×64 island with height-mapped voxels while logging the resulting counts, guaranteeing the "World generated: 4096 voxels" console check noted in the spec.【F:simple-experience.js†L2440-L2505】
+- The daylight system drives a 10-minute orbit that powers sun/moon lighting, fog tinting, and zombie-spawn timing so the HUD daylight bar mirrors the brief’s pacing.【F:simple-experience.js†L3966-L4024】
 
 ## Player View + Controls
 - First-person camera rigging attaches the orthographic camera to the player rig and renders articulated hands so the Minecraft-style perspective stays immersive.【F:simple-experience.js†L2052-L2088】
@@ -22,6 +23,11 @@ This checklist records the concrete runtime behaviours that satisfy the "Compreh
 
 ## Backend, Identity, and Score Sync
 - Google Sign-In handlers decode credentials, persist the profile, and notify the gameplay sandbox to refresh the leaderboard, keeping the DynamoDB-ready scoreboard aligned with player identity.【F:script.js†L985-L1105】
+- REST endpoints at `/scores` stream leaderboard entries and accept POSTed run summaries whenever score milestones (recipes, portals, victories) fire, ensuring the DynamoDB integration remains live during playtests.【F:simple-experience.js†L888-L962】【F:simple-experience.js†L1108-L1161】
+
+## Audio & Performance Feedback
+- Embedded Howler.js samples cover mining crunches, portal bubbles, zombie groans, and the Netherite victory cheer, with master/music/effects gains mapped to the settings modal for quick adjustment.【F:simple-experience.js†L627-L746】【F:simple-experience.js†L1717-L1773】【F:simple-experience.js†L4211-L4256】
+- The frame step clamps movement updates with delta timing, frustum-culls terrain chunks, and reports pointer-lock prompts so the 60 FPS target and control diagnostics from the specification can be verified in the console.【F:simple-experience.js†L3658-L3733】【F:simple-experience.js†L3936-L3989】
 
 ## Validation
 - Automated suites continue to cover crafting, portal mechanics, combat maths, and scoreboard utilities via `npm test`, providing regression insurance for the interactive loop.【F:tests/crafting.test.js†L1-L160】【F:tests/portal-mechanics.test.js†L1-L160】【F:tests/combat-utils.test.js†L1-L120】【F:tests/scoreboard-utils.test.js†L1-L160】
