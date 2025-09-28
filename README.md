@@ -34,6 +34,15 @@ Progress against each track is maintained in [docs/enhancement-roadmap.md](docs/
 
 Refer to [`docs/validation-matrix.md`](docs/validation-matrix.md) for the complete mapping between requirements, validation methods, success criteria, and hands-on test scenarios used during regression.
 
+### Local testing
+
+Two automated suites ship with the repository:
+
+1. `npm test` runs the Vitest unit suite that exercises the pure utility modules (scoreboard helpers, portal mechanics, and combat maths).
+2. `npm run test:e2e` launches the Playwright smoke test that boots the sandbox, validates HUD panels, and confirms there are no console regressions.
+
+Playwright downloads its browser binaries on demand. If the end-to-end check fails with a message similar to “Executable doesn't exist … run `npx playwright install`”, execute that command once and rerun the test. The download step is skipped automatically in CI because the workflow caches the Playwright bundle.
+
 ## Enhancement roadmap
 
 The design brief titled **“Comprehensive Analysis and Enhancement Specifications for Infinite Rails: Portals of Dimension”**
