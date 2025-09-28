@@ -659,6 +659,28 @@
       };
     }
 
+    emitGameEvent(type, detail = {}) {
+      const scope = typeof window !== 'undefined' ? window : typeof globalThis !== 'undefined' ? globalThis : null;
+      if (!scope || typeof scope.dispatchEvent !== 'function' || typeof CustomEvent !== 'function') {
+        return;
+      }
+      try {
+        scope.dispatchEvent(
+          new CustomEvent(`infinite-rails:${type}`, {
+            detail: {
+              mode: 'simple',
+              timestamp: Date.now(),
+              ...detail,
+            },
+          }),
+        );
+      } catch (error) {
+        if (typeof console !== 'undefined') {
+          console.debug('Failed to dispatch simple experience event', type, error);
+        }
+      }
+    }
+
     start() {
       if (this.started) return;
       this.started = true;
@@ -686,6 +708,7 @@
       this.loadScoreboard();
       this.exposeDebugInterface();
       this.renderFrame(performance.now());
+      this.emitGameEvent('started', { summary: this.createRunSummary('start') });
     }
 
     hideIntro() {
@@ -876,6 +899,7 @@
     updateLocalScoreEntry(reason) {
       const entry = this.createRunSummary(reason);
       this.mergeScoreEntries([entry]);
+      this.emitGameEvent('score-updated', { summary: entry });
     }
 
     createRunSummary(reason) {
@@ -895,6 +919,8 @@
       const unlockedDimensions = DIMENSION_THEME.slice(0, safeCount).map((dimension) => dimension.label);
       const activeDimensionLabel =
         this.dimensionSettings?.label || unlockedDimensions[unlockedDimensions.length - 1] || DIMENSION_THEME[0].label;
+      const craftedRecipes = Array.from(this.craftedRecipes ?? []);
+      const recipeCount = craftedRecipes.length;
       return {
         id: entryId,
         googleId: this.playerGoogleId ?? null,
@@ -913,6 +939,8 @@
         updatedAt: new Date().toISOString(),
         reason,
         eternalIngot: Boolean(this.eternalIngotCollected),
+        recipeCount,
+        recipes: craftedRecipes,
       };
     }
 
@@ -3326,6 +3354,10 @@
       console.log('Portal active');
       const activeDimension = this.dimensionSettings?.name || 'Unknown Dimension';
       console.log(`Portal active in ${activeDimension}`);
+      this.emitGameEvent('portal-activated', {
+        dimension: this.dimensionSettings?.id ?? null,
+        summary: this.createRunSummary('portal-activated'),
+      });
     }
 
     isPlayerNearPortal() {
@@ -3364,6 +3396,11 @@
         this.score += 1;
         this.updateHud();
         this.showHint('Portal frame complete — press F to ignite your torch.');
+        this.emitGameEvent('portal-ready', {
+          dimension: this.dimensionSettings?.id ?? null,
+          required,
+          placed: this.portalBlocksPlaced,
+        });
       }
       this.updatePortalProgress();
     }
@@ -3425,6 +3462,11 @@
         this.showHint(portalLog);
       }
       this.portalState = null;
+      this.emitGameEvent('dimension-advanced', {
+        dimension: this.dimensionSettings?.id ?? null,
+        index: this.currentDimensionIndex,
+        summary: this.createRunSummary('dimension-advanced'),
+      });
     }
 
     triggerVictory() {
@@ -3441,6 +3483,7 @@
       this.updateHud();
       this.scheduleScoreSync('victory');
       this.audio.play('victoryCheer', { volume: 0.75 });
+      this.emitGameEvent('victory', { summary: this.createRunSummary('victory') });
     }
 
     positionPlayer() {
