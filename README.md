@@ -20,6 +20,13 @@ For a citation-backed snapshot that proves the sandbox hits every headline requi
 - **Crafting & portals** – Hotbar/crafting UIs validate ordered recipes, award score, track portal progress, and transition across dimensions with gravity modifiers and the Netherite victory flow.【F:simple-experience.js†L3519-L3545】【F:simple-experience.js†L3695-L3756】【F:simple-experience.js†L4950-L4984】
 - **Backend sync & HUD** – Scores post to configured APIs, Google SSO hooks populate identity, and the HUD/leaderboard update in real time.【F:simple-experience.js†L1780-L1855】【F:simple-experience.js†L895-L959】【F:simple-experience.js†L1322-L1378】【F:simple-experience.js†L5224-L5280】
 
+If you need a line-by-line confirmation that the August 2025 spec requests are in place, the new
+[`docs/portals-of-dimension-compliance-2025-08.md`](docs/portals-of-dimension-compliance-2025-08.md)
+summary cites the exact gameplay, rendering, and backend functions that implement each pointer from
+the "Comprehensive Analysis and Enhancement Specifications" brief. Pair it with the existing
+enhancement proof to see both the narrative walkthrough and the underlying code references in one
+place.
+
 ## Near-term objectives
 
 The sandbox is feature complete; the next phase focuses on hardening the advanced renderer and polishing long-term systems:
