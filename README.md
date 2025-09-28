@@ -54,7 +54,9 @@ momentum toward the full experience described in the brief.
 If you need a quick status snapshot, [`docs/spec-compliance.md`](docs/spec-compliance.md) summarises how each requirement in the
 brief maps to shipped code (with direct citations), [`docs/spec-compliance-report.md`](docs/spec-compliance-report.md) provides a
 narrative coverage audit with action items, and [`docs/feature-verification.md`](docs/feature-verification.md) dives deeper into the
-implementation details and validation steps.
+implementation details and validation steps. For an annotated, citation-rich digest that connects the highest-priority gameplay
+loops from the enhancement brief to their concrete implementations, consult
+[`docs/portals-of-dimension-enhancements.md`](docs/portals-of-dimension-enhancements.md).
 
 If you work with coding agents (for example GitHub Copilot or Code Interpreter) the verbatim prompts from the brief are archived in [`docs/coding-agent-prompts.md`](docs/coding-agent-prompts.md). Reusing those prompts keeps automated contributions aligned with the currently shipped sandbox systems.
 
