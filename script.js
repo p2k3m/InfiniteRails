@@ -1310,6 +1310,12 @@
         const launchSimple = () => {
           try {
             simpleExperience.start();
+            if (!simpleExperience.started) {
+              throw new Error('Simple experience start completed without reporting an active session.');
+            }
+            if (console?.info) {
+              console.info('Simple experience ready — immersive sandbox initialised.');
+            }
           } catch (error) {
             console.error('Simple experience start failed; falling back to advanced mode.', error);
             startFailed = true;
@@ -1322,7 +1328,7 @@
           startButton.addEventListener('click', launchSimple, { once: true });
         }
         launchSimple();
-        if (!startFailed) {
+        if (!startFailed && simpleExperience.started) {
           setupSimpleExperienceIntegrations(simpleExperience);
           return;
         }
