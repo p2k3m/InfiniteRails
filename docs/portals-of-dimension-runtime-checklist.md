@@ -28,6 +28,7 @@ This checklist records the concrete runtime behaviours that satisfy the "Compreh
 ## Audio & Performance Feedback
 - Embedded Howler.js samples cover mining crunches, portal bubbles, zombie groans, and the Netherite victory cheer, with master/music/effects gains mapped to the settings modal for quick adjustment.【F:simple-experience.js†L627-L746】【F:simple-experience.js†L1717-L1773】【F:simple-experience.js†L4211-L4256】
 - The frame step clamps movement updates with delta timing, frustum-culls terrain chunks, and reports pointer-lock prompts so the 60 FPS target and control diagnostics from the specification can be verified in the console.【F:simple-experience.js†L3658-L3733】【F:simple-experience.js†L3936-L3989】
+- Texture/GLTF fetches now run through `[AssetBudget]` timers that enable `THREE.Cache`, measure load durations, warn if the 3-second budget is exceeded, and expose recent metrics through the debug interface for regression triage.【F:simple-experience.js†L506-L561】【F:simple-experience.js†L1976-L2015】【F:simple-experience.js†L2528-L2576】【F:simple-experience.js†L5643-L5666】
 
 ## Validation
 - Automated suites continue to cover crafting, portal mechanics, combat maths, and scoreboard utilities via `npm test`, providing regression insurance for the interactive loop.【F:tests/crafting.test.js†L1-L160】【F:tests/portal-mechanics.test.js†L1-L160】【F:tests/combat-utils.test.js†L1-L120】【F:tests/scoreboard-utils.test.js†L1-L160】

@@ -432,6 +432,10 @@
         throw new Error('Three.js is required for the simplified experience.');
       }
       this.THREE = THREE;
+      if (THREE?.Cache && THREE.Cache.enabled !== true) {
+        THREE.Cache.enabled = true;
+        THREE.Cache.autoClear = false;
+      }
       this.canvas = options.canvas;
       this.ui = options.ui || {};
       this.apiBaseUrl = options.apiBaseUrl || null;
@@ -526,6 +530,14 @@
       this.textureCache = new Map();
       this.textureLoader = null;
       this.pendingTextureLoads = new Map();
+      this.assetLoadBudgetMs = Number.isFinite(options.assetLoadBudgetMs)
+        ? Math.max(500, options.assetLoadBudgetMs)
+        : 3000;
+      this.assetLoadTimers = {
+        textures: new Map(),
+        models: new Map(),
+      };
+      this.assetLoadLog = [];
       this.materials = this.createMaterials();
       this.keys = new Set();
       this.velocity = new THREE.Vector3();
@@ -1506,6 +1518,72 @@
       this.cameraBaseOffset.copy(this.camera.position);
     }
 
+    getHighResTimestamp() {
+      if (typeof performance !== 'undefined' && typeof performance.now === 'function') {
+        return performance.now();
+      }
+      return Date.now();
+    }
+
+    beginAssetTimer(kind, key) {
+      if (!kind || !key) {
+        return;
+      }
+      const timers = this.assetLoadTimers?.[kind];
+      if (!timers || timers.has(key)) {
+        return;
+      }
+      timers.set(key, this.getHighResTimestamp());
+    }
+
+    completeAssetTimer(kind, key, details = {}) {
+      if (!kind || !key) {
+        return;
+      }
+      const timers = this.assetLoadTimers?.[kind];
+      if (!timers || !timers.has(key)) {
+        return;
+      }
+      const startedAt = timers.get(key);
+      timers.delete(key);
+      const duration = Math.max(0, this.getHighResTimestamp() - startedAt);
+      const entry = {
+        kind,
+        key,
+        duration,
+        status: details.success ? 'fulfilled' : 'failed',
+        url: details.url ?? null,
+        timestamp: Date.now(),
+      };
+      this.assetLoadLog.push(entry);
+      if (this.assetLoadLog.length > 40) {
+        this.assetLoadLog.splice(0, this.assetLoadLog.length - 40);
+      }
+      const budget = Number.isFinite(this.assetLoadBudgetMs) ? this.assetLoadBudgetMs : 3000;
+      const formattedDuration = duration.toFixed(0);
+      const sourceLabel = details.url ? ` from ${details.url}` : '';
+      if (details.success) {
+        if (duration > budget) {
+          console.warn(
+            `[AssetBudget] ${kind}:${key} ready in ${formattedDuration}ms (exceeds ${budget}ms budget)${sourceLabel}.`,
+          );
+        } else {
+          console.info(`[AssetBudget] ${kind}:${key} ready in ${formattedDuration}ms${sourceLabel}.`);
+        }
+      } else if (!details.silent) {
+        const attemptLabel = details.url ? ` (last attempted ${details.url})` : '';
+        console.warn(`[AssetBudget] ${kind}:${key} failed after ${formattedDuration}ms${attemptLabel}.`);
+      }
+    }
+
+    getAssetLoadLog(limit = 20) {
+      const size = Math.max(1, Math.floor(limit));
+      if (!this.assetLoadLog?.length) {
+        return [];
+      }
+      return this.assetLoadLog.slice(-size);
+    }
+
     createMaterials() {
       const THREE = this.THREE;
       const grassTexture = this.createVoxelTexture('grass', {
@@ -1998,16 +2076,20 @@
           return attemptLoad(index + 1);
         });
       };
+      this.beginAssetTimer('textures', key);
       const loadPromise = attemptLoad(0)
         .then((result) => {
           if (!result || !result.texture) {
+            this.completeAssetTimer('textures', key, { success: false, url: result?.url ?? null });
             return null;
           }
           this.prepareExternalTexture(result.texture);
           console.log(`External texture loaded for ${key} from ${result.url}`);
+          this.completeAssetTimer('textures', key, { success: true, url: result.url });
           return result.texture;
         })
         .catch((error) => {
+          this.completeAssetTimer('textures', key, { success: false });
           console.warn(`Unable to stream external texture for ${key}`, error);
           return null;
         })
@@ -2523,6 +2605,7 @@
       if (this.modelPromises.has(key)) {
         return this.modelPromises.get(key);
       }
+      this.beginAssetTimer('models', key);
       const promise = ensureGltfLoader(THREE)
         .then((LoaderClass) => {
           return new Promise((resolve, reject) => {
@@ -2551,10 +2634,12 @@
               child.receiveShadow = true;
             }
           });
+          this.completeAssetTimer('models', key, { success: true, url });
           this.loadedModels.set(key, payload);
           return payload;
         })
         .catch((error) => {
+          this.completeAssetTimer('models', key, { success: false, url });
           console.warn(`Failed to load model "${key}" from ${url}`, error);
           this.modelPromises.delete(key);
           throw error;
@@ -5630,6 +5715,7 @@
         completePortalFrame: () => this.debugCompletePortalFrame(),
         ignitePortal: (tool) => this.debugIgnitePortal(tool),
         advanceDimension: () => this.debugAdvanceDimension(),
+        assetLoads: (limit) => this.getAssetLoadLog(limit),
       };
       try {
         scope.dispatchEvent(
@@ -5664,6 +5750,7 @@
         netheriteCountdown: Math.max(0, Math.ceil(Math.max(0, this.netheriteCountdownSeconds - this.netheriteChallengeTimer))),
         eternalIngotCollected: Boolean(this.eternalIngotCollected),
         daylight: this.daylightIntensity ?? 0,
+        assetLoadsRecent: this.getAssetLoadLog(5),
       };
     }
 
