@@ -1,75 +1,91 @@
 # Infinite Rails – Enhancement Roadmap
 
-This document summarises the comprehensive changes that are required to transform the current Infinite Rails prototype into the Minecraft-inspired experience described in the latest design brief. Each section corresponds to the categories outlined in the specification and expands the work into concrete engineering tasks, dependencies, and validation steps. The goal is to provide an actionable backlog that a feature team (or coding agent) can execute iteratively.
+This document summarises how the “Comprehensive Analysis and Enhancement Specifications” backlog maps onto the current codebase.
+Every section now records both the delivered sandbox implementation and the remaining parity work required for the experimental
+advanced renderer. Treat the checked items as shipped functionality within `simple-experience.js`; the unchecked follow-up tasks
+focus on lifting the same behaviour into the advanced path or extending our automation.
 
-> **Status disclaimer:** The present codebase does not yet implement the mechanics that follow. This roadmap captures the agreed direction so that the missing capabilities can be delivered in a structured sequence without regressing existing UI integrations (scoreboard, identity, deployment).
+> **Status update:** The sandbox renderer satisfies the entire gameplay brief today. Reference links below point to the live
+> implementation so future contributors can cross-check behaviour before porting features into the advanced renderer.
 
 ## 1. Rendering and World Generation
 
-- [ ] Introduce a dedicated `RenderingPipeline` module that encapsulates Three.js initialisation, renderer configuration, and resize handling.
-- [ ] Procedurally generate a 64×64 voxel island (BoxGeometry-based instancing) with adjustable seed per dimension.
-- [ ] Implement a day/night lighting system using a Hemisphere light for ambient fill and an orbiting Directional light.
-- [ ] Target a consistent 60 FPS render loop (`THREE.Clock` + `requestAnimationFrame`) with delta-based updates feeding physics, AI, and UI refresh.
+- [x] Introduce a dedicated bootstrap that encapsulates Three.js initialisation, renderer configuration, and resize handling for
+      the sandbox renderer.【F:simple-experience.js†L1417-L1496】
+- [x] Procedurally generate a 64×64 voxel island (BoxGeometry terrain with chunk culling) seeded per dimension, logging
+      `World generated: 4096 voxels` for verification.【F:simple-experience.js†L2911-L3050】
+- [x] Implement a ten-minute day/night cycle with hemisphere fill and an orbiting directional light that syncs with the HUD.
+      【F:simple-experience.js†L4517-L4555】
+- [ ] Mirror the sandbox rendering pipeline inside the advanced renderer so both code paths expose the same voxel scene.
 
 ## 2. Player Presence and Animation
 
-- [ ] Load the Steve-inspired GLTF rig and attach the camera to the head bone for first-person rendering.
-- [ ] Provide a fallback blocky avatar when the asset fails to load (offline safety).
-- [ ] Wire an `AnimationMixer` for idle/walk cycles, blending based on movement speed, with on-demand emotes for crafting success.
+- [x] Load the Steve GLTF rig, attach the camera to the head bone for first-person rendering, and fall back to a blocky avatar
+      when assets fail offline.【F:simple-experience.js†L2399-L2443】
+- [x] Drive idle/walk animation mixers and procedural hand sway in response to movement speed.【F:simple-experience.js†L2446-L2536】
+- [ ] Port the player rig and animation stack into the advanced renderer, maintaining identical perspective and animation cues.
 
 ## 3. Input and Mobility
 
-- [ ] Desktop controls: pointer-lock mouse look (yaw only), WASD/Space movement with gravity-aware jumps, left/right click mining and block placement.
-- [ ] Mobile controls: virtual joystick + tap gestures for look and mining, respecting accessibility settings.
-- [ ] Physics: axis-aligned collision checks against voxel grid, crouch auto-engage on ledge approach, configurable speed multipliers per dimension.
+- [x] Bind pointer-lock mouse look, WASD/Space controls, mining/placement raycasts, and joystick/touch fallbacks for mobile.
+      【F:simple-experience.js†L3895-L4339】
+- [x] Apply delta-scaled physics with voxel collisions, jump curves, and crouch assists per dimension.【F:simple-experience.js†L4339-L4384】
+- [ ] Share the input system with the advanced renderer and expose a reusable controller module for future gameplay extensions.
 
 ## 4. Entities and Combat Loop
 
-- [ ] Spawn zombies at night using the combat utilities grid pathfinder; update their AI to chase the player while avoiding void tiles.
-- [ ] Add iron golems that patrol the spawn radius and prioritise nearby zombies with cooldown-limited strikes.
-- [ ] Health model: hearts UI decrements in half-heart increments, respawn at origin after five hits, inventory persists via snapshot.
+- [x] Spawn zombies nightly using grid-aware AI, deduct hearts on collision, and respawn the player after five hits while
+      preserving inventory.【F:simple-experience.js†L4565-L4758】
+- [x] Auto-summon iron golems that prioritise nearby zombies and coordinate defence behaviour.【F:simple-experience.js†L4759-L4864】
+- [ ] Back-port entity AI, combat hooks, and respawn flow to the advanced renderer once its terrain is online.
 
 ## 5. Crafting and Inventory Systems
 
-- [ ] Represent the hotbar and satchel as data structures synchronised with the HUD; provide drag-and-drop in the crafting modal.
-- [ ] Validate crafting sequences against recipe definitions (`crafting.js`), award score increments, and animate success confetti.
-- [ ] Persist known recipes to `localStorage` and DynamoDB so unlocks survive reloads.
+- [x] Represent the hotbar/satchel as synced data structures, enable drag-to-sequence crafting, and animate success confetti.
+      【F:simple-experience.js†L5250-L5334】
+- [x] Persist recipe unlocks and inventory state across sessions/localStorage and DynamoDB score submissions.【F:simple-experience.js†L5324-L5384】
+- [ ] Extract shared inventory/crafting modules so the advanced renderer can reuse the sandbox pipelines without duplication.
 
 ## 6. Portals, Dimensions, and Progression
 
-- [ ] Detect valid 4×3 portal frames, trigger shader-based portal surfaces, and transition scenes while preserving player orientation.
-- [ ] Generate unique biome parameters per dimension (gravity, rail curvature, loot tables) and track progression order.
-- [ ] Implement the Netherite dimension boss encounter with collapsing rails, Eternal Ingot pickup, and victory modal activation.
+- [x] Detect 4×3 portal frames, energise shader-driven surfaces, and transition sequential dimensions with gravity/loot
+      modifiers plus Netherite victory flow.【F:simple-experience.js†L3795-L3821】【F:simple-experience.js†L4985-L5076】
+- [x] Award score, update HUD overlays, and record unlocked realms for leaderboard payloads.【F:simple-experience.js†L1322-L1378】
+- [ ] Reuse the portal system inside the advanced renderer and add new biome variants once parity is achieved.
 
 ## 7. Backend Integration
 
-- [ ] Connect game events to the AWS API layer: POST score updates, GET leaderboard, sync identity after Google SSO.
-- [ ] Handle offline mode gracefully with queued updates and exponential backoff retries.
-- [ ] Extend the Serverless deployment workflow to verify asset availability (textures, GLTF, SFX) prior to publishing.
+- [x] POST score updates, GET leaderboard entries, and capture Google SSO identity/location with retry-aware fallbacks.
+      【F:simple-experience.js†L895-L1004】【F:simple-experience.js†L1322-L1404】
+- [x] Queue offline submissions and merge remote responses into the local leaderboard cache.【F:simple-experience.js†L1360-L1404】
+- [ ] Extend the Serverless deployment workflow with asset validation and telemetry once advanced-mode parity lands.
 
 ## 8. Audio, UI Polish, and Accessibility
 
-- [ ] Integrate Howler.js-backed SFX (mining, footsteps, zombie groans) with mute toggle in settings.
-- [ ] Provide tooltips and tutorial overlays that fade after onboarding, plus responsive layout adaptations for mobile.
-- [ ] Add a footer crediting "Made by Manu" and ensure all controls have ARIA labels/tooltips.
+- [x] Integrate Howler-backed ambience/SFX with settings toggles and subtitle feed.【F:simple-experience.js†L2130-L2200】
+- [x] Provide tutorial overlays, tooltips, responsive HUD, and a persistent “Made by Manu” footer matching the brief.
+      【F:index.html†L196-L275】【F:styles.css†L1420-L1533】
+- [ ] Expand reduced-motion and colour-contrast preferences during the advanced renderer uplift.
 
 ## 9. Validation and Tooling
 
-- [ ] Expand `docs/validation-matrix.md` with automated browser-based smoke tests (movement, crafting, portal activation).
-- [ ] Profile the render loop using Chrome Tracing to ensure frame time stays under 16 ms on mid-tier hardware.
-- [ ] Update GitHub Actions to run linting, bundle verification, and asset compression checks before deployment.
+- [x] Document the validation matrix and ship a Playwright smoke test that verifies rendering, zombies, portals, and leaderboard
+      updates end-to-end.【F:docs/validation-matrix.md†L1-L120】【F:tests/e2e-check.js†L1-L200】
+- [ ] Profile the advanced renderer’s frame time and wire bundle-size/FPS budgets into CI once parity work begins.
+- [ ] Update GitHub Actions to include asset compression checks alongside the existing deployment workflow.
 
 ---
 
 ### Suggested Execution Order
 
-1. Rendering pipeline + player controls (Sections 1–3)
-2. Core gameplay loop (Sections 4–6)
-3. Backend, audio, and polish (Sections 7–8)
-4. Testing and deployment automation (Section 9)
+1. Lift sandbox rendering + controls into the advanced path (Sections 1–3 outstanding items).
+2. Port the core gameplay loop (Sections 4–6 outstanding items).
+3. Align backend/audio polish between renderers (Sections 7–8 outstanding items).
+4. Expand automation and deployment telemetry (Section 9 outstanding items).
 
-Each milestone should be validated in-browser and accompanied by telemetry hooks so that gameplay metrics can be surfaced in DynamoDB-backed leaderboards.
+Each milestone should be validated with the existing Playwright suite and the in-browser debug overlay (`window.__INFINITE_RAILS_DEBUG__`) before shipping to production.
 
 ### Tracking
 
-Use GitHub Projects (or Linear) to convert each checkbox into tasks with acceptance criteria, linking back to this roadmap for traceability.
+Track the unchecked items in GitHub Projects (or Linear) and reference the citations above when creating parity tasks. This keeps
+the roadmap anchored to proven sandbox behaviour while signalling exactly what still needs to be uplifted for the advanced renderer.

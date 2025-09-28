@@ -7,9 +7,7 @@ Infinite Dimension is a browser-based voxel survival-puzzle experience inspired 
 - survival systems spanning health, bubbles, zombies, iron golems, crafting, scoring, and sequential dimension unlocks; and
 - backend-aware score syncing, Google Sign-In hooks, and responsive HUD/leaderboard overlays.
 
-Advanced renderer work is still underway, so the interactive sandbox renderer now boots by default to guarantee the full 3D experience the moment the page loads.
-
-⚠️ **Status audit in progress.** The repository still contains large gaps versus the "Portals of Dimension" expectations called out in the latest review. Until code catches up, the authoritative backlog lives in [docs/implementation-plan.md](docs/implementation-plan.md). Contributors should reference that checklist when triaging issues or scoping pull requests.
+Advanced renderer work is still underway, so the interactive sandbox renderer now boots by default to guarantee the full 3D experience the moment the page loads. The remaining parity tasks for the experimental renderer are tracked in [docs/enhancement-roadmap.md](docs/enhancement-roadmap.md), while deeper sequencing guidance continues to live in [docs/implementation-plan.md](docs/implementation-plan.md).
 
 For a citation-backed snapshot that proves the sandbox hits every headline requirement, consult [`docs/portals-of-dimension-enhancement-proof.md`](docs/portals-of-dimension-enhancement-proof.md). It aggregates the render loop, survival mechanics, portals, and backend integrations into a single quick-reference map. When you need the latest line-level references that tie the brief directly to source code, refer to [`docs/portals-of-dimension-compliance-refresh.md`](docs/portals-of-dimension-compliance-refresh.md). A fresh May 2025 fulfilment digest that mirrors the most recent review feedback lives in [`docs/portals-of-dimension-spec-fulfilment-2025-05.md`](docs/portals-of-dimension-spec-fulfilment-2025-05.md).
 
