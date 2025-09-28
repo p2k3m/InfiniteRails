@@ -11462,6 +11462,9 @@
         const actor = createZombieActor();
         if (!actor) break;
         zombieMeshes.push(actor);
+        if (typeof console !== 'undefined') {
+          console.log('Zombie spawned, chasing');
+        }
       }
       while (zombieMeshes.length > count) {
         const zombieData = zombieMeshes.pop();
@@ -15732,6 +15735,9 @@
 
     function completeRespawn() {
       if (!state.ui.respawnActive) return;
+      if (typeof console !== 'undefined') {
+        console.log('Respawn triggered');
+      }
       if (defeatRespawnButton) {
         defeatRespawnButton.disabled = true;
         defeatRespawnButton.textContent = 'Respawning...';
