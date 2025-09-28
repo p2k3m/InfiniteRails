@@ -1,6 +1,6 @@
 # Spec Compliance Summary: Infinite Rails — Portals of Dimension
 
-The sandbox renderer now delivers the end-to-end gameplay loop outlined in the "Comprehensive Analysis and Enhancement Specifications" brief. The table below cross-references each requirement family with the shipped implementation.
+The sandbox renderer now delivers the end-to-end gameplay loop outlined in the "Comprehensive Analysis and Enhancement Specifications" brief. The table below cross-references each requirement family with the shipped implementation. A pointer-by-pointer evidence trail lives in [spec-pointer-audit.md](./spec-pointer-audit.md) for quick reference during reviews.
 
 | Spec Area | Current Status | Evidence Summary |
 | --- | --- | --- |
