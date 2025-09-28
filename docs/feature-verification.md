@@ -46,3 +46,9 @@ This document maps the requested experience requirements to concrete implementat
 - Backend and identity integrations continue to operate: Google Sign-In posts user metadata to `/users`, while leaderboard GET/POST handlers refresh the UI without requiring a page reload.【F:script.js†L18123-L18186】【F:simple-experience.js†L752-L835】【F:simple-experience.js†L985-L1039】
 
 These references confirm the requested functionality is present and integrated across rendering, gameplay, UI, and backend systems.
+
+## Automated verification log — April 2025
+
+- `npm test` (Vitest) – Passes all unit suites that cover crafting recipes, combat maths, portal mechanics, and scoreboard formatting. Use this run to catch regressions in the supporting utility layers before exercising the renderer.【F:tests/crafting.test.js†L1-L120】【F:tests/combat-utils.test.js†L1-L112】【F:tests/portal-mechanics.test.js†L1-L134】【F:tests/scoreboard-utils.test.js†L1-L132】
+- `npm run test:e2e` (Playwright) – Boots the sandbox, validates the voxel population, and checks HUD/leaderboard state. Playwright requires a one-time `npx playwright install` to download the Chromium bundle when running in a fresh environment.【F:tests/e2e-check.js†L1-L124】
+- Manual smoke (optional) – When Playwright is unavailable, launch `index.html?mode=simple`, trigger the start modal, and confirm the console logs include “World generated: 4096 voxels” and “Steve visible in scene,” matching the specification’s onboarding expectations.【F:simple-experience.js†L2320-L2394】【F:simple-experience.js†L2001-L2047】
