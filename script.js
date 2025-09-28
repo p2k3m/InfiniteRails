@@ -560,10 +560,213 @@
       let gsiInitialized = false;
       let hydratingIdentity = false;
 
+      const simpleEventCleanup = [];
+      let pendingSummary = null;
+      let pendingVictorySummary = null;
+
+      function getGlobalInteractionScope() {
+        if (typeof window !== 'undefined') return window;
+        if (typeof globalThis !== 'undefined') return globalThis;
+        return null;
+      }
+
+      function registerSimpleEvent(eventName, handler) {
+        const scope = getGlobalInteractionScope();
+        if (!scope || typeof scope.addEventListener !== 'function') return;
+        scope.addEventListener(eventName, handler);
+        simpleEventCleanup.push(() => scope.removeEventListener(eventName, handler));
+      }
+
+      function getActiveGameState() {
+        const scope = getGlobalInteractionScope();
+        if (!scope) return null;
+        return scope.__INFINITE_RAILS_STATE__ || null;
+      }
+
+      function normaliseSimpleSummary(payload = {}) {
+        const source = payload && typeof payload.summary === 'object' ? payload.summary : payload;
+        if (!source || typeof source !== 'object') {
+          return null;
+        }
+        const normalizedDimensions = ensureArrayOfStrings(source.dimensions ?? []);
+        const normalizedRecipes = ensureArrayOfStrings(source.recipes ?? []);
+        const dimensionCount = Number.isFinite(source.dimensionCount)
+          ? Number(source.dimensionCount)
+          : normalizedDimensions.length;
+        const recipeCount = Number.isFinite(source.recipeCount)
+          ? Number(source.recipeCount)
+          : normalizedRecipes.length;
+        return {
+          score: Number.isFinite(source.score) ? Math.round(Number(source.score)) : null,
+          runTimeSeconds: Number.isFinite(source.runTimeSeconds)
+            ? Math.max(0, Number(source.runTimeSeconds))
+            : null,
+          inventoryCount: Number.isFinite(source.inventoryCount)
+            ? Math.max(0, Number(source.inventoryCount))
+            : null,
+          dimensionCount,
+          recipeCount,
+          dimensions: normalizedDimensions,
+          recipes: normalizedRecipes,
+          reason: payload?.reason ?? source.reason ?? null,
+        };
+      }
+
+      function mergeSimpleSummary(partial) {
+        if (!partial) return null;
+        const currentState = getActiveGameState();
+        const existing = (currentState && currentState.simpleSummary) || pendingSummary || {};
+        return {
+          score: Number.isFinite(partial.score) ? partial.score : existing.score ?? null,
+          runTimeSeconds: Number.isFinite(partial.runTimeSeconds)
+            ? partial.runTimeSeconds
+            : existing.runTimeSeconds ?? null,
+          inventoryCount: Number.isFinite(partial.inventoryCount)
+            ? partial.inventoryCount
+            : existing.inventoryCount ?? null,
+          dimensionCount: Number.isFinite(partial.dimensionCount)
+            ? partial.dimensionCount
+            : Number.isFinite(existing.dimensionCount)
+              ? existing.dimensionCount
+              : partial.dimensions?.length ?? existing.dimensions?.length ?? null,
+          recipeCount: Number.isFinite(partial.recipeCount)
+            ? partial.recipeCount
+            : Number.isFinite(existing.recipeCount)
+              ? existing.recipeCount
+              : partial.recipes?.length ?? existing.recipes?.length ?? null,
+          dimensions: partial.dimensions?.length ? partial.dimensions : existing.dimensions ?? [],
+          recipes: partial.recipes?.length ? partial.recipes : existing.recipes ?? [],
+          reason: partial.reason ?? existing.reason ?? null,
+        };
+      }
+
+      function applySummaryToState(summary) {
+        const gameState = getActiveGameState();
+        if (!gameState) {
+          pendingSummary = summary;
+          return false;
+        }
+        gameState.simpleSummary = summary;
+        pendingSummary = null;
+        return true;
+      }
+
+      function syncScoreStateFromSummary(summary) {
+        if (!summary) return;
+        scoreState.recipes.clear();
+        const recipeList = Array.isArray(summary.recipes) ? summary.recipes : [];
+        recipeList.forEach((id, index) => {
+          const key = (typeof id === 'string' && id.trim()) || `recipe-${index + 1}`;
+          scoreState.recipes.add(key);
+        });
+        if (Number.isFinite(summary.recipeCount)) {
+          while (scoreState.recipes.size < summary.recipeCount) {
+            scoreState.recipes.add(`recipe-${scoreState.recipes.size + 1}`);
+          }
+        }
+        scoreState.dimensions.clear();
+        const dimensionList = Array.isArray(summary.dimensions) ? summary.dimensions : [];
+        dimensionList.forEach((label, index) => {
+          const key = (typeof label === 'string' && label.trim()) || `dimension-${index + 1}`;
+          scoreState.dimensions.add(key);
+        });
+        if (Number.isFinite(summary.dimensionCount)) {
+          while (scoreState.dimensions.size < summary.dimensionCount) {
+            scoreState.dimensions.add(`dimension-${scoreState.dimensions.size + 1}`);
+          }
+        }
+        if (Number.isFinite(summary.score)) {
+          scoreState.score = summary.score;
+        }
+      }
+
+      function updateScoreFromSummary(summary, options = {}) {
+        if (!summary) return false;
+        syncScoreStateFromSummary(summary);
+        const applied = applySummaryToState(summary);
+        if (applied || getActiveGameState()) {
+          updateScoreOverlay({ flash: options.flash, triggerFlip: options.triggerFlip });
+        }
+        return applied;
+      }
+
+      registerSimpleEvent('infinite-rails:state-ready', () => {
+        if (pendingSummary) {
+          const summary = pendingSummary;
+          pendingSummary = null;
+          updateScoreFromSummary(summary, {});
+        }
+        if (pendingVictorySummary) {
+          const summary = pendingVictorySummary;
+          pendingVictorySummary = null;
+          const applied = updateScoreFromSummary(summary, { flash: true, triggerFlip: true });
+          const activeState = getActiveGameState();
+          if (applied && activeState) {
+            activeState.victory = true;
+            activeState.scoreSubmitted = true;
+            openVictoryCelebration();
+          }
+        }
+      });
+
+      registerSimpleEvent('infinite-rails:score-updated', (event) => {
+        const summary = mergeSimpleSummary(normaliseSimpleSummary(event?.detail ?? {}));
+        if (!summary) return;
+        const reason = summary.reason ?? event?.detail?.summary?.reason ?? null;
+        const flash = reason !== 'start' && reason !== 'identity-update' && reason !== 'location-update';
+        updateScoreFromSummary(summary, { flash });
+      });
+
+      registerSimpleEvent('infinite-rails:dimension-advanced', (event) => {
+        const summary = mergeSimpleSummary(normaliseSimpleSummary(event?.detail ?? {}));
+        if (!summary) return;
+        updateScoreFromSummary(summary, { flash: true, triggerFlip: true });
+      });
+
+      registerSimpleEvent('infinite-rails:portal-activated', (event) => {
+        const summary = mergeSimpleSummary(normaliseSimpleSummary(event?.detail ?? {}));
+        if (!summary) return;
+        updateScoreFromSummary(summary, { flash: true });
+      });
+
+      registerSimpleEvent('infinite-rails:victory', (event) => {
+        const summary = mergeSimpleSummary(normaliseSimpleSummary(event?.detail ?? {}));
+        if (!summary) return;
+        const applied = updateScoreFromSummary(summary, { flash: true, triggerFlip: true });
+        const activeState = getActiveGameState();
+        if (applied && activeState) {
+          activeState.victory = true;
+          activeState.scoreSubmitted = true;
+          openVictoryCelebration();
+        } else {
+          pendingVictorySummary = summary;
+        }
+      });
+
+      if (typeof experience?.createRunSummary === 'function') {
+        const bootstrapSummary = mergeSimpleSummary(
+          normaliseSimpleSummary({ summary: experience.createRunSummary('start') })
+        );
+        if (bootstrapSummary) {
+          updateScoreFromSummary(bootstrapSummary, {});
+        }
+      }
+
+      registerSimpleEvent('pagehide', () => {
+        while (simpleEventCleanup.length) {
+          const dispose = simpleEventCleanup.pop();
+          try {
+            dispose();
+          } catch (error) {
+            console.debug('Failed to remove simple integration listener', error);
+          }
+        }
+      });
+
       function persistIdentity() {
-        if (hydratingIdentity) return;
-        if (typeof localStorage === 'undefined') return;
-        try {
+      if (hydratingIdentity) return;
+      if (typeof localStorage === 'undefined') return;
+      try {
           const payload = {
             displayName: identityState.displayName,
             googleId: identityState.googleId,
@@ -12941,6 +13144,7 @@
       craftSequence: [],
       knownRecipes: new Set(['stick', 'stone-pickaxe']),
       unlockedDimensions: new Set(['origin']),
+      simpleSummary: null,
       player: {
         x: 8,
         y: 6,
@@ -12994,6 +13198,17 @@
         pendingReason: null,
       },
     };
+
+    if (typeof window !== 'undefined') {
+      window.__INFINITE_RAILS_STATE__ = state;
+      if (typeof window.dispatchEvent === 'function' && typeof CustomEvent === 'function') {
+        try {
+          window.dispatchEvent(new CustomEvent('infinite-rails:state-ready', { detail: { state } }));
+        } catch (error) {
+          console.debug('Failed to announce state readiness', error);
+        }
+      }
+    }
 
     state.player.heartsAtLastDamage = state.player.hearts;
 
@@ -13950,9 +14165,38 @@
 
       initializeScoreOverlayUI();
 
-      const { recipePoints, dimensionPoints, total } = recalculateScoreState();
-      const recipeCount = scoreState.recipes.size;
-      const dimensionCount = scoreState.dimensions.size;
+      let summary = null;
+      if (typeof window !== 'undefined' && window.__INFINITE_RAILS_STATE__?.simpleSummary) {
+        summary = window.__INFINITE_RAILS_STATE__.simpleSummary;
+      }
+      let recipeCount = scoreState.recipes.size;
+      let dimensionCount = scoreState.dimensions.size;
+      let recipePoints = recipeCount * SCORE_POINTS.recipe;
+      let dimensionPoints = dimensionCount * SCORE_POINTS.dimension;
+      let total = recipePoints + dimensionPoints;
+
+      if (summary) {
+        recipeCount = Number.isFinite(summary.recipeCount)
+          ? Math.max(0, Math.round(summary.recipeCount))
+          : Array.isArray(summary.recipes)
+            ? summary.recipes.length
+            : recipeCount;
+        dimensionCount = Number.isFinite(summary.dimensionCount)
+          ? Math.max(0, Math.round(summary.dimensionCount))
+          : Array.isArray(summary.dimensions)
+            ? summary.dimensions.length
+            : dimensionCount;
+        recipePoints = recipeCount * SCORE_POINTS.recipe;
+        dimensionPoints = dimensionCount * SCORE_POINTS.dimension;
+        total = Math.round(summary.score ?? recipePoints + dimensionPoints);
+      } else {
+        const recalculated = recalculateScoreState();
+        recipePoints = recalculated.recipePoints;
+        dimensionPoints = recalculated.dimensionPoints;
+        total = recalculated.total;
+        recipeCount = scoreState.recipes.size;
+        dimensionCount = scoreState.dimensions.size;
+      }
 
       animateScoreDigits(scoreTotalEl, total);
       animateMetricUpdate(scoreRecipesEl, `${recipeCount} (+${recipePoints} pts)`);
@@ -18404,6 +18648,27 @@
     }
 
     function computeScoreSnapshot() {
+      if (state?.simpleSummary) {
+        const summary = state.simpleSummary;
+        const dimensionCount = Number.isFinite(summary.dimensionCount)
+          ? Math.max(0, Math.round(summary.dimensionCount))
+          : Array.isArray(summary.dimensions)
+            ? summary.dimensions.length
+            : 0;
+        const runTimeSeconds = Number.isFinite(summary.runTimeSeconds)
+          ? Math.max(0, Math.round(summary.runTimeSeconds))
+          : 0;
+        const inventoryCount = Number.isFinite(summary.inventoryCount)
+          ? Math.max(0, Math.round(summary.inventoryCount))
+          : 0;
+        const scoreValue = Math.round(summary.score ?? 0);
+        return {
+          score: scoreValue,
+          dimensionCount,
+          runTimeSeconds,
+          inventoryCount,
+        };
+      }
       const dimensionCount = state.scoreBreakdown?.dimensions?.size ?? new Set(state.dimensionHistory ?? []).size;
       const recipeCount = state.scoreBreakdown?.recipes?.size ?? 0;
       const inventoryBundles = mergeInventory();
