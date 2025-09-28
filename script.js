@@ -3092,10 +3092,50 @@
     const tmpMovementForward = new THREE.Vector3();
     const tmpMovementRight = new THREE.Vector3();
     const tmpMovementVector = new THREE.Vector3();
+    const tmpCullingCenter = new THREE.Vector3();
     const tmpColorA = new THREE.Color();
     const tmpColorB = new THREE.Color();
     const tmpColorC = new THREE.Color();
     const tmpColorD = new THREE.Color();
+    let frameCounter = 0;
+    const viewFrustumState = {
+      frustum: new THREE.Frustum(),
+      matrix: new THREE.Matrix4(),
+      scratchSphere: new THREE.Sphere(),
+    };
+    let viewFrustumFrameId = -1;
+    const worldCullingState = {
+      islandCenter: new THREE.Vector3(0, 0, 0),
+      islandRadius: 0,
+    };
+
+    function invalidateViewFrustum() {
+      viewFrustumFrameId = -1;
+    }
+
+    function ensureViewFrustum() {
+      if (!camera) {
+        return false;
+      }
+      if (viewFrustumFrameId === frameCounter) {
+        return true;
+      }
+      camera.updateMatrixWorld(true);
+      viewFrustumState.matrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+      viewFrustumState.frustum.setFromProjectionMatrix(viewFrustumState.matrix);
+      viewFrustumFrameId = frameCounter;
+      return true;
+    }
+
+    function isSceneSphereVisible(center, radius) {
+      if (!ensureViewFrustum()) {
+        return true;
+      }
+      const sphere = viewFrustumState.scratchSphere;
+      sphere.center.copy(center);
+      sphere.radius = radius;
+      return viewFrustumState.frustum.intersectsSphere(sphere);
+    }
     const raycastPointer = new THREE.Vector2();
     const tmpRaycastBox = new THREE.Box3();
     const hoverState = { tile: null, entity: null };
@@ -4080,6 +4120,7 @@
 
       camera.up.copy(WORLD_UP);
       camera.lookAt(tmpCameraTarget);
+      invalidateViewFrustum();
     }
 
     const JOYSTICK_DEADZONE = 0.18;
@@ -4954,6 +4995,12 @@
         }
       }
       voxelIslandAssets.tileCount = tileCount;
+      const horizontalRadius = (size * tileSize) / 2;
+      const verticalRadius = (maxHeight * tileSize) / 2;
+      worldCullingState.islandCenter.set(0, verticalRadius, 0);
+      worldCullingState.islandRadius = Math.sqrt(
+        horizontalRadius * horizontalRadius * 2 + verticalRadius * verticalRadius
+      );
       if (typeof console !== 'undefined') {
         console.log(`World generated: ${tileCount} voxels`);
       }
@@ -11511,6 +11558,12 @@
         actor.baseEyeColors[index] = glow.clone();
       });
       entityGroup.add(clone);
+      clone.visible = true;
+      clone.updateMatrixWorld(true);
+      const bounds = new THREE.Box3().setFromObject(clone);
+      const sphere = bounds.getBoundingSphere(new THREE.Sphere());
+      actor.boundingCenter = sphere?.center?.clone?.() ?? new THREE.Vector3(0, actor.groundOffset, 0);
+      actor.boundingRadius = sphere?.radius ?? 1.2;
       return actor;
     }
 
@@ -11769,6 +11822,12 @@
         actor.baseEyeColors[index] = glow.clone();
       });
       entityGroup.add(clone);
+      clone.visible = true;
+      clone.updateMatrixWorld(true);
+      const bounds = new THREE.Box3().setFromObject(clone);
+      const sphere = bounds.getBoundingSphere(new THREE.Sphere());
+      actor.boundingCenter = sphere?.center?.clone?.() ?? new THREE.Vector3(0, actor.groundOffset, 0);
+      actor.boundingRadius = sphere?.radius ?? 1.6;
       return actor;
     }
 
@@ -12103,6 +12162,17 @@
         const bob = Math.abs(lift) * 0.15 + Math.sin(now / 520 + index) * 0.01 * (1 - movement);
         group.position.set(x, h + groundOffset + bob, z);
 
+        tmpCullingCenter.set(
+          x + (actor.boundingCenter?.x ?? 0),
+          h + groundOffset + bob + (actor.boundingCenter?.y ?? 0),
+          z + (actor.boundingCenter?.z ?? 0)
+        );
+        const zombieVisible = isSceneSphereVisible(tmpCullingCenter, actor.boundingRadius ?? 1.2);
+        group.visible = zombieVisible;
+        if (!zombieVisible) {
+          return;
+        }
+
         const distToPlayer = Math.abs(zombie.x - state.player.x) + Math.abs(zombie.y - state.player.y);
         const aggressionTarget = distToPlayer <= 1 ? 1 : Math.max(0, 1 - distToPlayer / 6);
         const previousAggression = actor.aggression ?? 0;
@@ -12252,6 +12322,17 @@
         group.position.set(x + groupOffsetX, h + groundOffset + groupOffsetY, z + groupOffsetZ);
         group.rotation.set(bodyPitch, Math.atan2(directionForRotation.x, directionForRotation.y), bodyRoll);
 
+        tmpCullingCenter.set(
+          group.position.x + (actor.boundingCenter?.x ?? 0),
+          group.position.y + (actor.boundingCenter?.y ?? 0),
+          group.position.z + (actor.boundingCenter?.z ?? 0)
+        );
+        const golemVisible = isSceneSphereVisible(tmpCullingCenter, actor.boundingRadius ?? 1.6);
+        group.visible = golemVisible;
+        if (!golemVisible) {
+          return;
+        }
+
         let nearestZombie = Infinity;
         state.zombies.forEach((z) => {
           const d = Math.abs(z.x - golem.x) + Math.abs(z.y - golem.y);
@@ -12322,6 +12403,14 @@
       });
       ghost.scale.multiplyScalar(1.02);
       entityGroup.add(ghost);
+      ghost.visible = true;
+      ghost.position.set(0, 0, 0);
+      ghost.rotation.set(0, 0, 0);
+      ghost.updateMatrixWorld(true);
+      const ghostBounds = new THREE.Box3().setFromObject(ghost);
+      const ghostSphere = ghostBounds.getBoundingSphere(new THREE.Sphere());
+      const ghostBoundingCenter = ghostSphere?.center?.clone?.() ?? new THREE.Vector3(0, 0.8, 0);
+      const ghostBoundingRadius = ghostSphere?.radius ?? 0.8;
       const rotation = Math.atan2(state.player.facing.x, state.player.facing.y);
       const scenePos = worldToScene(state.player.x, state.player.y);
       const height = tileSurfaceHeight(state.player.x, state.player.y);
@@ -12335,6 +12424,8 @@
         gridX: state.player.x,
         gridY: state.player.y,
         rotation,
+        boundingCenter: ghostBoundingCenter,
+        boundingRadius: ghostBoundingRadius,
       });
     }
 
@@ -12374,6 +12465,16 @@
         const bob = Math.sin(state.elapsed * 6 + i) * 0.04;
         ghost.group.position.set(scenePos.x, height + 0.06 + ratio * 0.35 + bob, scenePos.z);
         ghost.group.rotation.y = ghost.rotation;
+        tmpCullingCenter.set(
+          ghost.group.position.x + (ghost.boundingCenter?.x ?? 0),
+          ghost.group.position.y + (ghost.boundingCenter?.y ?? 0),
+          ghost.group.position.z + (ghost.boundingCenter?.z ?? 0)
+        );
+        const ghostVisible = isSceneSphereVisible(tmpCullingCenter, ghost.boundingRadius ?? 0.8);
+        ghost.group.visible = ghostVisible;
+        if (!ghostVisible) {
+          continue;
+        }
         ghost.materials?.forEach((material) => {
           if (!material) return;
           material.opacity = THREE.MathUtils.clamp(0.08 + intensity * 0.5, 0, 0.65);
@@ -12680,6 +12781,20 @@
       }
     }
 
+    function applyFrustumCulling() {
+      if (!voxelIslandAssets?.mesh) {
+        return;
+      }
+      if (worldCullingState.islandRadius <= 0) {
+        voxelIslandAssets.mesh.visible = true;
+        return;
+      }
+      voxelIslandAssets.mesh.visible = isSceneSphereVisible(
+        worldCullingState.islandCenter,
+        worldCullingState.islandRadius
+      );
+    }
+
     function renderScene() {
       updateWorldMeshes();
       updateEntities();
@@ -12711,6 +12826,7 @@
           return;
         }
         try {
+          applyFrustumCulling();
           renderer.render(scene, camera);
           uniformSanitizationFailureStreak = 0;
         } catch (error) {
@@ -14982,6 +15098,7 @@
     let frameAccumulator = 0;
 
     function loop() {
+      frameCounter += 1;
       const delta = Math.min(renderClock.getDelta(), 0.12);
       frameAccumulator += delta;
       frameAccumulator = Math.min(frameAccumulator, TARGET_FRAME_TIME * 5);
