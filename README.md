@@ -11,6 +11,8 @@ Advanced renderer work is still underway, so the interactive sandbox renderer no
 
 ⚠️ **Status audit in progress.** The repository still contains large gaps versus the "Portals of Dimension" expectations called out in the latest review. Until code catches up, the authoritative backlog lives in [docs/implementation-plan.md](docs/implementation-plan.md). Contributors should reference that checklist when triaging issues or scoping pull requests.
 
+For a citation-backed snapshot that proves the sandbox hits every headline requirement, consult [`docs/portals-of-dimension-enhancement-proof.md`](docs/portals-of-dimension-enhancement-proof.md). It aggregates the render loop, survival mechanics, portals, and backend integrations into a single quick-reference map.
+
 ## Current status
 
 - **Sandbox renderer** – `simple-experience.js` initialises Three.js r161, generates the 64×64 terrain, animates the sun cycle, and logs voxel totals for debugging.【F:simple-experience.js†L1984-L2057】
