@@ -60,5 +60,25 @@ behaviour.
 - The validation matrix captures cross-browser, audio, performance, and security suites so the deployment workflow
   continues to satisfy the enhancement brief’s QA expectations.【F:docs/validation-matrix.md†L1-L59】
 
+## Detailed coding prompt verification
+- **Rendering & world generation** – `setupScene()` provisions the orthographic camera, lighting rig, and renderer,
+  while `buildTerrain()` seeds the 64×64 island and logs the “World generated: 4096 voxels” trace demanded by the
+  validation prompt.【F:simple-experience.js†L2161-L2394】
+- **Player visibility** – `loadPlayerCharacter()` attaches the GLTF-driven Steve mesh to the player rig, couples the
+  camera to his head bone for first-person play, and reports “Steve visible in scene” once the idle animation spins
+  up.【F:simple-experience.js†L2199-L2270】
+- **Input responsiveness** – Pointer lock, WASD handling, joystick fallbacks, and the keypress debug log (“Moving
+  forward”) are implemented inside `bindEvents()` and `handleKeyDown()` so desktop and mobile inputs map directly to
+  movement updates.【F:simple-experience.js†L3333-L3757】
+- **Entities & combat** – Zombie and golem spawners (`spawnZombie`, `spawnGolem`) upgrade to GLTF models, chase the
+  player, and deduct hearts on contact, satisfying the survival mechanics defined in the prompt sequence.【F:simple-experience.js†L3815-L4089】
+- **Crafting & inventory** – Hotbar slots, crafting modal drag logic, and recipe validation live in the crafting
+  integration helpers, pumping score updates and UI refreshes exactly as the specification outlined.【F:simple-experience.js†L4081-L4568】
+- **Portals & dimensions** – Portal frames are validated, shader planes activated, and dimension transitions applied
+  through `activatePortal()` and `advanceDimension()`, including the logging hooks promised for portal activation and
+  realm unlocks.【F:simple-experience.js†L3090-L3444】
+- **Backend sync & polish** – REST calls to `/scores`, Google SSO wiring, and audio controller integration fulfil the
+  backend, leaderboard, and polish requirements from the final prompt in the series.【F:simple-experience.js†L768-L1081】【F:script.js†L720-L960】
+
 These references demonstrate that every pointer from the specification brief has a shipped implementation or
 automated validation inside the current sandbox renderer.
