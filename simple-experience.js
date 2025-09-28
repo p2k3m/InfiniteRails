@@ -855,13 +855,22 @@
             label: this.playerLocation.label ?? locationLabel,
           }
         : null;
+      const totalDimensions = DIMENSION_THEME.length;
+      const unlockedCount = Math.max(1, this.currentDimensionIndex + 1);
+      const safeCount = Math.min(unlockedCount, totalDimensions);
+      const unlockedDimensions = DIMENSION_THEME.slice(0, safeCount).map((dimension) => dimension.label);
+      const activeDimensionLabel =
+        this.dimensionSettings?.label || unlockedDimensions[unlockedDimensions.length - 1] || DIMENSION_THEME[0].label;
       return {
         id: entryId,
         googleId: this.playerGoogleId ?? null,
         playerId: entryId,
         name: this.playerDisplayName,
         score: Math.round(this.score),
-        dimensionCount: Math.max(1, this.currentDimensionIndex + 1),
+        dimensionCount: safeCount,
+        dimensionTotal: totalDimensions,
+        dimensionLabel: activeDimensionLabel,
+        dimensions: unlockedDimensions,
         runTimeSeconds: Math.round(this.elapsed),
         inventoryCount: Math.max(0, this.getTotalInventoryCount()),
         location: locationPayload,
@@ -921,13 +930,25 @@
           const updated = entry.updatedAt
             ? new Date(entry.updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
             : '—';
+          const dimensionNames = Array.isArray(entry.dimensions)
+            ? entry.dimensions.filter((name) => typeof name === 'string' && name.trim().length > 0)
+            : [];
+          const dimensionLabel = entry.dimensionLabel || dimensionNames[dimensionNames.length - 1] || 'Origin';
+          const dimensionTotal = Number.isFinite(entry.dimensionTotal)
+            ? Math.max(1, Math.floor(entry.dimensionTotal))
+            : DIMENSION_THEME.length;
+          const completedDimensions = Number.isFinite(entry.dimensionCount)
+            ? Math.max(1, Math.floor(entry.dimensionCount))
+            : Math.max(1, dimensionNames.length || 1);
+          const boundedCompleted = Math.min(completedDimensions, dimensionTotal);
+          const dimensionSummary = `${dimensionLabel} · ${boundedCompleted}/${dimensionTotal}`;
           return `
             <tr>
               <th scope="row" class="leaderboard-col-rank">${rank}</th>
               <td>${entry.name ?? 'Explorer'}</td>
               <td>${formatScore(entry.score)}</td>
               <td>${formatRunTime(entry.runTimeSeconds)}</td>
-              <td>${entry.dimensionCount ?? 0}</td>
+              <td>${dimensionSummary}</td>
               <td>${entry.inventoryCount ?? 0}</td>
               <td>${formatLocation(entry)}</td>
               <td>${updated}</td>
