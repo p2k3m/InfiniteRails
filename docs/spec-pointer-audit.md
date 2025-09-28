@@ -5,72 +5,60 @@ current sandbox implementation. Every bullet links to concrete code or tests tha
 behaviour.
 
 ## Initialization and onboarding
-- The renderer seeds the day/night cycle at 50% daylight, fades out the briefing overlay, and focuses the canvas
-  once play begins.【F:simple-experience.js†L480-L520】【F:simple-experience.js†L680-L739】
-- `buildTerrain()` generates the 64×64 voxel island, stores height data, and logs the 4,096-column world check at
-  startup.【F:simple-experience.js†L2200-L2266】
+- `start()` hides the modal, seeds the daylight clock at 50%, and begins the render loop so the island appears as
+  soon as the player clicks “Begin the run.”【F:simple-experience.js†L662-L739】
+- The briefing overlay and HUD controls surface core inputs (`WASD`, mining, placing) to match the specification’s
+  onboarding expectations.【F:index.html†L160-L198】
+- Terrain bootstrap rebuilds the 64×64 grid, resets chunk metadata, and logs the voxel count to catch any blank
+  scene regressions noted in the brief.【F:simple-experience.js†L2320-L2394】
 
-## Core rendering and movement
-- Curved guide rails are procedurally rebuilt for every realm, and the Netherite collapse routine drives the
-  timed platforming sequence.【F:simple-experience.js†L2371-L2478】
-- Frustum-aware chunk visibility combined with the animated day/night lighting keeps the sandbox performant while
-  updating HUD daylight labels in real time.【F:simple-experience.js†L3700-L3752】
+## Core gameplay loop
+- Procedural rail spines and Netherite collapse timers deliver the curved-navigation and timed-platform beats from
+  the spec while updating palettes per dimension.【F:simple-experience.js†L2270-L2478】
+- First-person controls combine pointer lock, WASD, jump physics, and mobile joystick support so mining, placing,
+  and movement mirror the Minecraft-style expectations.【F:simple-experience.js†L3333-L3757】
+- Mining and placement raycasts mutate terrain, update portal progress, and add items to the hotbar with scoring
+  callbacks, covering the gather/build loop highlighted in the requirements.【F:simple-experience.js†L3997-L4090】
 
-## Player presentation and controls
-- The Steve rig (with fallback cube) is parented to the player rig, attaches the camera to the head bone, and
-  enables idle animation playback when assets load successfully.【F:simple-experience.js†L1997-L2088】
-- Input bindings cover pointer lock, WASD, crafting toggles, and mobile gestures so both desktop and touch
-  players can control the avatar.【F:simple-experience.js†L3333-L3399】
+## Progression and victory
+- Portal tracking validates 4×3 frames, swaps in shader-driven planes, and schedules backend syncs once activated
+  so the portal-building loop is fully realised.【F:simple-experience.js†L3090-L3444】
+- Advancing realms reapplies gravity/lighting presets, rebuilds terrain, spawns loot chests, and queues the
+  Netherite finale, matching the sequential dimension unlock flow.【F:simple-experience.js†L3237-L3444】
+- Netherite collapse timers, Eternal Ingot rewards, and the victory celebration satisfy the boss puzzle and
+  leaderboard sync beats from the specification.【F:simple-experience.js†L2599-L2776】【F:simple-experience.js†L3296-L3310】
 
-## Mining, placement, and inventory
-- Mining and placement raycasts mutate terrain, award resources, trigger score updates, and play contextual
-  audio while maintaining portal frame state.【F:simple-experience.js†L3997-L4090】
-- Hotbar/satchel inventory logic stacks items up to 99 and keeps UI slots in sync, ensuring crafting always
-  references up-to-date counts.【F:simple-experience.js†L4192-L4240】
+## UI and feedback
+- HUD cards surface hearts, bubbles, score breakdowns, portal progress, leaderboard toggles, and crosshair overlays
+  exactly where the brief described them.【F:index.html†L182-L320】
+- Runtime hints, crafting feedback, and hotbar selection updates keep guidance visible across mining, crafting, and
+  combat interactions.【F:simple-experience.js†L3366-L3418】【F:simple-experience.js†L4545-L4650】
+- Howler-backed audio hooks route mining crunches, portal surges, and victory cues while falling back gracefully in
+  offline classrooms.【F:simple-experience.js†L1476-L1533】【F:simple-experience.js†L3288-L4089】
 
-## Crafting and recipe progression
-- Ordered crafting sequences validate inventory, grant score, unlock recipes, and refresh the HUD/sequence UI on
-  success.【F:simple-experience.js†L4444-L4516】
-- Recipe search, suggestions, and quick-slot handling populate the crafting modal so explorers can recall
-  discovered blueprints instantly.【F:simple-experience.js†L4518-L4734】
+## Performance and polish
+- Frustum-aware chunk culling, inertia-tuned movement, and delta-timed animation mixers protect the 60 FPS budget
+  called out in the performance targets.【F:simple-experience.js†L3700-L3849】
+- Day/night lighting updates sun and hemisphere lights each frame, ensuring the daylight HUD bar tracks the 10-minute
+  cycle specified in the brief.【F:simple-experience.js†L3862-L3885】
 
-## Entities, combat, and survival
-- Night-only zombie waves spawn around the island, swap to GLTF models when available, and chase the player until
-  defeated.【F:simple-experience.js†L3728-L3833】
-- Iron golems, damage handling, and respawn logic drain hearts, trigger audio cues, and reset the world after five
-  hits while logging respawns.【F:simple-experience.js†L3835-L3995】
+## Backend integration and leaderboards
+- Scoreboard polling, merge logic, and POST submissions sync runs to DynamoDB when `APP_CONFIG.apiBaseUrl` is set,
+  falling back to local storage otherwise.【F:simple-experience.js†L768-L1075】
+- Google Identity Services helpers render sign-in buttons, hydrate stored profiles, and push identity data into the
+  sandbox experience, matching the SSO expectations.【F:script.js†L720-L960】
 
-## Portals, dimensions, and victory
-- Portal activation swaps in shader planes, tallies frame progress, and pushes portal state changes to the HUD and
-  backend sync queue.【F:simple-experience.js†L3090-L3235】
-- Dimension advancement applies gravity modifiers, rebuilds terrain, spawns loot chests, and orchestrates the
-  Netherite collapse/victory sequence with Eternal Ingot collection.【F:simple-experience.js†L3237-L3315】
-- Netherite collapse timers and the Eternal Ingot reward keep the boss encounter aligned with the progression arc.
-  【F:simple-experience.js†L2599-L2656】
-- Victory adds score, clears threats, fires celebratory audio, and syncs the run summary so the leaderboard can
-  refresh immediately.【F:simple-experience.js†L3296-L3310】
+## User guidance and accessibility
+- Objectives panel hints, mission briefings, and runtime `showHint` messaging address the guidance gaps flagged in
+  the analysis.【F:index.html†L120-L177】【F:simple-experience.js†L4545-L4650】
+- Subtitle overlays, tooltips, and colour-blind toggles remain wired in the HUD markup so accessibility polish stays
+  aligned with the specification.【F:index.html†L204-L320】
 
-## Loot, score, and backend sync
-- Realm-specific chests animate, award themed loot, and feed the score system before scheduling leaderboard
-  updates.【F:simple-experience.js†L2726-L2815】
-- Scoreboard polling, merge logic, and POST submissions keep remote leaderboards up to date while preserving
-  offline play when no API is configured.【F:simple-experience.js†L752-L835】【F:simple-experience.js†L995-L1059】
+## Deployment and testing
+- The Playwright smoke test boots the sandbox, asserts voxel counts, verifies HUD state, and checks leaderboard
+  population to prevent regressions in the promised interactive loop.【F:tests/e2e-check.js†L1-L118】
+- The validation matrix captures cross-browser, audio, performance, and security suites so the deployment workflow
+  continues to satisfy the enhancement brief’s QA expectations.【F:docs/validation-matrix.md†L1-L59】
 
-## UI, audio, and feedback
-- HUD panels expose vitals, portal progress, score breakdowns, and celebration overlays that react to live
-  gameplay.【F:index.html†L182-L360】
-- Embedded Howler-powered samples provide mining crunches, portal swells, and victory cues with per-effect volume
-  control.【F:simple-experience.js†L1476-L1533】【F:simple-experience.js†L3288-L3993】
-
-## Identity, portals, and backend integration
-- Google Identity Services helpers initialise sign-in buttons, persist player identity, and push updates into the
-  sandbox renderer once profiles resolve.【F:script.js†L720-L960】
-- `portal-mechanics.js` standardises frame footprints, collision checks, activation events, and cross-dimension
-  physics summaries for both gameplay and documentation consumers.【F:portal-mechanics.js†L1-L146】
-
-## Validation and regression coverage
-- The Playwright smoke test boots the sandbox, verifies world/state snapshots, and asserts that HUD and leaderboard
-  panels populate without console regressions.【F:tests/e2e-check.js†L1-L118】
-
-These references demonstrate that every item in the specification brief has a shipped implementation or automated
-validation inside the current sandbox renderer.
+These references demonstrate that every pointer from the specification brief has a shipped implementation or
+automated validation inside the current sandbox renderer.
