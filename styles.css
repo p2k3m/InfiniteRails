@@ -2735,6 +2735,23 @@ body.sidebar-open .player-hint {
   color: var(--text-secondary);
 }
 
+.leaderboard-table tbody td[data-cell='dimensions'] {
+  white-space: normal;
+}
+
+.leaderboard-dimension-count {
+  display: block;
+  font-weight: 600;
+}
+
+.leaderboard-dimension-list {
+  display: block;
+  margin-top: 0.15rem;
+  font-size: 0.75rem;
+  line-height: 1.2;
+  color: rgba(245, 247, 251, 0.7);
+}
+
 .leaderboard-table tbody td[data-cell='updated'] {
   font-size: 0.72rem;
   color: rgba(242, 245, 250, 0.6);

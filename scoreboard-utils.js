@@ -6,6 +6,64 @@
     globalScope.ScoreboardUtils = globalFactory();
   }
 })(function () {
+  function normalizeDimensionLabels(entry) {
+    if (!entry || typeof entry !== 'object') {
+      return [];
+    }
+
+    const sources = [];
+    const addSource = (value) => {
+      if (!value) return;
+      if (Array.isArray(value)) {
+        if (value.length) {
+          sources.push(value);
+        }
+        return;
+      }
+      if (typeof value === 'string') {
+        const segments = value
+          .split(/[|,/\u2022\u2013\u2014]+/)
+          .map((segment) => segment.trim())
+          .filter(Boolean);
+        if (segments.length) {
+          sources.push(segments);
+        }
+      }
+    };
+
+    addSource(entry.dimensionLabels);
+    addSource(entry.dimensionNames);
+    addSource(entry.dimensionList);
+    addSource(Array.isArray(entry.dimensions) ? entry.dimensions : null);
+    addSource(Array.isArray(entry.realms) ? entry.realms : null);
+    addSource(entry.dimensionSummary);
+
+    const labels = [];
+    const seen = new Set();
+    sources.forEach((source) => {
+      source.forEach((item) => {
+        let label = null;
+        if (typeof item === 'string') {
+          label = item.trim();
+        } else if (item && typeof item === 'object') {
+          if (typeof item.name === 'string') {
+            label = item.name.trim();
+          } else if (typeof item.label === 'string') {
+            label = item.label.trim();
+          } else if (typeof item.id === 'string') {
+            label = item.id.trim();
+          }
+        }
+        if (label && !seen.has(label)) {
+          seen.add(label);
+          labels.push(label);
+        }
+      });
+    });
+
+    return labels;
+  }
+
   function normalizeScoreEntries(entries = []) {
     return entries
       .map((entry) => ({
@@ -22,6 +80,7 @@
             : null),
         locationLabel: entry.locationLabel ?? entry.location?.label ?? entry.locationName ?? null,
         updatedAt: entry.updatedAt ?? entry.lastUpdated ?? entry.updated_at ?? null,
+        dimensionLabels: normalizeDimensionLabels(entry),
       }))
       .sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
   }

@@ -14,7 +14,13 @@ describe('scoreboard utils', () => {
     const input = [
       { id: 'b', name: 'Beta', score: 100 },
       { googleId: 'c-google', displayName: 'Gamma', points: '250' },
-      { playerId: 'a-player', dimensions: '3', inventoryCount: 5, runtimeSeconds: 42 },
+      {
+        playerId: 'a-player',
+        dimensions: '3',
+        inventoryCount: 5,
+        runtimeSeconds: 42,
+        dimensionNames: ['Origin', 'Rock'],
+      },
     ];
     const result = normalizeScoreEntries(input);
     expect(result).toHaveLength(3);
@@ -24,6 +30,7 @@ describe('scoreboard utils', () => {
     expect(result[2].dimensionCount).toBe(3);
     expect(result[2].runTimeSeconds).toBe(42);
     expect(typeof result[2].id).toBe('string');
+    expect(result[2].dimensionLabels).toEqual(['Origin', 'Rock']);
   });
 
   it('formats numbers and runtimes for the scoreboard', () => {
@@ -44,14 +51,26 @@ describe('scoreboard utils', () => {
 
   it('inserts or updates scoreboard entries while keeping order', () => {
     const entries = [
-      { id: 'alpha', name: 'Alpha', score: 100 },
+      { id: 'alpha', name: 'Alpha', score: 100, dimensionLabels: ['Origin'] },
       { id: 'beta', name: 'Beta', score: 80 },
     ];
-    const updated = upsertScoreEntry(entries, { id: 'beta', name: 'Beta', score: 120 });
+    const updated = upsertScoreEntry(entries, {
+      id: 'beta',
+      name: 'Beta',
+      score: 120,
+      dimensionLabels: ['Origin', 'Rock'],
+    });
     expect(updated[0].id).toBe('beta');
     expect(updated[0].score).toBe(120);
-    const added = upsertScoreEntry(updated, { id: 'gamma', name: 'Gamma', score: 90 });
+    expect(updated[0].dimensionLabels).toEqual(['Origin', 'Rock']);
+    const added = upsertScoreEntry(updated, {
+      id: 'gamma',
+      name: 'Gamma',
+      score: 90,
+      dimensionLabels: ['Origin – Grassland Threshold'],
+    });
     expect(added.map((e) => e.id)).toEqual(['beta', 'alpha', 'gamma']);
     expect(entries[1].score).toBe(80);
+    expect(added[2].dimensionLabels).toEqual(['Origin – Grassland Threshold']);
   });
 });
