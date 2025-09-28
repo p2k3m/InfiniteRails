@@ -3938,7 +3938,7 @@
       window.addEventListener('pointercancel', this.onTouchLookPointerUp);
       this.canvas.addEventListener('click', () => {
         if (document.pointerLockElement !== this.canvas) {
-          this.canvas.requestPointerLock({ unadjustedMovement: true }).catch(() => {});
+          this.attemptPointerLock();
         }
       });
       this.canvas.addEventListener('contextmenu', this.preventContextMenu);
@@ -4011,6 +4011,30 @@
       this.updatePointerHintForInputMode(
         'Pointer lock was blocked. Allow mouse capture in your browser settings.'
       );
+    }
+
+    attemptPointerLock() {
+      if (!this.canvas || typeof this.canvas.requestPointerLock !== 'function') {
+        return;
+      }
+      try {
+        const result = this.canvas.requestPointerLock({ unadjustedMovement: true });
+        if (result && typeof result.catch === 'function') {
+          result.catch(() => {
+            try {
+              this.canvas.requestPointerLock();
+            } catch (fallbackError) {
+              console.debug('Pointer lock fallback failed', fallbackError);
+            }
+          });
+        }
+      } catch (error) {
+        try {
+          this.canvas.requestPointerLock();
+        } catch (fallbackError) {
+          console.debug('Pointer lock request failed', fallbackError);
+        }
+      }
     }
 
     handleMouseMove(event) {
@@ -4092,11 +4116,45 @@
     }
 
     handleMouseDown(event) {
-      if (!this.pointerLocked || !this.camera) return;
-      if (event.button === 0) {
+      if (!this.camera) return;
+      const isPrimary = event.button === 0;
+      const isSecondary = event.button === 2;
+      if (!isPrimary && !isSecondary) {
+        return;
+      }
+
+      const target = event.target;
+      const interactedWithCanvas =
+        this.pointerLocked ||
+        target === this.canvas ||
+        (this.canvas?.contains ? this.canvas.contains(target) : false);
+
+      if (!interactedWithCanvas) {
+        return;
+      }
+
+      event.preventDefault?.();
+
+      const alreadyLocked = this.pointerLocked || document.pointerLockElement === this.canvas;
+      if (!alreadyLocked) {
+        this.attemptPointerLock();
+        if (typeof this.canvas?.focus === 'function') {
+          try {
+            this.canvas.focus({ preventScroll: true });
+          } catch (error) {
+            this.canvas.focus();
+          }
+        }
+      }
+
+      if (isPrimary) {
         this.mineBlock();
-      } else if (event.button === 2) {
+      } else if (isSecondary) {
         this.placeBlock();
+      }
+
+      if (!alreadyLocked) {
+        this.updatePointerHintForInputMode();
       }
     }
 
