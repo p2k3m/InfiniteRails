@@ -3826,6 +3826,69 @@ body.sidebar-open .player-hint {
   line-height: 1.6;
 }
 
+.crafting-helper {
+  border-radius: 18px;
+  border: 1px solid rgba(73, 242, 255, 0.22);
+  background: rgba(6, 14, 28, 0.72);
+  padding: 1rem 1.1rem;
+  display: grid;
+  gap: 0.65rem;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+}
+
+.crafting-helper[data-state='active'] {
+  border-color: rgba(73, 242, 255, 0.45);
+  background: rgba(6, 20, 40, 0.82);
+  box-shadow: 0 12px 28px rgba(73, 242, 255, 0.18);
+}
+
+.crafting-helper[data-state='focused'] {
+  border-color: rgba(247, 183, 51, 0.55);
+  background: rgba(26, 36, 18, 0.9);
+  box-shadow: 0 16px 34px rgba(247, 183, 51, 0.18);
+}
+
+.crafting-helper__title {
+  font-size: 0.78rem;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: rgba(73, 242, 255, 0.7);
+}
+
+.crafting-helper__description {
+  font-size: 0.75rem;
+  line-height: 1.6;
+  color: var(--text-primary);
+}
+
+.crafting-helper__matches {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.45rem;
+}
+
+.crafting-helper__matches[data-empty='true'] {
+  display: none;
+}
+
+.crafting-helper__matches li {
+  font-size: 0.72rem;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  position: relative;
+  padding-left: 1rem;
+}
+
+.crafting-helper__matches li::before {
+  content: '•';
+  position: absolute;
+  left: 0;
+  top: 0;
+  color: rgba(73, 242, 255, 0.75);
+}
+
 @media (max-width: 720px) {
   .crafting-sequence {
     grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));

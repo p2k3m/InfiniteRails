@@ -398,13 +398,49 @@
   }
 
   const ITEM_DEFINITIONS = {
-    'grass-block': { label: 'Grass Block', icon: '🟩', placeable: true },
-    dirt: { label: 'Soil Chunk', icon: '🟫', placeable: true },
-    stone: { label: 'Stone Brick', icon: '⬜', placeable: true },
-    stick: { label: 'Stick', icon: '🪵', placeable: false },
-    'stone-pickaxe': { label: 'Stone Pickaxe', icon: '⛏️', placeable: false, equipment: true },
-    'portal-charge': { label: 'Portal Charge', icon: '🌀', placeable: false },
-    'eternal-ingot': { label: 'Eternal Ingot', icon: '🔥', placeable: false },
+    'grass-block': {
+      label: 'Grass Block',
+      icon: '🟩',
+      placeable: true,
+      description: 'Surface block with a soil base — perfect for bridging gaps.',
+    },
+    dirt: {
+      label: 'Soil Chunk',
+      icon: '🟫',
+      placeable: true,
+      description: 'Packed earth used for scaffolding and quick terrain fixes.',
+    },
+    stone: {
+      label: 'Stone Brick',
+      icon: '⬜',
+      placeable: true,
+      description: 'Dense masonry ideal for sturdy portal frames.',
+    },
+    stick: {
+      label: 'Stick',
+      icon: '🪵',
+      placeable: false,
+      description: 'Basic handle carved from wood — anchors most tools.',
+    },
+    'stone-pickaxe': {
+      label: 'Stone Pickaxe',
+      icon: '⛏️',
+      placeable: false,
+      equipment: true,
+      description: 'Reliable pickaxe that cracks tougher ores and rails.',
+    },
+    'portal-charge': {
+      label: 'Portal Charge',
+      icon: '🌀',
+      placeable: false,
+      description: 'Volatile energy cell required to ignite the portal.',
+    },
+    'eternal-ingot': {
+      label: 'Eternal Ingot',
+      icon: '🔥',
+      placeable: false,
+      description: 'Legendary alloy that stabilises the Netherite rail network.',
+    },
   };
   const DIMENSION_BADGE_SYMBOLS = {
     origin: '🌱',
@@ -544,7 +580,14 @@
     if (!id) {
       return { label: 'Empty', icon: '·', placeable: false };
     }
-    return ITEM_DEFINITIONS[id] || { label: id, icon: '⬜', placeable: false };
+    return (
+      ITEM_DEFINITIONS[id] || {
+        label: id,
+        icon: '⬜',
+        placeable: false,
+        description: '',
+      }
+    );
   }
 
   function formatInventoryLabel(item, quantity) {
@@ -684,6 +727,11 @@
       this.craftingSearchPanel = this.ui.craftingSearchPanel || null;
       this.craftingSearchInput = this.ui.craftingSearchInput || null;
       this.craftingSearchResultsEl = this.ui.craftingSearchResultsEl || null;
+      this.craftingHelperEl = this.ui.craftingHelperEl || null;
+      this.craftingHelperTitleEl = this.ui.craftingHelperTitleEl || null;
+      this.craftingHelperDescriptionEl = this.ui.craftingHelperDescriptionEl || null;
+      this.craftingHelperMatchesEl = this.ui.craftingHelperMatchesEl || null;
+      this.craftingHelperOverride = null;
       this.openCraftingSearchButton = this.ui.openCraftingSearchButton || null;
       this.closeCraftingSearchButton = this.ui.closeCraftingSearchButton || null;
       this.inventoryModal = this.ui.inventoryModal || null;
@@ -950,6 +998,12 @@
       this.onInventorySort = this.handleInventorySort.bind(this);
       this.onInventoryToggle = this.handleInventoryToggle.bind(this);
       this.onCraftingInventoryClick = this.handleCraftingInventoryClick.bind(this);
+      this.onCraftingInventoryFocus = this.handleCraftingInventoryFocus.bind(this);
+      this.onCraftingInventoryBlur = this.handleCraftingInventoryBlur.bind(this);
+      this.onCraftSuggestionFocus = this.handleCraftSuggestionFocus.bind(this);
+      this.onCraftSuggestionBlur = this.handleCraftSuggestionBlur.bind(this);
+      this.onCraftSequenceFocus = this.handleCraftSequenceFocus.bind(this);
+      this.onCraftSequenceBlur = this.handleCraftSequenceBlur.bind(this);
       this.onVictoryReplay = this.handleVictoryReplay.bind(this);
       this.onVictoryClose = this.handleVictoryClose.bind(this);
       this.onVictoryShare = this.handleVictoryShare.bind(this);
@@ -2151,6 +2205,7 @@
             label: 'Stone Pickaxe',
             score: 2,
             description: 'Unlocks tougher mining strikes and portal prep.',
+            sequence: ['stick', 'stick', 'stone'],
           },
         ],
         [
@@ -2160,6 +2215,7 @@
             label: 'Portal Charge',
             score: 4,
             description: 'Stabilises the next realm transition.',
+            sequence: ['stone', 'stone', 'grass-block'],
           },
         ],
       ]);
@@ -5267,6 +5323,26 @@
       this.craftSuggestionsEl?.addEventListener('click', this.onCraftSuggestionClick);
       this.craftingSearchResultsEl?.addEventListener('click', this.onCraftSuggestionClick);
       this.craftingInventoryEl?.addEventListener('click', this.onCraftingInventoryClick);
+      this.craftingInventoryEl?.addEventListener('pointerover', this.onCraftingInventoryFocus);
+      this.craftingInventoryEl?.addEventListener('focusin', this.onCraftingInventoryFocus);
+      this.craftingInventoryEl?.addEventListener('pointerout', this.onCraftingInventoryBlur);
+      this.craftingInventoryEl?.addEventListener('focusout', this.onCraftingInventoryBlur);
+      this.extendedInventoryEl?.addEventListener('pointerover', this.onCraftingInventoryFocus);
+      this.extendedInventoryEl?.addEventListener('focusin', this.onCraftingInventoryFocus);
+      this.extendedInventoryEl?.addEventListener('pointerout', this.onCraftingInventoryBlur);
+      this.extendedInventoryEl?.addEventListener('focusout', this.onCraftingInventoryBlur);
+      this.craftSuggestionsEl?.addEventListener('pointerover', this.onCraftSuggestionFocus);
+      this.craftSuggestionsEl?.addEventListener('focusin', this.onCraftSuggestionFocus);
+      this.craftSuggestionsEl?.addEventListener('pointerout', this.onCraftSuggestionBlur);
+      this.craftSuggestionsEl?.addEventListener('focusout', this.onCraftSuggestionBlur);
+      this.craftingSearchResultsEl?.addEventListener('pointerover', this.onCraftSuggestionFocus);
+      this.craftingSearchResultsEl?.addEventListener('focusin', this.onCraftSuggestionFocus);
+      this.craftingSearchResultsEl?.addEventListener('pointerout', this.onCraftSuggestionBlur);
+      this.craftingSearchResultsEl?.addEventListener('focusout', this.onCraftSuggestionBlur);
+      this.craftSequenceEl?.addEventListener('pointerover', this.onCraftSequenceFocus);
+      this.craftSequenceEl?.addEventListener('focusin', this.onCraftSequenceFocus);
+      this.craftSequenceEl?.addEventListener('pointerout', this.onCraftSequenceBlur);
+      this.craftSequenceEl?.addEventListener('focusout', this.onCraftSequenceBlur);
       this.extendedInventoryEl?.addEventListener('click', this.onExtendedInventoryClick);
       this.openCraftingSearchButton?.addEventListener('click', () => this.toggleCraftingSearch(true));
       this.closeCraftingSearchButton?.addEventListener('click', () => this.toggleCraftingSearch(false));
@@ -5309,6 +5385,26 @@
       this.craftSuggestionsEl?.removeEventListener('click', this.onCraftSuggestionClick);
       this.craftingSearchResultsEl?.removeEventListener('click', this.onCraftSuggestionClick);
       this.craftingInventoryEl?.removeEventListener('click', this.onCraftingInventoryClick);
+      this.craftingInventoryEl?.removeEventListener('pointerover', this.onCraftingInventoryFocus);
+      this.craftingInventoryEl?.removeEventListener('focusin', this.onCraftingInventoryFocus);
+      this.craftingInventoryEl?.removeEventListener('pointerout', this.onCraftingInventoryBlur);
+      this.craftingInventoryEl?.removeEventListener('focusout', this.onCraftingInventoryBlur);
+      this.extendedInventoryEl?.removeEventListener('pointerover', this.onCraftingInventoryFocus);
+      this.extendedInventoryEl?.removeEventListener('focusin', this.onCraftingInventoryFocus);
+      this.extendedInventoryEl?.removeEventListener('pointerout', this.onCraftingInventoryBlur);
+      this.extendedInventoryEl?.removeEventListener('focusout', this.onCraftingInventoryBlur);
+      this.craftSuggestionsEl?.removeEventListener('pointerover', this.onCraftSuggestionFocus);
+      this.craftSuggestionsEl?.removeEventListener('focusin', this.onCraftSuggestionFocus);
+      this.craftSuggestionsEl?.removeEventListener('pointerout', this.onCraftSuggestionBlur);
+      this.craftSuggestionsEl?.removeEventListener('focusout', this.onCraftSuggestionBlur);
+      this.craftingSearchResultsEl?.removeEventListener('pointerover', this.onCraftSuggestionFocus);
+      this.craftingSearchResultsEl?.removeEventListener('focusin', this.onCraftSuggestionFocus);
+      this.craftingSearchResultsEl?.removeEventListener('pointerout', this.onCraftSuggestionBlur);
+      this.craftingSearchResultsEl?.removeEventListener('focusout', this.onCraftSuggestionBlur);
+      this.craftSequenceEl?.removeEventListener('pointerover', this.onCraftSequenceFocus);
+      this.craftSequenceEl?.removeEventListener('focusin', this.onCraftSequenceFocus);
+      this.craftSequenceEl?.removeEventListener('pointerout', this.onCraftSequenceBlur);
+      this.craftSequenceEl?.removeEventListener('focusout', this.onCraftSequenceBlur);
       this.extendedInventoryEl?.removeEventListener('click', this.onExtendedInventoryClick);
       this.craftingSearchInput?.removeEventListener('input', this.onCraftSearchInput);
       this.inventorySortButton?.removeEventListener('click', this.onInventorySort);
@@ -6620,11 +6716,18 @@
           button.textContent = `${def.icon} ${slot.quantity}`;
           button.setAttribute('aria-label', formatInventoryLabel(slot.item, slot.quantity));
           button.setAttribute('draggable', 'true');
+          const hints = [];
+          if (def.description) {
+            hints.push(def.description);
+          }
+          hints.push('Click to equip • Drag to reorder');
+          button.setAttribute('data-hint', `${hints.join(' — ')} (×${slot.quantity})`);
           button.addEventListener('dragstart', this.onHotbarDragStart);
         } else {
           button.textContent = '·';
           button.setAttribute('aria-label', 'Empty slot');
           button.setAttribute('draggable', 'false');
+          button.setAttribute('data-hint', 'Empty slot — gather resources to fill your hotbar.');
         }
         button.addEventListener('dragenter', this.onHotbarDragEnter);
         button.addEventListener('dragover', this.onHotbarDragOver);
@@ -6771,9 +6874,17 @@
         button.type = 'button';
         button.className = 'crafting-inventory__item';
         button.dataset.itemId = item;
+        button.dataset.quantity = String(quantity);
         button.textContent = formatInventoryLabel(item, quantity);
         button.setAttribute('role', 'listitem');
         button.setAttribute('aria-label', formatInventoryLabel(item, quantity));
+        const def = getItemDefinition(item);
+        const hintParts = [];
+        if (def.description) {
+          hintParts.push(def.description);
+        }
+        hintParts.push(`Tap to queue • Carrying ×${quantity}`);
+        button.setAttribute('data-hint', hintParts.join(' — '));
         fragment.appendChild(button);
       });
       this.craftingInventoryEl.innerHTML = '';
@@ -6824,8 +6935,15 @@
           button.type = 'button';
           button.className = 'inventory-slot';
           button.dataset.itemId = item;
+          button.dataset.quantity = String(quantity);
           button.innerHTML = `<span>${def.label}</span><span class="quantity">×${quantity}</span>`;
           button.setAttribute('aria-label', `${def.label} ×${quantity}`);
+          const hintParts = [];
+          if (def.description) {
+            hintParts.push(def.description);
+          }
+          hintParts.push(`Tap to queue • Stored ×${quantity}`);
+          button.setAttribute('data-hint', hintParts.join(' — '));
           fragment.appendChild(button);
         });
       }
@@ -6937,12 +7055,84 @@
       this.queueCraftingItem(item);
     }
 
+    handleCraftingInventoryFocus(event) {
+      const button = event.target.closest('[data-item-id]');
+      if (!button) {
+        return;
+      }
+      const item = button.dataset.itemId;
+      if (!item) {
+        return;
+      }
+      const quantity = Number.parseInt(button.dataset.quantity ?? '0', 10);
+      const def = getItemDefinition(item);
+      const recipes = this.getRecipesUsingItem(item);
+      const matches = recipes.length
+        ? recipes.slice(0, 3).map((entry) => {
+            const sequenceText = this.formatRecipeSequence(entry.parts);
+            const summary = this.formatRecipeStepSummary(entry.positions, entry.parts.length);
+            const detail = summary ? `${summary}, +${entry.recipe.score} pts` : `+${entry.recipe.score} pts`;
+            return `${entry.recipe.label} — ${sequenceText} (${detail})`;
+          })
+        : ['Experiment with this resource to discover new recipes.'];
+      let description = def.description || def.label;
+      if (quantity > 0) {
+        description += ` — You carry ×${quantity}.`;
+      }
+      description += ' Tap to queue it into the crafting sequence.';
+      this.showCraftingHelperHint('inventory', {
+        title: def.label,
+        description,
+        matches,
+      });
+    }
+
+    handleCraftingInventoryBlur(event) {
+      if (event?.relatedTarget && event.currentTarget?.contains?.(event.relatedTarget)) {
+        return;
+      }
+      this.clearCraftingHelperHint('inventory');
+    }
+
     handleExtendedInventoryClick(event) {
       const button = event.target.closest('[data-item-id]');
       if (!button) return;
       const item = button.dataset.itemId;
       if (!item) return;
       this.queueCraftingItem(item);
+    }
+
+    handleCraftSuggestionFocus(event) {
+      const button = event.target.closest('[data-recipe-key]');
+      if (!button) {
+        return;
+      }
+      const key = button.dataset.recipeKey;
+      if (!key) {
+        return;
+      }
+      const recipe = this.craftingRecipes.get(key);
+      if (!recipe) {
+        return;
+      }
+      const parts = this.getRecipeSequence(recipe, key);
+      const descriptionSegments = [];
+      if (recipe.description) {
+        descriptionSegments.push(recipe.description);
+      }
+      descriptionSegments.push(`Autofill to award +${recipe.score} pts.`);
+      this.showCraftingHelperHint('recipe', {
+        title: recipe.label,
+        description: descriptionSegments.join(' '),
+        matches: [`Sequence: ${this.formatRecipeSequence(parts)}`, `Reward: +${recipe.score} pts`],
+      });
+    }
+
+    handleCraftSuggestionBlur(event) {
+      if (event?.relatedTarget && event.currentTarget?.contains?.(event.relatedTarget)) {
+        return;
+      }
+      this.clearCraftingHelperHint('recipe');
     }
 
     handleCraftSequenceClick(event) {
@@ -6954,6 +7144,51 @@
       }
       this.craftingState.sequence.splice(index, 1);
       this.refreshCraftingUi();
+    }
+
+    handleCraftSequenceFocus(event) {
+      const button = event.target.closest('[data-sequence-index]');
+      if (!button) {
+        return;
+      }
+      const index = Number.parseInt(button.dataset.sequenceIndex ?? '-1', 10);
+      if (!Number.isInteger(index)) {
+        return;
+      }
+      const sequence = Array.isArray(this.craftingState?.sequence) ? this.craftingState.sequence : [];
+      const item = sequence[index];
+      if (item) {
+        const def = getItemDefinition(item);
+        const matches = this.buildRecipeMatchSummaries(this.findRecipesMatchingPrefix(sequence), 3);
+        const details = matches.length
+          ? matches
+          : ['Sequence incomplete — continue adding ingredients to discover matches.'];
+        let description = def.description || def.label;
+        description += ' Click to remove this step from the sequence.';
+        this.showCraftingHelperHint('sequence', {
+          title: `Step ${index + 1}: ${def.label}`,
+          description,
+          matches: details,
+        });
+      } else {
+        const prefix = sequence.slice(0, index);
+        const matches = this.buildRecipeMatchSummaries(this.findRecipesMatchingPrefix(prefix), 3);
+        const details = matches.length
+          ? matches
+          : ['Experiment with ingredients to discover new recipes.'];
+        this.showCraftingHelperHint('sequence', {
+          title: `Slot ${index + 1}`,
+          description: 'Empty slot — drop an ingredient here to extend the recipe.',
+          matches: details,
+        });
+      }
+    }
+
+    handleCraftSequenceBlur(event) {
+      if (event?.relatedTarget && event.currentTarget?.contains?.(event.relatedTarget)) {
+        return;
+      }
+      this.clearCraftingHelperHint('sequence');
     }
 
     handleClearCraft() {
@@ -7076,6 +7311,7 @@
         this.craftingModal.setAttribute('aria-hidden', 'true');
         this.toggleCraftingSearch(false);
         this.canvas.focus({ preventScroll: true });
+        this.clearCraftingHelperHint();
       }
       if (this.craftLauncherButton) {
         this.craftLauncherButton.setAttribute('aria-expanded', visible ? 'true' : 'false');
@@ -7124,6 +7360,7 @@
       this.updateCraftingInventoryUi();
       this.updateCraftingSuggestions();
       this.updateCraftButtonState();
+      this.updateCraftingHelperOverlay();
     }
 
     updateCraftingSequenceUi() {
@@ -7137,11 +7374,14 @@
         button.className = 'crafting-sequence__slot';
         button.dataset.sequenceIndex = i;
         if (item) {
+          const def = getItemDefinition(item);
           button.textContent = formatInventoryLabel(item, 1);
-          button.setAttribute('aria-label', `Remove ${getItemDefinition(item).label} from sequence`);
+          button.setAttribute('aria-label', `Remove ${def.label} from sequence`);
+          button.setAttribute('data-hint', `Click to remove ${def.label} from the sequence.`);
         } else {
           button.textContent = '·';
           button.setAttribute('aria-label', 'Empty sequence slot');
+          button.setAttribute('data-hint', 'Empty slot — drop an ingredient here.');
         }
         fragment.appendChild(button);
       }
@@ -7160,6 +7400,12 @@
         button.className = 'crafting-suggestions__item';
         button.dataset.recipeKey = key;
         button.textContent = `${recipe.label} (${key.replace(/,/g, ' → ')})`;
+        const hintParts = [];
+        if (recipe.description) {
+          hintParts.push(recipe.description);
+        }
+        hintParts.push(`Autofill sequence • +${recipe.score} pts`);
+        button.setAttribute('data-hint', hintParts.join(' — '));
         const li = document.createElement('li');
         li.appendChild(button);
         fragment.appendChild(li);
@@ -7209,6 +7455,12 @@
         button.className = 'crafting-search__result';
         button.dataset.recipeKey = key;
         button.textContent = `${recipe.label} — ${key.replace(/,/g, ' → ')}`;
+        const hintParts = [];
+        if (recipe.description) {
+          hintParts.push(recipe.description);
+        }
+        hintParts.push(`Autofill sequence • +${recipe.score} pts`);
+        button.setAttribute('data-hint', hintParts.join(' — '));
         const li = document.createElement('li');
         li.appendChild(button);
         fragment.appendChild(li);
@@ -7221,6 +7473,235 @@
       }
       this.craftingSearchResultsEl.innerHTML = '';
       this.craftingSearchResultsEl.appendChild(fragment);
+    }
+
+    getRecipeSequence(recipe, key) {
+      if (Array.isArray(recipe?.sequence) && recipe.sequence.length) {
+        return recipe.sequence.slice();
+      }
+      if (typeof key === 'string' && key.length) {
+        return key.split(',').filter(Boolean);
+      }
+      return [];
+    }
+
+    formatRecipeSequence(parts) {
+      if (!Array.isArray(parts) || !parts.length) {
+        return '—';
+      }
+      return parts.map((itemId) => getItemDefinition(itemId).label).join(' → ');
+    }
+
+    hasMaterialsForRecipe(recipe) {
+      const parts = this.getRecipeSequence(recipe);
+      if (!parts.length) {
+        return false;
+      }
+      const counts = new Map();
+      parts.forEach((itemId) => {
+        counts.set(itemId, (counts.get(itemId) ?? 0) + 1);
+      });
+      for (const [itemId, required] of counts.entries()) {
+        if (this.getInventoryCountForItem(itemId) < required) {
+          return false;
+        }
+      }
+      return true;
+    }
+
+    findRecipesMatchingPrefix(sequence) {
+      if (!Array.isArray(sequence)) {
+        return [];
+      }
+      const matches = [];
+      this.craftingRecipes.forEach((recipe, key) => {
+        const parts = this.getRecipeSequence(recipe, key);
+        let valid = true;
+        for (let i = 0; i < sequence.length; i += 1) {
+          if (parts[i] !== sequence[i]) {
+            valid = false;
+            break;
+          }
+        }
+        if (!valid) {
+          return;
+        }
+        const remaining = Math.max(0, parts.length - sequence.length);
+        const nextId = parts[sequence.length] || null;
+        matches.push({ recipe, key, parts, remaining, nextId });
+      });
+      matches.sort((a, b) => {
+        if (a.remaining !== b.remaining) {
+          return a.remaining - b.remaining;
+        }
+        return a.recipe.label.localeCompare(b.recipe.label);
+      });
+      return matches;
+    }
+
+    getRecipesUsingItem(itemId) {
+      if (!itemId) {
+        return [];
+      }
+      const results = [];
+      this.craftingRecipes.forEach((recipe, key) => {
+        const parts = this.getRecipeSequence(recipe, key);
+        const positions = [];
+        parts.forEach((part, index) => {
+          if (part === itemId) {
+            positions.push(index);
+          }
+        });
+        if (positions.length) {
+          results.push({ recipe, parts, positions });
+        }
+      });
+      results.sort((a, b) => a.recipe.label.localeCompare(b.recipe.label));
+      return results;
+    }
+
+    formatRecipeStepSummary(positions, total) {
+      if (!Array.isArray(positions) || !positions.length || !Number.isFinite(total) || total <= 0) {
+        return '';
+      }
+      if (positions.length === total) {
+        return 'used in every step';
+      }
+      if (positions.length === 1) {
+        return `used at step ${positions[0] + 1} of ${total}`;
+      }
+      return `used at steps ${positions.map((index) => index + 1).join(', ')} of ${total}`;
+    }
+
+    buildRecipeMatchSummaries(matches, limit = 3) {
+      if (!Array.isArray(matches) || !matches.length) {
+        return [];
+      }
+      return matches.slice(0, limit).map((match) => {
+        const parts = match.parts;
+        const sequenceText = this.formatRecipeSequence(parts);
+        let status = '';
+        if (match.remaining === 0) {
+          status = this.hasMaterialsForRecipe(match.recipe) ? 'Ready to craft' : 'Missing ingredients';
+        } else if (match.nextId) {
+          status = `Next: ${getItemDefinition(match.nextId).label}`;
+        }
+        const base = `${match.recipe.label} — ${sequenceText}`;
+        const bonus = `+${match.recipe.score} pts`;
+        return status ? `${base} (${status}) • ${bonus}` : `${base} • ${bonus}`;
+      });
+    }
+
+    showCraftingHelperHint(source, payload = {}) {
+      if (!this.craftingHelperEl) {
+        return;
+      }
+      this.craftingHelperOverride = {
+        source: source || 'default',
+        title: payload.title || null,
+        description: payload.description || null,
+        matches: Array.isArray(payload.matches) ? payload.matches.filter((text) => typeof text === 'string' && text.trim()) : [],
+      };
+      this.updateCraftingHelperOverlay();
+    }
+
+    clearCraftingHelperHint(source) {
+      if (!this.craftingHelperEl) {
+        return;
+      }
+      if (source && this.craftingHelperOverride?.source && this.craftingHelperOverride.source !== source) {
+        return;
+      }
+      this.craftingHelperOverride = null;
+      this.updateCraftingHelperOverlay();
+    }
+
+    updateCraftingHelperOverlay() {
+      const helperEl = this.craftingHelperEl;
+      if (!helperEl) {
+        return;
+      }
+      const titleEl = this.craftingHelperTitleEl;
+      const descriptionEl = this.craftingHelperDescriptionEl;
+      const matchesEl = this.craftingHelperMatchesEl;
+      const defaultTitle = 'Recipe Helper';
+      let title = defaultTitle;
+      let description = 'Queue materials to preview known recipes.';
+      const matchSummaries = [];
+      const override = this.craftingHelperOverride;
+
+      if (override) {
+        if (override.title) {
+          title = override.title;
+        }
+        if (override.description) {
+          description = override.description;
+        }
+        if (Array.isArray(override.matches) && override.matches.length) {
+          override.matches.forEach((text) => {
+            if (text && typeof text === 'string') {
+              matchSummaries.push(text);
+            }
+          });
+        }
+      } else {
+        const sequence = Array.isArray(this.craftingState?.sequence) ? this.craftingState.sequence : [];
+        if (sequence.length === 0) {
+          const unlocked = Array.from(this.craftingState?.unlocked?.values?.() || []);
+          if (unlocked.length) {
+            description = 'Select an unlocked recipe to auto-fill the crafting circle.';
+            unlocked.slice(0, 3).forEach((recipe) => {
+              const parts = this.getRecipeSequence(recipe);
+              matchSummaries.push(`${recipe.label} — ${this.formatRecipeSequence(parts)} • +${recipe.score} pts`);
+            });
+          } else {
+            description = 'Drag ingredients from your satchel to experiment with new combinations.';
+          }
+        } else {
+          const prefixMatches = this.findRecipesMatchingPrefix(sequence);
+          if (prefixMatches.length) {
+            const top = prefixMatches[0];
+            if (top.remaining === 0) {
+              const readyText = this.hasMaterialsForRecipe(top.recipe)
+                ? 'Ready to craft — press Craft Item to claim the reward.'
+                : 'Recipe located — gather the remaining ingredients to craft it.';
+              description = `${top.recipe.label} detected. ${readyText}`;
+            } else if (top.nextId) {
+              const nextLabel = getItemDefinition(top.nextId).label;
+              description = `Next add ${nextLabel} to craft ${top.recipe.label}.`;
+            }
+            this.buildRecipeMatchSummaries(prefixMatches, 3).forEach((summary) => matchSummaries.push(summary));
+          } else {
+            description = 'No known recipes use this order yet. Try reordering the sequence.';
+          }
+        }
+      }
+
+      if (titleEl) {
+        titleEl.textContent = title;
+      }
+      if (descriptionEl) {
+        descriptionEl.textContent = description;
+      }
+      if (matchesEl) {
+        matchesEl.innerHTML = '';
+        if (matchSummaries.length) {
+          const fragment = document.createDocumentFragment();
+          matchSummaries.slice(0, 3).forEach((text) => {
+            const li = document.createElement('li');
+            li.textContent = text;
+            fragment.appendChild(li);
+          });
+          matchesEl.appendChild(fragment);
+        }
+        matchesEl.setAttribute('data-empty', matchSummaries.length ? 'false' : 'true');
+      }
+      helperEl.dataset.state = override
+        ? 'focused'
+        : this.craftingState.sequence.length
+          ? 'active'
+          : 'idle';
+      helperEl.setAttribute('data-has-matches', matchSummaries.length ? 'true' : 'false');
     }
 
     sortInventoryByQuantity() {

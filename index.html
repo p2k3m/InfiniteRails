@@ -725,6 +725,13 @@
             <p class="crafting-hint">
               Tip: Click ingredients from your satchel to queue them. Slots collapse to the left as you remove steps.
             </p>
+            <div class="crafting-helper" id="craftingHelper" aria-live="polite">
+              <p class="crafting-helper__title" id="craftingHelperTitle">Recipe Helper</p>
+              <p class="crafting-helper__description" id="craftingHelperDescription">
+                Queue materials to preview known recipes.
+              </p>
+              <ul class="crafting-helper__matches" id="craftingHelperMatches" data-empty="true"></ul>
+            </div>
           </section>
           <section class="crafting-modal__recipes" aria-label="Recipe library">
             <label class="crafting-search" for="recipeSearch">
