@@ -814,6 +814,8 @@
     const portalProgressLabel = portalProgressEl?.querySelector('.label') ?? null;
     const portalProgressBar = portalProgressEl?.querySelector('.bar') ?? null;
     const portalStatusText = portalStatusEl?.querySelector('.portal-status__text') ?? null;
+    const portalStatusStateText = portalStatusEl?.querySelector('.portal-status__state') ?? null;
+    const portalStatusDetailText = portalStatusEl?.querySelector('.portal-status__detail') ?? null;
     const portalStatusIcon = portalStatusEl?.querySelector('.portal-status__icon') ?? null;
     const dimensionIntroEl = document.getElementById('dimensionIntro');
     const dimensionIntroNameEl = document.getElementById('dimensionIntroName');
@@ -1583,6 +1585,8 @@
           scoreDimensionsEl,
           portalStatusEl,
           portalStatusText,
+          portalStatusStateText,
+          portalStatusDetailText,
           portalStatusIcon,
           portalProgressLabel,
           portalProgressBar,
@@ -15827,7 +15831,19 @@
       }
       updateStatusBars();
       flagProgressDirty('dimension');
-      logEvent(`Entered ${dim.name}.`);
+      const formatRulesFn =
+        (typeof window !== 'undefined' && window.PortalMechanics?.formatDimensionRules) || null;
+      const ruleSummary =
+        typeof formatRulesFn === 'function'
+          ? formatRulesFn({
+              name: dim.name,
+              id: dim.id,
+              rules: dim.rules?.descriptions ?? dim.rules?.list ?? dim.rules,
+              physics: dim.physics,
+              description: dim.description,
+            })
+          : dim.description ?? 'Adapt quickly to the realm\'s rules to survive.';
+      logEvent(`Entering ${dim.name} — ${ruleSummary}`);
     }
 
     const TARGET_FRAME_TIME = 1 / 60;

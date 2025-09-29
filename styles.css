@@ -1845,8 +1845,6 @@ body.game-active #gameCanvas {
   border-radius: 999px;
   background: rgba(6, 10, 24, 0.7);
   color: #f4f7ff;
-  text-transform: uppercase;
-  letter-spacing: 0.32em;
   font-size: 0.78rem;
   font-weight: 600;
   box-shadow: 0 16px 36px rgba(0, 0, 0, 0.4), 0 0 16px rgba(90, 115, 255, 0.25);
@@ -1861,7 +1859,28 @@ body.game-active #gameCanvas {
 }
 
 .portal-status__text {
-  white-space: nowrap;
+  display: flex;
+  flex-direction: column;
+  gap: 0.08rem;
+  white-space: normal;
+  line-height: 1.05;
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.portal-status__state {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.32em;
+  line-height: 1;
+}
+
+.portal-status__detail {
+  font-size: 0.74rem;
+  letter-spacing: 0.08em;
+  text-transform: none;
+  opacity: 0.88;
+  white-space: normal;
 }
 
 .portal-status__icon {

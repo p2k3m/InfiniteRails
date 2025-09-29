@@ -635,6 +635,7 @@
       this.portalIgnitionLog = [];
       this.portalStatusState = 'inactive';
       this.portalStatusMessage = '';
+      this.portalStatusLabel = '';
       this.portalStatusFlashTimer = null;
       this.dimensionIntroAutoHideTimer = null;
       this.dimensionIntroFadeTimer = null;
@@ -6668,20 +6669,41 @@
       this.updateFooterSummary();
     }
 
-    setPortalStatusIndicator(state, message) {
+    setPortalStatusIndicator(state, message, label) {
+      const stateLabels = {
+        inactive: 'Portal Dormant',
+        building: 'Portal Stabilising',
+        ready: 'Portal Ready',
+        active: 'Portal Active',
+        blocked: 'Portal Blocked',
+        victory: 'Network Secured',
+      };
       const nextState = state || 'inactive';
       const nextMessage = message || 'Portal dormant';
+      const nextLabel = label || stateLabels[nextState] || 'Portal Status';
       const previousState = this.portalStatusState;
       const previousMessage = this.portalStatusMessage;
-      if (previousState === nextState && previousMessage === nextMessage) {
+      const previousLabel = this.portalStatusLabel;
+      if (
+        previousState === nextState &&
+        previousMessage === nextMessage &&
+        previousLabel === nextLabel
+      ) {
         return;
       }
       this.portalStatusState = nextState;
       this.portalStatusMessage = nextMessage;
-      const { portalStatusEl, portalStatusText, portalStatusIcon } = this.ui;
+      this.portalStatusLabel = nextLabel;
+      const {
+        portalStatusEl,
+        portalStatusText,
+        portalStatusStateText,
+        portalStatusDetailText,
+        portalStatusIcon,
+      } = this.ui;
       if (portalStatusEl) {
         portalStatusEl.dataset.state = nextState;
-        portalStatusEl.setAttribute('aria-label', `Portal status: ${nextMessage}`);
+        portalStatusEl.setAttribute('aria-label', `Portal status: ${nextLabel}. ${nextMessage}`);
         portalStatusEl.classList.remove('portal-status--flash');
         void portalStatusEl.offsetWidth;
         portalStatusEl.classList.add('portal-status--flash');
@@ -6702,8 +6724,15 @@
           }, 620);
         }
       }
-      if (portalStatusText) {
+      if (portalStatusStateText) {
+        portalStatusStateText.textContent = nextLabel;
+      }
+      if (portalStatusDetailText) {
+        portalStatusDetailText.textContent = nextMessage;
+      } else if (!portalStatusStateText && portalStatusText) {
         portalStatusText.textContent = nextMessage;
+      } else if (portalStatusText && !portalStatusDetailText && portalStatusStateText) {
+        portalStatusText.textContent = `${nextLabel}: ${nextMessage}`;
       }
       if (portalStatusIcon) {
         portalStatusIcon.dataset.state = nextState;
@@ -6712,10 +6741,14 @@
         if (nextState === 'active') {
           this.audio.play('portalActivate', { volume: 0.7 });
           this.previewUpcomingDimension();
-        } else if (previousState === 'active' && nextState !== 'victory') {
-          this.audio.play('portalDormant', { volume: 0.5 });
+        } else if (nextState === 'ready') {
+          this.audio.play('portalPrimed', { volume: 0.55 });
+        } else if (nextState === 'blocked') {
+          this.audio.play('portalDormant', { volume: 0.45 });
         } else if (nextState === 'inactive' && previousState !== 'inactive') {
           this.audio.play('portalDormant', { volume: 0.38 });
+        } else if (previousState === 'active' && nextState !== 'victory') {
+          this.audio.play('portalDormant', { volume: 0.5 });
         }
       }
     }
@@ -6726,41 +6759,48 @@
       const rawProgress = required > 0 ? this.portalBlocksPlaced / required : 0;
       const progress = Math.min(1, Math.max(0, rawProgress));
       let statusState = 'inactive';
-      let statusMessage = 'Portal dormant';
+      let statusLabel = 'Portal Dormant';
+      let statusMessage = 'Awaiting ignition sequence';
       if (portalProgressLabel) {
         if (this.victoryAchieved) {
           portalProgressLabel.textContent = 'Eternal Ingot secured';
           statusState = 'victory';
-          statusMessage = 'Network secured';
+          statusLabel = 'Network Secured';
+          statusMessage = 'Eternal Ingot secured';
         } else if (this.netheriteChallengeActive && this.dimensionSettings?.id === 'netherite') {
           const seconds = Number.isFinite(this.netheriteCountdownDisplay)
             ? Math.max(0, this.netheriteCountdownDisplay)
             : Math.ceil(Math.max(0, this.netheriteCountdownSeconds - this.netheriteChallengeTimer));
           portalProgressLabel.textContent = `Collapse in ${seconds}s`;
           statusState = 'active';
+          statusLabel = 'Collapse Imminent';
           statusMessage = `Collapse in ${seconds}s`;
         } else if (this.portalActivated) {
           portalProgressLabel.textContent = 'Portal stabilised';
           statusState = 'active';
           const nextName = this.getNextDimensionName();
-          statusMessage = nextName ? `Active — Next: ${nextName}` : 'Portal active';
+          statusLabel = 'Portal Active';
+          statusMessage = nextName ? `Next: ${nextName}` : 'Portal active';
         } else if (this.portalReady) {
           portalProgressLabel.textContent = 'Portal ready — press F to ignite';
           statusState = 'ready';
+          statusLabel = 'Portal Ready';
           statusMessage = 'Primed — ignite to travel';
         } else if (!this.portalFrameInteriorValid && this.portalBlocksPlaced > 0) {
           portalProgressLabel.textContent = 'Clear the portal interior';
           statusState = 'blocked';
+          statusLabel = 'Portal Blocked';
           statusMessage = 'Interior obstructed';
         } else {
           portalProgressLabel.textContent = `Portal frame ${Math.round(progress * 100)}%`;
           if (progress > 0) {
             statusState = 'building';
+            statusLabel = 'Portal Stabilising';
             statusMessage = `Stabilising ${Math.round(progress * 100)}%`;
           }
         }
       }
-      this.setPortalStatusIndicator(statusState, statusMessage);
+      this.setPortalStatusIndicator(statusState, statusMessage, statusLabel);
       if (portalProgressBar) {
         let displayProgress = this.victoryAchieved ? 1 : progress;
         if (this.portalReady && !this.portalActivated) {

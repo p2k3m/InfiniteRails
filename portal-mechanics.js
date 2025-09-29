@@ -153,15 +153,17 @@ function enterPortal(portal, dimension) {
     shaderProfile: dimension?.physics?.shaderProfile ?? 'default',
   };
   const rules = formatDimensionRules(dimension);
+  const announcement = `Entering ${name} — ${rules}`;
   return {
     fade: true,
     resetPosition: { x: 0, y: 0 },
-    log: `Entered ${name}.`,
+    log: announcement,
     pointsAwarded: Number.isFinite(dimension?.unlockPoints) ? dimension.unlockPoints : 5,
     physics,
     shaderProfile: physics.shaderProfile,
     dimensionName: name,
     dimensionRules: rules,
+    announcement,
   };
 }
 
@@ -182,6 +184,7 @@ const api = {
   detectPortalCollision,
   ignitePortalFrame,
   enterPortal,
+  formatDimensionRules,
   getPortalMechanicsSummary,
 };
 

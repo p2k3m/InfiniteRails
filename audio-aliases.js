@@ -12,6 +12,7 @@
     zombieGroan: existing.zombieGroan || ['miningB', 'crunch'],
     portalActivate: existing.portalActivate || ['victoryCheer', 'miningA'],
     portalDormant: existing.portalDormant || ['bubble', 'crunch'],
+    portalPrimed: existing.portalPrimed || ['bubble', 'miningA'],
   });
 
   scope.INFINITE_RAILS_AUDIO_ALIASES = aliasConfig;
