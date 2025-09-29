@@ -390,6 +390,238 @@
     }
   }
 
+  const KEY_BINDINGS_STORAGE_KEY = 'infinite-rails-keybindings';
+  const HOTBAR_SLOT_COUNT = 10;
+  const DEFAULT_KEY_BINDINGS = (() => {
+    const map = {
+      moveForward: ['KeyW', 'ArrowUp'],
+      moveBackward: ['KeyS', 'ArrowDown'],
+      moveLeft: ['KeyA', 'ArrowLeft'],
+      moveRight: ['KeyD', 'ArrowRight'],
+      jump: ['Space'],
+      interact: ['KeyF'],
+      placeBlock: ['KeyQ'],
+      buildPortal: ['KeyR'],
+      toggleInventory: ['KeyE', 'KeyI'],
+      closeMenus: ['Escape'],
+    };
+    for (let slot = 1; slot <= HOTBAR_SLOT_COUNT; slot += 1) {
+      const action = `hotbar${slot}`;
+      const bindings = [];
+      if (slot <= 9) {
+        bindings.push(`Digit${slot}`);
+        bindings.push(`Numpad${slot}`);
+      } else {
+        bindings.push('Digit0');
+        bindings.push('Numpad0');
+      }
+      map[action] = bindings;
+    }
+    Object.keys(map).forEach((action) => {
+      map[action] = Object.freeze([...map[action]]);
+    });
+    return Object.freeze(map);
+  })();
+
+  function cloneKeyBindingMap(source = {}) {
+    const result = {};
+    Object.entries(source).forEach(([action, keys]) => {
+      if (Array.isArray(keys)) {
+        result[action] = [...keys];
+      }
+    });
+    return result;
+  }
+
+  function normaliseKeyBindingValue(value) {
+    if (typeof value === 'string') {
+      const trimmed = value.trim();
+      return trimmed ? [trimmed] : [];
+    }
+    if (Array.isArray(value)) {
+      const seen = new Set();
+      const result = [];
+      value.forEach((entry) => {
+        if (typeof entry !== 'string') return;
+        const trimmed = entry.trim();
+        if (!trimmed || seen.has(trimmed)) return;
+        seen.add(trimmed);
+        result.push(trimmed);
+      });
+      return result;
+    }
+    return [];
+  }
+
+  function normaliseKeyBindingMap(source) {
+    if (!source || typeof source !== 'object') {
+      return null;
+    }
+    const result = {};
+    Object.entries(source).forEach(([action, value]) => {
+      const keys = normaliseKeyBindingValue(value);
+      if (keys.length) {
+        result[action] = keys;
+      }
+    });
+    return Object.keys(result).length ? result : null;
+  }
+
+  function mergeKeyBindingMaps(base, ...sources) {
+    const merged = cloneKeyBindingMap(base);
+    sources.forEach((source) => {
+      if (!source) return;
+      Object.entries(source).forEach(([action, keys]) => {
+        if (!Array.isArray(keys) || !keys.length) return;
+        merged[action] = [...keys];
+      });
+    });
+    return merged;
+  }
+
+  function areKeyListsEqual(a = [], b = []) {
+    if (a.length !== b.length) {
+      return false;
+    }
+    for (let index = 0; index < a.length; index += 1) {
+      if (a[index] !== b[index]) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  function diffKeyBindingMaps(base = {}, current = {}) {
+    const overrides = {};
+    const actions = new Set([...Object.keys(base), ...Object.keys(current)]);
+    actions.forEach((action) => {
+      const baseKeys = base[action] ?? [];
+      const currentKeys = current[action] ?? [];
+      if (!areKeyListsEqual(baseKeys, currentKeys)) {
+        if (currentKeys.length) {
+          overrides[action] = [...currentKeys];
+        }
+      }
+    });
+    return Object.keys(overrides).length ? overrides : null;
+  }
+
+  function loadStoredKeyBindingOverrides() {
+    if (typeof window === 'undefined' || !window.localStorage) {
+      return null;
+    }
+    try {
+      const raw = window.localStorage.getItem(KEY_BINDINGS_STORAGE_KEY);
+      if (!raw) {
+        return null;
+      }
+      const parsed = JSON.parse(raw);
+      return normaliseKeyBindingMap(parsed);
+    } catch (error) {
+      console.debug('Failed to load key bindings from storage.', error);
+      return null;
+    }
+  }
+
+  function persistKeyBindingsToStorage(base, current) {
+    if (typeof window === 'undefined' || !window.localStorage) {
+      return;
+    }
+    try {
+      const overrides = diffKeyBindingMaps(base, current);
+      if (overrides) {
+        window.localStorage.setItem(KEY_BINDINGS_STORAGE_KEY, JSON.stringify(overrides));
+      } else {
+        window.localStorage.removeItem(KEY_BINDINGS_STORAGE_KEY);
+      }
+    } catch (error) {
+      console.debug('Failed to persist key bindings.', error);
+    }
+  }
+
+  function buildKeyBindings({ includeStored = true } = {}) {
+    const config = typeof window !== 'undefined' ? window.APP_CONFIG : globalScope?.APP_CONFIG;
+    const configOverrides = normaliseKeyBindingMap(config?.keyBindings);
+    const defaults = cloneKeyBindingMap(DEFAULT_KEY_BINDINGS);
+    const base = mergeKeyBindingMaps(defaults, configOverrides);
+    const stored = includeStored ? loadStoredKeyBindingOverrides() : null;
+    const keyBindings = mergeKeyBindingMaps(base, stored);
+    return { defaults, base, keyBindings };
+  }
+
+  function normaliseEventCode(code, keyFallback = '') {
+    if (typeof code === 'string' && code.trim()) {
+      return code;
+    }
+    const key = typeof keyFallback === 'string' ? keyFallback.trim() : '';
+    if (!key) {
+      return '';
+    }
+    const lower = key.toLowerCase();
+    if (lower.length === 1 && lower >= 'a' && lower <= 'z') {
+      return `Key${lower.toUpperCase()}`;
+    }
+    if (/^[0-9]$/.test(lower)) {
+      return `Digit${lower}`;
+    }
+    switch (lower) {
+      case ' ': {
+        return 'Space';
+      }
+      case 'space':
+      case 'spacebar':
+        return 'Space';
+      case 'arrowup':
+        return 'ArrowUp';
+      case 'arrowdown':
+        return 'ArrowDown';
+      case 'arrowleft':
+        return 'ArrowLeft';
+      case 'arrowright':
+        return 'ArrowRight';
+      case 'escape':
+        return 'Escape';
+      case 'esc':
+        return 'Escape';
+      case 'enter':
+        return 'Enter';
+      default:
+        break;
+    }
+    return '';
+  }
+
+  function formatKeyLabel(code) {
+    if (!code || typeof code !== 'string') {
+      return '';
+    }
+    if (code.startsWith('Key')) {
+      return code.slice(3);
+    }
+    if (code.startsWith('Digit')) {
+      return code.slice(5);
+    }
+    if (code.startsWith('Numpad')) {
+      return `Numpad ${code.slice(6)}`;
+    }
+    switch (code) {
+      case 'ArrowUp':
+        return '↑';
+      case 'ArrowDown':
+        return '↓';
+      case 'ArrowLeft':
+        return '←';
+      case 'ArrowRight':
+        return '→';
+      case 'Space':
+        return 'Space';
+      case 'Escape':
+        return 'Esc';
+      default:
+        return code;
+    }
+  }
+
   const SUPPORTS_MODEL_ASSETS =
     typeof window === 'undefined' || (typeof window.location !== 'undefined' && window.location.protocol !== 'file:');
 
@@ -2138,6 +2370,8 @@
       apiBaseUrl: window.APP_CONFIG?.apiBaseUrl ?? null,
       googleClientId: window.APP_CONFIG?.googleClientId ?? null,
     };
+
+    initializeKeyBindings();
 
     const TILE_UNIT = 1;
     const BASE_GEOMETRY = new THREE.BoxGeometry(TILE_UNIT, TILE_UNIT, TILE_UNIT);
@@ -4353,10 +4587,23 @@
       const mobileActive = preferredScheme === 'touch';
       const desktopBadge = desktopActive ? '<span class="player-hint__badge">Detected</span>' : '';
       const mobileBadge = mobileActive ? '<span class="player-hint__badge">Detected</span>' : '';
+      const forwardKey = getActionKeyLabels('moveForward', { limit: 1 })[0];
+      const leftKey = getActionKeyLabels('moveLeft', { limit: 1 })[0];
+      const backwardKey = getActionKeyLabels('moveBackward', { limit: 1 })[0];
+      const rightKey = getActionKeyLabels('moveRight', { limit: 1 })[0];
+      const jumpKey = joinKeyLabels(getActionKeyLabels('jump', { limit: 2 }));
+      const placeBlockKey = joinKeyLabels(getActionKeyLabels('placeBlock', { limit: 1 }));
+      const igniteKey = joinKeyLabels(getActionKeyLabels('interact', { limit: 1 }));
+
+      const movementKeys = [forwardKey, leftKey, backwardKey, rightKey].filter(Boolean);
       const desktopList = [
-        'Move with WASD or the arrow keys.',
-        'Press Space or click adjacent tiles to gather resources.',
-        'Press Q to place blocks and R to ignite portal frames.',
+        movementKeys.length ? `Move with ${movementKeys.join('/')}.` : 'Use your keyboard to move between rails.',
+        jumpKey
+          ? `Press ${jumpKey} to jump or gather resources.`
+          : 'Use the jump control or click adjacent tiles to gather resources.',
+        placeBlockKey && igniteKey
+          ? `Press ${placeBlockKey} to place blocks and ${igniteKey} to ignite portal frames.`
+          : 'Use your action keys to build portals and place blocks.',
       ];
       const mobileList = [
         'Tap the on-screen arrows to move.',
@@ -4369,7 +4616,8 @@
         `<div class="player-hint__key-row" aria-hidden="true">${keys
           .map((key) => `<span class="player-hint__key">${key}</span>`)
           .join('')}</div>`;
-      const desktopKeys = renderKeys(['W', 'A', 'S', 'D']);
+      const movementRowKeys = [forwardKey, leftKey, backwardKey, rightKey].map((value) => value || '—');
+      const desktopKeys = renderKeys(movementRowKeys);
       const mobileKeys =
         '<div class="player-hint__key-row player-hint__key-row--mobile" aria-hidden="true">' +
         ['◀', '▲', '▼', '▶']
@@ -4398,7 +4646,9 @@
               ${renderList(mobileList)}
             </section>
           </div>
-          <p class="player-hint__note">Move to make your compass ring glow gold, then face a tree or stone and press Space or ✦ to gather.</p>
+          <p class="player-hint__note">Move to make your compass ring glow gold, then face a tree or stone and press ${
+            jumpKey || 'your jump key'
+          } or ✦ to gather.</p>
         </div>
       `;
     }
@@ -12582,9 +12832,14 @@
         if (movementStrength > 0.28) {
           dismissMovementHint();
           if (state?.ui && !state.ui.movementGlowHintShown) {
-            showPlayerHint('Great! Follow the golden ring as it turns bright—face a tree or stone and press Space to gather.', {
-              duration: 7200,
-            });
+            const jumpHintKey =
+              joinKeyLabels(getActionKeyLabels('jump', { limit: 1 }), { fallback: 'Jump' }) || 'Jump';
+            showPlayerHint(
+              `Great! Follow the golden ring as it turns bright—face a tree or stone and press ${jumpHintKey} to gather.`,
+              {
+                duration: 7200,
+              }
+            );
             state.ui.movementGlowHintShown = true;
           }
         }
@@ -14034,6 +14289,9 @@
         lastDamageAt: -Infinity,
         heartsAtLastDamage: null,
       },
+      defaultKeyBindings: cloneKeyBindingMap(DEFAULT_KEY_BINDINGS),
+      baseKeyBindings: cloneKeyBindingMap(DEFAULT_KEY_BINDINGS),
+      keyBindings: cloneKeyBindingMap(DEFAULT_KEY_BINDINGS),
       pressedKeys: new Set(),
       joystickInput: { forward: 0, strafe: 0 },
       isRunning: false,
@@ -14071,6 +14329,13 @@
 
     if (typeof window !== 'undefined') {
       window.__INFINITE_RAILS_STATE__ = state;
+      window.InfiniteRails = window.InfiniteRails || {};
+      window.InfiniteRails.getState = () => state;
+      window.InfiniteRails.getKeyBindings = getKeyBindings;
+      window.InfiniteRails.getDefaultKeyBindings = getDefaultKeyBindings;
+      window.InfiniteRails.setKeyBinding = (action, keys, options) => setKeyBinding(action, keys, options);
+      window.InfiniteRails.setKeyBindings = (overrides, options) => setKeyBindings(overrides, options);
+      window.InfiniteRails.resetKeyBindings = (options) => resetKeyBindings(options);
       if (typeof window.dispatchEvent === 'function' && typeof CustomEvent === 'function') {
         try {
           window.dispatchEvent(new CustomEvent('infinite-rails:state-ready', { detail: { state } }));
@@ -15451,7 +15716,8 @@
     }
 
     function handleVictoryKeydown(event) {
-      if (event.key === 'Escape') {
+      const code = normaliseEventCode(event.code || '', event.key);
+      if (isKeyForAction('closeMenus', code)) {
         event.preventDefault();
         dismissVictoryCelebration();
       }
@@ -18252,45 +18518,192 @@
       renderScene();
     }
 
-    function handleMovementKey(code, pressed, keyFallback = '') {
-      let direction = null;
-      switch (code) {
-        case 'KeyW':
-        case 'ArrowUp':
-          direction = 'forward';
-          break;
-        case 'KeyS':
-        case 'ArrowDown':
-          direction = 'backward';
-          break;
-        case 'KeyA':
-        case 'ArrowLeft':
-          direction = 'left';
-          break;
-        case 'KeyD':
-        case 'ArrowRight':
-          direction = 'right';
-          break;
-        default:
-          break;
+    function initializeKeyBindings(options = {}) {
+      const { includeStored = true } = options ?? {};
+      const { defaults, base, keyBindings } = buildKeyBindings({ includeStored });
+      state.defaultKeyBindings = defaults;
+      state.baseKeyBindings = base;
+      state.keyBindings = keyBindings;
+    }
+
+    function applyKeyBinding(action, keys) {
+      if (typeof action !== 'string' || !Array.isArray(keys)) {
+        return false;
       }
-      if (!direction && keyFallback) {
-        switch (keyFallback.toLowerCase()) {
-          case 'w':
-            direction = 'forward';
-            break;
-          case 's':
-            direction = 'backward';
-            break;
-          case 'a':
-            direction = 'left';
-            break;
-          case 'd':
-            direction = 'right';
-            break;
-          default:
-            break;
+      const trimmedAction = action.trim();
+      if (!trimmedAction) {
+        return false;
+      }
+      const filteredKeys = [];
+      const seen = new Set();
+      keys.forEach((key) => {
+        if (typeof key !== 'string') {
+          return;
         }
+        const trimmed = key.trim();
+        if (!trimmed || seen.has(trimmed)) {
+          return;
+        }
+        seen.add(trimmed);
+        filteredKeys.push(trimmed);
+      });
+      const fallback = state.baseKeyBindings?.[trimmedAction] ?? [];
+      const nextKeys = filteredKeys.length ? filteredKeys : [...fallback];
+      const current = state.keyBindings?.[trimmedAction] ?? [];
+      if (areKeyListsEqual(current, nextKeys)) {
+        return false;
+      }
+      if (!state.keyBindings) {
+        state.keyBindings = {};
+      }
+      state.keyBindings[trimmedAction] = [...nextKeys];
+      return true;
+    }
+
+    function persistKeyBindings() {
+      persistKeyBindingsToStorage(state.baseKeyBindings ?? {}, state.keyBindings ?? {});
+    }
+
+    function setKeyBinding(action, keys, options = {}) {
+      const { persist = true } = options ?? {};
+      if (typeof action !== 'string' || !action.trim()) {
+        return false;
+      }
+      const normalised = normaliseKeyBindingValue(keys);
+      let nextKeys = normalised;
+      if (!nextKeys.length) {
+        const fallback = state.baseKeyBindings?.[action.trim()] ?? [];
+        nextKeys = [...fallback];
+      }
+      const changed = applyKeyBinding(action.trim(), nextKeys);
+      if (changed && persist) {
+        persistKeyBindings();
+      }
+      return changed;
+    }
+
+    function setKeyBindings(overrides, options = {}) {
+      const { persist = true } = options ?? {};
+      const normalised = normaliseKeyBindingMap(overrides);
+      if (!normalised) {
+        return false;
+      }
+      let changed = false;
+      Object.entries(normalised).forEach(([action, keys]) => {
+        if (applyKeyBinding(action, [...keys])) {
+          changed = true;
+        }
+      });
+      if (changed && persist) {
+        persistKeyBindings();
+      }
+      return changed;
+    }
+
+    function resetKeyBindings(options = {}) {
+      const { persist = true } = options ?? {};
+      state.keyBindings = mergeKeyBindingMaps(state.baseKeyBindings ?? {}, null);
+      if (persist) {
+        persistKeyBindings();
+      }
+      return cloneKeyBindingMap(state.keyBindings);
+    }
+
+    function getKeyBindings() {
+      return cloneKeyBindingMap(state.keyBindings);
+    }
+
+    function getDefaultKeyBindings() {
+      return cloneKeyBindingMap(state.defaultKeyBindings ?? DEFAULT_KEY_BINDINGS);
+    }
+
+    function getBindingsForAction(action, options = {}) {
+      const { useDefaults = false } = options ?? {};
+      const sourceMap = useDefaults
+        ? state.defaultKeyBindings ?? DEFAULT_KEY_BINDINGS
+        : state.keyBindings ?? DEFAULT_KEY_BINDINGS;
+      const binding = sourceMap?.[action];
+      if (Array.isArray(binding) && binding.length) {
+        return [...binding];
+      }
+      if (!useDefaults) {
+        const base = state.baseKeyBindings?.[action];
+        if (Array.isArray(base) && base.length) {
+          return [...base];
+        }
+      }
+      const fallback = DEFAULT_KEY_BINDINGS?.[action];
+      return Array.isArray(fallback) ? [...fallback] : [];
+    }
+
+    function getActionKeyLabels(action, options = {}) {
+      const { limit = null, useDefaults = false } = options ?? {};
+      const bindings = getBindingsForAction(action, { useDefaults });
+      const seen = new Set();
+      const labels = [];
+      bindings.forEach((code) => {
+        const label = formatKeyLabel(code);
+        if (!label || seen.has(label)) {
+          return;
+        }
+        seen.add(label);
+        labels.push(label);
+      });
+      if (typeof limit === 'number' && Number.isFinite(limit) && limit >= 0) {
+        return labels.slice(0, Math.floor(limit));
+      }
+      return labels;
+    }
+
+    function joinKeyLabels(labels, options = {}) {
+      const { fallback = '' } = options ?? {};
+      if (!Array.isArray(labels)) {
+        return fallback;
+      }
+      const filtered = labels.filter((label) => typeof label === 'string' && label.trim());
+      if (!filtered.length) {
+        return fallback;
+      }
+      if (filtered.length === 1) {
+        return filtered[0];
+      }
+      return filtered.join(' / ');
+    }
+
+    function isKeyForAction(action, code) {
+      if (!action || !code) {
+        return false;
+      }
+      const binding = state.keyBindings?.[action];
+      if (!binding || !binding.length) {
+        return false;
+      }
+      return binding.includes(code);
+    }
+
+    function getHotbarSlotFromCode(code) {
+      if (!code) {
+        return null;
+      }
+      for (let slot = 1; slot <= HOTBAR_SLOT_COUNT; slot += 1) {
+        if (isKeyForAction(`hotbar${slot}`, code)) {
+          return slot - 1;
+        }
+      }
+      return null;
+    }
+
+    function handleMovementKey(code, pressed, keyFallback = '') {
+      const resolvedCode = normaliseEventCode(code, keyFallback);
+      let direction = null;
+      if (isKeyForAction('moveForward', resolvedCode)) {
+        direction = 'forward';
+      } else if (isKeyForAction('moveBackward', resolvedCode)) {
+        direction = 'backward';
+      } else if (isKeyForAction('moveLeft', resolvedCode)) {
+        direction = 'left';
+      } else if (isKeyForAction('moveRight', resolvedCode)) {
+        direction = 'right';
       }
       if (!direction) {
         return false;
@@ -18312,22 +18725,18 @@
 
     function handleKeyDown(event) {
       if (event.repeat) return;
-      const key = (event.key || '').toLowerCase();
-      const code = event.code || '';
+      const rawKey = typeof event.key === 'string' ? event.key : '';
+      const code = normaliseEventCode(event.code || '', rawKey);
       const target = event.target;
       if (!state.isRunning && previewState.active) {
-        const leftKeys = ['a', 'arrowleft'];
-        const rightKeys = ['d', 'arrowright'];
-        if (leftKeys.includes(key) || rightKeys.includes(key)) {
-          const delta = rightKeys.includes(key) ? PREVIEW_KEY_YAW_DELTA : -PREVIEW_KEY_YAW_DELTA;
+        if (isKeyForAction('moveLeft', code) || isKeyForAction('moveRight', code)) {
+          const delta = isKeyForAction('moveRight', code) ? PREVIEW_KEY_YAW_DELTA : -PREVIEW_KEY_YAW_DELTA;
           setPreviewYaw(previewState.yaw + delta);
           event.preventDefault();
           return;
         }
-        const upKeys = ['arrowup'];
-        const downKeys = ['arrowdown'];
-        if (upKeys.includes(key) || downKeys.includes(key)) {
-          const delta = upKeys.includes(key) ? PREVIEW_KEY_YAW_DELTA * 0.5 : -PREVIEW_KEY_YAW_DELTA * 0.5;
+        if (code === 'ArrowUp' || code === 'ArrowDown') {
+          const delta = code === 'ArrowUp' ? PREVIEW_KEY_YAW_DELTA * 0.5 : -PREVIEW_KEY_YAW_DELTA * 0.5;
           setPreviewPitch(previewState.pitch + delta);
           event.preventDefault();
           return;
@@ -18339,56 +18748,57 @@
       ) {
         return;
       }
-      if (isInventoryModalOpen() && key !== 'e' && key !== 'escape') {
-        event.preventDefault();
-        return;
-      }
-      if (state.isRunning && handleMovementKey(code, true, key)) {
-        event.preventDefault();
-        return;
-      }
-      switch (key) {
-        case ' ':
-          console.log('Jump triggered');
-          if (!attemptJump()) {
-            interact();
-          }
-          break;
-        case 'q':
-          placeBlock();
-          break;
-        case 'r':
-          promptPortalBuild();
-          break;
-        case 'e':
-          toggleInventoryModal({ focusFirstSlot: true });
+      if (isInventoryModalOpen()) {
+        const allowed = isKeyForAction('toggleInventory', code) || isKeyForAction('closeMenus', code);
+        if (!allowed) {
           event.preventDefault();
-          break;
-        case 'f':
-          interact();
-          break;
-        case '1':
-        case '2':
-        case '3':
-        case '4':
-        case '5':
-        case '6':
-        case '7':
-        case '8':
-        case '9':
-        case '0': {
-          const index = (parseInt(event.key, 10) + 9) % 10;
-          state.player.selectedSlot = index;
-          updateInventoryUI();
-          break;
+          return;
         }
-        default:
-          break;
+      }
+      if (state.isRunning && handleMovementKey(code, true, rawKey)) {
+        event.preventDefault();
+        return;
+      }
+      if (isKeyForAction('jump', code)) {
+        console.log('Jump triggered');
+        if (!attemptJump()) {
+          interact();
+        }
+        event.preventDefault();
+        return;
+      }
+      if (isKeyForAction('placeBlock', code)) {
+        placeBlock();
+        event.preventDefault();
+        return;
+      }
+      if (isKeyForAction('buildPortal', code)) {
+        promptPortalBuild();
+        event.preventDefault();
+        return;
+      }
+      if (isKeyForAction('toggleInventory', code)) {
+        toggleInventoryModal({ focusFirstSlot: true });
+        event.preventDefault();
+        return;
+      }
+      if (isKeyForAction('interact', code)) {
+        interact();
+        event.preventDefault();
+        return;
+      }
+      const hotbarSlot = getHotbarSlotFromCode(code);
+      if (hotbarSlot !== null) {
+        state.player.selectedSlot = hotbarSlot;
+        updateInventoryUI();
+        event.preventDefault();
       }
     }
 
     function handleKeyUp(event) {
-      handleMovementKey(event.code || '', false, event.key);
+      const rawKey = typeof event.key === 'string' ? event.key : '';
+      const code = normaliseEventCode(event.code || '', rawKey);
+      handleMovementKey(code, false, rawKey);
     }
 
     function placeBlock(targetTile = null) {
@@ -18587,7 +18997,8 @@
         button.addEventListener('click', () => closeSidebar(true));
       });
       window.addEventListener('keydown', (event) => {
-        if (event.key !== 'Escape') return;
+        const code = normaliseEventCode(event.code || '', event.key);
+        if (!isKeyForAction('closeMenus', code)) return;
         if (inventoryModal && !inventoryModal.hidden) {
           closeInventoryModal(true);
           event.preventDefault();
@@ -20442,15 +20853,17 @@
         craftingSearchPanel.setAttribute('aria-hidden', 'true');
       }
       document.addEventListener('keydown', (event) => {
-        if (event.key === 'Escape') {
-          if (craftingSearchPanel?.getAttribute('data-open') === 'true') {
-            event.preventDefault();
-            closeCraftingSearchPanel(true);
-            return;
-          }
-          if (!craftingModal.hidden) {
-            closeCraftingModal();
-          }
+        const code = normaliseEventCode(event.code || '', event.key);
+        if (!isKeyForAction('closeMenus', code)) {
+          return;
+        }
+        if (craftingSearchPanel?.getAttribute('data-open') === 'true') {
+          event.preventDefault();
+          closeCraftingSearchPanel(true);
+          return;
+        }
+        if (!craftingModal.hidden) {
+          closeCraftingModal();
         }
       });
     }
@@ -20882,8 +21295,11 @@
       }
 
       function updateCaption() {
+        const igniteKey = joinKeyLabels(getActionKeyLabels('interact', { limit: 1 }), {
+          fallback: 'your ignite key',
+        });
         if (nextSlotIndex >= slots.length) {
-          caption.textContent = 'Sequence complete! Press ignite to craft the portal key.';
+          caption.textContent = `Sequence complete! Press ${igniteKey} to craft the portal key.`;
           toast.hidden = false;
           return;
         }
@@ -21021,7 +21437,8 @@
         button.addEventListener('click', closeGuideModal);
       });
       document.addEventListener('keydown', (event) => {
-        if (event.key === 'Escape' && !guideModal.hidden) {
+        const code = normaliseEventCode(event.code || '', event.key);
+        if (isKeyForAction('closeMenus', code) && !guideModal.hidden) {
           closeGuideModal();
         }
       });
@@ -21283,20 +21700,29 @@
         ctx.fillRect(0, 0, canvas.width, canvas.height);
       }
 
+      const hasActionActive = (action) => {
+        for (const code of keys) {
+          if (isKeyForAction(action, code)) {
+            return true;
+          }
+        }
+        return false;
+      };
+
       function updateCharacterPosition() {
         const speed = 2.5;
         character.vx = 0;
         character.vy = 0;
-        if (keys.has('a') || keys.has('arrowleft')) {
+        if (hasActionActive('moveLeft')) {
           character.vx -= speed;
         }
-        if (keys.has('d') || keys.has('arrowright')) {
+        if (hasActionActive('moveRight')) {
           character.vx += speed;
         }
-        if (keys.has('w') || keys.has('arrowup')) {
+        if (hasActionActive('moveForward')) {
           character.vy -= speed;
         }
-        if (keys.has('s') || keys.has('arrowdown')) {
+        if (hasActionActive('moveBackward')) {
           character.vy += speed;
         }
         character.x = Math.min(Math.max(character.x + character.vx, 26), 174);
@@ -21315,8 +21741,12 @@
       }
 
       function handleKeyDown(event) {
-        keys.add(event.key.toLowerCase());
-        if (event.key === ' ' || event.key === 'Spacebar') {
+        const code = normaliseEventCode(event.code || '', event.key);
+        if (!code) {
+          return;
+        }
+        keys.add(code);
+        if (isKeyForAction('jump', code)) {
           character.jumpTimer = 18;
           activateStep(1, { animate: true });
           captionEl.textContent = 'Tap jump to clear the missing section and keep your combo streak alive.';
@@ -21325,13 +21755,17 @@
           activateStep(2, { animate: true });
           captionEl.textContent = 'Feather the landing so magnetised boots lock onto the rail.';
         }
-        if (event.key.toLowerCase() === 'd' || event.key === 'ArrowRight') {
+        if (isKeyForAction('moveRight', code)) {
           activateStep(0, { animate: true });
         }
       }
 
       function handleKeyUp(event) {
-        keys.delete(event.key.toLowerCase());
+        const code = normaliseEventCode(event.code || '', event.key);
+        if (!code) {
+          return;
+        }
+        keys.delete(code);
       }
 
       window.addEventListener('keydown', handleKeyDown);
@@ -21365,7 +21799,11 @@
       let rafId = null;
       let confettiPieces = [];
 
-      captionEl.textContent = 'Drag the glowing components into the sequence slots, then press F to ignite.';
+      const getPortalIgniteKeyLabel = () =>
+        joinKeyLabels(getActionKeyLabels('interact', { limit: 1 }), {
+          fallback: 'your ignite key',
+        }) || 'your ignite key';
+      captionEl.textContent = `Drag the glowing components into the sequence slots, then press ${getPortalIgniteKeyLabel()} to ignite.`;
       activateStep(0, { animate: true, captionOverride: 'Call up the blueprint to lock the frame dimensions.' });
 
       function drawBackground() {
@@ -21495,12 +21933,13 @@
         }
         igniteReady = slots.every((slot) => slot.filled);
         if (igniteReady) {
-          captionEl.textContent = 'Press F to ignite the portal matrix.';
+          captionEl.textContent = `Press ${getPortalIgniteKeyLabel()} to ignite the portal matrix.`;
         }
       }
 
       function handleKeyDown(event) {
-        if (igniteReady && event.key.toLowerCase() === 'f') {
+        const code = normaliseEventCode(event.code || '', event.key);
+        if (igniteReady && isKeyForAction('interact', code)) {
           activateStep(2, { animate: true });
           captionEl.textContent = 'Gateway stabilised! Sequence stored in your crafting circle.';
           igniteReady = false;
@@ -21609,13 +22048,15 @@
       }
 
       function handleKeyDown(event) {
-        if (event.key.toLowerCase() === 'q') {
+        const code = normaliseEventCode(event.code || '', event.key);
+        if (isKeyForAction('placeBlock', code)) {
           hotbarIndex = (hotbarIndex + 1) % 3;
           activateStep(0, { animate: true });
           captionEl.textContent = 'Emergency slot armed. Deploy a barricade next!';
         }
-        if (event.key === '1' || event.key === '2' || event.key === '3') {
-          hotbarIndex = Number(event.key) - 1;
+        const hotbarSlot = getHotbarSlotFromCode(code);
+        if (hotbarSlot !== null && hotbarSlot < 3) {
+          hotbarIndex = hotbarSlot;
           barricadePlaced = true;
           activateStep(1, { animate: true });
           captionEl.textContent = 'Barricade deployed. Hold to channel repairs.';
