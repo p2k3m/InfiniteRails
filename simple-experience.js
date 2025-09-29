@@ -480,6 +480,7 @@
       this.zombieGroup = null;
       this.portalMechanics = PORTAL_MECHANICS;
       this.playerRig = null;
+      this.cameraBoom = null;
       this.handGroup = null;
       this.handMaterials = [];
       this.handMaterialsDynamic = true;
@@ -569,6 +570,12 @@
       this.cameraShakeDuration = 0;
       this.cameraShakeTime = 0;
       this.cameraShakeIntensity = 0;
+      this.cameraPerspective = 'first';
+      this.firstPersonCameraOffset = new THREE.Vector3(0, 0.08, 0.04);
+      this.thirdPersonCameraOffset = new THREE.Vector3(0, 0.8, 3.4);
+      this.sessionToken = 0;
+      this.activeSessionId = 0;
+      this.playerHeadAttachment = null;
       this.unloadBeaconSent = false;
       this.pointerLocked = false;
       this.yaw = Math.PI;
@@ -777,6 +784,9 @@
       if (!this.verifyWebglSupport()) {
         return;
       }
+      this.sessionToken += 1;
+      this.activeSessionId = this.sessionToken;
+      this.cameraPerspective = 'first';
       this.resetPlayerCharacterState();
       this.started = true;
       this.unloadBeaconSent = false;
@@ -1528,6 +1538,7 @@
       this.hideVictoryCelebration(true);
       this.hideVictoryBanner();
       this.victoryShareBusy = false;
+      this.activeSessionId = 0;
       this.resetPlayerCharacterState();
       this.started = false;
     }
@@ -1546,6 +1557,8 @@
       this.playerMixer = null;
       this.playerIdleAction = null;
 
+      this.cameraPerspective = 'first';
+      this.playerHeadAttachment = null;
       if (this.camera && this.camera.parent && typeof this.camera.parent.remove === 'function') {
         try {
           this.camera.parent.remove(this.camera);
@@ -1553,9 +1566,10 @@
           console.debug('Failed to detach camera from previous parent.', error);
         }
       }
-      if (this.playerRig && this.camera && typeof this.playerRig.add === 'function') {
+      const cameraHolder = this.cameraBoom && typeof this.cameraBoom.add === 'function' ? this.cameraBoom : this.playerRig;
+      if (cameraHolder && this.camera && typeof cameraHolder.add === 'function') {
         try {
-          this.playerRig.add(this.camera);
+          cameraHolder.add(this.camera);
           this.camera.position.set(0, 0, 0);
         } catch (error) {
           console.debug('Unable to reset camera rig state.', error);
@@ -1577,6 +1591,7 @@
         if (typeof this.handGroup.clear === 'function') {
           this.handGroup.clear();
         }
+        this.handGroup.visible = true;
         this.handGroup = null;
       }
 
@@ -1609,8 +1624,12 @@
       this.playerRig = new THREE.Group();
       this.playerRig.name = 'PlayerRig';
       this.playerRig.position.set(0, PLAYER_EYE_HEIGHT, 0);
-      this.playerRig.add(this.camera);
+      this.cameraBoom = new THREE.Object3D();
+      this.cameraBoom.name = 'PlayerCameraBoom';
+      this.playerRig.add(this.cameraBoom);
+      this.cameraBoom.add(this.camera);
       this.scene.add(this.playerRig);
+      this.camera.position.set(0, 0, 0);
       this.camera.lookAt(new THREE.Vector3(0, PLAYER_EYE_HEIGHT, 10));
       this.updateCameraFrustum(width, height);
 
@@ -1688,6 +1707,58 @@
         return;
       }
       this.cameraBaseOffset.copy(this.camera.position);
+    }
+
+    applyCameraPerspective(mode) {
+      const perspective = mode === 'third' ? 'third' : 'first';
+      this.cameraPerspective = perspective;
+      if (!this.camera) {
+        return;
+      }
+      const desiredParent =
+        perspective === 'first'
+          ? (this.playerHeadAttachment && this.playerHeadAttachment.isObject3D
+              ? this.playerHeadAttachment
+              : this.cameraBoom || this.playerRig || this.scene)
+          : this.cameraBoom || this.playerRig || this.scene;
+      if (desiredParent && this.camera.parent !== desiredParent && typeof desiredParent.add === 'function') {
+        try {
+          this.camera.parent?.remove?.(this.camera);
+        } catch (error) {
+          console.debug('Unable to detach camera from previous parent.', error);
+        }
+        try {
+          desiredParent.add(this.camera);
+        } catch (error) {
+          console.debug('Unable to reparent camera for perspective change.', error);
+        }
+      }
+      if (perspective === 'third') {
+        if (this.thirdPersonCameraOffset) {
+          this.camera.position.copy(this.thirdPersonCameraOffset);
+        }
+        if (this.handGroup) {
+          this.handGroup.visible = false;
+        }
+      } else {
+        if (this.firstPersonCameraOffset) {
+          this.camera.position.copy(this.firstPersonCameraOffset);
+        }
+        if (this.handGroup) {
+          if (this.handGroup.parent !== this.camera) {
+            this.camera.add(this.handGroup);
+          }
+          this.handGroup.visible = true;
+        }
+      }
+      this.refreshCameraBaseOffset();
+    }
+
+    toggleCameraPerspective() {
+      const next = this.cameraPerspective === 'first' ? 'third' : 'first';
+      this.applyCameraPerspective(next);
+      const message = next === 'first' ? 'First-person view enabled.' : 'Third-person view enabled.';
+      this.showHint(message);
     }
 
     getHighResTimestamp() {
@@ -2809,9 +2880,10 @@
     createFirstPersonHands() {
       const THREE = this.THREE;
       if (!THREE || !this.camera) return;
-      if (this.playerRig && this.camera.parent !== this.playerRig) {
+      const cameraHolder = this.cameraBoom || this.playerRig;
+      if (cameraHolder && this.camera.parent !== cameraHolder) {
         this.camera.parent?.remove(this.camera);
-        this.playerRig.add(this.camera);
+        cameraHolder.add(this.camera);
       }
 
       if (this.handGroup) {
@@ -2860,6 +2932,7 @@
       this.handGroup.add(left.group);
       this.handGroup.add(right.group);
       this.camera.add(this.handGroup);
+      this.handGroup.visible = this.cameraPerspective === 'first';
       this.handMaterials = [left.palm.material, right.palm.material, left.sleeve.material, right.sleeve.material];
     }
 
@@ -2974,6 +3047,7 @@
         });
         this.handMaterialsDynamic = false;
         this.handModelLoaded = true;
+        this.handGroup.visible = this.cameraPerspective === 'first';
         return;
       }
       const rightArm = rightAsset.scene;
@@ -2994,17 +3068,25 @@
       });
       this.handMaterialsDynamic = false;
       this.handModelLoaded = true;
+      this.handGroup.visible = this.cameraPerspective === 'first';
     }
 
     async loadPlayerCharacter() {
       if (!this.playerRig) return;
       const THREE = this.THREE;
+      const sessionId = this.activeSessionId;
       let asset = null;
       try {
         asset = await this.cloneModelScene('steve');
       } catch (error) {
         console.warn('Failed to load Steve model.', error);
         asset = null;
+      }
+      if (sessionId !== this.activeSessionId) {
+        if (asset?.scene) {
+          disposeObject3D(asset.scene);
+        }
+        return;
       }
       if (!asset?.scene) {
         console.warn('Model load failed, using fallback cube');
@@ -3017,11 +3099,12 @@
         fallback.receiveShadow = true;
         this.playerRig.add(fallback);
         this.playerAvatar = fallback;
+        this.playerHeadAttachment = fallback;
         if (this.camera.parent !== fallback) {
           fallback.add(this.camera);
-          this.camera.position.set(0, 0.08, 0.08);
+          this.camera.position.copy(this.firstPersonCameraOffset);
         }
-        this.refreshCameraBaseOffset();
+        this.applyCameraPerspective(this.cameraPerspective);
         console.log('Steve visible in scene (fallback)');
         return;
       }
@@ -3043,21 +3126,13 @@
       this.playerRig.add(model);
       this.playerAvatar = model;
 
-      if (this.camera.parent !== model) {
-        const head = model.getObjectByName('HeadPivot') || model.getObjectByName('Head');
-        if (head && head.isObject3D) {
-          head.add(this.camera);
-          this.camera.position.set(0, 0.08, 0.04);
-        } else {
-          this.playerRig.add(this.camera);
-          this.camera.position.set(0, 0, 0);
-        }
-      }
+      const head = model.getObjectByName('HeadPivot') || model.getObjectByName('Head');
+      this.playerHeadAttachment = head && head.isObject3D ? head : model;
       if (this.handGroup && this.handGroup.parent !== this.camera) {
         this.camera.add(this.handGroup);
       }
 
-      this.refreshCameraBaseOffset();
+      this.applyCameraPerspective(this.cameraPerspective);
 
       if (this.playerMixer) {
         this.playerMixer.stopAllAction();
@@ -4520,6 +4595,10 @@
         this.placeBlock();
         event.preventDefault();
       }
+      if (event.code === 'KeyV' && !event.repeat) {
+        this.toggleCameraPerspective();
+        event.preventDefault();
+      }
       if (event.code === 'KeyE') {
         const open = this.craftingModal?.hidden !== false;
         this.toggleCraftingModal(open);
@@ -4818,11 +4897,11 @@
       const THREE = this.THREE;
       const forward = this.tmpForward;
       const right = this.tmpRight;
-      forward.set(0, 0, -1).applyEuler(new THREE.Euler(this.pitch, this.yaw, 0, 'YXZ'));
-      forward.y = 0;
+      const yawOnly = new THREE.Euler(0, this.yaw, 0, 'YXZ');
+      forward.set(0, 0, -1).applyEuler(yawOnly);
       if (forward.lengthSq() > 0) forward.normalize();
-      right.set(1, 0, 0).applyEuler(new THREE.Euler(0, this.yaw + Math.PI / 2, 0));
-      right.y = 0;
+      const up = this.tmpVector2.set(0, 1, 0);
+      right.copy(forward).cross(up);
       if (right.lengthSq() > 0) right.normalize();
 
       const speed = this.currentSpeed;
@@ -4854,8 +4933,14 @@
 
       this.velocity.multiplyScalar(PLAYER_INERTIA);
 
-      const cameraQuaternion = new THREE.Quaternion().setFromEuler(new THREE.Euler(this.pitch, this.yaw, 0, 'YXZ'));
-      this.camera.quaternion.copy(cameraQuaternion);
+      const cameraPitch = this.pitch;
+      const cameraQuaternion = new THREE.Quaternion().setFromEuler(new THREE.Euler(cameraPitch, 0, 0, 'YXZ'));
+      if (this.playerRig) {
+        this.playerRig.rotation.y = this.yaw;
+      }
+      if (this.camera) {
+        this.camera.quaternion.copy(cameraQuaternion);
+      }
 
       const position = this.playerRig ? this.playerRig.position : this.camera.position;
       position.add(this.velocity);
@@ -4925,7 +5010,7 @@
     }
 
     updateHands(delta) {
-      if (!this.handGroup) return;
+      if (!this.handGroup || !this.handGroup.visible) return;
       const THREE = this.THREE;
       const speed = this.velocity.length();
       const target = Math.min(1, speed * 3.2 + (this.isGrounded ? 0 : 0.25));

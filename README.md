@@ -104,7 +104,7 @@ These steps restore the intended first-person experience when a deployment or ca
 
 | Platform | Input |
 | --- | --- |
-| Desktop | `WASD` / arrow keys to move, `Space` to interact, `Q` to place blocks, `E` inventory, `R` build portals, `F` interact, `Shift` to sprint |
+| Desktop | `WASD` / arrow keys to move, `Space` to interact, `Q` to place blocks, `E` inventory, `R` build portals, `F` interact, `V` toggle view, `Shift` to sprint |
 | Mobile | Swipe to move between rails, tap/hold to mine or place, tap the action buttons for crafting and portals |
 
 ## Identity, location & scoreboard endpoints
