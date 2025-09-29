@@ -4479,11 +4479,23 @@
       }
       try {
         const probe = document.createElement('canvas');
-        const attributes = { failIfMajorPerformanceCaveat: true, powerPreference: 'high-performance' };
-        const context =
-          probe.getContext('webgl2', attributes) ||
-          probe.getContext('webgl', attributes) ||
-          probe.getContext('experimental-webgl');
+        const attributeCandidates = [
+          { failIfMajorPerformanceCaveat: true, powerPreference: 'high-performance' },
+          { powerPreference: 'high-performance' },
+          {},
+        ];
+        let context = null;
+        let attributesUsed = null;
+        for (const attributes of attributeCandidates) {
+          context =
+            probe.getContext('webgl2', attributes) ||
+            probe.getContext('webgl', attributes) ||
+            probe.getContext('experimental-webgl', attributes);
+          if (context) {
+            attributesUsed = attributes;
+            break;
+          }
+        }
         if (!context) {
           this.presentRendererFailure(
             'WebGL is unavailable. Enable hardware acceleration or switch to a compatible browser to explore the realms.',
@@ -4492,6 +4504,14 @@
         }
         const loseContext = typeof context.getExtension === 'function' ? context.getExtension('WEBGL_lose_context') : null;
         loseContext?.loseContext?.();
+        if (typeof console !== 'undefined') {
+          const attributeSummary = attributesUsed
+            ? Object.entries(attributesUsed)
+                .map(([key, value]) => `${key}=${value}`)
+                .join(', ')
+            : 'default attributes';
+          console.info(`WebGL probe succeeded (${attributeSummary}).`);
+        }
         return true;
       } catch (error) {
         this.presentRendererFailure('Unable to initialise WebGL. See console output for troubleshooting steps.', {
