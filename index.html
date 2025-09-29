@@ -1064,10 +1064,11 @@
     <script>
       window.APP_CONFIG = Object.assign(
         {
-          enableAdvancedExperience: false,
-          preferAdvanced: false,
-          defaultMode: 'simple',
-          forceSimpleMode: true,
+          enableAdvancedExperience: true,
+          preferAdvanced: true,
+          defaultMode: 'advanced',
+          forceAdvanced: true,
+          forceSimpleMode: false,
         },
         window.APP_CONFIG || {},
       );
