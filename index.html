@@ -487,7 +487,8 @@
         <div>
           <h3>Desktop Controls</h3>
           <p>
-            WASD/Arrows move · Space jump · F interact/ignite · Q place block · E crafting · I inventory · R reset position ·
+            WASD/Arrows move · Space jump · F interact · Q place block · R ignite portal · E crafting · I inventory · T reset
+            position ·
             V toggle view · 1–9 hotbar
           </p>
         </div>
@@ -612,6 +613,17 @@
               />
             </div>
             <p class="settings-modal__hint">Balance ambient loops and crafting cues independently.</p>
+          </fieldset>
+          <fieldset class="settings-modal__fieldset settings-modal__fieldset--keybindings">
+            <legend class="settings-modal__legend">Key bindings</legend>
+            <p class="settings-modal__hint settings-modal__hint--keys">
+              Click a control, then press a key to remap it. Press Backspace to restore an individual default or reset all
+              bindings below.
+            </p>
+            <div class="keybinding-groups" id="settingsKeyBindingsList"></div>
+            <div class="settings-modal__key-actions">
+              <button type="button" class="ghost small" id="resetKeyBindingsButton">Reset all to defaults</button>
+            </div>
           </fieldset>
           <fieldset class="settings-modal__fieldset settings-modal__fieldset--toggles">
             <legend class="settings-modal__legend">Accessibility</legend>

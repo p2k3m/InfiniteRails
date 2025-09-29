@@ -4337,6 +4337,118 @@ input[type='search'] {
   gap: 1rem;
 }
 
+.settings-modal__fieldset--keybindings {
+  gap: 1rem;
+}
+
+.settings-modal__hint--keys {
+  margin: 0;
+}
+
+.keybinding-groups {
+  display: grid;
+  gap: 1rem;
+}
+
+.keybinding-group {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.keybinding-group__title {
+  margin: 0;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-family: 'Chakra Petch', sans-serif;
+  color: var(--accent);
+}
+
+.keybinding-group__list {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.keybinding-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.75rem 1rem;
+  border-radius: 14px;
+  border: 1px solid rgba(73, 242, 255, 0.18);
+  background: rgba(6, 18, 34, 0.65);
+}
+
+.keybinding-row__info {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.keybinding-row__label {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.keybinding-row__default {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+}
+
+.keybinding-row__button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  border-radius: 999px;
+  border: 1px solid rgba(73, 242, 255, 0.38);
+  background: rgba(9, 24, 43, 0.7);
+  color: var(--accent);
+  font-weight: 600;
+  padding: 0.4rem 0.85rem;
+  cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+}
+
+.keybinding-row__button:hover {
+  background: rgba(73, 242, 255, 0.16);
+  border-color: rgba(73, 242, 255, 0.55);
+}
+
+.keybinding-row__button:focus-visible {
+  outline: 2px solid rgba(73, 242, 255, 0.65);
+  outline-offset: 3px;
+}
+
+.keybinding-row__button--listening {
+  background: rgba(73, 242, 255, 0.24);
+  border-color: rgba(73, 242, 255, 0.7);
+  color: var(--text-primary);
+}
+
+.keybinding-row__keys {
+  font-variant-numeric: tabular-nums;
+}
+
+.keybinding-row__cta {
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.keybinding-row__button--listening .keybinding-row__cta {
+  color: var(--text-primary);
+}
+
+.keybinding-row__button--listening .keybinding-row__keys {
+  font-weight: 700;
+}
+
+.settings-modal__key-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
 .settings-modal__fieldset--account {
   justify-items: flex-start;
   gap: 0.85rem;
