@@ -777,6 +777,7 @@
       if (!this.verifyWebglSupport()) {
         return;
       }
+      this.resetPlayerCharacterState();
       this.started = true;
       this.unloadBeaconSent = false;
       this.rendererUnavailable = false;
@@ -1527,6 +1528,61 @@
       this.hideVictoryCelebration(true);
       this.hideVictoryBanner();
       this.victoryShareBusy = false;
+      this.resetPlayerCharacterState();
+      this.started = false;
+    }
+
+    resetPlayerCharacterState() {
+      if (this.playerMixer) {
+        try {
+          this.playerMixer.stopAllAction();
+          if (this.playerAvatar && typeof this.playerMixer.uncacheRoot === 'function') {
+            this.playerMixer.uncacheRoot(this.playerAvatar);
+          }
+        } catch (error) {
+          console.debug('Unable to stop player mixer cleanly.', error);
+        }
+      }
+      this.playerMixer = null;
+      this.playerIdleAction = null;
+
+      if (this.camera && this.camera.parent && typeof this.camera.parent.remove === 'function') {
+        try {
+          this.camera.parent.remove(this.camera);
+        } catch (error) {
+          console.debug('Failed to detach camera from previous parent.', error);
+        }
+      }
+      if (this.playerRig && this.camera && typeof this.playerRig.add === 'function') {
+        try {
+          this.playerRig.add(this.camera);
+          this.camera.position.set(0, 0, 0);
+        } catch (error) {
+          console.debug('Unable to reset camera rig state.', error);
+        }
+      }
+
+      if (this.playerAvatar) {
+        if (this.playerRig && typeof this.playerRig.remove === 'function') {
+          this.playerRig.remove(this.playerAvatar);
+        }
+        disposeObject3D(this.playerAvatar);
+        this.playerAvatar = null;
+      }
+
+      if (this.handGroup) {
+        if (this.handGroup.parent && typeof this.handGroup.parent.remove === 'function') {
+          this.handGroup.parent.remove(this.handGroup);
+        }
+        if (typeof this.handGroup.clear === 'function') {
+          this.handGroup.clear();
+        }
+        this.handGroup = null;
+      }
+
+      this.handMaterials = [];
+      this.handMaterialsDynamic = true;
+      this.handModelLoaded = false;
     }
 
     setupScene() {

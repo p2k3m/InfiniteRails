@@ -15120,7 +15120,7 @@
       state.player.satchel = [];
       state.player.selectedSlot = 0;
       state.craftSequence = [];
-      ensurePlayerAvatarReady({ resetAnimations: true });
+      ensurePlayerAvatarReady({ forceReload: true, resetAnimations: true });
       renderVictoryBanner();
       loadDimension(startDimensionId);
       if (!startingWithRestoredProgress && state.dayCycle) {
@@ -16110,7 +16110,7 @@
         state.player.zombieHits = 0;
       }
       loadDimension('origin');
-      ensurePlayerAvatarReady({ resetAnimations: true });
+      ensurePlayerAvatarReady({ forceReload: true, resetAnimations: true });
       if (combatUtils?.restoreInventory) {
         combatUtils.restoreInventory(state.player, inventorySnapshot);
       } else {
