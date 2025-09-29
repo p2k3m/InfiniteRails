@@ -159,6 +159,7 @@ Expose an `APP_CONFIG` object before loading `script.js` to wire up Google SSO a
 - **Scoreboard** – the app loads scores via `GET ${apiBaseUrl}/scores` and upserts the player’s run with `POST ${apiBaseUrl}/scores`. The payload mirrors the UI fields: `name`, `score`, `dimensionCount`, `runTimeSeconds`, `inventoryCount`, plus optional `location` or `locationLabel` fields.
 - **Offline-friendly** – when `apiBaseUrl` is absent the UI persists identities and scores to `localStorage` and displays sample leaderboard entries so the page remains fully interactive.
 - **Mode selection** – the bundled configuration already opts into the advanced renderer. Set `forceSimpleMode: true` when you need to fall back to the lighter sandbox, or override any flag above to suit your deployment.
+- **Static asset base paths** – when the experience is served from a subdirectory (for example, `https://cdn.example.com/compose/`), provide `assetBaseUrl` to point at the folder containing `vendor/` and other shared bundles. The bootstrapper automatically uses the page URL as a default, but explicitly setting the base prevents 404s when assets live outside the current directory.
 - **Texture packs** – set `textureBaseUrl` to a bucket such as `https://your-bucket.s3.amazonaws.com/blocks` (or provide a `textures` / `textureManifest` map) to stream PNG tile maps for `grass`, `dirt`, and `stone`. The sandbox swaps them in at runtime with frustum-aware anisotropy while keeping the procedural textures as an offline fallback.
 
 ### Deploying the AWS backend
