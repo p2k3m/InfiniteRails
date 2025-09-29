@@ -48,6 +48,7 @@ describe('portal mechanics', () => {
       name: 'Rock Dimension',
       physics: { gravity: 1.5, shaderProfile: 'rock-grit' },
       unlockPoints: 5,
+      description: 'Heavier world with dense ore clusters.',
     };
     const result = enterPortal(portal, dimension);
     expect(result.fade).toBe(true);
@@ -55,6 +56,8 @@ describe('portal mechanics', () => {
     expect(result.log).toBe('Entered Rock Dimension.');
     expect(result.physics.gravity).toBeCloseTo(1.5);
     expect(result.pointsAwarded).toBe(5);
+    expect(result.dimensionRules).toContain('Gravity ×1.50');
+    expect(result.dimensionRules).toContain('dense ore clusters');
   });
 
   it('summarises the core portal mechanics for documentation output', () => {

@@ -1876,6 +1876,18 @@ body.game-active #gameCanvas {
     opacity 0.35s ease;
 }
 
+.portal-status__icon::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-size: 0.66rem;
+  line-height: 1;
+  color: rgba(8, 12, 24, 0.82);
+  text-shadow: 0 0 6px rgba(255, 255, 255, 0.35);
+}
+
 .portal-status__icon::after {
   content: '';
   position: absolute;
@@ -1894,10 +1906,19 @@ body.game-active #gameCanvas {
   transform: scale(0.78);
 }
 
+.portal-status__icon[data-state='inactive']::before {
+  content: '⏳';
+}
+
 .portal-status__icon[data-state='building']::after {
   opacity: 0.6;
   border-color: rgba(0, 176, 255, 0.4);
   transform: scale(0.86);
+}
+
+.portal-status__icon[data-state='building']::before {
+  content: '🛠️';
+  font-size: 0.62rem;
 }
 
 .portal-status__icon[data-state='ready']::after {
@@ -1906,10 +1927,18 @@ body.game-active #gameCanvas {
   animation: portal-status-ripple 2.1s ease-in-out infinite;
 }
 
+.portal-status__icon[data-state='ready']::before {
+  content: '🔥';
+}
+
 .portal-status__icon[data-state='active']::after {
   opacity: 0.95;
   border-color: rgba(204, 132, 255, 0.75);
   animation: portal-status-ripple 1.6s ease-out infinite;
+}
+
+.portal-status__icon[data-state='active']::before {
+  content: '🌀';
 }
 
 .portal-status__icon[data-state='blocked']::after {
@@ -1918,10 +1947,18 @@ body.game-active #gameCanvas {
   transform: scale(0.9);
 }
 
+.portal-status__icon[data-state='blocked']::before {
+  content: '⛔';
+}
+
 .portal-status__icon[data-state='victory']::after {
   opacity: 0.9;
   border-color: rgba(255, 193, 94, 0.7);
   animation: portal-status-ripple 2.8s ease-in-out infinite;
+}
+
+.portal-status__icon[data-state='victory']::before {
+  content: '🏆';
 }
 
 @keyframes portal-status-pulse {
@@ -5877,6 +5914,19 @@ body.colorblind-assist .subtitle-overlay {
 .dimension-intro.active {
   opacity: 1;
   transform: translate3d(-50%, 0, 0);
+}
+
+.dimension-intro[data-intent='preview'] {
+  background: linear-gradient(170deg, rgba(6, 22, 34, 0.9), rgba(12, 40, 58, 0.82));
+  box-shadow: 0 24px 46px rgba(0, 16, 28, 0.55), 0 0 26px rgba(0, 206, 255, 0.35);
+}
+
+.dimension-intro[data-intent='preview'] .dimension-intro__name {
+  color: #9fe2ff;
+}
+
+.dimension-intro[data-intent='preview'] .dimension-intro__rules {
+  color: rgba(202, 244, 255, 0.88);
 }
 
 .dimension-intro__name {
