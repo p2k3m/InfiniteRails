@@ -104,8 +104,31 @@ These steps restore the intended first-person experience when a deployment or ca
 
 | Platform | Input |
 | --- | --- |
-| Desktop | `WASD` / arrow keys to move, `Space` to interact, `Q` to place blocks, `E` inventory, `R` build portals, `F` interact, `V` toggle view, `Shift` to sprint |
+| Desktop | `WASD` / arrow keys to move, `Space` to jump, `F` interact/ignite, `Q` place blocks, `E` crafting, `I` inventory, `R` reset position, `V` toggle view, `1–9` hotbar slots |
 | Mobile | Swipe to move between rails, tap/hold to mine or place, tap the action buttons for crafting and portals |
+
+Desktop key bindings now live in a centralised map with sensible defaults (WASD and the arrow keys for movement). Provide overrides via configuration or at runtime:
+
+```html
+<script>
+  window.APP_CONFIG = {
+    keyBindings: {
+      moveForward: ['KeyI', 'ArrowUp'],
+      interact: ['KeyE'],
+      hotbar1: ['Digit1', 'Numpad1'],
+    },
+  };
+</script>
+```
+
+Once you have a reference to the `SimpleExperience` instance (returned from `SimpleExperience.create(options)`), call its helpers to adjust bindings dynamically. Changes persist to `localStorage` under `infinite-rails-keybindings` so players keep their preferences across sessions:
+
+```js
+experience.setKeyBinding('jump', ['KeyZ']);
+experience.setKeyBindings({ moveForward: ['KeyI'], moveBackward: ['KeyK'] });
+// Restore the defaults from configuration/localStorage
+experience.resetKeyBindings();
+```
 
 ## Identity, location & scoreboard endpoints
 
