@@ -695,6 +695,10 @@
       this.openInventoryButtons = Array.isArray(openInventorySource)
         ? openInventorySource
         : Array.from(openInventorySource);
+      this.hotbarExpandButton = this.ui.hotbarExpandButton || null;
+      this.extendedInventoryEl = this.ui.extendedInventoryEl || null;
+      this.hotbarExpanded = false;
+      this.activeHotbarDrag = null;
       this.columns = new Map();
       this.heightMap = Array.from({ length: WORLD_SIZE }, () => Array(WORLD_SIZE).fill(0));
       this.blockGeometry = new THREE.BoxGeometry(BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE);
@@ -928,6 +932,13 @@
       this.onTouchLookPointerMove = this.handleTouchLookPointerMove.bind(this);
       this.onTouchLookPointerUp = this.handleTouchLookPointerUp.bind(this);
       this.onHotbarClick = this.handleHotbarClick.bind(this);
+      this.onExtendedInventoryClick = this.handleExtendedInventoryClick.bind(this);
+      this.onHotbarDragStart = this.handleHotbarDragStart.bind(this);
+      this.onHotbarDragEnter = this.handleHotbarDragEnter.bind(this);
+      this.onHotbarDragOver = this.handleHotbarDragOver.bind(this);
+      this.onHotbarDragLeave = this.handleHotbarDragLeave.bind(this);
+      this.onHotbarDrop = this.handleHotbarDrop.bind(this);
+      this.onHotbarDragEnd = this.handleHotbarDragEnd.bind(this);
       this.onCanvasWheel = this.handleCanvasWheel.bind(this);
       this.onCraftButton = this.handleCraftButton.bind(this);
       this.onClearCraft = this.handleClearCraft.bind(this);
@@ -5256,6 +5267,7 @@
       this.craftSuggestionsEl?.addEventListener('click', this.onCraftSuggestionClick);
       this.craftingSearchResultsEl?.addEventListener('click', this.onCraftSuggestionClick);
       this.craftingInventoryEl?.addEventListener('click', this.onCraftingInventoryClick);
+      this.extendedInventoryEl?.addEventListener('click', this.onExtendedInventoryClick);
       this.openCraftingSearchButton?.addEventListener('click', () => this.toggleCraftingSearch(true));
       this.closeCraftingSearchButton?.addEventListener('click', () => this.toggleCraftingSearch(false));
       this.craftingSearchInput?.addEventListener('input', this.onCraftSearchInput);
@@ -5297,6 +5309,7 @@
       this.craftSuggestionsEl?.removeEventListener('click', this.onCraftSuggestionClick);
       this.craftingSearchResultsEl?.removeEventListener('click', this.onCraftSuggestionClick);
       this.craftingInventoryEl?.removeEventListener('click', this.onCraftingInventoryClick);
+      this.extendedInventoryEl?.removeEventListener('click', this.onExtendedInventoryClick);
       this.craftingSearchInput?.removeEventListener('input', this.onCraftSearchInput);
       this.inventorySortButton?.removeEventListener('click', this.onInventorySort);
       this.closeInventoryButton?.removeEventListener('click', this.onInventoryToggle);
@@ -6583,52 +6596,177 @@
     }
 
     updateInventoryUi() {
+      this.activeHotbarDrag = null;
       this.updateHotbarUi();
       this.updateCraftingInventoryUi();
       this.updateInventoryModal();
+      this.updateExtendedInventoryUi();
+      this.updateHotbarExpansionUi();
       this.updateCraftButtonState();
     }
 
     updateHotbarUi() {
       if (!this.hotbarEl) return;
-      const slots = Array.from(this.hotbarEl.querySelectorAll('[data-hotbar-slot]'));
-      if (!slots.length) {
-        this.hotbarEl.innerHTML = '';
-        this.hotbar.forEach((slot, index) => {
-          const button = document.createElement('button');
-          button.type = 'button';
-          button.className = 'hotbar-slot';
-          button.dataset.hotbarSlot = index;
+      const fragment = document.createDocumentFragment();
+      this.hotbar.forEach((slot, index) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'hotbar-slot';
+        button.dataset.hotbarSlot = String(index);
+        const isActive = index === this.selectedHotbarIndex;
+        button.dataset.active = isActive ? 'true' : 'false';
+        if (slot?.item) {
+          const def = getItemDefinition(slot.item);
+          button.textContent = `${def.icon} ${slot.quantity}`;
+          button.setAttribute('aria-label', formatInventoryLabel(slot.item, slot.quantity));
+          button.setAttribute('draggable', 'true');
+          button.addEventListener('dragstart', this.onHotbarDragStart);
+        } else {
+          button.textContent = '·';
           button.setAttribute('aria-label', 'Empty slot');
-          this.hotbarEl.appendChild(button);
-        });
-      }
-      const updatedSlots = Array.from(this.hotbarEl.querySelectorAll('[data-hotbar-slot]'));
-      updatedSlots.forEach((element) => {
-        const index = Number.parseInt(element.dataset.hotbarSlot ?? '-1', 10);
-        if (!Number.isInteger(index) || index < 0 || index >= this.hotbar.length) return;
-        const slot = this.hotbar[index];
-        const def = getItemDefinition(slot.item);
-        element.dataset.active = index === this.selectedHotbarIndex ? 'true' : 'false';
-        element.textContent = slot.item ? `${def.icon} ${slot.quantity}` : '·';
-        element.setAttribute('aria-label', slot.item ? formatInventoryLabel(slot.item, slot.quantity) : 'Empty slot');
+          button.setAttribute('draggable', 'false');
+        }
+        button.addEventListener('dragenter', this.onHotbarDragEnter);
+        button.addEventListener('dragover', this.onHotbarDragOver);
+        button.addEventListener('dragleave', this.onHotbarDragLeave);
+        button.addEventListener('drop', this.onHotbarDrop);
+        button.addEventListener('dragend', this.onHotbarDragEnd);
+        fragment.appendChild(button);
       });
+      this.hotbarEl.innerHTML = '';
+      this.hotbarEl.appendChild(fragment);
+    }
+
+    clearHotbarDragIndicators() {
+      if (!this.hotbarEl) return;
+      this.hotbarEl
+        .querySelectorAll('.hotbar-slot.dragging, .hotbar-slot.drag-over')
+        .forEach((node) => node.classList.remove('dragging', 'drag-over'));
+    }
+
+    getHotbarSlotIndexFromElement(element) {
+      if (!(element instanceof HTMLElement)) return null;
+      const raw = element.dataset?.hotbarSlot ?? '-1';
+      const index = Number.parseInt(raw, 10);
+      if (!Number.isInteger(index) || index < 0 || index >= this.hotbar.length) {
+        return null;
+      }
+      return index;
+    }
+
+    swapHotbarSlots(fromIndex, toIndex) {
+      if (!Number.isInteger(fromIndex) || !Number.isInteger(toIndex)) return false;
+      if (fromIndex === toIndex) return false;
+      if (fromIndex < 0 || toIndex < 0) return false;
+      if (fromIndex >= this.hotbar.length || toIndex >= this.hotbar.length) return false;
+      const from = this.hotbar[fromIndex];
+      const to = this.hotbar[toIndex];
+      this.hotbar[fromIndex] = to;
+      this.hotbar[toIndex] = from;
+      if (this.selectedHotbarIndex === fromIndex) {
+        this.selectedHotbarIndex = toIndex;
+      } else if (this.selectedHotbarIndex === toIndex) {
+        this.selectedHotbarIndex = fromIndex;
+      }
+      this.updateInventoryUi();
+      return true;
+    }
+
+    handleHotbarDragStart(event) {
+      const button = event.currentTarget;
+      const index = this.getHotbarSlotIndexFromElement(button);
+      if (index === null) {
+        event.preventDefault();
+        return;
+      }
+      const slot = this.hotbar[index];
+      if (!slot?.item) {
+        event.preventDefault();
+        return;
+      }
+      this.activeHotbarDrag = { from: index };
+      button.classList.add('dragging');
+      if (event.dataTransfer) {
+        try {
+          event.dataTransfer.effectAllowed = 'move';
+          event.dataTransfer.setData('text/plain', String(index));
+        } catch (error) {
+          // Ignore unsupported drag data operations.
+        }
+      }
+    }
+
+    handleHotbarDragEnter(event) {
+      if (!this.activeHotbarDrag) return;
+      event.preventDefault();
+      event.currentTarget.classList.add('drag-over');
+    }
+
+    handleHotbarDragOver(event) {
+      if (!this.activeHotbarDrag) return;
+      event.preventDefault();
+      if (event.dataTransfer) {
+        event.dataTransfer.dropEffect = 'move';
+      }
+    }
+
+    handleHotbarDragLeave(event) {
+      if (!this.activeHotbarDrag) return;
+      const { currentTarget, relatedTarget } = event;
+      if (relatedTarget instanceof HTMLElement && currentTarget.contains(relatedTarget)) {
+        return;
+      }
+      currentTarget.classList.remove('drag-over');
+    }
+
+    handleHotbarDrop(event) {
+      if (!this.activeHotbarDrag) return;
+      event.preventDefault();
+      let fromIndex = this.activeHotbarDrag.from;
+      const targetIndex = this.getHotbarSlotIndexFromElement(event.currentTarget);
+      if (event.dataTransfer) {
+        try {
+          const raw = event.dataTransfer.getData('text/plain');
+          const parsed = Number.parseInt(raw, 10);
+          if (Number.isInteger(parsed)) {
+            fromIndex = parsed;
+          }
+        } catch (error) {
+          // Ignore unsupported drag data operations.
+        }
+      }
+      this.clearHotbarDragIndicators();
+      this.activeHotbarDrag = null;
+      if (fromIndex === null || targetIndex === null) {
+        return;
+      }
+      this.swapHotbarSlots(fromIndex, targetIndex);
+    }
+
+    handleHotbarDragEnd() {
+      this.clearHotbarDragIndicators();
+      this.activeHotbarDrag = null;
+    }
+
+    getCombinedInventoryEntries() {
+      const aggregate = new Map();
+      this.hotbar.forEach((slot) => {
+        if (!slot?.item || slot.quantity <= 0) return;
+        aggregate.set(slot.item, (aggregate.get(slot.item) ?? 0) + slot.quantity);
+      });
+      this.satchel.forEach((quantity, item) => {
+        if (!quantity) return;
+        aggregate.set(item, (aggregate.get(item) ?? 0) + quantity);
+      });
+      return Array.from(aggregate.entries()).map(([item, quantity]) => ({ item, quantity }));
     }
 
     updateCraftingInventoryUi() {
       if (!this.craftingInventoryEl) return;
       const fragment = document.createDocumentFragment();
-      const aggregate = new Map();
-      this.hotbar.forEach((slot) => {
-        if (!slot.item) return;
-        aggregate.set(slot.item, (aggregate.get(slot.item) ?? 0) + slot.quantity);
-      });
-      this.satchel.forEach((quantity, item) => {
-        aggregate.set(item, (aggregate.get(item) ?? 0) + quantity);
-      });
-      const items = Array.from(aggregate.entries());
-      items.sort((a, b) => b[1] - a[1]);
-      items.forEach(([item, quantity]) => {
+      const items = this.getCombinedInventoryEntries();
+      items.sort((a, b) => b.quantity - a.quantity);
+      items.forEach(({ item, quantity }) => {
         const button = document.createElement('button');
         button.type = 'button';
         button.className = 'crafting-inventory__item';
@@ -6644,22 +6782,14 @@
 
     updateInventoryModal() {
       if (!this.inventoryGridEl) return;
-      const aggregate = new Map();
-      this.hotbar.forEach((slot) => {
-        if (!slot.item) return;
-        aggregate.set(slot.item, (aggregate.get(slot.item) ?? 0) + slot.quantity);
-      });
-      this.satchel.forEach((quantity, item) => {
-        aggregate.set(item, (aggregate.get(item) ?? 0) + quantity);
-      });
-      const items = Array.from(aggregate.entries());
-      items.sort((a, b) => a[0].localeCompare(b[0]));
+      const items = this.getCombinedInventoryEntries();
+      items.sort((a, b) => a.item.localeCompare(b.item));
       this.inventoryGridEl.innerHTML = '';
       if (!items.length) {
         this.inventoryGridEl.textContent = 'Inventory empty — gather resources to craft.';
         return;
       }
-      items.forEach(([item, quantity]) => {
+      items.forEach(({ item, quantity }) => {
         const cell = document.createElement('div');
         cell.className = 'inventory-grid__cell';
         cell.textContent = formatInventoryLabel(item, quantity);
@@ -6675,6 +6805,57 @@
           this.inventoryOverflowEl.textContent = '';
         }
       }
+    }
+
+    updateExtendedInventoryUi() {
+      if (!this.extendedInventoryEl) return;
+      const items = this.getCombinedInventoryEntries();
+      items.sort((a, b) => a.item.localeCompare(b.item));
+      const fragment = document.createDocumentFragment();
+      if (!items.length) {
+        const empty = document.createElement('p');
+        empty.className = 'inventory-extended__empty';
+        empty.textContent = 'Gather resources to populate your satchel.';
+        fragment.appendChild(empty);
+      } else {
+        items.forEach(({ item, quantity }) => {
+          const def = getItemDefinition(item);
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.className = 'inventory-slot';
+          button.dataset.itemId = item;
+          button.innerHTML = `<span>${def.label}</span><span class="quantity">×${quantity}</span>`;
+          button.setAttribute('aria-label', `${def.label} ×${quantity}`);
+          fragment.appendChild(button);
+        });
+      }
+      this.extendedInventoryEl.innerHTML = '';
+      this.extendedInventoryEl.appendChild(fragment);
+    }
+
+    updateHotbarExpansionUi() {
+      const expanded = this.hotbarExpanded === true;
+      if (this.extendedInventoryEl) {
+        this.extendedInventoryEl.dataset.visible = expanded ? 'true' : 'false';
+        this.extendedInventoryEl.setAttribute('aria-hidden', expanded ? 'false' : 'true');
+      }
+      if (this.hotbarExpandButton) {
+        this.hotbarExpandButton.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+        if (this.hotbarExpandButton.tagName === 'BUTTON') {
+          this.hotbarExpandButton.textContent = expanded ? 'Collapse Inventory' : 'Expand Inventory';
+        }
+      }
+    }
+
+    toggleHotbarExpansion(forceValue) {
+      const next = typeof forceValue === 'boolean' ? forceValue : !this.hotbarExpanded;
+      if (this.hotbarExpanded === next) {
+        this.updateHotbarExpansionUi();
+        return this.hotbarExpanded;
+      }
+      this.hotbarExpanded = next;
+      this.updateHotbarExpansionUi();
+      return this.hotbarExpanded;
     }
 
     selectHotbarSlot(index, announce = true) {
@@ -6730,24 +6911,38 @@
       }
     }
 
-    handleCraftingInventoryClick(event) {
-      const button = event.target.closest('[data-item-id]');
-      if (!button) return;
-      const item = button.dataset.itemId;
-      if (!item) return;
+    queueCraftingItem(item) {
+      if (!item) return false;
       const slotCount = this.getCraftingSlotCount();
       if (this.craftingState.sequence.length >= slotCount) {
         this.showHint('Sequence full — craft or clear to add more.');
-        return;
+        return false;
       }
       const available = this.getInventoryCountForItem(item);
       const planned = this.craftingState.sequence.filter((entry) => entry === item).length;
       if (planned >= available) {
         this.showHint('Not enough resources in your satchel. Gather more.');
-        return;
+        return false;
       }
       this.craftingState.sequence.push(item);
       this.refreshCraftingUi();
+      return true;
+    }
+
+    handleCraftingInventoryClick(event) {
+      const button = event.target.closest('[data-item-id]');
+      if (!button) return;
+      const item = button.dataset.itemId;
+      if (!item) return;
+      this.queueCraftingItem(item);
+    }
+
+    handleExtendedInventoryClick(event) {
+      const button = event.target.closest('[data-item-id]');
+      if (!button) return;
+      const item = button.dataset.itemId;
+      if (!item) return;
+      this.queueCraftingItem(item);
     }
 
     handleCraftSequenceClick(event) {
@@ -7857,6 +8052,7 @@
         golemCount: Array.isArray(this.golems) ? this.golems.length : 0,
         score: Math.round(this.score ?? 0),
         hotbarSlots: Array.isArray(this.hotbar) ? this.hotbar.length : 0,
+        hotbarExpanded: Boolean(this.hotbarExpanded),
         sceneChildren: this.scene?.children?.length ?? 0,
         hudActive:
           typeof document !== 'undefined' ? document.body.classList.contains('game-active') : false,
