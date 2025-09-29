@@ -16,6 +16,14 @@ describe('Portals of Dimension spec regression checks', () => {
     expect(simpleExperienceSource).toMatch(/World generated: \$\{columnCount\} voxels/);
   });
 
+  it('keeps the console telemetry checkpoints demanded by the spec', () => {
+    expect(simpleExperienceSource).toMatch(/Scene populated/);
+    expect(simpleExperienceSource).toMatch(/Steve visible in scene/);
+    expect(simpleExperienceSource).toMatch(/Zombie spawned, chasing/);
+    expect(simpleExperienceSource).toMatch(/Respawn triggered/);
+    expect(simpleExperienceSource).toMatch(/Portal active/);
+  });
+
   it('ships the expected character and entity assets', () => {
     expect(simpleExperienceSource).toMatch(/MODEL_URLS\s*=\s*\{/);
     expect(simpleExperienceSource).toMatch(/steve\.gltf/);
