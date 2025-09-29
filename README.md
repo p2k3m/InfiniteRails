@@ -1,13 +1,13 @@
 # Infinite Dimension: Portals Reimagined
 
-Infinite Dimension is a browser-based voxel survival-puzzle experience inspired by the "Comprehensive Analysis and Enhancement Specifications" brief. The advanced renderer now boots a complete Minecraft-style prototype featuring:
+Infinite Dimension is a browser-based voxel survival-puzzle experience inspired by the "Comprehensive Analysis and Enhancement Specifications" brief. The advanced renderer now boots by default and delivers a complete Minecraft-style prototype featuring:
 
 - a Three.js render loop that carves out a 64×64 floating island with day/night lighting and shader-driven portals;
 - first-person controls with the Steve avatar, idle/walk animation mixers, mining and block placement, and virtual joystick support on mobile;
 - survival systems spanning health, bubbles, zombies, iron golems, crafting, scoring, and sequential dimension unlocks; and
 - backend-aware score syncing, Google Sign-In hooks, and responsive HUD/leaderboard overlays.
 
-Advanced renderer work is still underway, so the interactive sandbox renderer now boots by default to guarantee the full 3D experience the moment the page loads. The remaining parity tasks for the experimental renderer are tracked in [docs/enhancement-roadmap.md](docs/enhancement-roadmap.md), while deeper sequencing guidance continues to live in [docs/implementation-plan.md](docs/implementation-plan.md).
+The interactive sandbox renderer remains fully supported and can be forced through configuration for low-power devices or debugging sessions. The remaining parity tasks for the experimental renderer are tracked in [docs/enhancement-roadmap.md](docs/enhancement-roadmap.md), while deeper sequencing guidance continues to live in [docs/implementation-plan.md](docs/implementation-plan.md).
 
 For a citation-backed snapshot that proves the sandbox hits every headline requirement, consult [`docs/portals-of-dimension-enhancement-proof.md`](docs/portals-of-dimension-enhancement-proof.md). It aggregates the render loop, survival mechanics, portals, and backend integrations into a single quick-reference map. When you need the latest line-level references that tie the brief directly to source code, refer to [`docs/portals-of-dimension-compliance-refresh.md`](docs/portals-of-dimension-compliance-refresh.md). A fresh May 2025 fulfilment digest that mirrors the most recent review feedback lives in [`docs/portals-of-dimension-spec-fulfilment-2025-05.md`](docs/portals-of-dimension-spec-fulfilment-2025-05.md). For the newest walkthrough that maps every specification pointer to the exact July 2026 implementation, see [`docs/portals-of-dimension-spec-verification-2026-07.md`](docs/portals-of-dimension-spec-verification-2026-07.md).
 
@@ -69,9 +69,9 @@ loops from the enhancement brief to their concrete implementations, consult
 
 If you work with coding agents (for example GitHub Copilot or Code Interpreter) the verbatim prompts from the brief are archived in [`docs/coding-agent-prompts.md`](docs/coding-agent-prompts.md). Reusing those prompts keeps automated contributions aligned with the currently shipped sandbox systems.
 
-## Default sandbox renderer
+## Renderer selection
 
-The sandbox renderer remains the canonical experience while the experimental advanced renderer is hardened. It delivers the complete brief today and doubles as a safety net for low-power devices or debugging sessions. The sandbox:
+The advanced renderer now powers the default experience and immediately loads the full 3D sandbox described in the specification. The prior sandbox renderer remains available as a safety net for low-power devices or debugging sessions. The sandbox:
 
 - draws a 64×64 voxel island with soft day/night lighting at 60 FPS, complete with a procedurally curved rail spine,
 - locks the camera to a first-person perspective with mouse look + `WASD` movement and jump physics that adapt to each realm,
@@ -83,8 +83,8 @@ Use the following switches to control which experience loads:
 
 | Mode | How to activate |
 | --- | --- |
-| Sandbox renderer (default) | Load the page normally. The default `APP_CONFIG` shipped with the repo forces sandbox mode so the full experience is always available. |
-| Experimental advanced renderer | Append `?mode=advanced` (or `?advanced=1`), or set `APP_CONFIG.forceAdvanced = true`. Provide `enableAdvancedExperience: true` to opt into the work-in-progress renderer permanently. |
+| Advanced renderer (default) | Load the page normally. The bundled `APP_CONFIG` now enables and prefers the advanced renderer so the fully interactive 3D experience starts immediately. |
+| Sandbox renderer (fallback) | Append `?mode=simple` (or `?simple=1`), or set `APP_CONFIG.forceSimpleMode = true`. This mirrors the previous default for devices that need the lighter sandbox. |
 
 The sandbox keeps the portal-building brief front-and-centre while the production renderer continues to mature. Flip the flags
 above whenever you want to regression-test the work-in-progress advanced build without losing the reliable sandbox.
@@ -98,7 +98,7 @@ If you load the page and only see the HUD without the voxel world, run through t
 3. **Inspect the console.** Shader-uniform or WebGL context errors will be logged with actionable recovery tips—clear the cache and reload once the offending asset has been restored.
 4. **Disable browser extensions.** Content blockers can prevent pointer-lock or audio initialisation; retry in a private window if input still appears frozen.
 
-These steps restore the intended first-person sandbox when a deployment or cached configuration temporarily forces the unfinished renderer path.
+These steps restore the intended first-person experience when a deployment or cached configuration temporarily forces the alternate renderer path.
 
 ## Controls
 
@@ -116,9 +116,10 @@ Expose an `APP_CONFIG` object before loading `script.js` to wire up Google SSO a
   window.APP_CONFIG = {
     apiBaseUrl: 'https://your-api.example.com',
     googleClientId: 'GOOGLE_OAUTH_CLIENT_ID.apps.googleusercontent.com',
-    // Optional: enable the experimental renderer and make it the default (overrides the sandbox-first config).
+    // Optional: override renderer defaults (advanced mode is enabled by default).
     enableAdvancedExperience: true,
     preferAdvanced: true,
+    forceAdvanced: true,
   };
 </script>
 ```
@@ -127,7 +128,7 @@ Expose an `APP_CONFIG` object before loading `script.js` to wire up Google SSO a
 - **User metadata** – on sign-in the app POSTs to `${apiBaseUrl}/users` with the player’s Google ID, preferred name, device snapshot, and geolocation (if permission is granted). The handler can write directly to a DynamoDB table keyed by Google ID.
 - **Scoreboard** – the app loads scores via `GET ${apiBaseUrl}/scores` and upserts the player’s run with `POST ${apiBaseUrl}/scores`. The payload mirrors the UI fields: `name`, `score`, `dimensionCount`, `runTimeSeconds`, `inventoryCount`, plus optional `location` or `locationLabel` fields.
 - **Offline-friendly** – when `apiBaseUrl` is absent the UI persists identities and scores to `localStorage` and displays sample leaderboard entries so the page remains fully interactive.
-- **Mode selection** – the bundled configuration already forces sandbox mode. Override with `enableAdvancedExperience: true` or `forceAdvanced: true` if you want to opt into the experimental renderer permanently.
+- **Mode selection** – the bundled configuration already opts into the advanced renderer. Set `forceSimpleMode: true` when you need to fall back to the lighter sandbox, or override any flag above to suit your deployment.
 - **Texture packs** – set `textureBaseUrl` to a bucket such as `https://your-bucket.s3.amazonaws.com/blocks` (or provide a `textures` / `textureManifest` map) to stream PNG tile maps for `grass`, `dirt`, and `stone`. The sandbox swaps them in at runtime with frustum-aware anisotropy while keeping the procedural textures as an offline fallback.
 
 ### Deploying the AWS backend
