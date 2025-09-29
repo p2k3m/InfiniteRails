@@ -508,6 +508,9 @@
       this.footerScoreEl = this.ui.footerScoreEl || null;
       this.footerDimensionEl = this.ui.footerDimensionEl || null;
       this.footerStatusEl = this.ui.footerStatusEl || null;
+      this.startButtonEl = this.ui.startButton || null;
+      this.introModalEl = this.ui.introModal || null;
+      this.hudRootEl = this.ui.hudRootEl || null;
       this.pointerHintActive = false;
       this.pointerHintHideTimer = null;
       this.pointerHintAutoDismissTimer = null;
@@ -737,6 +740,12 @@
           this.handleCloseCrafting(event);
         }
       };
+      this.rendererUnavailable = false;
+      this.contextLost = false;
+      this.webglEventsBound = false;
+      this.rendererFailureMessage = '';
+      this.onWebglContextLost = this.handleWebglContextLost.bind(this);
+      this.onWebglContextRestored = this.handleWebglContextRestored.bind(this);
     }
 
     emitGameEvent(type, detail = {}) {
@@ -762,41 +771,53 @@
     }
 
     start() {
-      if (this.started) return;
+      if (this.started || this.rendererUnavailable) return;
+      if (!this.verifyWebglSupport()) {
+        return;
+      }
       this.started = true;
+      this.rendererUnavailable = false;
+      this.contextLost = false;
       this.clearVictoryEffectTimers();
       this.hideVictoryCelebration(true);
       this.hideVictoryBanner();
       this.victorySummary = null;
       this.victoryCelebrationActive = false;
       this.victoryShareBusy = false;
-      this.setupScene();
-      this.preloadCharacterModels();
-      this.loadFirstPersonArms();
-      this.initializeScoreboardUi();
-      this.applyDimensionSettings(this.currentDimensionIndex);
-      this.buildTerrain();
-      this.buildRails();
-      this.spawnDimensionChests();
-      this.refreshPortalState();
-      this.positionPlayer();
-      this.evaluateBossChallenge();
-      this.bindEvents();
-      this.initializeMobileControls();
-      this.updatePointerHintForInputMode();
-      this.showDesktopPointerTutorialHint();
-      this.updateHud();
-      this.refreshCraftingUi();
-      this.hideIntro();
-      this.showBriefingOverlay();
-      this.autoCaptureLocation({ updateOnFailure: true }).catch((error) => {
-        console.warn('Location capture failed', error);
-      });
-      this.updateLocalScoreEntry('start');
-      this.loadScoreboard();
-      this.exposeDebugInterface();
-      this.renderFrame(performance.now());
-      this.emitGameEvent('started', { summary: this.createRunSummary('start') });
+      try {
+        this.setupScene();
+        this.preloadCharacterModels();
+        this.loadFirstPersonArms();
+        this.initializeScoreboardUi();
+        this.applyDimensionSettings(this.currentDimensionIndex);
+        this.buildTerrain();
+        this.buildRails();
+        this.spawnDimensionChests();
+        this.refreshPortalState();
+        this.positionPlayer();
+        this.evaluateBossChallenge();
+        this.bindEvents();
+        this.initializeMobileControls();
+        this.updatePointerHintForInputMode();
+        this.showDesktopPointerTutorialHint();
+        this.updateHud();
+        this.refreshCraftingUi();
+        this.hideIntro();
+        this.showBriefingOverlay();
+        this.autoCaptureLocation({ updateOnFailure: true }).catch((error) => {
+          console.warn('Location capture failed', error);
+        });
+        this.updateLocalScoreEntry('start');
+        this.loadScoreboard();
+        this.exposeDebugInterface();
+        this.renderFrame(performance.now());
+        this.emitGameEvent('started', { summary: this.createRunSummary('start') });
+      } catch (error) {
+        this.presentRendererFailure('Renderer initialisation failed. Check your browser console for details.', {
+          error,
+        });
+        this.started = false;
+      }
     }
 
     hideIntro() {
@@ -1532,6 +1553,7 @@
       this.renderer.setPixelRatio(window.devicePixelRatio ?? 1);
       this.renderer.setSize(width, height, false);
       this.applyTextureAnisotropy();
+      this.bindWebglContextEvents();
 
       this.hemiLight = new THREE.HemisphereLight(0xbddcff, 0x34502d, 0.9);
       this.scene.add(this.hemiLight);
@@ -4425,6 +4447,9 @@
     }
 
     renderFrame(timestamp) {
+      if (this.rendererUnavailable || !this.renderer) {
+        return;
+      }
       this.animationFrame = requestAnimationFrame((nextTimestamp) => this.renderFrame(nextTimestamp));
       if (!this.prevTime) {
         this.prevTime = timestamp;
@@ -4446,6 +4471,109 @@
       this.updateScoreSync(delta);
       this.updateScoreboardPolling(delta);
       this.renderer.render(this.scene, this.camera);
+    }
+
+    verifyWebglSupport() {
+      if (typeof document === 'undefined') {
+        return true;
+      }
+      try {
+        const probe = document.createElement('canvas');
+        const attributes = { failIfMajorPerformanceCaveat: true, powerPreference: 'high-performance' };
+        const context =
+          probe.getContext('webgl2', attributes) ||
+          probe.getContext('webgl', attributes) ||
+          probe.getContext('experimental-webgl');
+        if (!context) {
+          this.presentRendererFailure(
+            'WebGL is unavailable. Enable hardware acceleration or switch to a compatible browser to explore the realms.',
+          );
+          return false;
+        }
+        const loseContext = typeof context.getExtension === 'function' ? context.getExtension('WEBGL_lose_context') : null;
+        loseContext?.loseContext?.();
+        return true;
+      } catch (error) {
+        this.presentRendererFailure('Unable to initialise WebGL. See console output for troubleshooting steps.', {
+          error,
+        });
+        return false;
+      }
+    }
+
+    presentRendererFailure(message, details = {}) {
+      if (details?.error && typeof console !== 'undefined') {
+        console.error(message, details.error);
+      } else if (typeof console !== 'undefined') {
+        console.error(message);
+      }
+      this.rendererUnavailable = true;
+      this.rendererFailureMessage = message;
+      if (this.playerHintEl) {
+        this.playerHintEl.textContent = message;
+      }
+      if (this.footerStatusEl) {
+        this.footerStatusEl.textContent = message;
+      }
+      if (this.footerEl) {
+        this.footerEl.dataset.state = 'alert';
+      }
+      if (this.scoreboardStatusEl) {
+        this.scoreboardStatusEl.textContent = 'Renderer offline — unable to sync runs.';
+      }
+      if (this.startButtonEl) {
+        this.startButtonEl.disabled = true;
+        this.startButtonEl.textContent = 'Renderer unavailable';
+        this.startButtonEl.setAttribute('aria-hidden', 'true');
+        this.startButtonEl.setAttribute('tabindex', '-1');
+      }
+      if (this.introModalEl) {
+        this.introModalEl.hidden = false;
+        this.introModalEl.style.display = 'grid';
+        this.introModalEl.setAttribute('aria-hidden', 'false');
+      }
+      if (this.hudRootEl) {
+        this.hudRootEl.classList.add('renderer-unavailable');
+      }
+      if (this.pointerHintEl) {
+        this.pointerHintEl.hidden = true;
+        this.pointerHintEl.classList.remove('is-visible');
+      }
+    }
+
+    bindWebglContextEvents() {
+      if (!this.canvas || this.webglEventsBound) {
+        return;
+      }
+      this.canvas.addEventListener('webglcontextlost', this.onWebglContextLost, false);
+      this.canvas.addEventListener('webglcontextrestored', this.onWebglContextRestored, false);
+      this.webglEventsBound = true;
+    }
+
+    handleWebglContextLost(event) {
+      if (event?.preventDefault) {
+        event.preventDefault();
+      }
+      if (this.contextLost) {
+        return;
+      }
+      this.contextLost = true;
+      this.rendererUnavailable = true;
+      this.prevTime = null;
+      if (this.animationFrame !== null) {
+        cancelAnimationFrame(this.animationFrame);
+        this.animationFrame = null;
+      }
+      this.presentRendererFailure('Rendering paused — WebGL context lost. Reload the page to continue your run.');
+    }
+
+    handleWebglContextRestored() {
+      if (typeof console !== 'undefined') {
+        console.info('WebGL context restored — refreshing to recover renderer resources.');
+      }
+      if (typeof window !== 'undefined' && typeof window.location?.reload === 'function') {
+        window.location.reload();
+      }
     }
 
     updateMovement(delta) {
