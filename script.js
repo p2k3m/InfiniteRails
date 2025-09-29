@@ -547,8 +547,8 @@
       effects: document.querySelector('[data-volume-label="effects"]'),
     };
     let lastFocusedBeforeGuide = null;
-    const portalProgressLabel = portalProgressEl.querySelector('.label');
-    const portalProgressBar = portalProgressEl.querySelector('.bar');
+    const portalProgressLabel = portalProgressEl?.querySelector('.label') ?? null;
+    const portalProgressBar = portalProgressEl?.querySelector('.bar') ?? null;
     const headerUserNameEl = document.getElementById('headerUserName');
     const headerUserLocationEl = document.getElementById('headerUserLocation');
     const userNameDisplayEl = document.getElementById('userNameDisplay');
@@ -16931,6 +16931,9 @@
       const documentedCount = Math.min(scoreState.dimensions.size, totalStages - 1);
       const visitedCount = clamp(documentedCount + 1, 1, totalStages);
       const ratio = clamp(visitedCount / totalStages, 0, 1);
+      if (!portalProgressEl || !portalProgressBar || !portalProgressLabel) {
+        return;
+      }
       portalProgressEl.classList.add('visible');
       portalProgressBar.style.setProperty('--progress', ratio.toFixed(3));
       const nextIndex = Math.min(visitedCount, totalStages - 1);
