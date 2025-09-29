@@ -10,6 +10,8 @@
   const aliasConfig = Object.assign({}, existing, {
     craftChime: existing.craftChime || ['victoryCheer', 'miningA'],
     zombieGroan: existing.zombieGroan || ['miningB', 'crunch'],
+    portalActivate: existing.portalActivate || ['victoryCheer', 'miningA'],
+    portalDormant: existing.portalDormant || ['bubble', 'crunch'],
   });
 
   scope.INFINITE_RAILS_AUDIO_ALIASES = aliasConfig;

@@ -633,6 +633,10 @@
       this.portalHintShown = false;
       this.portalState = null;
       this.portalIgnitionLog = [];
+      this.portalStatusState = 'inactive';
+      this.portalStatusMessage = '';
+      this.dimensionIntroAutoHideTimer = null;
+      this.dimensionIntroFadeTimer = null;
       this.victoryAchieved = false;
       this.currentDimensionIndex = 0;
       this.dimensionSettings = DIMENSION_THEME[0];
@@ -856,6 +860,7 @@
         this.updatePointerHintForInputMode();
         this.showDesktopPointerTutorialHint();
         this.updateHud();
+        this.revealDimensionIntro(this.dimensionSettings, { duration: 6200 });
         this.refreshCraftingUi();
         this.hideIntro();
         this.showBriefingOverlay();
@@ -4701,6 +4706,7 @@
       this.buildRails();
       this.spawnDimensionChests();
       this.refreshPortalState();
+      this.revealDimensionIntro(this.dimensionSettings);
       this.positionPlayer();
       this.evaluateBossChallenge();
       this.clearZombies();
@@ -6651,29 +6657,74 @@
       this.updateFooterSummary();
     }
 
+    setPortalStatusIndicator(state, message) {
+      const nextState = state || 'inactive';
+      const nextMessage = message || 'Portal dormant';
+      const previousState = this.portalStatusState;
+      const previousMessage = this.portalStatusMessage;
+      if (previousState === nextState && previousMessage === nextMessage) {
+        return;
+      }
+      this.portalStatusState = nextState;
+      this.portalStatusMessage = nextMessage;
+      const { portalStatusEl, portalStatusText } = this.ui;
+      if (portalStatusEl) {
+        portalStatusEl.dataset.state = nextState;
+        portalStatusEl.setAttribute('aria-label', `Portal status: ${nextMessage}`);
+      }
+      if (portalStatusText) {
+        portalStatusText.textContent = nextMessage;
+      }
+      if (previousState !== nextState) {
+        if (nextState === 'active') {
+          this.audio.play('portalActivate', { volume: 0.7 });
+        } else if (previousState === 'active' && nextState !== 'victory') {
+          this.audio.play('portalDormant', { volume: 0.5 });
+        }
+      }
+    }
+
     updatePortalProgress() {
       const { portalProgressLabel, portalProgressBar } = this.ui;
       const required = this.portalFrameRequiredCount || PORTAL_BLOCK_REQUIREMENT;
       const rawProgress = required > 0 ? this.portalBlocksPlaced / required : 0;
       const progress = Math.min(1, Math.max(0, rawProgress));
+      let statusState = 'inactive';
+      let statusMessage = 'Portal dormant';
       if (portalProgressLabel) {
         if (this.victoryAchieved) {
           portalProgressLabel.textContent = 'Eternal Ingot secured';
+          statusState = 'victory';
+          statusMessage = 'Network secured';
         } else if (this.netheriteChallengeActive && this.dimensionSettings?.id === 'netherite') {
           const seconds = Number.isFinite(this.netheriteCountdownDisplay)
             ? Math.max(0, this.netheriteCountdownDisplay)
             : Math.ceil(Math.max(0, this.netheriteCountdownSeconds - this.netheriteChallengeTimer));
           portalProgressLabel.textContent = `Collapse in ${seconds}s`;
+          statusState = 'active';
+          statusMessage = `Collapse in ${seconds}s`;
         } else if (this.portalActivated) {
           portalProgressLabel.textContent = 'Portal stabilised';
+          statusState = 'active';
+          const nextName = this.getNextDimensionName();
+          statusMessage = nextName ? `Active — Next: ${nextName}` : 'Portal active';
         } else if (this.portalReady) {
           portalProgressLabel.textContent = 'Portal ready — press F to ignite';
+          statusState = 'ready';
+          statusMessage = 'Primed — ignite to travel';
         } else if (!this.portalFrameInteriorValid && this.portalBlocksPlaced > 0) {
           portalProgressLabel.textContent = 'Clear the portal interior';
+          statusState = 'blocked';
+          statusMessage = 'Interior obstructed';
         } else {
           portalProgressLabel.textContent = `Portal frame ${Math.round(progress * 100)}%`;
+          if (progress > 0) {
+            statusState = 'building';
+            statusMessage = `Stabilising ${Math.round(progress * 100)}%`;
+          }
         }
       }
+      this.setPortalStatusIndicator(statusState, statusMessage);
       if (portalProgressBar) {
         let displayProgress = this.victoryAchieved ? 1 : progress;
         if (this.portalReady && !this.portalActivated) {
@@ -6726,6 +6777,67 @@
             ? 'ready'
             : 'explore';
       this.footerEl.dataset.state = state;
+    }
+
+    revealDimensionIntro(theme, options = {}) {
+      const { dimensionIntroEl, dimensionIntroNameEl, dimensionIntroRulesEl } = this.ui;
+      if (!dimensionIntroEl || !dimensionIntroNameEl || !dimensionIntroRulesEl) {
+        return;
+      }
+      const timerHost = typeof window !== 'undefined' ? window : globalThis;
+      timerHost.clearTimeout(this.dimensionIntroAutoHideTimer);
+      timerHost.clearTimeout(this.dimensionIntroFadeTimer);
+      const name = typeof theme?.name === 'string' && theme.name.trim() ? theme.name.trim() : 'Unknown Dimension';
+      const gravity = Number.isFinite(theme?.gravity) ? (theme.gravity ?? 1).toFixed(2) : null;
+      const speed = Number.isFinite(theme?.speedMultiplier)
+        ? (theme.speedMultiplier ?? 1).toFixed(2)
+        : null;
+      const descriptors = [];
+      if (gravity) {
+        descriptors.push(`Gravity ×${gravity}`);
+      }
+      if (speed) {
+        descriptors.push(`Speed ×${speed}`);
+      }
+      const description = typeof theme?.description === 'string' ? theme.description.trim() : '';
+      const rules = descriptors.length
+        ? `${descriptors.join(' · ')}${description ? ` — ${description}` : ''}`
+        : description || 'Adapt quickly to the realm\'s rules to survive.';
+      dimensionIntroNameEl.textContent = name;
+      dimensionIntroRulesEl.textContent = rules;
+      dimensionIntroEl.hidden = false;
+      dimensionIntroEl.setAttribute('aria-hidden', 'false');
+      dimensionIntroEl.classList.remove('active');
+      void dimensionIntroEl.offsetWidth;
+      dimensionIntroEl.classList.add('active');
+      const duration = Number.isFinite(options.duration) ? Math.max(0, options.duration) : 5200;
+      if (duration > 0 && !this.prefersReducedMotion) {
+        this.dimensionIntroAutoHideTimer = timerHost.setTimeout(() => {
+          this.hideDimensionIntro();
+        }, duration);
+      }
+    }
+
+    hideDimensionIntro(immediate = false) {
+      const { dimensionIntroEl } = this.ui;
+      if (!dimensionIntroEl) {
+        return;
+      }
+      const timerHost = typeof window !== 'undefined' ? window : globalThis;
+      timerHost.clearTimeout(this.dimensionIntroAutoHideTimer);
+      this.dimensionIntroAutoHideTimer = null;
+      timerHost.clearTimeout(this.dimensionIntroFadeTimer);
+      const finalize = () => {
+        dimensionIntroEl.hidden = true;
+        dimensionIntroEl.setAttribute('aria-hidden', 'true');
+      };
+      if (immediate || this.prefersReducedMotion) {
+        dimensionIntroEl.classList.remove('active');
+        finalize();
+        return;
+      }
+      dimensionIntroEl.classList.remove('active');
+      this.dimensionIntroFadeTimer = timerHost.setTimeout(finalize, 360);
     }
 
     getNextDimensionName() {

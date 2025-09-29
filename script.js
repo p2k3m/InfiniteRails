@@ -751,6 +751,7 @@
     const timeEl = document.getElementById('timeOfDay');
     const dimensionInfoEl = document.getElementById('dimensionInfo');
     const portalProgressEl = document.getElementById('portalProgress');
+    const portalStatusEl = document.getElementById('portalStatus');
     const hudRootEl = document.getElementById('gameHud');
     const objectivesPanelEl = document.getElementById('objectivesPanel');
     const victoryBannerEl = document.getElementById('victoryBanner');
@@ -812,6 +813,11 @@
     let lastFocusedBeforeGuide = null;
     const portalProgressLabel = portalProgressEl?.querySelector('.label') ?? null;
     const portalProgressBar = portalProgressEl?.querySelector('.bar') ?? null;
+    const portalStatusText = portalStatusEl?.querySelector('.portal-status__text') ?? null;
+    const portalStatusIcon = portalStatusEl?.querySelector('.portal-status__icon') ?? null;
+    const dimensionIntroEl = document.getElementById('dimensionIntro');
+    const dimensionIntroNameEl = document.getElementById('dimensionIntroName');
+    const dimensionIntroRulesEl = document.getElementById('dimensionIntroRules');
     const headerUserNameEl = document.getElementById('headerUserName');
     const headerUserLocationEl = document.getElementById('headerUserLocation');
     const userNameDisplayEl = document.getElementById('userNameDisplay');
@@ -1571,14 +1577,20 @@
             heartsEl,
             bubblesEl,
             timeEl,
-            dimensionInfoEl,
-            scoreTotalEl,
-            scoreRecipesEl,
-            scoreDimensionsEl,
-            portalProgressLabel,
-            portalProgressBar,
-            hotbarEl,
-            playerHintEl,
+          dimensionInfoEl,
+          scoreTotalEl,
+          scoreRecipesEl,
+          scoreDimensionsEl,
+          portalStatusEl,
+          portalStatusText,
+          portalStatusIcon,
+          portalProgressLabel,
+          portalProgressBar,
+          hotbarEl,
+          playerHintEl,
+          dimensionIntroEl,
+          dimensionIntroNameEl,
+          dimensionIntroRulesEl,
             scoreboardListEl,
             scoreboardStatusEl,
             refreshScoresButton,
