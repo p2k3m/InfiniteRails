@@ -1019,6 +1019,45 @@
           </table>
           <p class="leaderboard-empty" id="leaderboardEmptyMessage">Sign in to publish your victories and see the live rankings.</p>
         </div>
+        <div
+          class="compose-overlay"
+          id="leaderboardOverlay"
+          hidden
+          aria-hidden="true"
+          data-mode="idle"
+        >
+          <div
+            class="compose-overlay__dialog"
+            id="leaderboardOverlayDialog"
+            tabindex="-1"
+            role="dialog"
+            aria-modal="false"
+            aria-labelledby="leaderboardOverlayTitle"
+            aria-describedby="leaderboardOverlayMessage"
+          >
+            <div class="compose-overlay__spinner" id="leaderboardOverlaySpinner" aria-hidden="true"></div>
+            <div class="compose-overlay__body">
+              <h3 class="compose-overlay__title" id="leaderboardOverlayTitle">Syncing leaderboard</h3>
+              <p class="compose-overlay__message" id="leaderboardOverlayMessage" aria-live="polite"></p>
+              <div class="compose-overlay__actions" id="leaderboardOverlayActions">
+                <button
+                  type="button"
+                  class="ghost small compose-overlay__action"
+                  id="leaderboardOverlayDismiss"
+                >
+                  Dismiss
+                </button>
+                <button
+                  type="button"
+                  class="accent small compose-overlay__action"
+                  id="leaderboardOverlayRetry"
+                >
+                  Retry
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
 
