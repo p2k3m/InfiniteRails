@@ -2906,6 +2906,7 @@
     let particleGroup;
     let playerMesh;
     let playerMeshParts;
+    let playerModelLoading = false;
     let playerActionAnimation = null;
     let gltfLoader;
     let playerMixer = null;
@@ -11036,6 +11037,9 @@
       playerMeshParts = fallback.parts;
       attachPlayerKeyLight(playerMesh);
       resetPlayerAnimationState();
+      ensurePlayerMeshVisibility();
+      restartPlayerAnimationActions({ allowInitialization: false });
+      playerModelLoading = false;
       announceVisualFallback(
         'player-model',
         'Your device blocked the detailed explorer model, so a simplified avatar is active. Enable WebGL or switch browsers for full visuals.'
@@ -11089,6 +11093,85 @@
       }
       playerKeyLight.position.set(0.2, 1.25, 0.6);
       target.add(playerKeyLight);
+    }
+
+    function ensurePlayerMeshVisibility() {
+      if (!playerMesh) return;
+      playerMesh.visible = true;
+      playerMesh.traverse((child) => {
+        if (!child) return;
+        if (child.visible === false) {
+          child.visible = true;
+        }
+      });
+      if (playerMeshParts) {
+        const parts = [
+          playerMeshParts.leftArm,
+          playerMeshParts.rightArm,
+          playerMeshParts.leftLeg,
+          playerMeshParts.rightLeg,
+          playerMeshParts.head,
+          playerMeshParts.hair,
+          playerMeshParts.fringe,
+        ];
+        parts.forEach((part) => {
+          if (part && part.visible === false) {
+            part.visible = true;
+          }
+        });
+      }
+    }
+
+    function restartPlayerAnimationActions({ allowInitialization = true } = {}) {
+      if (!playerMesh) return;
+      if (allowInitialization) {
+        if (!playerMixer || !playerAnimationActions.idle || !playerAnimationActions.walk) {
+          initializePlayerAnimations();
+        }
+      }
+      playerAnimationBlend.idle = 1;
+      playerAnimationBlend.walk = 0;
+      playerActionAnimation = null;
+      if (!playerMixer || !playerAnimationActions.idle || !playerAnimationActions.walk) {
+        return;
+      }
+      const idleAction = playerAnimationActions.idle;
+      if (idleAction) {
+        idleAction.reset();
+        idleAction.play();
+        idleAction.enabled = true;
+        idleAction.setEffectiveWeight(1);
+      }
+      const walkAction = playerAnimationActions.walk;
+      if (walkAction) {
+        walkAction.reset();
+        walkAction.play();
+        walkAction.enabled = true;
+        walkAction.setEffectiveWeight(0);
+      }
+      const mineAction = playerAnimationActions.mine;
+      if (mineAction) {
+        mineAction.stop();
+        mineAction.reset();
+        mineAction.enabled = false;
+        mineAction.setEffectiveWeight(0);
+      }
+    }
+
+    function ensurePlayerAvatarReady({ forceReload = false, resetAnimations = false } = {}) {
+      if (!entityGroup) return;
+      if (forceReload || !playerMesh || !playerMesh.parent) {
+        createPlayerMesh();
+        return;
+      }
+      ensurePlayerMeshVisibility();
+      if (!playerMixer || !playerAnimationActions.idle || !playerAnimationActions.walk) {
+        restartPlayerAnimationActions({ allowInitialization: true });
+        return;
+      }
+      if (resetAnimations) {
+        restartPlayerAnimationActions({ allowInitialization: true });
+      }
     }
 
     function handlePlayerGltfLoad(gltf) {
@@ -11181,10 +11264,14 @@
       if (playerMeshParts.leftArm && playerMeshParts.rightArm && playerMeshParts.leftLeg && playerMeshParts.rightLeg) {
         initializePlayerAnimations();
       }
+      ensurePlayerMeshVisibility();
+      restartPlayerAnimationActions();
+      playerModelLoading = false;
     }
 
     function createPlayerMesh() {
       if (!entityGroup) return;
+      if (playerModelLoading) return;
       if (playerMesh) {
         entityGroup.remove(playerMesh);
       }
@@ -11203,12 +11290,13 @@
 
       if (!THREE.GLTFLoader) {
         console.error('GLTFLoader is unavailable; cannot create the Steve model.');
+        playerModelLoading = false;
         return;
       }
       if (!gltfLoader) {
         gltfLoader = new THREE.GLTFLoader();
       }
-
+      playerModelLoading = true;
       gltfLoader.load(
         'assets/steve.gltf',
         (gltf) => {
@@ -11217,9 +11305,18 @@
         undefined,
         (error) => {
           console.error('Failed to load Steve model.', error);
-          parseEmbeddedModel('steve', handlePlayerGltfLoad, () => {
-            useFallbackPlayerMesh();
-          });
+          parseEmbeddedModel(
+            'steve',
+            (embeddedGltf) => {
+              handlePlayerGltfLoad(embeddedGltf);
+            },
+            () => {
+              useFallbackPlayerMesh();
+              playerModelLoading = false;
+              ensurePlayerMeshVisibility();
+              restartPlayerAnimationActions({ allowInitialization: false });
+            }
+          );
         }
       );
     }
@@ -15023,6 +15120,7 @@
       state.player.satchel = [];
       state.player.selectedSlot = 0;
       state.craftSequence = [];
+      ensurePlayerAvatarReady({ resetAnimations: true });
       renderVictoryBanner();
       loadDimension(startDimensionId);
       if (!startingWithRestoredProgress && state.dayCycle) {
@@ -16012,6 +16110,7 @@
         state.player.zombieHits = 0;
       }
       loadDimension('origin');
+      ensurePlayerAvatarReady({ resetAnimations: true });
       if (combatUtils?.restoreInventory) {
         combatUtils.restoreInventory(state.player, inventorySnapshot);
       } else {
