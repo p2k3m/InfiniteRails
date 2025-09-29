@@ -1,13 +1,97 @@
 (function () {
+  function normaliseAssetBase(base) {
+    if (!base || typeof base !== 'string') {
+      return null;
+    }
+    try {
+      const resolved = new URL(base, typeof window !== 'undefined' ? window.location?.href : undefined);
+      if (!resolved) return null;
+      let href = resolved.href;
+      if (!href.endsWith('/')) {
+        href += '/';
+      }
+      return href;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function createAssetUrlCandidates(relativePath) {
+    const candidates = [];
+    const seen = new Set();
+    const pushCandidate = (value) => {
+      if (!value || seen.has(value)) {
+        return;
+      }
+      seen.add(value);
+      candidates.push(value);
+    };
+
+    if (typeof window !== 'undefined') {
+      const configBase = normaliseAssetBase(window.APP_CONFIG?.assetBaseUrl ?? null);
+      if (configBase) {
+        try {
+          pushCandidate(new URL(relativePath, configBase).href);
+        } catch (error) {
+          // Ignore invalid config values and continue exploring fallbacks.
+        }
+      }
+    }
+
+    if (typeof document !== 'undefined') {
+      const findScriptElement = () => {
+        if (document.currentScript) {
+          return document.currentScript;
+        }
+        const scripts = Array.from(document.getElementsByTagName('script'));
+        return scripts.find((element) =>
+          typeof element.src === 'string' && /\bscript\.js(?:[?#].*)?$/i.test(element.src || '')
+        );
+      };
+
+      const currentScript = findScriptElement();
+      if (currentScript?.src) {
+        try {
+          const scriptUrl = new URL(currentScript.src, window?.location?.href);
+          const scriptDir = scriptUrl.href.replace(/[^/]*$/, '');
+          pushCandidate(new URL(relativePath, scriptDir).href);
+          pushCandidate(new URL(relativePath, `${scriptUrl.origin}/`).href);
+        } catch (error) {
+          // Swallow and continue gathering fallbacks.
+        }
+      }
+
+      if (document.baseURI) {
+        try {
+          pushCandidate(new URL(relativePath, document.baseURI).href);
+        } catch (error) {
+          // Ignore invalid base URIs.
+        }
+      }
+    }
+
+    if (typeof window !== 'undefined' && window.location) {
+      try {
+        pushCandidate(new URL(relativePath, `${window.location.origin}/`).href);
+      } catch (error) {
+        // Continue to relative fallbacks below.
+      }
+    }
+
+    pushCandidate(relativePath);
+
+    return candidates;
+  }
+
   const THREE_CDN_URLS = [
     // Local build bundled with the project so the experience works offline/file://
     // without depending on a CDN (which may be blocked in classroom environments).
-    'vendor/three.min.js',
+    ...createAssetUrlCandidates('vendor/three.min.js'),
     'https://unpkg.com/three@0.161.0/build/three.min.js',
     'https://cdn.jsdelivr.net/npm/three@0.161.0/build/three.min.js',
   ];
   const GLTF_SCRIPT_URLS = [
-    'vendor/GLTFLoader.js',
+    ...createAssetUrlCandidates('vendor/GLTFLoader.js'),
     'https://unpkg.com/three@0.161.0/examples/js/loaders/GLTFLoader.js',
     'https://cdn.jsdelivr.net/npm/three@0.161.0/examples/js/loaders/GLTFLoader.js',
   ];
