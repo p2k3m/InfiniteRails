@@ -1087,6 +1087,25 @@
     const gameBriefingEl = document.getElementById('gameBriefing');
     const dismissBriefingButton = document.getElementById('dismissBriefing');
     const gameBriefingStepsEl = document.getElementById('gameBriefingSteps');
+    const briefingMovementKeysEl = document.getElementById('briefingMovementKeys');
+    const briefingGatherKeysEl = document.getElementById('briefingGatherKeys');
+    const briefingPlaceKeysEl = document.getElementById('briefingPlaceKeys');
+    const desktopControlsSummaryEl = document.getElementById('desktopControlsSummary');
+    const primerHarvestJumpEl = document.querySelector('[data-keybinding-copy="harvest-jump"]');
+    const primerHarvestInteractEl = document.querySelector('[data-keybinding-copy="harvest-interact"]');
+    const primerPlaceKeyEl = document.querySelector('[data-keybinding-copy="place-block"]');
+    const primerIgniteKeyEl = document.querySelector('[data-keybinding-copy="ignite-portal"]');
+    const controlReferenceCells = {
+      movement: document.querySelector('[data-keybinding-table="movement"]'),
+      jump: document.querySelector('[data-keybinding-table="jump"]'),
+      interact: document.querySelector('[data-keybinding-table="interact"]'),
+      toggleCrafting: document.querySelector('[data-keybinding-table="toggleCrafting"]'),
+      toggleInventory: document.querySelector('[data-keybinding-table="toggleInventory"]'),
+      placeBlock: document.querySelector('[data-keybinding-table="placeBlock"]'),
+      toggleCameraPerspective: document.querySelector('[data-keybinding-table="toggleCameraPerspective"]'),
+      resetPosition: document.querySelector('[data-keybinding-table="resetPosition"]'),
+      hotbar: document.querySelector('[data-keybinding-table="hotbar"]'),
+    };
     const settingsVolumeInputs = {
       master: document.getElementById('masterVolume'),
       music: document.getElementById('musicVolume'),
@@ -2432,6 +2451,7 @@
     };
 
     initializeKeyBindings();
+    refreshKeyBindingDependentCopy();
 
     const TILE_UNIT = 1;
     const BASE_GEOMETRY = new THREE.BoxGeometry(TILE_UNIT, TILE_UNIT, TILE_UNIT);
@@ -4540,19 +4560,32 @@
       });
     }
 
-    const DEFAULT_BRIEFING_STEPS = [
-      'Collect wood and stone with Space, F, or a tap while facing a resource tile.',
-      'Open the hammer icon to craft a Stone Pickaxe and unlock new recipes.',
-      'Form a 4×3 portal frame with Q and ignite it with R to stabilise a gateway.',
-    ];
+    function getDefaultBriefingSteps() {
+      const harvestLabels = collectActionLabels(['jump', 'interact'], { limitPerAction: 2 });
+      const harvestText = formatKeyListForSentence(harvestLabels, { fallback: 'Space or F' });
+      const gatherSentence = harvestText
+        ? `Collect wood and stone with ${harvestText}, or tap while facing a resource tile.`
+        : 'Collect wood and stone by using your harvest controls while facing a resource tile.';
+      const placeLabel = getActionKeySummary('placeBlock', { fallback: 'Q' });
+      const igniteLabel = getActionKeySummary('buildPortal', { fallback: 'R' });
+      const portalSentence = placeLabel && igniteLabel
+        ? `Form a 4×3 portal frame with ${placeLabel} and ignite it with ${igniteLabel} to stabilise a gateway.`
+        : 'Form a 4×3 portal frame and ignite it to stabilise a gateway.';
+      return [
+        gatherSentence,
+        'Open the hammer icon to craft a Stone Pickaxe and unlock new recipes.',
+        portalSentence,
+      ];
+    }
 
     function getBriefingSteps() {
       const tasks = Array.isArray(dimensionOverlayState?.tasks) ? dimensionOverlayState.tasks.filter(Boolean) : [];
       if (!tasks.length) {
-        return DEFAULT_BRIEFING_STEPS;
+        return getDefaultBriefingSteps();
       }
       const combined = tasks.slice(0, 3);
-      for (const step of DEFAULT_BRIEFING_STEPS) {
+      const defaults = getDefaultBriefingSteps();
+      for (const step of defaults) {
         if (combined.length >= 3) break;
         if (!combined.includes(step)) {
           combined.push(step);
@@ -18697,8 +18730,11 @@
         nextKeys = [...fallback];
       }
       const changed = applyKeyBinding(action.trim(), nextKeys);
-      if (changed && persist) {
-        persistKeyBindings();
+      if (changed) {
+        if (persist) {
+          persistKeyBindings();
+        }
+        refreshKeyBindingDependentCopy();
       }
       return changed;
     }
@@ -18715,8 +18751,11 @@
           changed = true;
         }
       });
-      if (changed && persist) {
-        persistKeyBindings();
+      if (changed) {
+        if (persist) {
+          persistKeyBindings();
+        }
+        refreshKeyBindingDependentCopy();
       }
       return changed;
     }
@@ -18727,6 +18766,7 @@
       if (persist) {
         persistKeyBindings();
       }
+      refreshKeyBindingDependentCopy();
       return cloneKeyBindingMap(state.keyBindings);
     }
 
@@ -18789,6 +18829,303 @@
         return filtered[0];
       }
       return filtered.join(' / ');
+    }
+
+    function collectActionLabels(actions = [], options = {}) {
+      const { limitPerAction = null, useDefaults = false } = options ?? {};
+      const labels = [];
+      const seen = new Set();
+      actions.forEach((action) => {
+        if (!action) return;
+        const actionLabels = getActionKeyLabels(action, { limit: limitPerAction, useDefaults });
+        actionLabels.forEach((label) => {
+          if (!label || seen.has(label)) {
+            return;
+          }
+          seen.add(label);
+          labels.push(label);
+        });
+      });
+      return labels;
+    }
+
+    function getActionKeySummary(action, options = {}) {
+      const { limit = null, fallback = '', useDefaults = false } = options ?? {};
+      const labels = getActionKeyLabels(action, { limit, useDefaults });
+      return joinKeyLabels(labels, { fallback });
+    }
+
+    function formatKeyListForSentence(labels, options = {}) {
+      const { fallback = '' } = options ?? {};
+      if (!Array.isArray(labels) || !labels.length) {
+        return fallback;
+      }
+      if (labels.length === 1) {
+        return labels[0];
+      }
+      if (labels.length === 2) {
+        return `${labels[0]} or ${labels[1]}`;
+      }
+      const head = labels.slice(0, -1).join(', ');
+      return `${head}, or ${labels[labels.length - 1]}`;
+    }
+
+    function getMovementKeySets() {
+      const actions = ['moveForward', 'moveLeft', 'moveBackward', 'moveRight'];
+      const primary = [];
+      const secondary = [];
+      let hasSecondary = true;
+      actions.forEach((action) => {
+        const labels = getActionKeyLabels(action);
+        if (labels.length) {
+          primary.push(labels[0]);
+        }
+        if (labels.length > 1) {
+          secondary.push(labels[1]);
+        } else {
+          hasSecondary = false;
+        }
+      });
+      return {
+        primary,
+        secondary: hasSecondary && secondary.length === actions.length ? secondary : [],
+      };
+    }
+
+    function getMovementKeySummary(options = {}) {
+      const { joiner = ' / ', fallback = '' } = options ?? {};
+      const { primary } = getMovementKeySets();
+      const filtered = primary.filter((label) => typeof label === 'string' && label.trim());
+      if (!filtered.length) {
+        return fallback;
+      }
+      return filtered.join(joiner);
+    }
+
+    function escapeHtml(value) {
+      if (value == null) {
+        return '';
+      }
+      return `${value}`.replace(/[&<>"']/g, (char) => {
+        switch (char) {
+          case '&':
+            return '&amp;';
+          case '<':
+            return '&lt;';
+          case '>':
+            return '&gt;';
+          case '"':
+            return '&quot;';
+          case "'":
+            return '&#39;';
+          default:
+            return char;
+        }
+      });
+    }
+
+    function formatKbdSequence(labels, options = {}) {
+      const { joiner = ' / ', fallback = '' } = options ?? {};
+      if (!Array.isArray(labels)) {
+        return fallback;
+      }
+      const filtered = labels.filter((label) => typeof label === 'string' && label.trim());
+      if (!filtered.length) {
+        return fallback;
+      }
+      return filtered.map((label) => `<kbd>${escapeHtml(label)}</kbd>`).join(joiner);
+    }
+
+    function getHotbarRange(options = {}) {
+      const { asMarkup = false } = options ?? {};
+      const wrap = asMarkup ? (value) => `<kbd>${escapeHtml(value)}</kbd>` : (value) => value;
+      const joiner = ' · ';
+      const first = getActionKeyLabels('hotbar1', { limit: 1 })[0];
+      const last = getActionKeyLabels(`hotbar${HOTBAR_SLOT_COUNT}`, { limit: 1 })[0];
+      if (first && last) {
+        return `${wrap(first)}–${wrap(last)}`;
+      }
+      const labels = [];
+      for (let slot = 1; slot <= HOTBAR_SLOT_COUNT; slot += 1) {
+        const label = getActionKeyLabels(`hotbar${slot}`, { limit: 1 })[0];
+        if (!label) {
+          continue;
+        }
+        labels.push(wrap(label));
+        if (labels.length >= 3) {
+          break;
+        }
+      }
+      if (labels.length) {
+        return labels.join(joiner);
+      }
+      return '';
+    }
+
+    function updatePrimerCopy() {
+      if (primerHarvestJumpEl) {
+        primerHarvestJumpEl.textContent = getActionKeySummary('jump', { fallback: 'Space' });
+      }
+      if (primerHarvestInteractEl) {
+        primerHarvestInteractEl.textContent = getActionKeySummary('interact', { fallback: 'F' });
+      }
+      if (primerPlaceKeyEl) {
+        primerPlaceKeyEl.textContent = getActionKeySummary('placeBlock', { fallback: 'Q' });
+      }
+      if (primerIgniteKeyEl) {
+        primerIgniteKeyEl.textContent = getActionKeySummary('buildPortal', { fallback: 'R' });
+      }
+    }
+
+    function updateGameBriefingControlsCopy() {
+      if (briefingMovementKeysEl) {
+        const movementSummary = getMovementKeySummary({ fallback: 'W / A / S / D' });
+        briefingMovementKeysEl.textContent = movementSummary || '—';
+      }
+      if (briefingGatherKeysEl) {
+        const gatherLabels = collectActionLabels(['jump', 'interact'], { limitPerAction: 2 });
+        const parts = [];
+        const keyboardSummary = joinKeyLabels(gatherLabels, { fallback: '' });
+        if (keyboardSummary) {
+          parts.push(keyboardSummary);
+        }
+        parts.push('Click');
+        briefingGatherKeysEl.textContent = parts.join(' · ');
+      }
+      if (briefingPlaceKeysEl) {
+        const placeLabel = getActionKeySummary('placeBlock', { fallback: 'Q' });
+        const igniteLabel = getActionKeySummary('buildPortal', { fallback: 'R' });
+        const parts = [];
+        if (placeLabel) {
+          parts.push(placeLabel);
+        }
+        if (igniteLabel) {
+          parts.push(igniteLabel);
+        }
+        briefingPlaceKeysEl.textContent = parts.length ? parts.join(' · ') : '—';
+      }
+    }
+
+    function updatePointerHintMessage() {
+      if (!pointerHintEl) {
+        return;
+      }
+      const movementSummary = getMovementKeySummary({ fallback: '' });
+      const label = movementSummary
+        ? `Click the viewport to capture your mouse, then use ${movementSummary} to move and left-click to mine.`
+        : 'Click the viewport to capture your mouse, then use your movement keys to move and left-click to mine.';
+      pointerHintEl.textContent = label;
+    }
+
+    function updateDesktopControlsSummary() {
+      if (!desktopControlsSummaryEl) {
+        return;
+      }
+      const segments = [];
+      const movementSummary = getMovementKeySummary({ fallback: '' });
+      if (movementSummary) {
+        segments.push(`${movementSummary} move`);
+      }
+      const jumpSummary = getActionKeySummary('jump', { fallback: 'Space' });
+      if (jumpSummary) {
+        segments.push(`${jumpSummary} jump`);
+      }
+      const interactSummary = getActionKeySummary('interact', { fallback: 'F' });
+      if (interactSummary) {
+        segments.push(`${interactSummary} interact/use`);
+      }
+      const placeSummary = getActionKeySummary('placeBlock', { fallback: 'Q' });
+      if (placeSummary) {
+        segments.push(`${placeSummary} place block`);
+      }
+      const igniteSummary = getActionKeySummary('buildPortal', { fallback: 'R' });
+      if (igniteSummary) {
+        segments.push(`${igniteSummary} ignite portal`);
+      }
+      const craftingSummary = getActionKeySummary('toggleCrafting', { fallback: 'E' });
+      if (craftingSummary) {
+        segments.push(`${craftingSummary} crafting`);
+      }
+      const inventorySummary = getActionKeySummary('toggleInventory', { fallback: 'I' });
+      if (inventorySummary) {
+        segments.push(`${inventorySummary} inventory`);
+      }
+      const resetSummary = getActionKeySummary('resetPosition', { fallback: 'T' });
+      if (resetSummary) {
+        segments.push(`${resetSummary} reset position`);
+      }
+      const cameraSummary = getActionKeySummary('toggleCameraPerspective', { fallback: 'V' });
+      if (cameraSummary) {
+        segments.push(`${cameraSummary} toggle view`);
+      }
+      const closeMenusSummary = getActionKeySummary('closeMenus', { fallback: 'Esc' });
+      if (closeMenusSummary) {
+        segments.push(`${closeMenusSummary} close menus`);
+      }
+      const hotbarSummary = getHotbarRange({ asMarkup: false });
+      if (hotbarSummary) {
+        segments.push(`${hotbarSummary} hotbar`);
+      }
+      desktopControlsSummaryEl.textContent = segments.join(' · ');
+    }
+
+    function updateControlReferenceTable() {
+      if (!controlReferenceCells) {
+        return;
+      }
+      const { movement, jump, interact, toggleCrafting, toggleInventory, placeBlock, toggleCameraPerspective, resetPosition, hotbar } =
+        controlReferenceCells;
+      if (movement) {
+        const { primary, secondary } = getMovementKeySets();
+        const parts = [];
+        if (primary.length) {
+          parts.push(formatKbdSequence(primary));
+        }
+        if (secondary.length) {
+          parts.push(`or ${formatKbdSequence(secondary)}`);
+        }
+        movement.innerHTML = parts.length ? parts.join(' ') : '—';
+      }
+      if (jump) {
+        jump.innerHTML = formatKbdSequence(getActionKeyLabels('jump'), { fallback: '—' });
+      }
+      if (interact) {
+        const keyboard = formatKbdSequence(getActionKeyLabels('interact'), { fallback: '' });
+        const segments = [];
+        if (keyboard) {
+          segments.push(keyboard);
+        }
+        segments.push('Mouse click');
+        interact.innerHTML = segments.join(' / ');
+      }
+      if (toggleCrafting) {
+        toggleCrafting.innerHTML = formatKbdSequence(getActionKeyLabels('toggleCrafting'), { fallback: '—' });
+      }
+      if (toggleInventory) {
+        toggleInventory.innerHTML = formatKbdSequence(getActionKeyLabels('toggleInventory'), { fallback: '—' });
+      }
+      if (placeBlock) {
+        placeBlock.innerHTML = formatKbdSequence(getActionKeyLabels('placeBlock'), { fallback: '—' });
+      }
+      if (toggleCameraPerspective) {
+        toggleCameraPerspective.innerHTML = formatKbdSequence(getActionKeyLabels('toggleCameraPerspective'), { fallback: '—' });
+      }
+      if (resetPosition) {
+        resetPosition.innerHTML = formatKbdSequence(getActionKeyLabels('resetPosition'), { fallback: '—' });
+      }
+      if (hotbar) {
+        const hotbarLabel = getHotbarRange({ asMarkup: true });
+        hotbar.innerHTML = hotbarLabel ? `${hotbarLabel} hotbar` : 'Hotbar shortcuts';
+      }
+    }
+
+    function refreshKeyBindingDependentCopy() {
+      updatePrimerCopy();
+      updateGameBriefingControlsCopy();
+      updateDesktopControlsSummary();
+      updateControlReferenceTable();
+      updatePointerHintMessage();
+      renderGameBriefingSteps();
     }
 
     function isKeyForAction(action, code) {

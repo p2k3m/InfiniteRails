@@ -91,8 +91,10 @@
                 <div class="primer-list__content">
                   <h3>Gather with purpose</h3>
                   <p>
-                    Face a resource tile and press <strong>Space</strong>, <strong>F</strong>, or tap to harvest
-                    wood, stone, and ore. Watch the hint feed for biome-specific dangers.
+                    Face a resource tile and press
+                    <strong data-keybinding-copy="harvest-jump">Space</strong>,
+                    <strong data-keybinding-copy="harvest-interact">F</strong>, or tap to harvest wood, stone, and ore.
+                    Watch the hint feed for biome-specific dangers.
                   </p>
                 </div>
               </li>
@@ -111,8 +113,9 @@
                 <div class="primer-list__content">
                   <h3>Build the exit portal</h3>
                   <p>
-                    Place blocks with <strong>Q</strong> to form a <strong>4×3 frame</strong>, ignite it with
-                    <strong>R</strong>, and cross through before nightfall drains your hearts.
+                    Place blocks with <strong data-keybinding-copy="place-block">Q</strong> to form a
+                    <strong>4×3 frame</strong>, ignite it with <strong data-keybinding-copy="ignite-portal">R</strong>,
+                    and cross through before nightfall drains your hearts.
                   </p>
                 </div>
               </li>
@@ -165,15 +168,15 @@
             <div class="game-briefing__controls" aria-label="Core controls">
               <div>
                 <span class="game-briefing__label">Movement</span>
-                <span class="game-briefing__keys">W · A · S · D</span>
+                <span class="game-briefing__keys" id="briefingMovementKeys">W · A · S · D</span>
               </div>
               <div>
                 <span class="game-briefing__label">Gather / Use</span>
-                <span class="game-briefing__keys">Space · Click · F</span>
+                <span class="game-briefing__keys" id="briefingGatherKeys">Space · Click · F</span>
               </div>
               <div>
                 <span class="game-briefing__label">Place / Portal</span>
-                <span class="game-briefing__keys">Q · R</span>
+                <span class="game-briefing__keys" id="briefingPlaceKeys">Q · R</span>
               </div>
             </div>
             <button type="button" class="game-briefing__dismiss" id="dismissBriefing">Begin the run</button>
@@ -486,10 +489,9 @@
       <div class="controls">
         <div>
           <h3>Desktop Controls</h3>
-          <p>
+          <p id="desktopControlsSummary">
             WASD/Arrows move · Space jump · F interact · Q place block · R ignite portal · E crafting · I inventory · T reset
-            position ·
-            V toggle view · 1–9 hotbar
+            position · V toggle view · 1–9 hotbar · Esc close menus
           </p>
         </div>
         <div>
@@ -906,47 +908,47 @@
             <tbody>
               <tr>
                 <th scope="row">Move &amp; swap rails</th>
-                <td><kbd>WASD</kbd> or <kbd>Arrows</kbd></td>
+                <td data-keybinding-table="movement"><kbd>WASD</kbd> or <kbd>Arrows</kbd></td>
                 <td>Swipe ⟷</td>
               </tr>
               <tr>
                 <th scope="row">Jump</th>
-                <td><kbd>Space</kbd></td>
+                <td data-keybinding-table="jump"><kbd>Space</kbd></td>
                 <td>Tap Jump</td>
               </tr>
               <tr>
                 <th scope="row">Interact</th>
-                <td><kbd>F</kbd> / <kbd>Mouse</kbd> click</td>
+                <td data-keybinding-table="interact"><kbd>F</kbd> / <kbd>Mouse</kbd> click</td>
                 <td>Tap interact icon</td>
               </tr>
               <tr>
                 <th scope="row">Crafting</th>
-                <td><kbd>E</kbd></td>
+                <td data-keybinding-table="toggleCrafting"><kbd>E</kbd></td>
                 <td>Crafting button</td>
               </tr>
               <tr>
                 <th scope="row">Inventory</th>
-                <td><kbd>I</kbd></td>
+                <td data-keybinding-table="toggleInventory"><kbd>I</kbd></td>
                 <td>Inventory button</td>
               </tr>
               <tr>
                 <th scope="row">Place block</th>
-                <td><kbd>Q</kbd></td>
+                <td data-keybinding-table="placeBlock"><kbd>Q</kbd></td>
                 <td>Tap build icon</td>
               </tr>
               <tr>
                 <th scope="row">Toggle camera</th>
-                <td><kbd>V</kbd></td>
+                <td data-keybinding-table="toggleCameraPerspective"><kbd>V</kbd></td>
                 <td>&mdash;</td>
               </tr>
               <tr>
                 <th scope="row">Reset position</th>
-                <td><kbd>R</kbd></td>
+                <td data-keybinding-table="resetPosition"><kbd>R</kbd></td>
                 <td>&mdash;</td>
               </tr>
               <tr>
                 <th scope="row">Quick deploy</th>
-                <td><kbd>1</kbd>–<kbd>9</kbd> hotbar</td>
+                <td data-keybinding-table="hotbar"><kbd>1</kbd>–<kbd>9</kbd> hotbar</td>
                 <td>Hotbar tap</td>
               </tr>
             </tbody>

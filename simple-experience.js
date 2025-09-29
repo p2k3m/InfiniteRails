@@ -14,7 +14,7 @@
   const DAY_LENGTH_SECONDS = 600;
   const POINTER_SENSITIVITY = 0.0022;
   const POINTER_TUTORIAL_MESSAGE =
-    'Click the viewport to capture your mouse, then use WASD or the arrow keys to move and left-click to mine.';
+    'Click the viewport to capture your mouse, then use your movement keys to move and left-click to mine.';
   const FALLBACK_HEALTH = 10;
   const PORTAL_BLOCK_REQUIREMENT = 10;
   const PORTAL_INTERACTION_RANGE = 4.5;
@@ -109,6 +109,67 @@
       });
     });
     return merged;
+  }
+
+  function formatKeyLabel(code) {
+    if (!code || typeof code !== 'string') {
+      return '';
+    }
+    if (code.startsWith('Key')) {
+      return code.slice(3);
+    }
+    if (code.startsWith('Digit')) {
+      return code.slice(5);
+    }
+    if (code.startsWith('Numpad')) {
+      return `Numpad ${code.slice(6)}`;
+    }
+    switch (code) {
+      case 'ArrowUp':
+        return '↑';
+      case 'ArrowDown':
+        return '↓';
+      case 'ArrowLeft':
+        return '←';
+      case 'ArrowRight':
+        return '→';
+      case 'Space':
+        return 'Space';
+      case 'Escape':
+        return 'Esc';
+      default:
+        return code;
+    }
+  }
+
+  function joinKeyLabels(labels, options = {}) {
+    const { fallback = '' } = options ?? {};
+    if (!Array.isArray(labels)) {
+      return fallback;
+    }
+    const filtered = labels.filter((label) => typeof label === 'string' && label.trim());
+    if (!filtered.length) {
+      return fallback;
+    }
+    if (filtered.length === 1) {
+      return filtered[0];
+    }
+    return filtered.join(' / ');
+  }
+
+  function formatKeyListForSentence(labels, options = {}) {
+    const { fallback = '' } = options ?? {};
+    if (!Array.isArray(labels) || !labels.length) {
+      return fallback;
+    }
+    if (labels.length === 1) {
+      return labels[0];
+    }
+    if (labels.length === 2) {
+      return `${labels[0]} or ${labels[1]}`;
+    }
+    const head = labels.slice(0, -1).join(', ');
+    return `${head}, or ${labels[labels.length - 1]}`;
   }
   const MAX_STACK_SIZE = 99;
   const GOLEM_CONTACT_RANGE = 1.6;
@@ -1063,7 +1124,7 @@
         return;
       }
       const text =
-        (typeof message === 'string' && message.trim()) || POINTER_TUTORIAL_MESSAGE;
+        (typeof message === 'string' && message.trim()) || this.getPointerTutorialMessage();
       if (this.pointerHintEl.textContent !== text) {
         this.pointerHintEl.textContent = text;
       }
@@ -1155,7 +1216,7 @@
       if (this.pointerLocked) {
         return;
       }
-      this.updatePointerHintForInputMode(POINTER_TUTORIAL_MESSAGE);
+      this.updatePointerHintForInputMode(this.getPointerTutorialMessage());
       this.schedulePointerHintAutoHide(5);
     }
 
@@ -4373,7 +4434,11 @@
             !chest.hintShown &&
             this.elapsed - this.lastChestHintAt > CHEST_HINT_COOLDOWN
           ) {
-            this.showHint('Press F to open the loot chest.');
+            const interactSentence = formatKeyListForSentence(this.getActionKeyLabels('interact', { limit: 3 }));
+            const chestHint = interactSentence
+              ? `Press ${interactSentence} to open the loot chest.`
+              : 'Use your interact control to open the loot chest.';
+            this.showHint(chestHint);
             chest.hintShown = true;
             this.lastChestHintAt = this.elapsed;
           }
@@ -4986,6 +5051,91 @@
 
     getDefaultKeyBindings() {
       return cloneKeyBindingMap(this.defaultKeyBindings);
+    }
+
+    getActionKeyLabels(action, options = {}) {
+      const { limit = null } = options ?? {};
+      if (typeof action !== 'string' || !action.trim()) {
+        return [];
+      }
+      const binding = this.keyBindings?.[action.trim()] ?? [];
+      const seen = new Set();
+      const labels = [];
+      binding.forEach((code) => {
+        const label = formatKeyLabel(code);
+        if (!label || seen.has(label)) {
+          return;
+        }
+        seen.add(label);
+        labels.push(label);
+      });
+      if (typeof limit === 'number' && Number.isFinite(limit) && limit >= 0) {
+        return labels.slice(0, Math.floor(limit));
+      }
+      return labels;
+    }
+
+    getActionKeySummary(action, options = {}) {
+      const { limit = null, fallback = '' } = options ?? {};
+      const labels = this.getActionKeyLabels(action, { limit });
+      return joinKeyLabels(labels, { fallback });
+    }
+
+    getCombinedActionLabels(actions = [], options = {}) {
+      const { limitPerAction = null } = options ?? {};
+      const labels = [];
+      const seen = new Set();
+      actions.forEach((action) => {
+        const actionLabels = this.getActionKeyLabels(action, { limit: limitPerAction });
+        actionLabels.forEach((label) => {
+          if (!label || seen.has(label)) {
+            return;
+          }
+          seen.add(label);
+          labels.push(label);
+        });
+      });
+      return labels;
+    }
+
+    getMovementKeySets() {
+      const actions = ['moveForward', 'moveLeft', 'moveBackward', 'moveRight'];
+      const primary = [];
+      const secondary = [];
+      let hasSecondary = true;
+      actions.forEach((action) => {
+        const labels = this.getActionKeyLabels(action);
+        if (labels.length) {
+          primary.push(labels[0]);
+        }
+        if (labels.length > 1) {
+          secondary.push(labels[1]);
+        } else {
+          hasSecondary = false;
+        }
+      });
+      return {
+        primary,
+        secondary: hasSecondary && secondary.length === actions.length ? secondary : [],
+      };
+    }
+
+    getMovementKeySummary(options = {}) {
+      const { joiner = ' / ', fallback = '' } = options ?? {};
+      const { primary } = this.getMovementKeySets();
+      const filtered = primary.filter((label) => typeof label === 'string' && label.trim());
+      if (!filtered.length) {
+        return fallback;
+      }
+      return filtered.join(joiner);
+    }
+
+    getPointerTutorialMessage() {
+      const movementSummary = this.getMovementKeySummary({ fallback: '' });
+      if (movementSummary) {
+        return `Click the viewport to capture your mouse, then use ${movementSummary} to move and left-click to mine.`;
+      }
+      return POINTER_TUTORIAL_MESSAGE;
     }
 
     applyKeyBinding(action, keys) {
