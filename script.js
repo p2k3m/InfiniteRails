@@ -13,6 +13,7 @@
   ];
   let gltfLoaderPromise = null;
   let threeLoaderPromise = null;
+  let gltfLoaderInstancePromise = null;
 
   function getGlobalScope() {
     if (typeof window !== 'undefined') return window;
@@ -3210,6 +3211,10 @@
       material: null,
       texture: null,
       instancingFallbackNotified: false,
+      voxelBudget: 0,
+      voxelUsage: 0,
+      voxelCount: 0,
+      columnsTrimmed: 0,
     };
     const voxelIslandDummy = new THREE.Object3D();
     let entityGroup;
@@ -3226,6 +3231,9 @@
     const playerAnimationActions = {};
     const playerAnimationBlend = { idle: 1, walk: 0 };
     let tileRenderState = [];
+    const tileUpdateQueue = new Set();
+    const animatedTileRenderInfos = new Set();
+    let fullWorldRefreshPending = false;
     const zombieMeshes = [];
     const ironGolemMeshes = [];
     let zombieModelTemplate = null;
@@ -3620,6 +3628,8 @@
       noiseScale: 0.65,
       falloffPower: 1.6,
     };
+
+    const TERRAIN_VOXEL_CAP = VOXEL_ISLAND_CONFIG.size * VOXEL_ISLAND_CONFIG.size * 4;
 
     const particleSystems = [];
 
@@ -5209,6 +5219,17 @@
       const halfSize = size / 2;
       const radius = Math.max(tileSize, size * radiusMultiplier);
       const tileCount = size * size;
+      const minColumnUnits = Math.max(1, Math.round(minHeight));
+      const maxColumnUnits = Math.max(minColumnUnits, Math.round(maxHeight));
+      const totalColumns = tileCount;
+      const minRequired = totalColumns * minColumnUnits;
+      const maxPossible = totalColumns * maxColumnUnits;
+      const cappedBudget = Math.min(TERRAIN_VOXEL_CAP, maxPossible);
+      const voxelBudget = Math.max(minRequired, cappedBudget);
+      let remainingVoxels = voxelBudget;
+      let cappedColumns = 0;
+      let voxelCount = 0;
+      let highestColumnUnits = 0;
 
       if (tileCount === 0) {
         return;
@@ -5283,17 +5304,35 @@
           const distanceRatio = Math.min(distance / radius, 1);
           const falloff = Math.pow(Math.max(0, 1 - distanceRatio), falloffPower);
           const variation = random(offsetX, offsetZ) * noiseScale;
-          const height = THREE.MathUtils.clamp(
+          const desiredHeight = THREE.MathUtils.clamp(
             minHeight + falloff * (maxHeight - minHeight) + variation,
             minHeight,
             maxHeight,
           );
-          voxelIslandDummy.position.set(
-            offsetX * tileSize,
-            (height * tileSize) / 2,
-            offsetZ * tileSize,
-          );
-          voxelIslandDummy.scale.set(1, height, 1);
+          const desiredUnits = Math.max(minColumnUnits, Math.round(desiredHeight));
+          const columnsRemaining = totalColumns - index - 1;
+          const reservedForRemaining = Math.max(0, columnsRemaining * minColumnUnits);
+          const availableForColumn = Math.max(minColumnUnits, remainingVoxels - reservedForRemaining);
+          let columnUnits = Math.min(desiredUnits, maxColumnUnits, availableForColumn);
+          if (columnUnits < minColumnUnits) {
+            columnUnits = Math.min(minColumnUnits, remainingVoxels);
+          }
+          columnUnits = Math.max(0, Math.floor(columnUnits));
+          if (columnUnits < minColumnUnits && remainingVoxels > 0) {
+            columnUnits = Math.min(minColumnUnits, Math.floor(remainingVoxels));
+          }
+          if (columnUnits <= 0) {
+            columnUnits = minColumnUnits;
+          }
+          if (columnUnits < desiredUnits) {
+            cappedColumns += 1;
+          }
+          remainingVoxels = Math.max(0, remainingVoxels - columnUnits);
+          voxelCount += columnUnits;
+          highestColumnUnits = Math.max(highestColumnUnits, columnUnits);
+          const columnHeight = columnUnits * tileSize;
+          voxelIslandDummy.position.set(offsetX * tileSize, columnHeight / 2, offsetZ * tileSize);
+          voxelIslandDummy.scale.set(1, columnUnits, 1);
           voxelIslandDummy.rotation.set(0, 0, 0);
           voxelIslandDummy.updateMatrix();
           if (islandMesh) {
@@ -5331,15 +5370,30 @@
           voxelIslandAssets.instancingFallbackNotified = true;
         }
       }
+      const voxelsUsed = voxelBudget - remainingVoxels;
       voxelIslandAssets.tileCount = tileCount;
+      voxelIslandAssets.voxelBudget = voxelBudget;
+      voxelIslandAssets.voxelUsage = voxelsUsed;
+      voxelIslandAssets.voxelCount = voxelCount;
+      voxelIslandAssets.columnsTrimmed = cappedColumns;
+      const maxColumnHeight = Math.max(tileSize, highestColumnUnits * tileSize);
       const horizontalRadius = (size * tileSize) / 2;
-      const verticalRadius = (maxHeight * tileSize) / 2;
+      const verticalRadius = maxColumnHeight / 2;
       worldCullingState.islandCenter.set(0, verticalRadius, 0);
       worldCullingState.islandRadius = Math.sqrt(
         horizontalRadius * horizontalRadius * 2 + verticalRadius * verticalRadius
       );
       if (typeof console !== 'undefined') {
         console.log(`World generated: ${tileCount} voxels`);
+        console.log(`Terrain blocks placed: ${voxelCount}`);
+        if (cappedColumns > 0) {
+          console.info(
+            `Terrain voxel budget applied: ${cappedColumns} columns trimmed to stay under ${voxelBudget} voxels`,
+          );
+        }
+        if (voxelsUsed >= voxelBudget) {
+          console.info(`Terrain voxel cap enforced at ${voxelsUsed}/${voxelBudget} blocks.`);
+        }
       }
     }
 
@@ -6059,6 +6113,38 @@
       return group;
     }
 
+    function getGltfLoaderInstance() {
+      if (gltfLoader) {
+        return Promise.resolve(gltfLoader);
+      }
+      if (!SUPPORTS_MODEL_ASSETS) {
+        return Promise.reject(new Error('Model assets are disabled.'));
+      }
+      if (gltfLoaderInstancePromise) {
+        return gltfLoaderInstancePromise;
+      }
+      if (!THREE) {
+        return Promise.reject(new Error('THREE.js is unavailable for GLTF loading.'));
+      }
+      const loaderPromise = ensureGLTFLoader(THREE).then((LoaderCtor) => {
+        if (!LoaderCtor) {
+          throw new Error('GLTFLoader is unavailable.');
+        }
+        gltfLoader = new LoaderCtor();
+        return gltfLoader;
+      });
+      gltfLoaderInstancePromise = loaderPromise
+        .then((loader) => {
+          gltfLoaderInstancePromise = null;
+          return loader;
+        })
+        .catch((error) => {
+          gltfLoaderInstancePromise = null;
+          throw error;
+        });
+      return gltfLoaderInstancePromise;
+    }
+
     function loadPreviewHandTemplate() {
       if (previewHandTemplate) {
         return Promise.resolve(previewHandTemplate);
@@ -6067,43 +6153,46 @@
         previewHandTemplate = createFallbackHand();
         return Promise.resolve(previewHandTemplate);
       }
-      if (!THREE.GLTFLoader) {
-        previewHandTemplate = createFallbackHand();
-        return Promise.resolve(previewHandTemplate);
-      }
-      if (!gltfLoader) {
-        gltfLoader = new THREE.GLTFLoader();
-      }
       if (!previewHandPromise) {
-        previewHandPromise = new Promise((resolve) => {
-          gltfLoader.load(
-            'assets/arm.gltf',
-            (gltf) => {
-              const template = gltf.scene || gltf.scenes?.[0] || createFallbackHand();
-              previewHandTemplate = template;
-              resolve(template);
-            },
-            undefined,
-            (error) => {
-              console.warn('Failed to load first-person hand model.', error);
-              parseEmbeddedModel(
-                'arm',
-                (embeddedGltf) => {
-                  const template = embeddedGltf.scene || embeddedGltf.scenes?.[0] || createFallbackHand();
+        previewHandPromise = getGltfLoaderInstance()
+          .then((loader) =>
+            new Promise((resolve) => {
+              loader.load(
+                'assets/arm.gltf',
+                (gltf) => {
+                  const template = gltf.scene || gltf.scenes?.[0] || createFallbackHand();
                   previewHandTemplate = template;
                   resolve(template);
                 },
-                () => {
-                  const fallback = createFallbackHand();
-                  previewHandTemplate = fallback;
-                  resolve(fallback);
-                }
+                undefined,
+                (error) => {
+                  console.warn('Failed to load first-person hand model.', error);
+                  parseEmbeddedModel(
+                    'arm',
+                    (embeddedGltf) => {
+                      const template = embeddedGltf.scene || embeddedGltf.scenes?.[0] || createFallbackHand();
+                      previewHandTemplate = template;
+                      resolve(template);
+                    },
+                    () => {
+                      const fallback = createFallbackHand();
+                      previewHandTemplate = fallback;
+                      resolve(fallback);
+                    }
+                  );
+                },
               );
-            },
-          );
-        }).finally(() => {
-          previewHandPromise = null;
-        });
+            })
+          )
+          .catch((error) => {
+            console.warn('GLTFLoader unavailable for preview hand; using fallback.', error);
+            const fallback = createFallbackHand();
+            previewHandTemplate = fallback;
+            return fallback;
+          })
+          .finally(() => {
+            previewHandPromise = null;
+          });
       }
       return previewHandPromise.then((template) => {
         previewHandTemplate = template || previewHandTemplate || createFallbackHand();
@@ -6328,6 +6417,9 @@
 
     function resetWorldMeshes() {
       tileRenderState = [];
+      tileUpdateQueue.clear();
+      animatedTileRenderInfos.clear();
+      fullWorldRefreshPending = true;
       clearMiningState();
       hideHoverHighlights();
       if (worldTilesRoot) {
@@ -6361,8 +6453,40 @@
             group,
             signature: null,
             animations: {},
+            x,
+            y,
           };
         }
+      }
+    }
+
+    function markTileDirty(x, y) {
+      if (!Number.isFinite(x) || !Number.isFinite(y)) {
+        return;
+      }
+      const ix = Math.floor(x);
+      const iy = Math.floor(y);
+      if (ix < 0 || iy < 0 || ix >= state.width || iy >= state.height) {
+        return;
+      }
+      tileUpdateQueue.add(`${ix}|${iy}`);
+    }
+
+    function markAllTilesDirty() {
+      if (!Number.isFinite(state?.width) || !Number.isFinite(state?.height)) {
+        return;
+      }
+      fullWorldRefreshPending = true;
+    }
+
+    function syncAnimatedTileTracking(renderInfo) {
+      if (!renderInfo) return;
+      const animations = renderInfo.animations || {};
+      const hasAnimations = Object.keys(animations).some((key) => Boolean(animations[key]));
+      if (hasAnimations) {
+        animatedTileRenderInfos.add(renderInfo);
+      } else if (animatedTileRenderInfos.has(renderInfo)) {
+        animatedTileRenderInfos.delete(renderInfo);
       }
     }
 
@@ -7882,6 +8006,7 @@
         resourceGem.rotation.y = Math.PI / 4;
         renderInfo.animations.resourceGem = resourceGem;
       }
+      syncAnimatedTileTracking(renderInfo);
     }
 
     function updateTileVisual(tile, renderInfo) {
@@ -11076,20 +11201,79 @@
 
     function updateWorldMeshes() {
       ensureTileGroups();
-      for (let y = 0; y < state.height; y++) {
-        for (let x = 0; x < state.width; x++) {
-          const tile = state.world?.[y]?.[x];
+      if (!Array.isArray(state.world)) {
+        return;
+      }
+
+      if (fullWorldRefreshPending) {
+        fullWorldRefreshPending = false;
+        for (let y = 0; y < state.height; y += 1) {
+          for (let x = 0; x < state.width; x += 1) {
+            tileUpdateQueue.add(`${x}|${y}`);
+          }
+        }
+      }
+
+      const processedKeys = new Set();
+
+      if (tileUpdateQueue.size > 0) {
+        const pendingKeys = Array.from(tileUpdateQueue);
+        tileUpdateQueue.clear();
+        for (const key of pendingKeys) {
+          const [sx, sy] = key.split('|');
+          const x = Number.parseInt(sx, 10);
+          const y = Number.parseInt(sy, 10);
+          if (!Number.isFinite(x) || !Number.isFinite(y)) {
+            continue;
+          }
+          if (x < 0 || y < 0 || x >= state.width || y >= state.height) {
+            continue;
+          }
+          const tile = state.world?.[y]?.[x] ?? null;
           const renderInfo = tileRenderState?.[y]?.[x];
-          if (!renderInfo) continue;
+          if (!renderInfo) {
+            continue;
+          }
           const signature = getTileSignature(tile);
           if (renderInfo.signature !== signature) {
             rebuildTileGroup(renderInfo, tile);
             renderInfo.signature = signature;
           }
-          if (tile) {
-            updateTileVisual(tile, renderInfo);
+          if (!tile) {
+            renderInfo.group.visible = false;
+            renderInfo.animations = {};
+            syncAnimatedTileTracking(renderInfo);
+            continue;
           }
+          processedKeys.add(`${x}|${y}`);
+          updateTileVisual(tile, renderInfo);
+          syncAnimatedTileTracking(renderInfo);
         }
+      }
+
+      if (animatedTileRenderInfos.size > 0) {
+        animatedTileRenderInfos.forEach((renderInfo) => {
+          if (!renderInfo) {
+            return;
+          }
+          const { x, y } = renderInfo;
+          if (!Number.isFinite(x) || !Number.isFinite(y)) {
+            animatedTileRenderInfos.delete(renderInfo);
+            return;
+          }
+          const key = `${x}|${y}`;
+          if (processedKeys.has(key)) {
+            return;
+          }
+          const tile = state.world?.[y]?.[x] ?? null;
+          if (!tile || tile.type === 'void') {
+            renderInfo.group.visible = false;
+            renderInfo.animations = {};
+            syncAnimatedTileTracking(renderInfo);
+            return;
+          }
+          updateTileVisual(tile, renderInfo);
+        });
       }
     }
 
@@ -11399,26 +11583,25 @@
         onError?.(new Error(`Embedded model "${key}" is unavailable.`));
         return;
       }
-      if (!THREE?.GLTFLoader) {
-        onError?.(new Error('GLTFLoader is unavailable for embedded model parsing.'));
-        return;
-      }
-      if (!gltfLoader) {
-        gltfLoader = new THREE.GLTFLoader();
-      }
-      try {
-        const modelString = EMBEDDED_ASSETS.models[key];
-        gltfLoader.parse(
-          modelString,
-          '',
-          onLoad,
-          (parseError) => {
-            onError?.(parseError);
-          },
-        );
-      } catch (error) {
-        onError?.(error);
-      }
+      const modelString = EMBEDDED_ASSETS.models[key];
+      getGltfLoaderInstance()
+        .then((loader) => {
+          try {
+            loader.parse(
+              modelString,
+              '',
+              onLoad,
+              (parseError) => {
+                onError?.(parseError);
+              },
+            );
+          } catch (error) {
+            onError?.(error);
+          }
+        })
+        .catch((error) => {
+          onError?.(error);
+        });
     }
 
     function attachPlayerKeyLight(target) {
@@ -11652,26 +11835,32 @@
         return;
       }
 
-      if (!THREE.GLTFLoader) {
-        console.error('GLTFLoader is unavailable; cannot create the Steve model.');
-        if (sessionId === activePlayerSessionId) {
-          playerModelLoading = false;
-        }
-        return;
-      }
-      if (!gltfLoader) {
-        gltfLoader = new THREE.GLTFLoader();
-      }
       const loadSessionId = sessionId;
       playerModelLoading = true;
-      gltfLoader.load(
-        'assets/steve.gltf',
-        (gltf) => {
-          handlePlayerGltfLoad(gltf, loadSessionId);
-        },
-        undefined,
-        (error) => {
-          console.error('Failed to load Steve model.', error);
+      getGltfLoaderInstance()
+        .then((loader) => {
+          loader.load(
+            'assets/steve.gltf',
+            (gltf) => {
+              handlePlayerGltfLoad(gltf, loadSessionId);
+            },
+            undefined,
+            (error) => {
+              console.error('Failed to load Steve model.', error);
+              parseEmbeddedModel(
+                'steve',
+                (embeddedGltf) => {
+                  handlePlayerGltfLoad(embeddedGltf, loadSessionId);
+                },
+                () => {
+                  useFallbackPlayerMesh(loadSessionId);
+                }
+              );
+            }
+          );
+        })
+        .catch((error) => {
+          console.error('GLTFLoader is unavailable; cannot create the Steve model.', error);
           parseEmbeddedModel(
             'steve',
             (embeddedGltf) => {
@@ -11681,8 +11870,7 @@
               useFallbackPlayerMesh(loadSessionId);
             }
           );
-        }
-      );
+        });
     }
 
     function initializePlayerAnimations() {
@@ -11860,46 +12048,19 @@
         zombieModelPromise = Promise.resolve(zombieModelTemplate);
         return zombieModelPromise;
       }
-      if (!THREE.GLTFLoader) {
-        console.error('GLTFLoader is unavailable; cannot create the zombie model.');
-        return null;
-      }
-      if (!gltfLoader) {
-        gltfLoader = new THREE.GLTFLoader();
-      }
-      zombieModelPromise = new Promise((resolve) => {
-        const resolveWithTemplate = (template) => {
-          zombieModelTemplate = template;
-          resolve(template);
-        };
-        gltfLoader.load(
-          'assets/zombie.gltf',
-          (gltf) => {
-            const zombieScene = gltf.scene || gltf.scenes?.[0];
-            if (!zombieScene) {
-              console.error('Zombie model did not include a scene.');
-              resolveWithTemplate(createFallbackZombieTemplate());
-              return;
-            }
-            zombieScene.position.set(0, 0, 0);
-            zombieScene.rotation.set(0, 0, 0);
-            zombieScene.scale.set(1, 1, 1);
-            zombieScene.updateMatrixWorld(true);
-            const bounds = new THREE.Box3().setFromObject(zombieScene);
-            resolveWithTemplate({
-              scene: zombieScene,
-              groundOffset: -bounds.min.y,
-              defaultScale: 0.6,
-            });
-          },
-          undefined,
-          (error) => {
-            console.error('Failed to load the zombie model.', error);
-            parseEmbeddedModel(
-              'zombie',
-              (embeddedGltf) => {
-                const zombieScene = embeddedGltf.scene || embeddedGltf.scenes?.[0];
+      zombieModelPromise = getGltfLoaderInstance()
+        .then((loader) =>
+          new Promise((resolve) => {
+            const resolveWithTemplate = (template) => {
+              zombieModelTemplate = template;
+              resolve(template);
+            };
+            loader.load(
+              'assets/zombie.gltf',
+              (gltf) => {
+                const zombieScene = gltf.scene || gltf.scenes?.[0];
                 if (!zombieScene) {
+                  console.error('Zombie model did not include a scene.');
                   resolveWithTemplate(createFallbackZombieTemplate());
                   return;
                 }
@@ -11914,13 +12075,42 @@
                   defaultScale: 0.6,
                 });
               },
-              () => {
-                resolveWithTemplate(createFallbackZombieTemplate());
+              undefined,
+              (error) => {
+                console.error('Failed to load the zombie model.', error);
+                parseEmbeddedModel(
+                  'zombie',
+                  (embeddedGltf) => {
+                    const zombieScene = embeddedGltf.scene || embeddedGltf.scenes?.[0];
+                    if (!zombieScene) {
+                      resolveWithTemplate(createFallbackZombieTemplate());
+                      return;
+                    }
+                    zombieScene.position.set(0, 0, 0);
+                    zombieScene.rotation.set(0, 0, 0);
+                    zombieScene.scale.set(1, 1, 1);
+                    zombieScene.updateMatrixWorld(true);
+                    const bounds = new THREE.Box3().setFromObject(zombieScene);
+                    resolveWithTemplate({
+                      scene: zombieScene,
+                      groundOffset: -bounds.min.y,
+                      defaultScale: 0.6,
+                    });
+                  },
+                  () => {
+                    resolveWithTemplate(createFallbackZombieTemplate());
+                  }
+                );
               }
             );
-          }
-        );
-      });
+          })
+        )
+        .catch((error) => {
+          console.error('GLTFLoader is unavailable; cannot create the zombie model.', error);
+          const fallback = createFallbackZombieTemplate();
+          zombieModelTemplate = fallback;
+          return fallback;
+        });
       return zombieModelPromise;
     }
 
@@ -12126,46 +12316,19 @@
         ironGolemModelPromise = Promise.resolve(ironGolemModelTemplate);
         return ironGolemModelPromise;
       }
-      if (!THREE.GLTFLoader) {
-        console.error('GLTFLoader is unavailable; cannot create the iron golem model.');
-        return null;
-      }
-      if (!gltfLoader) {
-        gltfLoader = new THREE.GLTFLoader();
-      }
-      ironGolemModelPromise = new Promise((resolve) => {
-        const resolveWithTemplate = (template) => {
-          ironGolemModelTemplate = template;
-          resolve(template);
-        };
-        gltfLoader.load(
-          'assets/iron_golem.gltf',
-          (gltf) => {
-            const golemScene = gltf.scene || gltf.scenes?.[0];
-            if (!golemScene) {
-              console.error('Iron golem model did not include a scene.');
-              resolveWithTemplate(createFallbackGolemTemplate());
-              return;
-            }
-            golemScene.position.set(0, 0, 0);
-            golemScene.rotation.set(0, 0, 0);
-            golemScene.scale.set(1, 1, 1);
-            golemScene.updateMatrixWorld(true);
-            const bounds = new THREE.Box3().setFromObject(golemScene);
-            resolveWithTemplate({
-              scene: golemScene,
-              groundOffset: -bounds.min.y,
-              defaultScale: 0.55,
-            });
-          },
-          undefined,
-          (error) => {
-            console.error('Failed to load the iron golem model.', error);
-            parseEmbeddedModel(
-              'ironGolem',
-              (embeddedGltf) => {
-                const golemScene = embeddedGltf.scene || embeddedGltf.scenes?.[0];
+      ironGolemModelPromise = getGltfLoaderInstance()
+        .then((loader) =>
+          new Promise((resolve) => {
+            const resolveWithTemplate = (template) => {
+              ironGolemModelTemplate = template;
+              resolve(template);
+            };
+            loader.load(
+              'assets/iron_golem.gltf',
+              (gltf) => {
+                const golemScene = gltf.scene || gltf.scenes?.[0];
                 if (!golemScene) {
+                  console.error('Iron golem model did not include a scene.');
                   resolveWithTemplate(createFallbackGolemTemplate());
                   return;
                 }
@@ -12180,13 +12343,42 @@
                   defaultScale: 0.55,
                 });
               },
-              () => {
-                resolveWithTemplate(createFallbackGolemTemplate());
+              undefined,
+              (error) => {
+                console.error('Failed to load the iron golem model.', error);
+                parseEmbeddedModel(
+                  'ironGolem',
+                  (embeddedGltf) => {
+                    const golemScene = embeddedGltf.scene || embeddedGltf.scenes?.[0];
+                    if (!golemScene) {
+                      resolveWithTemplate(createFallbackGolemTemplate());
+                      return;
+                    }
+                    golemScene.position.set(0, 0, 0);
+                    golemScene.rotation.set(0, 0, 0);
+                    golemScene.scale.set(1, 1, 1);
+                    golemScene.updateMatrixWorld(true);
+                    const bounds = new THREE.Box3().setFromObject(golemScene);
+                    resolveWithTemplate({
+                      scene: golemScene,
+                      groundOffset: -bounds.min.y,
+                      defaultScale: 0.55,
+                    });
+                  },
+                  () => {
+                    resolveWithTemplate(createFallbackGolemTemplate());
+                  }
+                );
               }
             );
-          }
-        );
-      });
+          })
+        )
+        .catch((error) => {
+          console.error('GLTFLoader is unavailable; cannot create the iron golem model.', error);
+          const fallback = createFallbackGolemTemplate();
+          ironGolemModelTemplate = fallback;
+          return fallback;
+        });
       return ironGolemModelPromise;
     }
 
@@ -15562,6 +15754,7 @@
         shaderProfile: dim.physics?.shaderProfile ?? 'default',
       };
       resetWorldMeshes();
+      markAllTilesDirty();
       state.player.x = Math.floor(state.width / 2);
       state.player.y = Math.floor(state.height / 2);
       state.player.facing = { x: 0, y: 1 };
@@ -16956,7 +17149,7 @@
         return;
       }
       if (tile.type === 'chest') {
-        openChest(tile);
+        openChest(tile, tx, ty);
         return;
       }
       if (tile.resource) {
@@ -16980,7 +17173,7 @@
       const originalType = tile.type;
       const itemId = tile.resource;
       if (itemId === 'chest') {
-        openChest(tile);
+        openChest(tile, x, y);
         return;
       }
       if (itemId === 'stone' && !hasItem('stone-pickaxe')) {
@@ -17011,6 +17204,7 @@
         tile.type = 'grass';
         tile.resource = null;
       }
+      markTileDirty(x, y);
       if (!echoed) {
         for (const hook of state.hooks.onAction) {
           hook(state, (fromEcho) => harvestResource(tile, x, y, true));
@@ -17170,6 +17364,7 @@
               portalState.shaderActive = true;
             }
           }
+          markTileDirty(tx, ty);
         }
       });
       if (activationMethod === 'torch') {
@@ -17211,7 +17406,10 @@
       };
       portal.frame.forEach(({ x, y }) => {
         const tile = getTile(x, y);
-        if (tile) tile.type = 'portalFrame';
+        if (tile) {
+          tile.type = 'portalFrame';
+          markTileDirty(x, y);
+        }
       });
       portal.tiles.forEach(({ x, y }) => {
         const tile = getTile(x, y);
@@ -17222,6 +17420,7 @@
             portalState.activation = 0;
             portalState.transition = 0;
           }
+          markTileDirty(x, y);
         }
       });
       state.portals.push(portal);
@@ -17239,7 +17438,10 @@
       const { frame, portal } = footprint;
       frame.forEach(({ x, y }) => {
         const tile = getTile(x, y);
-        if (tile) tile.type = 'portalFrame';
+        if (tile) {
+          tile.type = 'portalFrame';
+          markTileDirty(x, y);
+        }
       });
       portal.forEach(({ x, y }) => {
         const tile = getTile(x, y);
@@ -17250,6 +17452,7 @@
             portalState.activation = 1;
             portalState.transition = 0;
           }
+          markTileDirty(x, y);
         }
       });
       state.portals.push({
@@ -17350,7 +17553,10 @@
                 portalState.shaderActive = true;
               }
             }
-            tile.type = 'portal';
+            if (tile.type !== 'portal') {
+              tile.type = 'portal';
+              markTileDirty(x, y);
+            }
           });
           if (progress >= 1) {
             portal.active = true;
@@ -17365,6 +17571,7 @@
                   portalState.shaderActive = true;
                 }
               }
+              markTileDirty(x, y);
             });
             if (!portal.announcedActive) {
               logEvent(`Portal active: ${portal.label}.`);
@@ -17981,13 +18188,16 @@
       }, 1600);
     }
 
-    function openChest(tile) {
+    function openChest(tile, x = null, y = null) {
       if (tile.data?.locked && !hasItem(tile.data.required)) {
         logEvent('Chest locked. Requires Rail Key.');
         return;
       }
       tile.type = 'grass';
       tile.resource = null;
+      if (Number.isFinite(x) && Number.isFinite(y)) {
+        markTileDirty(x, y);
+      }
       const lootTable = [
         { item: 'stick', qty: 2 },
         { item: 'spark-crystal', qty: 1 },
@@ -18180,6 +18390,7 @@
       tile.type = blockItems.includes(slot.item) ? slot.item : 'grass';
       tile.resource = null;
       if (!tile.data) tile.data = {};
+      markTileDirty(tx, ty);
       removeItem(slot.item, 1);
       logEvent(`${ITEM_DEFS[slot.item].name} placed.`);
       return true;
@@ -21645,7 +21856,6 @@
   }
 
   ensureThree()
-    .then((THREEInstance) => ensureGLTFLoader(THREEInstance).then(() => THREEInstance))
     .then(() => {
       bootstrap();
     })
