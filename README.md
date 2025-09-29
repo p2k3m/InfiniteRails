@@ -130,6 +130,13 @@ experience.setKeyBindings({ moveForward: ['KeyI'], moveBackward: ['KeyK'] });
 experience.resetKeyBindings();
 ```
 
+The advanced renderer exposes the same helpers on `window.InfiniteRails` once `script.js` boots. Call them at runtime to tweak bindings without reloading:
+
+```js
+window.InfiniteRails.setKeyBinding('interact', ['KeyG']);
+window.InfiniteRails.resetKeyBindings();
+```
+
 ## Identity, location & scoreboard endpoints
 
 Expose an `APP_CONFIG` object before loading `script.js` to wire up Google SSO and DynamoDB-backed endpoints:
