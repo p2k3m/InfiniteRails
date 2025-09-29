@@ -401,8 +401,10 @@
       jump: ['Space'],
       interact: ['KeyF'],
       placeBlock: ['KeyQ'],
-      buildPortal: ['KeyR'],
-      toggleInventory: ['KeyE', 'KeyI'],
+      toggleCrafting: ['KeyE'],
+      toggleInventory: ['KeyI'],
+      resetPosition: ['KeyR'],
+      toggleCameraPerspective: ['KeyV'],
       closeMenus: ['Escape'],
     };
     for (let slot = 1; slot <= HOTBAR_SLOT_COUNT; slot += 1) {
@@ -3662,6 +3664,26 @@
     const CAMERA_DRAG_SUPPRESS_THRESHOLD = 5;
     const WORLD_UP = new THREE.Vector3(0, 1, 0);
     const CAMERA_VERTICAL_OFFSET = 0;
+    const CAMERA_PERSPECTIVE_SETTINGS = {
+      third: {
+        eyeOffset: CAMERA_EYE_OFFSET,
+        forwardOffset: CAMERA_FORWARD_OFFSET,
+        verticalOffset: CAMERA_VERTICAL_OFFSET,
+        lookDistance: CAMERA_LOOK_DISTANCE,
+        zoom: CAMERA_BASE_ZOOM,
+      },
+      first: {
+        eyeOffset: CAMERA_EYE_OFFSET - 0.18,
+        forwardOffset: 0.6,
+        verticalOffset: CAMERA_VERTICAL_OFFSET,
+        lookDistance: CAMERA_LOOK_DISTANCE * 0.75,
+        zoom: CAMERA_BASE_ZOOM * 1.08,
+      },
+    };
+    let cameraPerspective = 'third';
+    function getCameraPerspectiveSettings(perspective = cameraPerspective) {
+      return CAMERA_PERSPECTIVE_SETTINGS[perspective] ?? CAMERA_PERSPECTIVE_SETTINGS.third;
+    }
     const cameraState = {
       lastFacing: new THREE.Vector3(0, 0, 1),
       lastPlayerFacing: new THREE.Vector3(0, 0, 1),
@@ -3669,6 +3691,7 @@
       lastIdleBob: 0,
       lastWalkBob: 0,
       lastMovementStrength: 0,
+      perspective: 'third',
     };
     const tmpCameraForward = new THREE.Vector3();
     const tmpCameraTarget = new THREE.Vector3();
@@ -4688,6 +4711,7 @@
       cameraState.lastIdleBob = idleBob;
       cameraState.lastWalkBob = walkBob;
       cameraState.lastMovementStrength = movementStrength;
+      const perspectiveSettings = getCameraPerspectiveSettings();
       const { x, z } = worldToScene(state.player.x, state.player.y);
       const baseHeight = tileSurfaceHeight(state.player.x, state.player.y) || 0;
 
@@ -4713,15 +4737,15 @@
       const bobOffset = idleBob * 0.35 + walkBob * 0.22;
       const bounceOffset =
         movementStrength > 0.01 ? Math.sin(timestamp / 320) * 0.05 * movementStrength : 0;
-      const headY = baseHeight + CAMERA_EYE_OFFSET + bobOffset + bounceOffset;
+      const headY = baseHeight + perspectiveSettings.eyeOffset + bobOffset + bounceOffset;
 
       tmpCameraTarget.set(x, headY, z);
 
       camera.position.copy(tmpCameraTarget);
-      camera.position.addScaledVector(cameraState.lastFacing, -CAMERA_FORWARD_OFFSET);
-      camera.position.y += CAMERA_VERTICAL_OFFSET;
+      camera.position.addScaledVector(cameraState.lastFacing, -perspectiveSettings.forwardOffset);
+      camera.position.y += perspectiveSettings.verticalOffset;
 
-      tmpCameraTarget.addScaledVector(cameraState.lastFacing, CAMERA_LOOK_DISTANCE);
+      tmpCameraTarget.addScaledVector(cameraState.lastFacing, perspectiveSettings.lookDistance);
 
       if (movementStrength > 0.01) {
         const sway = Math.sin(timestamp / 280) * 0.18 * movementStrength;
@@ -4734,6 +4758,43 @@
       camera.up.copy(WORLD_UP);
       camera.lookAt(tmpCameraTarget);
       invalidateViewFrustum();
+    }
+
+    function applyCameraPerspective(perspective, options = {}) {
+      if (!perspective || !CAMERA_PERSPECTIVE_SETTINGS[perspective]) {
+        return false;
+      }
+      const { force = false, log = true } = options ?? {};
+      if (!force && perspective === cameraPerspective) {
+        return false;
+      }
+      cameraPerspective = perspective;
+      cameraState.perspective = perspective;
+      if (state && typeof state === 'object') {
+        state.cameraPerspective = perspective;
+      }
+      const settings = getCameraPerspectiveSettings(perspective);
+      if (camera) {
+        const targetZoom = settings.zoom ?? CAMERA_BASE_ZOOM;
+        if (Math.abs((camera.zoom ?? 0) - targetZoom) > 0.0001) {
+          camera.zoom = targetZoom;
+          camera.updateProjectionMatrix();
+        }
+      }
+      if (camera && state?.player) {
+        syncCameraToPlayer({ idleBob: 0, walkBob: 0, movementStrength: 0, facing: state.player.facing });
+      }
+      if (log && typeof logEvent === 'function') {
+        const label = perspective === 'first' ? 'First-person view engaged.' : 'Third-person view engaged.';
+        logEvent(label);
+      }
+      return true;
+    }
+
+    function toggleCameraPerspective(options = {}) {
+      const { log = true } = options ?? {};
+      const next = cameraPerspective === 'first' ? 'third' : 'first';
+      return applyCameraPerspective(next, { log });
     }
 
     const JOYSTICK_DEADZONE = 0.18;
@@ -5258,11 +5319,12 @@
       const halfWidth = halfHeight * aspect;
 
       camera = new THREE.OrthographicCamera(-halfWidth, halfWidth, halfHeight, -halfHeight, 0.1, 80);
-      camera.zoom = CAMERA_BASE_ZOOM;
+      const perspectiveSettings = getCameraPerspectiveSettings();
+      camera.zoom = perspectiveSettings.zoom ?? CAMERA_BASE_ZOOM;
       camera.updateProjectionMatrix();
-      camera.position.set(0, CAMERA_EYE_OFFSET, CAMERA_FORWARD_OFFSET);
+      camera.position.set(0, perspectiveSettings.eyeOffset, perspectiveSettings.forwardOffset);
       camera.up.copy(WORLD_UP);
-      camera.lookAt(0, CAMERA_EYE_OFFSET, 0);
+      camera.lookAt(0, perspectiveSettings.eyeOffset, 0);
 
       worldGroup = new THREE.Group();
       worldGroup.name = 'world-root';
@@ -14258,6 +14320,7 @@
       chests: [],
       lastMoveAt: 0,
       moveDelay: DEFAULT_MOVE_DELAY_SECONDS,
+      cameraPerspective: 'third',
       baseMoveDelay: DEFAULT_MOVE_DELAY_SECONDS,
       hooks: {
         onMove: [],
@@ -18723,6 +18786,75 @@
       return true;
     }
 
+    function findNearestWalkableTile(seeds = []) {
+      if (!Array.isArray(seeds) || !seeds.length) {
+        return null;
+      }
+      const queue = [];
+      const visited = new Set();
+      const push = (x, y) => {
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+        const ix = Math.round(x);
+        const iy = Math.round(y);
+        if (!isWithinBounds(ix, iy)) return;
+        const key = `${ix},${iy}`;
+        if (visited.has(key)) return;
+        visited.add(key);
+        queue.push({ x: ix, y: iy });
+      };
+      seeds.forEach((seed) => {
+        if (!seed) return;
+        push(seed.x, seed.y);
+      });
+      let index = 0;
+      const neighbors = [
+        [1, 0],
+        [-1, 0],
+        [0, 1],
+        [0, -1],
+      ];
+      while (index < queue.length) {
+        const current = queue[index++];
+        if (isWalkable(current.x, current.y)) {
+          return current;
+        }
+        neighbors.forEach(([dx, dy]) => push(current.x + dx, current.y + dy));
+      }
+      return null;
+    }
+
+    function resetPlayerPosition(options = {}) {
+      if (!state?.player) {
+        return false;
+      }
+      const { log = true } = options ?? {};
+      const seeds = [];
+      if (Number.isFinite(state.player.x) && Number.isFinite(state.player.y)) {
+        seeds.push({ x: state.player.x, y: state.player.y });
+      }
+      seeds.push({ x: Math.floor(state.width / 2), y: Math.floor(state.height / 2) });
+      const safeTile = findNearestWalkableTile(seeds);
+      if (!safeTile) {
+        console.warn('Unable to locate a safe tile while resetting position.');
+        return false;
+      }
+      state.player.x = safeTile.x;
+      state.player.y = safeTile.y;
+      state.player.facing = { x: 0, y: 1 };
+      state.player.isSliding = false;
+      state.player.tarStacks = 0;
+      state.player.tarSlowTimer = 0;
+      const now = performance?.now ? performance.now() : Date.now();
+      state.lastMoveAt = now;
+      if (camera) {
+        syncCameraToPlayer({ idleBob: 0, walkBob: 0, movementStrength: 0, facing: state.player.facing });
+      }
+      if (log && typeof logEvent === 'function') {
+        logEvent('Rail anchors recalibrated. Position reset.');
+      }
+      return true;
+    }
+
     function handleKeyDown(event) {
       if (event.repeat) return;
       const rawKey = typeof event.key === 'string' ? event.key : '';
@@ -18746,7 +18878,13 @@
         target instanceof HTMLElement &&
         (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)
       ) {
-        return;
+        const allowedInInput =
+          isKeyForAction('toggleInventory', code) ||
+          isKeyForAction('toggleCrafting', code) ||
+          isKeyForAction('closeMenus', code);
+        if (!allowedInInput) {
+          return;
+        }
       }
       if (isInventoryModalOpen()) {
         const allowed = isKeyForAction('toggleInventory', code) || isKeyForAction('closeMenus', code);
@@ -18772,13 +18910,34 @@
         event.preventDefault();
         return;
       }
-      if (isKeyForAction('buildPortal', code)) {
-        promptPortalBuild();
+      if (isKeyForAction('toggleCrafting', code)) {
+        toggleCraftingModal({ focusReturn: canvas });
         event.preventDefault();
         return;
       }
       if (isKeyForAction('toggleInventory', code)) {
-        toggleInventoryModal({ focusFirstSlot: true });
+        const opening = !isInventoryModalOpen();
+        toggleInventoryModal({ focusFirstSlot: opening });
+        if (!opening) {
+          canvas?.focus();
+        }
+        event.preventDefault();
+        return;
+      }
+      if (isKeyForAction('resetPosition', code)) {
+        if (resetPlayerPosition()) {
+          event.preventDefault();
+        }
+        return;
+      }
+      if (isKeyForAction('toggleCameraPerspective', code)) {
+        if (toggleCameraPerspective()) {
+          event.preventDefault();
+        }
+        return;
+      }
+      if (isKeyForAction('buildPortal', code)) {
+        promptPortalBuild();
         event.preventDefault();
         return;
       }
@@ -20822,14 +20981,26 @@
       recipeSearchEl?.focus();
     }
 
-    function closeCraftingModal() {
+    function closeCraftingModal(options = {}) {
       if (!craftingModal) return;
+      const { focusTrigger = true, focusTarget = null } = options ?? {};
       craftingModal.hidden = true;
       craftingModal.setAttribute('aria-hidden', 'true');
       craftSuggestionsEl?.setAttribute('data-visible', 'false');
       craftLauncherButton?.setAttribute('aria-expanded', 'false');
       closeCraftingSearchPanel();
-      craftLauncherButton?.focus();
+      const target = focusTarget || (focusTrigger ? craftLauncherButton : null);
+      target?.focus();
+    }
+
+    function toggleCraftingModal(options = {}) {
+      if (!craftingModal) return;
+      const { focusReturn = null } = options ?? {};
+      if (craftingModal.hidden) {
+        openCraftingModal();
+      } else {
+        closeCraftingModal({ focusTrigger: false, focusTarget: focusReturn });
+      }
     }
 
     function setupCraftingModal() {
@@ -20846,7 +21017,7 @@
           closeCraftingModal();
         }
       });
-      closeCraftingButton?.addEventListener('click', closeCraftingModal);
+      closeCraftingButton?.addEventListener('click', () => closeCraftingModal({ focusTrigger: true }));
       if (craftingSearchPanel) {
         craftingSearchPanel.hidden = true;
         craftingSearchPanel.setAttribute('data-open', 'false');
