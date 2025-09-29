@@ -32,6 +32,14 @@ describe('Portals of Dimension spec regression checks', () => {
     expect(simpleExperienceSource.includes('navigator.geolocation.getCurrentPosition')).toBe(true);
   });
 
+  it('keeps the first-person rig and day/night pipeline wired as specced', () => {
+    expect(simpleExperienceSource).toMatch(/this\.camera = new THREE\.OrthographicCamera/);
+    expect(simpleExperienceSource).toMatch(/this\.camera\.add\(this\.handGroup\);/);
+    expect(simpleExperienceSource).toMatch(/this\.elapsed = DAY_LENGTH_SECONDS \* 0\.5;/);
+    expect(simpleExperienceSource).toMatch(/updateDayNightCycle\(\)/);
+    expect(simpleExperienceSource).toMatch(/this\.sunLight\.position\.set/);
+  });
+
   it('ships the expected character and entity assets', () => {
     expect(simpleExperienceSource).toMatch(/MODEL_URLS\s*=\s*\{/);
     expect(simpleExperienceSource).toMatch(/steve\.gltf/);
@@ -45,14 +53,32 @@ describe('Portals of Dimension spec regression checks', () => {
     expect(simpleExperienceSource).toMatch(/handleCraftButton\(/);
   });
 
+  it('keeps supporting entities, crafting, and inventory hooks', () => {
+    expect(simpleExperienceSource).toMatch(/spawnGolem\(/);
+    expect(simpleExperienceSource).toMatch(/updateLootChests\(/);
+    expect(simpleExperienceSource).toMatch(/this\.hotbar = Array\.from\(/);
+    expect(simpleExperienceSource).toMatch(/this\.craftingModal/);
+    expect(simpleExperienceSource).toMatch(/this\.portalFrameLayout = this\.createPortalFrameLayout\(\);/);
+  });
+
   it('keeps backend sync hooks in place', () => {
     expect(simpleExperienceSource).toMatch(/loadScoreboard\(/);
     expect(simpleExperienceSource).toMatch(/flushScoreSync\(/);
     expect(scriptSource.includes("apiBaseUrl.replace(/\\/$/, '')}/scores")).toBe(true);
     expect(scriptSource.includes('google.accounts.id')).toBe(true);
+    expect(simpleExperienceSource.includes('nav?.sendBeacon')).toBe(true);
+    expect(simpleExperienceSource.includes('fetch(url, {')).toBe(true);
   });
 
   it('publishes the sandbox constructor for the bootstrapper', () => {
     expect(simpleExperienceSource).toMatch(/window\.SimpleExperience =/);
+  });
+
+  it('keeps audio polish, HUD refresh, and leaderboard prompts intact', () => {
+    expect(simpleExperienceSource).toMatch(/new HowlCtor\(/);
+    expect(simpleExperienceSource).toMatch(/updateHud\(/);
+    expect(simpleExperienceSource).toMatch(/this\.scoreboardStatusEl/);
+    expect(simpleExperienceSource).toMatch(/this\.pointerHintEl/);
+    expect(simpleExperienceSource).toMatch(/this\.footerStatusEl/);
   });
 });
