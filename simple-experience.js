@@ -569,6 +569,7 @@
       this.cameraShakeDuration = 0;
       this.cameraShakeTime = 0;
       this.cameraShakeIntensity = 0;
+      this.unloadBeaconSent = false;
       this.pointerLocked = false;
       this.yaw = Math.PI;
       this.pitch = 0;
@@ -735,6 +736,7 @@
       this.onVictoryReplay = this.handleVictoryReplay.bind(this);
       this.onVictoryClose = this.handleVictoryClose.bind(this);
       this.onVictoryShare = this.handleVictoryShare.bind(this);
+      this.onBeforeUnload = this.handleBeforeUnload.bind(this);
       this.onCraftingModalBackdrop = (event) => {
         if (event?.target === this.craftingModal) {
           this.handleCloseCrafting(event);
@@ -776,6 +778,7 @@
         return;
       }
       this.started = true;
+      this.unloadBeaconSent = false;
       this.rendererUnavailable = false;
       this.contextLost = false;
       this.clearVictoryEffectTimers();
@@ -1113,6 +1116,7 @@
       const entry = this.createRunSummary(reason);
       this.mergeScoreEntries([entry]);
       this.emitGameEvent('score-updated', { summary: entry });
+      return entry;
     }
 
     createRunSummary(reason) {
@@ -4201,6 +4205,7 @@
       document.addEventListener('mousemove', this.onMouseMove);
       document.addEventListener('mousedown', this.onMouseDown);
       window.addEventListener('resize', this.onResize);
+      window.addEventListener('beforeunload', this.onBeforeUnload);
       this.canvas.addEventListener('wheel', this.onCanvasWheel, { passive: false });
       this.canvas.addEventListener('pointerdown', this.onTouchLookPointerDown, { passive: false });
       window.addEventListener('pointermove', this.onTouchLookPointerMove, { passive: false });
@@ -4245,6 +4250,7 @@
       document.removeEventListener('mousemove', this.onMouseMove);
       document.removeEventListener('mousedown', this.onMouseDown);
       window.removeEventListener('resize', this.onResize);
+      window.removeEventListener('beforeunload', this.onBeforeUnload);
       this.canvas.removeEventListener('wheel', this.onCanvasWheel);
       this.canvas.removeEventListener('pointerdown', this.onTouchLookPointerDown);
       window.removeEventListener('pointermove', this.onTouchLookPointerMove);
@@ -4394,6 +4400,59 @@
         this.initializeMobileControls();
       }
       this.updatePointerHintForInputMode();
+    }
+
+    handleBeforeUnload() {
+      if (!this.started || this.unloadBeaconSent) {
+        return;
+      }
+      this.unloadBeaconSent = true;
+      try {
+        this.savePersistentUnlocks();
+      } catch (error) {
+        console.debug('Failed to persist crafting unlocks before unload', error);
+      }
+      try {
+        this.persistIdentitySnapshot();
+      } catch (error) {
+        console.debug('Failed to persist identity snapshot before unload', error);
+      }
+      const summary = this.updateLocalScoreEntry('unload');
+      if (!summary || !this.apiBaseUrl) {
+        return;
+      }
+      const baseUrl = typeof this.apiBaseUrl === 'string' ? this.apiBaseUrl.replace(/\/$/, '') : '';
+      if (!baseUrl) {
+        return;
+      }
+      const url = `${baseUrl}/scores`;
+      const payload = JSON.stringify(summary);
+      let delivered = false;
+      const nav = typeof navigator !== 'undefined' ? navigator : null;
+      if (nav?.sendBeacon) {
+        try {
+          delivered = nav.sendBeacon(url, payload);
+        } catch (error) {
+          console.debug('Score beacon sendBeacon failed', error);
+          delivered = false;
+        }
+      }
+      if (!delivered && typeof fetch === 'function') {
+        try {
+          fetch(url, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Accept: 'application/json',
+            },
+            body: payload,
+            keepalive: true,
+            credentials: 'omit',
+          }).catch(() => {});
+        } catch (error) {
+          console.debug('Score beacon fetch failed', error);
+        }
+      }
     }
 
     handleMouseDown(event) {
