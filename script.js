@@ -2906,6 +2906,9 @@
     let particleGroup;
     let playerMesh;
     let playerMeshParts;
+    let playerSessionToken = 0;
+    let activePlayerSessionId = 0;
+    let playerMeshSessionId = 0;
     let playerModelLoading = false;
     let playerActionAnimation = null;
     let gltfLoader;
@@ -4746,7 +4749,7 @@
       initPointerControls();
       window.addEventListener('resize', handleResize);
       handleResize();
-      createPlayerMesh();
+      createPlayerMesh(beginNewPlayerSession());
       createPlayerLocator();
       syncCameraToPlayer({ idleBob: 0, walkBob: 0, movementStrength: 0 });
       updateLighting(0);
@@ -10797,6 +10800,14 @@
       playerAnimationBlend.walk = 0;
     }
 
+    function beginNewPlayerSession() {
+      playerSessionToken += 1;
+      activePlayerSessionId = playerSessionToken;
+      playerMeshSessionId = 0;
+      playerModelLoading = false;
+      return activePlayerSessionId;
+    }
+
     function srgbColor(hex) {
       const color = new THREE.Color(hex);
       if (typeof color.convertSRGBToLinear === 'function') {
@@ -11026,15 +11037,37 @@
       return { group, parts };
     }
 
-    function useFallbackPlayerMesh() {
+    function disposeMeshTree(root) {
+      if (!root) return;
+      const disposeMaterial = (material) => {
+        if (Array.isArray(material)) {
+          material.forEach((mat) => mat?.dispose?.());
+        } else {
+          material?.dispose?.();
+        }
+      };
+      root.traverse?.((child) => {
+        if (child.isMesh) {
+          child.geometry?.dispose?.();
+          disposeMaterial(child.material);
+        }
+      });
+    }
+
+    function useFallbackPlayerMesh(sessionId = activePlayerSessionId) {
       if (!entityGroup) return;
       const fallback = createFallbackSteveModel();
+      if (sessionId !== activePlayerSessionId) {
+        disposeMeshTree(fallback.group);
+        return;
+      }
       const placeholder = fallback.group;
       placeholder.position.y = 0.05;
       placeholder.scale.setScalar(1.18);
       entityGroup.add(placeholder);
       playerMesh = placeholder;
       playerMeshParts = fallback.parts;
+      playerMeshSessionId = sessionId;
       attachPlayerKeyLight(playerMesh);
       resetPlayerAnimationState();
       ensurePlayerMeshVisibility();
@@ -11160,8 +11193,14 @@
 
     function ensurePlayerAvatarReady({ forceReload = false, resetAnimations = false } = {}) {
       if (!entityGroup) return;
-      if (forceReload || !playerMesh || !playerMesh.parent) {
-        createPlayerMesh();
+      const needsReload =
+        forceReload ||
+        !playerMesh ||
+        !playerMesh.parent ||
+        playerMeshSessionId !== activePlayerSessionId;
+      if (needsReload) {
+        const sessionId = beginNewPlayerSession();
+        createPlayerMesh(sessionId);
         return;
       }
       ensurePlayerMeshVisibility();
@@ -11174,10 +11213,15 @@
       }
     }
 
-    function handlePlayerGltfLoad(gltf) {
+    function handlePlayerGltfLoad(gltf, sessionId) {
       const steveScene = gltf.scene || gltf.scenes?.[0];
       if (!steveScene) {
         console.error('Steve model did not include a scene.');
+        return;
+      }
+
+      if (sessionId !== activePlayerSessionId) {
+        disposeMeshTree(steveScene);
         return;
       }
 
@@ -11240,6 +11284,7 @@
       });
 
       entityGroup.add(playerMesh);
+      playerMeshSessionId = sessionId;
       attachPlayerKeyLight(playerMesh);
 
       if (typeof console !== 'undefined') {
@@ -11264,14 +11309,20 @@
       if (playerMeshParts.leftArm && playerMeshParts.rightArm && playerMeshParts.leftLeg && playerMeshParts.rightLeg) {
         initializePlayerAnimations();
       }
-      ensurePlayerMeshVisibility();
       restartPlayerAnimationActions();
+      ensurePlayerMeshVisibility();
       playerModelLoading = false;
     }
 
-    function createPlayerMesh() {
+    function createPlayerMesh(sessionId = activePlayerSessionId) {
       if (!entityGroup) return;
-      if (playerModelLoading) return;
+      if (!sessionId) {
+        sessionId = beginNewPlayerSession();
+      }
+      if (sessionId !== activePlayerSessionId) {
+        return;
+      }
+      if (playerModelLoading && sessionId === activePlayerSessionId) return;
       if (playerMesh) {
         entityGroup.remove(playerMesh);
       }
@@ -11281,26 +11332,30 @@
       playerKeyLight = null;
       playerMesh = null;
       playerMeshParts = null;
+      playerMeshSessionId = 0;
       resetPlayerAnimationState();
 
       if (!SUPPORTS_MODEL_ASSETS) {
-        useFallbackPlayerMesh();
+        useFallbackPlayerMesh(sessionId);
         return;
       }
 
       if (!THREE.GLTFLoader) {
         console.error('GLTFLoader is unavailable; cannot create the Steve model.');
-        playerModelLoading = false;
+        if (sessionId === activePlayerSessionId) {
+          playerModelLoading = false;
+        }
         return;
       }
       if (!gltfLoader) {
         gltfLoader = new THREE.GLTFLoader();
       }
+      const loadSessionId = sessionId;
       playerModelLoading = true;
       gltfLoader.load(
         'assets/steve.gltf',
         (gltf) => {
-          handlePlayerGltfLoad(gltf);
+          handlePlayerGltfLoad(gltf, loadSessionId);
         },
         undefined,
         (error) => {
@@ -11308,13 +11363,10 @@
           parseEmbeddedModel(
             'steve',
             (embeddedGltf) => {
-              handlePlayerGltfLoad(embeddedGltf);
+              handlePlayerGltfLoad(embeddedGltf, loadSessionId);
             },
             () => {
-              useFallbackPlayerMesh();
-              playerModelLoading = false;
-              ensurePlayerMeshVisibility();
-              restartPlayerAnimationActions({ allowInitialization: false });
+              useFallbackPlayerMesh(loadSessionId);
             }
           );
         }
