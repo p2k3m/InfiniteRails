@@ -2543,9 +2543,6 @@
       googleClientId: window.APP_CONFIG?.googleClientId ?? null,
     };
 
-    initializeKeyBindings();
-    refreshKeyBindingDependentCopy();
-
     const TILE_UNIT = 1;
     const BASE_GEOMETRY = new THREE.BoxGeometry(TILE_UNIT, TILE_UNIT, TILE_UNIT);
     const PLANE_GEOMETRY = new THREE.PlaneGeometry(TILE_UNIT, TILE_UNIT);
@@ -14593,6 +14590,9 @@
         }
       }
     }
+
+    initializeKeyBindings();
+    refreshKeyBindingDependentCopy();
 
     state.player.heartsAtLastDamage = state.player.hearts;
 
