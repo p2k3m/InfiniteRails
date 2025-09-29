@@ -24,6 +24,14 @@ describe('Portals of Dimension spec regression checks', () => {
     expect(simpleExperienceSource).toMatch(/Portal active/);
   });
 
+  it('retains the player control and progression instrumentation', () => {
+    expect(simpleExperienceSource.includes("console.log('Moving forward');")).toBe(true);
+    expect(simpleExperienceSource.includes('this.canvas.requestPointerLock')).toBe(true);
+    expect(simpleExperienceSource.includes('console.log(`Dimension: ${this.dimensionSettings.name} unlocked`);')).toBe(true);
+    expect(simpleExperienceSource.includes("console.log('Score synced'")).toBe(true);
+    expect(simpleExperienceSource.includes('navigator.geolocation.getCurrentPosition')).toBe(true);
+  });
+
   it('ships the expected character and entity assets', () => {
     expect(simpleExperienceSource).toMatch(/MODEL_URLS\s*=\s*\{/);
     expect(simpleExperienceSource).toMatch(/steve\.gltf/);
