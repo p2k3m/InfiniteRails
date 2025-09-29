@@ -1852,6 +1852,7 @@ body.game-active #gameCanvas {
   transition: background 0.35s ease, box-shadow 0.35s ease, transform 0.35s ease,
     opacity 0.35s ease, color 0.35s ease;
   backdrop-filter: blur(10px);
+  max-width: min(30rem, 92vw);
 }
 
 .portal-status--flash {
@@ -1866,6 +1867,7 @@ body.game-active #gameCanvas {
   line-height: 1.05;
   letter-spacing: normal;
   text-transform: none;
+  max-width: 100%;
 }
 
 .portal-status__state {
@@ -1881,6 +1883,7 @@ body.game-active #gameCanvas {
   text-transform: none;
   opacity: 0.88;
   white-space: normal;
+  line-height: 1.15;
 }
 
 .portal-status__icon {
