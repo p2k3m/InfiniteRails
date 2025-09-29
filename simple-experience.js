@@ -1,6 +1,9 @@
 (function () {
   const WORLD_SIZE = 64;
   const BLOCK_SIZE = 1;
+  const MIN_COLUMN_HEIGHT = 1;
+  const MAX_COLUMN_HEIGHT = 6;
+  const MAX_TERRAIN_VOXELS = WORLD_SIZE * WORLD_SIZE * MAX_COLUMN_HEIGHT;
   const PLAYER_EYE_HEIGHT = 1.8;
   const PLAYER_BASE_SPEED = 4.5;
   const PLAYER_INERTIA = 0.88;
@@ -546,6 +549,16 @@
       this.textureCache = new Map();
       this.textureLoader = null;
       this.pendingTextureLoads = new Map();
+      this.minColumnHeight = MIN_COLUMN_HEIGHT;
+      const requestedMaxColumnHeight = Number.isFinite(options.maxColumnHeight)
+        ? Math.floor(options.maxColumnHeight)
+        : MAX_COLUMN_HEIGHT;
+      this.maxColumnHeight = Math.max(this.minColumnHeight, requestedMaxColumnHeight);
+      const minVoxelBudget = WORLD_SIZE * WORLD_SIZE * this.minColumnHeight;
+      const requestedVoxelBudget = Number.isFinite(options.maxTerrainVoxels)
+        ? Math.floor(options.maxTerrainVoxels)
+        : MAX_TERRAIN_VOXELS;
+      this.maxTerrainVoxels = Math.max(minVoxelBudget, requestedVoxelBudget);
       this.assetLoadBudgetMs = Number.isFinite(options.assetLoadBudgetMs)
         ? Math.max(500, options.assetLoadBudgetMs)
         : 3000;
@@ -686,6 +699,8 @@
       this.restorePersistentUnlocks();
       this.restoreIdentitySnapshot();
       this.animationFrame = null;
+      this.modelPreloadHandle = null;
+      this.modelPreloadUsingIdle = false;
       this.briefingAutoHideTimer = null;
       this.briefingFadeTimer = null;
       this.victoryHideTimer = null;
@@ -755,6 +770,11 @@
       this.rendererFailureMessage = '';
       this.onWebglContextLost = this.handleWebglContextLost.bind(this);
       this.onWebglContextRestored = this.handleWebglContextRestored.bind(this);
+      this.isTabVisible =
+        typeof document === 'undefined' ||
+        document.visibilityState === 'visible' ||
+        document.visibilityState === 'prerender';
+      this.onVisibilityChange = this.handleVisibilityChange.bind(this);
     }
 
     emitGameEvent(type, detail = {}) {
@@ -801,7 +821,7 @@
       this.victoryShareBusy = false;
       try {
         this.setupScene();
-        this.preloadCharacterModels();
+        this.queueCharacterPreload();
         this.loadFirstPersonArms(sessionId);
         this.initializeScoreboardUi();
         this.applyDimensionSettings(this.currentDimensionIndex);
@@ -2957,6 +2977,55 @@
       this.ensurePlayerArmsVisible();
     }
 
+    queueCharacterPreload() {
+      const scope = typeof window !== 'undefined' ? window : typeof globalThis !== 'undefined' ? globalThis : null;
+      if (!scope) {
+        if (this.started && !this.rendererUnavailable) {
+          this.preloadCharacterModels();
+        }
+        return;
+      }
+      this.cancelQueuedModelPreload();
+      const executePreload = () => {
+        this.modelPreloadHandle = null;
+        this.modelPreloadUsingIdle = false;
+        if (!this.started || this.rendererUnavailable) {
+          return;
+        }
+        this.preloadCharacterModels();
+      };
+      if (typeof scope.requestIdleCallback === 'function') {
+        this.modelPreloadUsingIdle = true;
+        this.modelPreloadHandle = scope.requestIdleCallback(executePreload, {
+          timeout: Math.max(500, Math.min(4000, this.assetLoadBudgetMs || 1500)),
+        });
+        return;
+      }
+      if (typeof scope.setTimeout === 'function') {
+        this.modelPreloadUsingIdle = false;
+        this.modelPreloadHandle = scope.setTimeout(executePreload, 0);
+        return;
+      }
+      executePreload();
+    }
+
+    cancelQueuedModelPreload() {
+      if (this.modelPreloadHandle === null) {
+        this.modelPreloadUsingIdle = false;
+        return;
+      }
+      const scope = typeof window !== 'undefined' ? window : typeof globalThis !== 'undefined' ? globalThis : null;
+      if (scope) {
+        if (this.modelPreloadUsingIdle && typeof scope.cancelIdleCallback === 'function') {
+          scope.cancelIdleCallback(this.modelPreloadHandle);
+        } else if (typeof scope.clearTimeout === 'function') {
+          scope.clearTimeout(this.modelPreloadHandle);
+        }
+      }
+      this.modelPreloadHandle = null;
+      this.modelPreloadUsingIdle = false;
+    }
+
     preloadCharacterModels() {
       this.loadModel('arm').catch(() => {});
       this.loadModel('steve').catch(() => {});
@@ -3325,6 +3394,15 @@
       this.terrainChunkMap.clear();
       this.dirtyTerrainChunks.clear();
       const half = WORLD_SIZE / 2;
+      const totalColumns = WORLD_SIZE * WORLD_SIZE;
+      const minColumnHeight = Math.max(1, Math.floor(this.minColumnHeight ?? MIN_COLUMN_HEIGHT));
+      const maxColumnHeight = Math.max(minColumnHeight, Math.floor(this.maxColumnHeight ?? MAX_COLUMN_HEIGHT));
+      const targetBudget = Number.isFinite(this.maxTerrainVoxels)
+        ? Math.floor(this.maxTerrainVoxels)
+        : MAX_TERRAIN_VOXELS;
+      const voxelBudget = Math.max(totalColumns * minColumnHeight, targetBudget);
+      let remainingVoxels = voxelBudget;
+      let cappedColumns = 0;
       let voxelCount = 0;
       for (let gx = 0; gx < WORLD_SIZE; gx += 1) {
         for (let gz = 0; gz < WORLD_SIZE; gz += 1) {
@@ -3336,16 +3414,32 @@
           const falloff = Math.max(0, 1 - distance / (WORLD_SIZE * 0.68));
           const heightNoise = pseudoRandom(gx * 0.35, gz * 0.35);
           const secondary = pseudoRandom(gz * 0.12, gx * 0.18);
-          const maxHeight = Math.max(1, Math.round(1 + falloff * 2.6 + heightNoise * 2 + secondary * 0.9));
-          this.heightMap[gx][gz] = maxHeight;
-          this.initialHeightMap[gx][gz] = maxHeight;
+          const columnIndex = gx * WORLD_SIZE + gz;
+          const desiredHeight = Math.max(
+            minColumnHeight,
+            Math.round(1 + falloff * 2.6 + heightNoise * 2 + secondary * 0.9),
+          );
+          const cappedHeight = Math.min(desiredHeight, maxColumnHeight);
+          const columnsRemaining = totalColumns - columnIndex - 1;
+          const reservedForRemaining = columnsRemaining * minColumnHeight;
+          const availableForColumn = Math.max(minColumnHeight, remainingVoxels - reservedForRemaining);
+          const columnHeight = Math.max(
+            minColumnHeight,
+            Math.min(cappedHeight, availableForColumn, maxColumnHeight),
+          );
+          if (columnHeight < desiredHeight) {
+            cappedColumns += 1;
+          }
+          remainingVoxels = Math.max(0, remainingVoxels - columnHeight);
+          this.heightMap[gx][gz] = columnHeight;
+          this.initialHeightMap[gx][gz] = columnHeight;
           const columnKey = `${gx}|${gz}`;
           const column = [];
-          for (let level = 0; level < maxHeight; level += 1) {
-            const isSurface = level === maxHeight - 1;
+          for (let level = 0; level < columnHeight; level += 1) {
+            const isSurface = level === columnHeight - 1;
             const blockType = isSurface
               ? 'grass-block'
-              : level > maxHeight - 3
+              : level > columnHeight - 3
                 ? 'dirt'
                 : 'stone';
             const material =
@@ -3384,6 +3478,11 @@
         const columnCount = WORLD_SIZE * WORLD_SIZE;
         console.log(`World generated: ${columnCount} voxels`);
         console.log(`Terrain blocks placed: ${voxelCount}`);
+        if (cappedColumns > 0) {
+          console.info(
+            `Terrain voxel budget applied: ${cappedColumns} columns trimmed to stay under ${voxelBudget} voxels`,
+          );
+        }
       }
       this.portalAnchorGrid = this.computePortalAnchorGrid();
       const anchorWorldX = (this.portalAnchorGrid.x - WORLD_SIZE / 2) * BLOCK_SIZE;
@@ -4484,6 +4583,7 @@
     bindEvents() {
       document.addEventListener('pointerlockchange', this.onPointerLockChange);
       document.addEventListener('pointerlockerror', this.onPointerLockError);
+      document.addEventListener('visibilitychange', this.onVisibilityChange);
       document.addEventListener('keydown', this.onKeyDown);
       document.addEventListener('keyup', this.onKeyUp);
       document.addEventListener('mousemove', this.onMouseMove);
@@ -4529,6 +4629,7 @@
     unbindEvents() {
       document.removeEventListener('pointerlockchange', this.onPointerLockChange);
       document.removeEventListener('pointerlockerror', this.onPointerLockError);
+      document.removeEventListener('visibilitychange', this.onVisibilityChange);
       document.removeEventListener('keydown', this.onKeyDown);
       document.removeEventListener('keyup', this.onKeyUp);
       document.removeEventListener('mousemove', this.onMouseMove);
@@ -4691,6 +4792,7 @@
     }
 
     handleBeforeUnload() {
+      this.cancelQueuedModelPreload();
       if (!this.started || this.unloadBeaconSent) {
         return;
       }
@@ -4793,16 +4895,39 @@
       this.positionPlayer();
     }
 
-    renderFrame(timestamp) {
+    scheduleNextFrame() {
       if (this.rendererUnavailable || !this.renderer) {
         return;
       }
-      this.animationFrame = requestAnimationFrame((nextTimestamp) => this.renderFrame(nextTimestamp));
+      if (this.animationFrame !== null) {
+        return;
+      }
+      this.animationFrame = requestAnimationFrame((nextTimestamp) => {
+        this.animationFrame = null;
+        this.renderFrame(nextTimestamp);
+      });
+    }
+
+    renderFrame(timestamp) {
+      if (this.rendererUnavailable || !this.renderer) {
+        this.animationFrame = null;
+        return;
+      }
+      if (!this.isTabVisible) {
+        this.prevTime = null;
+        this.animationFrame = null;
+        return;
+      }
       if (!this.prevTime) {
         this.prevTime = timestamp;
       }
-      const delta = Math.min(0.05, (timestamp - this.prevTime) / 1000);
+      const rawDelta = (timestamp - this.prevTime) / 1000;
       this.prevTime = timestamp;
+      if (!Number.isFinite(rawDelta)) {
+        this.scheduleNextFrame();
+        return;
+      }
+      const delta = Math.min(0.05, Math.max(0, rawDelta));
       this.elapsed += delta;
       this.updateDayNightCycle();
       this.updateMovement(delta);
@@ -4818,6 +4943,36 @@
       this.updateScoreSync(delta);
       this.updateScoreboardPolling(delta);
       this.renderer.render(this.scene, this.camera);
+      this.scheduleNextFrame();
+    }
+
+    handleVisibilityChange() {
+      if (typeof document === 'undefined') {
+        return;
+      }
+      const hidden = document.visibilityState === 'hidden';
+      this.isTabVisible = !hidden;
+      if (hidden) {
+        this.prevTime = null;
+        if (this.animationFrame !== null) {
+          cancelAnimationFrame(this.animationFrame);
+          this.animationFrame = null;
+        }
+        this.cancelQueuedModelPreload();
+        return;
+      }
+      if (!this.started || this.rendererUnavailable || !this.renderer) {
+        return;
+      }
+      this.queueCharacterPreload();
+      this.prevTime = null;
+      if (this.animationFrame === null) {
+        const now =
+          typeof performance !== 'undefined' && typeof performance.now === 'function'
+            ? performance.now()
+            : Date.now();
+        this.renderFrame(now);
+      }
     }
 
     verifyWebglSupport() {
@@ -4874,6 +5029,7 @@
       } else if (typeof console !== 'undefined') {
         console.error(message);
       }
+      this.cancelQueuedModelPreload();
       this.rendererUnavailable = true;
       this.rendererFailureMessage = message;
       if (this.playerHintEl) {
