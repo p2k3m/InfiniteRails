@@ -561,6 +561,14 @@
     const scoreboardListEl = document.getElementById('scoreboardList');
     const scoreboardStatusEl = document.getElementById('scoreboardStatus');
     const refreshScoresButton = document.getElementById('refreshScores');
+    const leaderboardOverlay = document.getElementById('leaderboardOverlay');
+    const leaderboardOverlayDialog = document.getElementById('leaderboardOverlayDialog');
+    const leaderboardOverlayTitle = document.getElementById('leaderboardOverlayTitle');
+    const leaderboardOverlayMessage = document.getElementById('leaderboardOverlayMessage');
+    const leaderboardOverlaySpinner = document.getElementById('leaderboardOverlaySpinner');
+    const leaderboardOverlayActions = document.getElementById('leaderboardOverlayActions');
+    const leaderboardOverlayRetry = document.getElementById('leaderboardOverlayRetry');
+    const leaderboardOverlayDismiss = document.getElementById('leaderboardOverlayDismiss');
     const scorePanelEl = document.getElementById('scorePanel');
     const scoreTotalEl = document.getElementById('scoreTotal');
     const scoreRecipesEl = document.getElementById('scoreRecipes');
@@ -3349,6 +3357,8 @@
       playerRank: null,
       loadingScores: false,
       googleInitialized: false,
+      scoreboardMessage: '',
+      scoreboardError: null,
     };
 
     const SCOREBOARD_STORAGE_KEY = 'infinite-dimension-scoreboard';
@@ -18182,29 +18192,33 @@
       }
 
       if (scoreboardStatusEl) {
-        let statusText = '';
-        if (identityState.loadingScores) {
-          statusText = 'Loading score data...';
-        } else if (identityState.scoreboardSource === 'remote') {
-          if (!identityState.scoreboard.length) {
-            statusText = signedIn
-              ? 'No scores recorded yet.'
-              : 'No runs recorded yet. Be the first to chart the multiverse.';
-          } else {
-            statusText = signedIn
-              ? 'Live multiverse leaderboard synced with DynamoDB.'
-              : 'Live multiverse rankings. Sign in to submit your run.';
+        let statusText = identityState.scoreboardMessage || '';
+        if (!statusText) {
+          if (identityState.loadingScores) {
+            statusText = appConfig.apiBaseUrl
+              ? 'Fetching the latest leaderboard entries…'
+              : 'Loading saved leaderboard entries…';
+          } else if (identityState.scoreboardSource === 'remote') {
+            if (!identityState.scoreboard.length) {
+              statusText = signedIn
+                ? 'No scores recorded yet.'
+                : 'No runs recorded yet. Be the first to chart the multiverse.';
+            } else {
+              statusText = signedIn
+                ? 'Live multiverse leaderboard synced with DynamoDB.'
+                : 'Live multiverse rankings. Sign in to submit your run.';
+            }
+          } else if (identityState.scoreboardSource === 'local') {
+            statusText = 'Scores are saved locally on this device.';
+          } else if (identityState.scoreboardSource === 'sample') {
+            statusText = 'Showing sample data. Connect the API to DynamoDB for live scores.';
+          } else if (!signedIn) {
+            statusText = appConfig.apiBaseUrl
+              ? 'Live rankings unavailable. Try refreshing.'
+              : 'Sign in to publish your victories and see the live rankings.';
+          } else if (!identityState.scoreboard.length) {
+            statusText = 'No scores recorded yet.';
           }
-        } else if (identityState.scoreboardSource === 'local') {
-          statusText = 'Scores are saved locally on this device.';
-        } else if (identityState.scoreboardSource === 'sample') {
-          statusText = 'Showing sample data. Connect the API to DynamoDB for live scores.';
-        } else if (!signedIn) {
-          statusText = appConfig.apiBaseUrl
-            ? 'Live rankings unavailable. Try refreshing.'
-            : 'Sign in to publish your victories and see the live rankings.';
-        } else if (!identityState.scoreboard.length) {
-          statusText = 'No scores recorded yet.';
         }
         scoreboardStatusEl.textContent = statusText;
         scoreboardStatusEl.hidden = statusText === '';
@@ -18221,7 +18235,11 @@
 
       if (leaderboardEmptyMessage) {
         if (identityState.loadingScores) {
-          leaderboardEmptyMessage.textContent = 'Fetching the latest rankings...';
+          leaderboardEmptyMessage.textContent = appConfig.apiBaseUrl
+            ? 'Fetching the latest rankings…'
+            : 'Loading saved leaderboard entries…';
+        } else if (identityState.scoreboardMessage) {
+          leaderboardEmptyMessage.textContent = identityState.scoreboardMessage;
         } else if (identityState.scoreboardSource === 'remote') {
           leaderboardEmptyMessage.textContent = signedIn
             ? 'No scores recorded yet. Be the first to complete a run!'
@@ -18232,6 +18250,8 @@
           leaderboardEmptyMessage.textContent = 'No scores recorded yet. Be the first to complete a run!';
         }
       }
+
+      renderLeaderboardOverlay();
 
       renderScoreboard(identityState.scoreboard);
     }
@@ -18647,6 +18667,10 @@
       leaderboardModal.hidden = false;
       leaderboardModal.setAttribute('aria-hidden', 'false');
       openLeaderboardButton?.setAttribute('aria-expanded', 'true');
+      if (leaderboardOverlayState.visible) {
+        lastLeaderboardOverlayVisible = false;
+      }
+      renderLeaderboardOverlay();
       const shouldRefreshLeaderboard =
         !identityState.loadingScores &&
         ((appConfig.apiBaseUrl && identityState.scoreboardSource !== 'remote') || !identityState.scoreboard.length);
@@ -19189,6 +19213,134 @@
       return { normalized: annotated, displayed };
     }
 
+    const leaderboardOverlayState = {
+      visible: false,
+      mode: 'idle',
+      title: '',
+      message: '',
+      allowRetry: false,
+      allowDismiss: false,
+    };
+    let lastLeaderboardOverlayVisible = false;
+
+    function isLeaderboardModalVisible() {
+      return Boolean(leaderboardModal && leaderboardModal.hidden === false);
+    }
+
+    function renderLeaderboardOverlay() {
+      if (!leaderboardOverlay) {
+        return;
+      }
+      const { visible, mode, title, message, allowRetry, allowDismiss } = leaderboardOverlayState;
+      leaderboardOverlay.hidden = !visible;
+      leaderboardOverlay.setAttribute('aria-hidden', visible ? 'false' : 'true');
+      leaderboardOverlay.setAttribute('data-mode', mode);
+      if (leaderboardOverlayDialog) {
+        leaderboardOverlayDialog.setAttribute('role', mode === 'error' ? 'alertdialog' : 'dialog');
+        leaderboardOverlayDialog.setAttribute('aria-modal', visible ? 'true' : 'false');
+      }
+      if (leaderboardOverlayTitle) {
+        const fallbackTitle = mode === 'error' ? 'Leaderboard unavailable' : 'Syncing leaderboard';
+        leaderboardOverlayTitle.textContent = title || fallbackTitle;
+      }
+      if (leaderboardOverlayMessage) {
+        leaderboardOverlayMessage.textContent = message || '';
+      }
+      if (leaderboardOverlaySpinner) {
+        leaderboardOverlaySpinner.hidden = mode !== 'loading';
+      }
+      if (leaderboardOverlayRetry) {
+        leaderboardOverlayRetry.hidden = !allowRetry;
+        leaderboardOverlayRetry.disabled = mode === 'loading';
+      }
+      if (leaderboardOverlayDismiss) {
+        leaderboardOverlayDismiss.hidden = !allowDismiss;
+      }
+      if (leaderboardOverlayActions) {
+        leaderboardOverlayActions.hidden = !allowRetry && !allowDismiss;
+      }
+      if (leaderboardModal) {
+        leaderboardModal.setAttribute('aria-busy', identityState.loadingScores ? 'true' : 'false');
+      }
+      const shouldFocus = visible && !lastLeaderboardOverlayVisible && isLeaderboardModalVisible();
+      lastLeaderboardOverlayVisible = visible;
+      if (shouldFocus) {
+        if (allowRetry && !leaderboardOverlayRetry?.hidden) {
+          leaderboardOverlayRetry.focus({ preventScroll: true });
+        } else if (allowDismiss && !leaderboardOverlayDismiss?.hidden) {
+          leaderboardOverlayDismiss.focus({ preventScroll: true });
+        } else {
+          leaderboardOverlayDialog?.focus?.({ preventScroll: true });
+        }
+      }
+    }
+
+    function updateLeaderboardOverlayState(partial) {
+      Object.assign(leaderboardOverlayState, partial);
+      renderLeaderboardOverlay();
+    }
+
+    function showLeaderboardOverlay(options = {}) {
+      const {
+        mode = 'loading',
+        title = '',
+        message = '',
+        allowRetry = false,
+        allowDismiss = false,
+      } = options;
+      updateLeaderboardOverlayState({
+        visible: true,
+        mode,
+        title,
+        message,
+        allowRetry,
+        allowDismiss,
+      });
+    }
+
+    function hideLeaderboardOverlay({ resetMessage = false } = {}) {
+      updateLeaderboardOverlayState({
+        visible: false,
+        mode: 'idle',
+        title: '',
+        message: '',
+        allowRetry: false,
+        allowDismiss: false,
+      });
+      if (resetMessage) {
+        identityState.scoreboardError = null;
+        identityState.scoreboardMessage = '';
+        updateIdentityUI();
+      }
+    }
+
+    function presentLeaderboardLoading(message) {
+      identityState.scoreboardError = null;
+      identityState.scoreboardMessage = message;
+      showLeaderboardOverlay({
+        mode: 'loading',
+        title: 'Syncing leaderboard',
+        message,
+        allowRetry: false,
+        allowDismiss: false,
+      });
+      updateIdentityUI();
+    }
+
+    function presentLeaderboardError(message) {
+      identityState.scoreboardError = message;
+      identityState.scoreboardMessage = message;
+      identityState.loadingScores = false;
+      showLeaderboardOverlay({
+        mode: 'error',
+        title: 'Leaderboard unavailable',
+        message,
+        allowRetry: Boolean(appConfig.apiBaseUrl),
+        allowDismiss: true,
+      });
+      updateIdentityUI();
+    }
+
     function primeOfflineScoreboard() {
       if (identityState.googleProfile) return;
       if (identityState.scoreboard.length) return;
@@ -19198,19 +19350,24 @@
 
     function refreshOfflineScoreboard() {
       identityState.loadingScores = true;
-      updateIdentityUI();
+      presentLeaderboardLoading('Loading saved leaderboard entries…');
       const localResult = loadLocalScores();
       setTimeout(() => {
         storeScoreboardEntries(localResult.entries, localResult.source);
         identityState.loadingScores = false;
+        hideLeaderboardOverlay({ resetMessage: true });
         updateIdentityUI();
       }, 600);
     }
 
     async function loadScoreboard() {
+      const loadingMessage = appConfig.apiBaseUrl
+        ? 'Fetching the latest leaderboard entries…'
+        : 'Loading saved leaderboard entries…';
       identityState.loadingScores = true;
-      updateIdentityUI();
+      presentLeaderboardLoading(loadingMessage);
       let remoteResult = null;
+      let remoteErrorMessage = null;
       if (appConfig.apiBaseUrl) {
         try {
           const response = await fetch(`${appConfig.apiBaseUrl.replace(/\/$/, '')}/scores`);
@@ -19226,10 +19383,14 @@
           } else if (response.status === 404) {
             remoteResult = { entries: [], source: 'remote' };
           } else {
+            remoteErrorMessage = 'Unable to reach the live leaderboard. Showing cached scores.';
             console.warn(`Remote scoreboard returned status ${response.status}.`);
+            presentLeaderboardError(remoteErrorMessage);
           }
         } catch (error) {
+          remoteErrorMessage = 'Unable to reach the live leaderboard. Showing cached scores.';
           console.warn('Unable to load remote scoreboard.', error);
+          presentLeaderboardError(remoteErrorMessage);
         }
       }
       const result = remoteResult ?? loadLocalScores();
@@ -19237,8 +19398,14 @@
       if (result.source === 'remote') {
         saveLocalScores(normalized);
       }
-      identityState.loadingScores = false;
-      updateIdentityUI();
+      if (!remoteErrorMessage) {
+        identityState.loadingScores = false;
+        hideLeaderboardOverlay({ resetMessage: true });
+        updateIdentityUI();
+      } else {
+        identityState.loadingScores = false;
+        updateIdentityUI();
+      }
     }
 
     async function recordScore(snapshot) {
@@ -19431,6 +19598,15 @@
         }
         if (!appConfig.apiBaseUrl && (identityState.scoreboardSource === 'sample' || identityState.scoreboardSource === 'local')) {
           refreshOfflineScoreboard();
+          return;
+        }
+        loadScoreboard();
+      });
+      leaderboardOverlayDismiss?.addEventListener('click', () => {
+        hideLeaderboardOverlay();
+      });
+      leaderboardOverlayRetry?.addEventListener('click', () => {
+        if (identityState.loadingScores) {
           return;
         }
         loadScoreboard();

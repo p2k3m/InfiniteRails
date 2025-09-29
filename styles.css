@@ -2495,6 +2495,8 @@ body.sidebar-open .player-hint {
   text-align: left;
   display: grid;
   gap: 1.5rem;
+  position: relative;
+  overflow: hidden;
 }
 
 .leaderboard-modal__header {
@@ -2836,6 +2838,87 @@ body.sidebar-open .player-hint {
 }
 
 @keyframes leaderboard-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.compose-overlay {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 1.5rem;
+  background: rgba(6, 12, 26, 0.74);
+  backdrop-filter: blur(7px);
+  z-index: 15;
+}
+
+.compose-overlay__dialog {
+  width: min(360px, 100%);
+  border-radius: 16px;
+  padding: 1.75rem 1.5rem;
+  background: rgba(9, 17, 34, 0.96);
+  box-shadow: 0 28px 48px rgba(2, 6, 18, 0.55);
+  outline: none;
+  display: grid;
+  gap: 1rem;
+  justify-items: center;
+  text-align: center;
+  color: var(--text-primary, #f5f7fb);
+}
+
+.compose-overlay__body {
+  display: grid;
+  gap: 0.75rem;
+  justify-items: center;
+}
+
+.compose-overlay__title {
+  margin: 0;
+  font-size: 1.2rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.compose-overlay__message {
+  margin: 0;
+  font-size: 0.95rem;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.compose-overlay__spinner {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  border: 3px solid rgba(73, 242, 255, 0.26);
+  border-top-color: #49f2ff;
+  animation: compose-spin 0.9s linear infinite;
+}
+
+.compose-overlay__actions {
+  display: flex;
+  gap: 0.75rem;
+  margin-top: 0.25rem;
+}
+
+.compose-overlay__actions[hidden] {
+  display: none;
+}
+
+.compose-overlay__action {
+  min-width: 96px;
+}
+
+.compose-overlay[data-mode='error'] .compose-overlay__spinner {
+  display: none;
+}
+
+@keyframes compose-spin {
   from {
     transform: rotate(0deg);
   }
