@@ -861,7 +861,7 @@
         this.updatePointerHintForInputMode();
         this.showDesktopPointerTutorialHint();
         this.updateHud();
-        this.revealDimensionIntro(this.dimensionSettings, { duration: 6200 });
+        this.revealDimensionIntro(this.dimensionSettings, { duration: 6200, intent: 'arrival' });
         this.refreshCraftingUi();
         this.hideIntro();
         this.showBriefingOverlay();
@@ -4677,6 +4677,7 @@
       let pointsAwarded = 5;
       let portalLog = '';
       let transitionResult = null;
+      const rulesSummary = this.buildDimensionRuleSummary(nextSettings);
       if (this.portalMechanics?.enterPortal) {
         try {
           const result = this.portalMechanics.enterPortal(this.portalState || { active: true }, {
@@ -4684,6 +4685,8 @@
             id: nextSettings?.id || `dimension-${nextIndex + 1}`,
             physics: { gravity: nextSettings?.gravity ?? this.gravityScale, shaderProfile: nextSettings?.id ?? 'default' },
             unlockPoints: 5,
+            description: nextSettings?.description ?? '',
+            rules: rulesSummary,
           });
           transitionResult = result;
           if (result?.pointsAwarded !== undefined) {
@@ -4707,7 +4710,14 @@
       this.buildRails();
       this.spawnDimensionChests();
       this.refreshPortalState();
-      this.revealDimensionIntro(this.dimensionSettings);
+      const arrivalRules = this.buildDimensionRuleSummary(
+        this.dimensionSettings,
+        transitionResult?.dimensionRules ?? rulesSummary,
+      );
+      this.revealDimensionIntro(this.dimensionSettings, {
+        intent: 'arrival',
+        rulesOverride: arrivalRules,
+      });
       this.positionPlayer();
       this.evaluateBossChallenge();
       this.clearZombies();
@@ -6701,6 +6711,7 @@
       if (previousState !== nextState) {
         if (nextState === 'active') {
           this.audio.play('portalActivate', { volume: 0.7 });
+          this.previewUpcomingDimension();
         } else if (previousState === 'active' && nextState !== 'victory') {
           this.audio.play('portalDormant', { volume: 0.5 });
         } else if (nextState === 'inactive' && previousState !== 'inactive') {
@@ -6813,29 +6824,27 @@
       timerHost.clearTimeout(this.dimensionIntroAutoHideTimer);
       timerHost.clearTimeout(this.dimensionIntroFadeTimer);
       const name = typeof theme?.name === 'string' && theme.name.trim() ? theme.name.trim() : 'Unknown Dimension';
-      const gravity = Number.isFinite(theme?.gravity) ? (theme.gravity ?? 1).toFixed(2) : null;
-      const speed = Number.isFinite(theme?.speedMultiplier)
-        ? (theme.speedMultiplier ?? 1).toFixed(2)
-        : null;
-      const descriptors = [];
-      if (gravity) {
-        descriptors.push(`Gravity ×${gravity}`);
-      }
-      if (speed) {
-        descriptors.push(`Speed ×${speed}`);
-      }
-      const description = typeof theme?.description === 'string' ? theme.description.trim() : '';
-      const rules = descriptors.length
-        ? `${descriptors.join(' · ')}${description ? ` — ${description}` : ''}`
-        : description || 'Adapt quickly to the realm\'s rules to survive.';
-      dimensionIntroNameEl.textContent = name;
-      dimensionIntroRulesEl.textContent = `Rules: ${rules}`;
+      const intent = typeof options.intent === 'string' ? options.intent : 'arrival';
+      const rules = this.buildDimensionRuleSummary(theme, options.rulesOverride);
+      const heading =
+        intent === 'preview'
+          ? `Next: ${name}`
+          : intent === 'arrival'
+            ? `Entering ${name}`
+            : name;
+      const ruleLabel = intent === 'preview' ? 'Rules Preview' : 'Rules';
+      dimensionIntroEl.dataset.intent = intent;
+      dimensionIntroNameEl.textContent = heading;
+      dimensionIntroRulesEl.textContent = `${ruleLabel}: ${rules}`;
       dimensionIntroEl.hidden = false;
       dimensionIntroEl.setAttribute('aria-hidden', 'false');
       dimensionIntroEl.classList.remove('active');
       void dimensionIntroEl.offsetWidth;
       dimensionIntroEl.classList.add('active');
-      const duration = Number.isFinite(options.duration) ? Math.max(0, options.duration) : 5200;
+      const defaultDuration = intent === 'preview' ? 6400 : 5200;
+      const duration = Number.isFinite(options.duration)
+        ? Math.max(0, options.duration)
+        : defaultDuration;
       if (duration > 0 && !this.prefersReducedMotion) {
         this.dimensionIntroAutoHideTimer = timerHost.setTimeout(() => {
           this.hideDimensionIntro();
@@ -6855,6 +6864,7 @@
       const finalize = () => {
         dimensionIntroEl.hidden = true;
         dimensionIntroEl.setAttribute('aria-hidden', 'true');
+        dimensionIntroEl.dataset.intent = 'hidden';
       };
       if (immediate || this.prefersReducedMotion) {
         dimensionIntroEl.classList.remove('active');
@@ -6868,6 +6878,62 @@
     getNextDimensionName() {
       const nextTheme = DIMENSION_THEME[this.currentDimensionIndex + 1];
       return nextTheme?.name ?? null;
+    }
+
+    buildDimensionRuleSummary(theme, override) {
+      if (override && typeof override === 'string' && override.trim()) {
+        return override.trim();
+      }
+      if (!theme) {
+        return 'Adapt quickly to the realm\'s rules to survive.';
+      }
+      const descriptors = [];
+      const gravity = Number.isFinite(theme?.gravity) ? Number(theme.gravity).toFixed(2) : null;
+      if (gravity) {
+        descriptors.push(`Gravity ×${gravity}`);
+      }
+      const speed =
+        Number.isFinite(theme?.speedMultiplier) && theme.speedMultiplier !== 1
+          ? Number(theme.speedMultiplier).toFixed(2)
+          : null;
+      if (speed) {
+        descriptors.push(`Speed ×${speed}`);
+      }
+      const extraRules = Array.isArray(theme?.rules)
+        ? theme.rules.filter((rule) => typeof rule === 'string' && rule.trim()).map((rule) => rule.trim())
+        : typeof theme?.rules === 'string' && theme.rules.trim()
+          ? [theme.rules.trim()]
+          : [];
+      if (extraRules.length) {
+        descriptors.push(...extraRules);
+      }
+      const description = typeof theme?.description === 'string' ? theme.description.trim() : '';
+      if (descriptors.length && description) {
+        return `${descriptors.join(' · ')} — ${description}`;
+      }
+      if (description) {
+        return description;
+      }
+      if (descriptors.length) {
+        return descriptors.join(' · ');
+      }
+      return 'Adapt quickly to the realm\'s rules to survive.';
+    }
+
+    previewUpcomingDimension() {
+      if (this.victoryAchieved) {
+        return;
+      }
+      const nextTheme = DIMENSION_THEME[this.currentDimensionIndex + 1];
+      if (!nextTheme) {
+        return;
+      }
+      const summary = this.buildDimensionRuleSummary(nextTheme);
+      this.revealDimensionIntro(nextTheme, {
+        intent: 'preview',
+        duration: 6400,
+        rulesOverride: summary,
+      });
     }
 
     updateDimensionInfoPanel() {

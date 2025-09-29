@@ -108,12 +108,51 @@ function ignitePortalFrame(footprint, options = {}) {
   };
 }
 
+function normaliseRuleList(rules) {
+  if (!rules) return [];
+  if (Array.isArray(rules)) {
+    return rules
+      .map((rule) => (typeof rule === 'string' ? rule.trim() : ''))
+      .filter(Boolean);
+  }
+  if (typeof rules === 'string') {
+    const trimmed = rules.trim();
+    return trimmed ? [trimmed] : [];
+  }
+  return [];
+}
+
+function formatDimensionRules(dimension) {
+  const rules = normaliseRuleList(dimension?.rules);
+  const descriptors = [];
+  if (rules.length) {
+    descriptors.push(...rules);
+  }
+  const gravity = dimension?.physics?.gravity;
+  if (Number.isFinite(gravity)) {
+    descriptors.unshift(`Gravity ×${Number(gravity).toFixed(2)}`);
+  }
+  const description =
+    typeof dimension?.description === 'string' ? dimension.description.trim() : '';
+  if (descriptors.length && description) {
+    return `${descriptors.join(' · ')} — ${description}`;
+  }
+  if (descriptors.length) {
+    return descriptors.join(' · ');
+  }
+  if (description) {
+    return description;
+  }
+  return 'Expect the unexpected beyond the portal.';
+}
+
 function enterPortal(portal, dimension) {
   const name = dimension?.name ?? dimension?.id ?? 'Unknown Dimension';
   const physics = {
     gravity: dimension?.physics?.gravity ?? 1,
     shaderProfile: dimension?.physics?.shaderProfile ?? 'default',
   };
+  const rules = formatDimensionRules(dimension);
   return {
     fade: true,
     resetPosition: { x: 0, y: 0 },
@@ -122,6 +161,7 @@ function enterPortal(portal, dimension) {
     physics,
     shaderProfile: physics.shaderProfile,
     dimensionName: name,
+    dimensionRules: rules,
   };
 }
 
