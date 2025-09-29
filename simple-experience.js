@@ -6,6 +6,8 @@
   const PLAYER_INERTIA = 0.88;
   const DAY_LENGTH_SECONDS = 600;
   const POINTER_SENSITIVITY = 0.0022;
+  const POINTER_TUTORIAL_MESSAGE =
+    'Click the viewport to capture your mouse, then use WASD to move and left-click to mine.';
   const FALLBACK_HEALTH = 10;
   const PORTAL_BLOCK_REQUIREMENT = 10;
   const PORTAL_INTERACTION_RANGE = 4.5;
@@ -508,6 +510,7 @@
       this.footerStatusEl = this.ui.footerStatusEl || null;
       this.pointerHintActive = false;
       this.pointerHintHideTimer = null;
+      this.pointerHintAutoDismissTimer = null;
       this.pointerHintLastMessage = '';
       this.lastHintMessage = '';
       this.craftingModal = this.ui.craftingModal || null;
@@ -781,6 +784,7 @@
       this.bindEvents();
       this.initializeMobileControls();
       this.updatePointerHintForInputMode();
+      this.showDesktopPointerTutorialHint();
       this.updateHud();
       this.refreshCraftingUi();
       this.hideIntro();
@@ -863,13 +867,13 @@
 
     showPointerHint(message) {
       if (!this.pointerHintEl) return;
+      this.cancelPointerHintAutoHide();
       if (this.detectTouchPreferred()) {
         this.hidePointerHint(true);
         return;
       }
       const text =
-        (typeof message === 'string' && message.trim()) ||
-        'Click the viewport to capture your mouse and look around.';
+        (typeof message === 'string' && message.trim()) || POINTER_TUTORIAL_MESSAGE;
       if (this.pointerHintEl.textContent !== text) {
         this.pointerHintEl.textContent = text;
       }
@@ -888,6 +892,7 @@
 
     hidePointerHint(immediate = false) {
       if (!this.pointerHintEl) return;
+      this.cancelPointerHintAutoHide();
       if (!this.pointerHintActive && !immediate) {
         return;
       }
@@ -930,6 +935,38 @@
         return;
       }
       this.showPointerHint(override || this.pointerHintLastMessage || undefined);
+    }
+
+    cancelPointerHintAutoHide() {
+      if (!this.pointerHintAutoDismissTimer) {
+        return;
+      }
+      const scope = typeof window !== 'undefined' ? window : globalThis;
+      scope.clearTimeout(this.pointerHintAutoDismissTimer);
+      this.pointerHintAutoDismissTimer = null;
+    }
+
+    schedulePointerHintAutoHide(seconds = 5) {
+      if (!Number.isFinite(seconds) || seconds <= 0) {
+        return;
+      }
+      const scope = typeof window !== 'undefined' ? window : globalThis;
+      this.cancelPointerHintAutoHide();
+      this.pointerHintAutoDismissTimer = scope.setTimeout(() => {
+        this.pointerHintAutoDismissTimer = null;
+        this.hidePointerHint();
+      }, seconds * 1000);
+    }
+
+    showDesktopPointerTutorialHint() {
+      if (this.detectTouchPreferred()) {
+        return;
+      }
+      if (this.pointerLocked) {
+        return;
+      }
+      this.updatePointerHintForInputMode(POINTER_TUTORIAL_MESSAGE);
+      this.schedulePointerHintAutoHide(5);
     }
 
     initializeScoreboardUi() {
@@ -4218,14 +4255,21 @@
 
     handlePointerLockChange() {
       this.pointerLocked = document.pointerLockElement === this.canvas;
-      this.updatePointerHintForInputMode();
+      if (this.pointerLocked) {
+        this.cancelPointerHintAutoHide();
+        this.hidePointerHint(true);
+        return;
+      }
+      this.showDesktopPointerTutorialHint();
     }
 
     handlePointerLockError() {
       this.pointerLocked = false;
+      this.cancelPointerHintAutoHide();
       this.updatePointerHintForInputMode(
         'Pointer lock was blocked. Allow mouse capture in your browser settings.'
       );
+      this.schedulePointerHintAutoHide(6);
     }
 
     attemptPointerLock() {
