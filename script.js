@@ -1902,6 +1902,8 @@
           portalProgressLabel,
           portalProgressBar,
           hotbarEl,
+          hotbarExpandButton: toggleExtendedBtn,
+          extendedInventoryEl,
           playerHintEl,
           dimensionIntroEl,
           dimensionIntroNameEl,
@@ -1939,7 +1941,6 @@
             inventorySortButton,
             inventoryOverflowEl,
             closeInventoryButton,
-            openInventoryButtons: [toggleExtendedBtn].filter(Boolean),
             pointerHintEl,
             footerEl: document.getElementById('siteFooter'),
             footerScoreEl: document.getElementById('footerScore'),
@@ -15250,6 +15251,10 @@
     }
 
     function toggleHotbarExpansion(forceValue) {
+      if (simpleExperience && typeof simpleExperience.toggleHotbarExpansion === 'function') {
+        simpleExperience.toggleHotbarExpansion(forceValue);
+        return;
+      }
       const nextState = typeof forceValue === 'boolean' ? forceValue : !state.ui.hotbarExpanded;
       state.ui.hotbarExpanded = nextState;
       updateHotbarExpansionUi();
