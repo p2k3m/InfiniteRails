@@ -2857,6 +2857,11 @@ body.sidebar-open .player-hint {
   z-index: 15;
 }
 
+.compose-overlay--global {
+  position: fixed;
+  z-index: 1200;
+}
+
 .compose-overlay__dialog {
   width: min(360px, 100%);
   border-radius: 16px;
