@@ -786,6 +786,7 @@
       }
       this.sessionToken += 1;
       this.activeSessionId = this.sessionToken;
+      const sessionId = this.activeSessionId;
       this.cameraPerspective = 'first';
       this.resetPlayerCharacterState();
       this.started = true;
@@ -801,7 +802,7 @@
       try {
         this.setupScene();
         this.preloadCharacterModels();
-        this.loadFirstPersonArms();
+        this.loadFirstPersonArms(sessionId);
         this.initializeScoreboardUi();
         this.applyDimensionSettings(this.currentDimensionIndex);
         this.buildTerrain();
@@ -1737,21 +1738,11 @@
         if (this.thirdPersonCameraOffset) {
           this.camera.position.copy(this.thirdPersonCameraOffset);
         }
-        if (this.handGroup) {
-          this.handGroup.visible = false;
-        }
-      } else {
-        if (this.firstPersonCameraOffset) {
-          this.camera.position.copy(this.firstPersonCameraOffset);
-        }
-        if (this.handGroup) {
-          if (this.handGroup.parent !== this.camera) {
-            this.camera.add(this.handGroup);
-          }
-          this.handGroup.visible = true;
-        }
+      } else if (this.firstPersonCameraOffset) {
+        this.camera.position.copy(this.firstPersonCameraOffset);
       }
       this.refreshCameraBaseOffset();
+      this.ensurePlayerArmsVisible();
     }
 
     toggleCameraPerspective() {
@@ -1759,6 +1750,36 @@
       this.applyCameraPerspective(next);
       const message = next === 'first' ? 'First-person view enabled.' : 'Third-person view enabled.';
       this.showHint(message);
+    }
+
+    ensurePlayerArmsVisible() {
+      if (this.playerAvatar) {
+        this.playerAvatar.visible = true;
+        if (typeof this.playerAvatar.traverse === 'function') {
+          this.playerAvatar.traverse((child) => {
+            if (child && child.visible === false) {
+              child.visible = true;
+            }
+          });
+        }
+      }
+      if (!this.handGroup) {
+        return;
+      }
+      const shouldShowHands = this.cameraPerspective === 'first';
+      if (shouldShowHands && this.camera && this.handGroup.parent !== this.camera) {
+        try {
+          this.handGroup.parent?.remove?.(this.handGroup);
+        } catch (error) {
+          console.debug('Unable to detach hand group from previous parent.', error);
+        }
+        try {
+          this.camera.add(this.handGroup);
+        } catch (error) {
+          console.debug('Unable to attach hand group to camera.', error);
+        }
+      }
+      this.handGroup.visible = shouldShowHands;
     }
 
     getHighResTimestamp() {
@@ -2932,8 +2953,8 @@
       this.handGroup.add(left.group);
       this.handGroup.add(right.group);
       this.camera.add(this.handGroup);
-      this.handGroup.visible = this.cameraPerspective === 'first';
       this.handMaterials = [left.palm.material, right.palm.material, left.sleeve.material, right.sleeve.material];
+      this.ensurePlayerArmsVisible();
     }
 
     preloadCharacterModels() {
@@ -3022,17 +3043,44 @@
       }
     }
 
-    async loadFirstPersonArms() {
+    async loadFirstPersonArms(sessionId = this.activeSessionId) {
       if (!this.handGroup) return;
-      const asset = await this.cloneModelScene('arm');
-      if (!asset?.scene) {
+      const currentSessionId = sessionId;
+      let asset = null;
+      try {
+        asset = await this.cloneModelScene('arm');
+      } catch (error) {
+        asset = null;
+      }
+      if (currentSessionId !== this.activeSessionId || !this.handGroup) {
+        if (asset?.scene) {
+          disposeObject3D(asset.scene);
+        }
         return;
       }
-      this.handGroup.clear();
+      if (!asset?.scene) {
+        this.ensurePlayerArmsVisible();
+        return;
+      }
+      if (typeof this.handGroup.clear === 'function') {
+        this.handGroup.clear();
+      }
       const leftArm = asset.scene;
       leftArm.position.set(-0.32, -0.1, -0.58);
       leftArm.rotation.set(-0.32, 0.32, 0.12);
-      const rightAsset = await this.cloneModelScene('arm');
+      let rightAsset = null;
+      try {
+        rightAsset = await this.cloneModelScene('arm');
+      } catch (error) {
+        rightAsset = null;
+      }
+      if (currentSessionId !== this.activeSessionId || !this.handGroup) {
+        disposeObject3D(leftArm);
+        if (rightAsset?.scene) {
+          disposeObject3D(rightAsset.scene);
+        }
+        return;
+      }
       if (!rightAsset?.scene) {
         this.handGroup.add(leftArm);
         this.handMaterials = [];
@@ -3047,7 +3095,7 @@
         });
         this.handMaterialsDynamic = false;
         this.handModelLoaded = true;
-        this.handGroup.visible = this.cameraPerspective === 'first';
+        this.ensurePlayerArmsVisible();
         return;
       }
       const rightArm = rightAsset.scene;
@@ -3068,7 +3116,7 @@
       });
       this.handMaterialsDynamic = false;
       this.handModelLoaded = true;
-      this.handGroup.visible = this.cameraPerspective === 'first';
+      this.ensurePlayerArmsVisible();
     }
 
     async loadPlayerCharacter() {
@@ -3106,6 +3154,7 @@
         }
         this.applyCameraPerspective(this.cameraPerspective);
         console.log('Steve visible in scene (fallback)');
+        this.ensurePlayerArmsVisible();
         return;
       }
       if (this.playerAvatar) {
@@ -3162,6 +3211,7 @@
         this.playerIdleAction.play();
       }
       console.log('Steve visible in scene');
+      this.ensurePlayerArmsVisible();
     }
 
     upgradeZombie(zombie) {
