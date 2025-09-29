@@ -1065,6 +1065,10 @@
     const craftingSearchPanel = document.getElementById('craftingSearchPanel');
     const craftingSearchInput = document.getElementById('craftingSearchInput');
     const craftingSearchResultsEl = document.getElementById('craftingSearchResults');
+    const craftingHelperEl = document.getElementById('craftingHelper');
+    const craftingHelperTitleEl = document.getElementById('craftingHelperTitle');
+    const craftingHelperDescriptionEl = document.getElementById('craftingHelperDescription');
+    const craftingHelperMatchesEl = document.getElementById('craftingHelperMatches');
     const closeCraftingSearchButton = document.getElementById('closeCraftingSearch');
     const craftLauncherButton = document.getElementById('openCrafting');
     const craftingModal = document.getElementById('craftingModal');
@@ -1936,6 +1940,10 @@
           craftingSearchPanel,
           craftingSearchInput,
           craftingSearchResultsEl,
+          craftingHelperEl,
+          craftingHelperTitleEl,
+          craftingHelperDescriptionEl,
+          craftingHelperMatchesEl,
             inventoryModal,
             inventoryGridEl,
             inventorySortButton,
