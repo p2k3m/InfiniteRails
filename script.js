@@ -428,6 +428,234 @@
     });
   }
 
+  const composeOverlayControllers = {};
+
+  function createComposeOverlayController(elements = {}, options = {}) {
+    const {
+      overlay = null,
+      dialog = null,
+      title: titleEl = null,
+      message: messageEl = null,
+      spinner: spinnerEl = null,
+      actionsContainer = null,
+    } = elements;
+    if (!overlay) {
+      return {
+        show: () => {},
+        hide: () => {},
+        update: () => {},
+        isVisible: () => false,
+        getState: () => ({ visible: false, mode: 'idle', title: '', message: '', actions: [] }),
+      };
+    }
+
+    const {
+      defaults = {},
+      shouldAutoFocus = null,
+      onStateChange = null,
+    } = options ?? {};
+
+    const fallbackTitles = {
+      loading: defaults.loadingTitle ?? 'Working…',
+      error: defaults.errorTitle ?? 'Something went wrong',
+      idle: defaults.idleTitle ?? '',
+    };
+    const fallbackMessages = {
+      loading: defaults.loadingMessage ?? '',
+      error: defaults.errorMessage ?? '',
+      idle: defaults.idleMessage ?? '',
+    };
+
+    let state = {
+      visible: false,
+      mode: 'idle',
+      title: '',
+      message: '',
+      actions: [],
+      focusActionId: null,
+    };
+
+    let lastVisible = false;
+    let renderedActions = [];
+
+    function render() {
+      const { visible, mode, title, message, actions } = state;
+      overlay.hidden = !visible;
+      overlay.setAttribute('aria-hidden', visible ? 'false' : 'true');
+      overlay.setAttribute('data-mode', mode);
+      if (dialog) {
+        dialog.setAttribute('role', mode === 'error' ? 'alertdialog' : 'dialog');
+        dialog.setAttribute('aria-modal', visible ? 'true' : 'false');
+      }
+      if (titleEl) {
+        const fallback = fallbackTitles[mode] ?? fallbackTitles.idle ?? '';
+        titleEl.textContent = title || fallback;
+      }
+      if (messageEl) {
+        const fallbackMessage = fallbackMessages[mode] ?? fallbackMessages.idle ?? '';
+        messageEl.textContent = message || fallbackMessage;
+      }
+      if (spinnerEl) {
+        spinnerEl.hidden = mode !== 'loading';
+      }
+
+      renderedActions = [];
+      if (actionsContainer) {
+        const hasActions = Array.isArray(actions) && actions.length > 0;
+        actionsContainer.innerHTML = '';
+        actionsContainer.hidden = !hasActions;
+        if (hasActions) {
+          actions.forEach((action) => {
+            if (!action) return;
+            const button = document.createElement('button');
+            button.type = 'button';
+            const variant = action.variant === 'accent' ? 'accent' : action.variant === 'danger' ? 'danger' : 'ghost';
+            button.className = `${variant} small compose-overlay__action`;
+            button.textContent = action.label || (variant === 'accent' ? 'Confirm' : 'Dismiss');
+            if (action.title) {
+              button.title = action.title;
+            }
+            if (action.id) {
+              button.dataset.actionId = action.id;
+            }
+            const disabled = Boolean(action.disabled);
+            button.disabled = disabled;
+            button.setAttribute('aria-disabled', disabled ? 'true' : 'false');
+            if (typeof action.onClick === 'function') {
+              button.addEventListener('click', (event) => {
+                if (button.disabled) return;
+                action.onClick(event);
+              });
+            }
+            actionsContainer.appendChild(button);
+            renderedActions.push({
+              id: action.id ?? null,
+              button,
+              variant,
+            });
+          });
+        }
+      }
+
+      const shouldFocus =
+        visible &&
+        !lastVisible &&
+        (typeof shouldAutoFocus !== 'function' || shouldAutoFocus(state));
+      lastVisible = visible;
+      if (shouldFocus) {
+        let focusTarget = null;
+        if (state.focusActionId) {
+          focusTarget = renderedActions.find((entry) => entry.id === state.focusActionId)?.button ?? null;
+        }
+        if (!focusTarget) {
+          focusTarget = renderedActions.find((entry) => entry.variant === 'accent')?.button ?? null;
+        }
+        if (!focusTarget) {
+          focusTarget = renderedActions[0]?.button ?? null;
+        }
+        if (!focusTarget) {
+          focusTarget = dialog;
+        }
+        try {
+          focusTarget?.focus?.({ preventScroll: true });
+        } catch (error) {
+          console.warn('Unable to focus overlay action.', error);
+        }
+      }
+
+      if (typeof onStateChange === 'function') {
+        onStateChange({ ...state });
+      }
+    }
+
+    function update(partial = {}) {
+      state = { ...state, ...partial };
+      render();
+    }
+
+    function show(options = {}) {
+      const {
+        mode = 'loading',
+        title = '',
+        message = '',
+        actions = [],
+        focusActionId: explicitFocusId = null,
+      } = options ?? {};
+      const actionList = Array.isArray(actions) ? actions : [];
+      const resolvedFocus =
+        explicitFocusId ??
+        actionList.find((action) => action?.autoFocus && action?.id)?.id ??
+        null;
+      update({
+        visible: true,
+        mode,
+        title,
+        message,
+        actions: actionList,
+        focusActionId: resolvedFocus,
+      });
+    }
+
+    function hide() {
+      update({
+        visible: false,
+        mode: 'idle',
+        title: '',
+        message: '',
+        actions: [],
+        focusActionId: null,
+      });
+    }
+
+    function isVisible() {
+      return state.visible;
+    }
+
+    function getState() {
+      return { ...state };
+    }
+
+    function focus() {
+      if (!state.visible) {
+        return;
+      }
+      lastVisible = false;
+      render();
+    }
+
+    return { show, hide, update, isVisible, getState, focus };
+  }
+
+  function getGlobalOverlayController() {
+    if (composeOverlayControllers.global) {
+      return composeOverlayControllers.global;
+    }
+    const overlay = document.getElementById('globalOverlay');
+    if (!overlay) {
+      return null;
+    }
+    const controller = createComposeOverlayController(
+      {
+        overlay,
+        dialog: document.getElementById('globalOverlayDialog'),
+        title: document.getElementById('globalOverlayTitle'),
+        message: document.getElementById('globalOverlayMessage'),
+        spinner: document.getElementById('globalOverlaySpinner'),
+        actionsContainer: document.getElementById('globalOverlayActions'),
+      },
+      {
+        defaults: {
+          loadingTitle: 'Working…',
+          errorTitle: 'Action required',
+          idleTitle: '',
+        },
+        shouldAutoFocus: () => true,
+      },
+    );
+    composeOverlayControllers.global = controller;
+    return controller;
+  }
+
   function showDependencyError(message, error) {
     console.error(message, error);
     const modal = document.getElementById('introModal');
@@ -438,8 +666,26 @@
       startButton.setAttribute('aria-hidden', 'true');
       startButton.setAttribute('tabindex', '-1');
     }
+    const overlay = getGlobalOverlayController();
     if (!modal) {
-      alert(message);
+      if (overlay) {
+        overlay.show({
+          mode: 'error',
+          title: 'Unable to start experience',
+          message,
+          actions: [
+            {
+              id: 'dismiss',
+              label: 'Dismiss',
+              variant: 'accent',
+              onClick: () => overlay.hide(),
+              autoFocus: true,
+            },
+          ],
+        });
+      } else {
+        alert(message);
+      }
       return;
     }
     modal.hidden = false;
@@ -451,6 +697,22 @@
         <h2>Infinite Dimension</h2>
         <p class=\"modal-error\">${message}</p>
       `;
+    }
+    if (overlay) {
+      overlay.show({
+        mode: 'error',
+        title: 'Unable to start experience',
+        message,
+        actions: [
+          {
+            id: 'dismiss',
+            label: 'Dismiss',
+            variant: 'accent',
+            onClick: () => overlay.hide(),
+            autoFocus: true,
+          },
+        ],
+      });
     }
   }
 
@@ -567,8 +829,6 @@
     const leaderboardOverlayMessage = document.getElementById('leaderboardOverlayMessage');
     const leaderboardOverlaySpinner = document.getElementById('leaderboardOverlaySpinner');
     const leaderboardOverlayActions = document.getElementById('leaderboardOverlayActions');
-    const leaderboardOverlayRetry = document.getElementById('leaderboardOverlayRetry');
-    const leaderboardOverlayDismiss = document.getElementById('leaderboardOverlayDismiss');
     const scorePanelEl = document.getElementById('scorePanel');
     const scoreTotalEl = document.getElementById('scoreTotal');
     const scoreRecipesEl = document.getElementById('scoreRecipes');
@@ -1076,11 +1336,35 @@
 
       async function handleFallbackSignIn(event) {
         event?.preventDefault?.();
+        const overlay = getGlobalOverlayController();
         if (!appConfig.googleClientId) {
-          alert('Google Sign-In is not configured for this deployment.');
+          if (overlay) {
+            overlay.show({
+              mode: 'error',
+              title: 'Google Sign-In unavailable',
+              message: 'Google Sign-In is not configured for this deployment.',
+              actions: [
+                {
+                  id: 'dismiss',
+                  label: 'Dismiss',
+                  variant: 'accent',
+                  onClick: () => overlay.hide(),
+                  autoFocus: true,
+                },
+              ],
+            });
+          } else {
+            alert('Google Sign-In is not configured for this deployment.');
+          }
           return;
         }
         identityState.googleBusy = true;
+        overlay?.show({
+          mode: 'loading',
+          title: 'Connecting to Google',
+          message: 'Preparing secure sign-in…',
+          actions: [],
+        });
         updateIdentityUI();
         try {
           const auth = await ensureGapiAuth();
@@ -1101,9 +1385,27 @@
             name: profile.getName?.() || profile.getGivenName?.() || 'Explorer',
             picture: profile.getImageUrl?.() || null,
           });
+          overlay?.hide();
         } catch (error) {
           console.warn('Google Sign-In failed.', error);
-          alert('Google Sign-In failed. Please try again later.');
+          if (overlay) {
+            overlay.show({
+              mode: 'error',
+              title: 'Google Sign-In failed',
+              message: 'Please try again later.',
+              actions: [
+                {
+                  id: 'dismiss',
+                  label: 'Dismiss',
+                  variant: 'accent',
+                  onClick: () => overlay.hide(),
+                  autoFocus: true,
+                },
+              ],
+            });
+          } else {
+            alert('Google Sign-In failed. Please try again later.');
+          }
         } finally {
           identityState.googleBusy = false;
           updateIdentityUI();
@@ -18192,33 +18494,35 @@
       }
 
       if (scoreboardStatusEl) {
-        let statusText = identityState.scoreboardMessage || '';
-        if (!statusText) {
-          if (identityState.loadingScores) {
-            statusText = appConfig.apiBaseUrl
-              ? 'Fetching the latest leaderboard entries…'
-              : 'Loading saved leaderboard entries…';
-          } else if (identityState.scoreboardSource === 'remote') {
-            if (!identityState.scoreboard.length) {
-              statusText = signedIn
-                ? 'No scores recorded yet.'
-                : 'No runs recorded yet. Be the first to chart the multiverse.';
-            } else {
-              statusText = signedIn
-                ? 'Live multiverse leaderboard synced with DynamoDB.'
-                : 'Live multiverse rankings. Sign in to submit your run.';
-            }
-          } else if (identityState.scoreboardSource === 'local') {
-            statusText = 'Scores are saved locally on this device.';
-          } else if (identityState.scoreboardSource === 'sample') {
-            statusText = 'Showing sample data. Connect the API to DynamoDB for live scores.';
-          } else if (!signedIn) {
-            statusText = appConfig.apiBaseUrl
-              ? 'Live rankings unavailable. Try refreshing.'
-              : 'Sign in to publish your victories and see the live rankings.';
-          } else if (!identityState.scoreboard.length) {
-            statusText = 'No scores recorded yet.';
+        let statusText = '';
+        if (identityState.scoreboardError) {
+          statusText = identityState.scoreboardError;
+        } else if (identityState.scoreboardMessage) {
+          statusText = identityState.scoreboardMessage;
+        } else if (identityState.loadingScores) {
+          statusText = appConfig.apiBaseUrl
+            ? 'Fetching the latest leaderboard entries…'
+            : 'Loading saved leaderboard entries…';
+        } else if (identityState.scoreboardSource === 'remote') {
+          if (!identityState.scoreboard.length) {
+            statusText = signedIn
+              ? 'No scores recorded yet.'
+              : 'No runs recorded yet. Be the first to chart the multiverse.';
+          } else {
+            statusText = signedIn
+              ? 'Live multiverse leaderboard synced with DynamoDB.'
+              : 'Live multiverse rankings. Sign in to submit your run.';
           }
+        } else if (identityState.scoreboardSource === 'local') {
+          statusText = 'Scores are saved locally on this device.';
+        } else if (identityState.scoreboardSource === 'sample') {
+          statusText = 'Showing sample data. Connect the API to DynamoDB for live scores.';
+        } else if (!signedIn) {
+          statusText = appConfig.apiBaseUrl
+            ? 'Live rankings unavailable. Try refreshing.'
+            : 'Sign in to publish your victories and see the live rankings.';
+        } else if (!identityState.scoreboard.length) {
+          statusText = 'No scores recorded yet.';
         }
         scoreboardStatusEl.textContent = statusText;
         scoreboardStatusEl.hidden = statusText === '';
@@ -18238,6 +18542,8 @@
           leaderboardEmptyMessage.textContent = appConfig.apiBaseUrl
             ? 'Fetching the latest rankings…'
             : 'Loading saved leaderboard entries…';
+        } else if (identityState.scoreboardError) {
+          leaderboardEmptyMessage.textContent = identityState.scoreboardError;
         } else if (identityState.scoreboardMessage) {
           leaderboardEmptyMessage.textContent = identityState.scoreboardMessage;
         } else if (identityState.scoreboardSource === 'remote') {
@@ -18250,8 +18556,6 @@
           leaderboardEmptyMessage.textContent = 'No scores recorded yet. Be the first to complete a run!';
         }
       }
-
-      renderLeaderboardOverlay();
 
       renderScoreboard(identityState.scoreboard);
     }
@@ -18667,10 +18971,9 @@
       leaderboardModal.hidden = false;
       leaderboardModal.setAttribute('aria-hidden', 'false');
       openLeaderboardButton?.setAttribute('aria-expanded', 'true');
-      if (leaderboardOverlayState.visible) {
-        lastLeaderboardOverlayVisible = false;
+      if (leaderboardOverlayController?.isVisible?.()) {
+        leaderboardOverlayController.focus?.();
       }
-      renderLeaderboardOverlay();
       const shouldRefreshLeaderboard =
         !identityState.loadingScores &&
         ((appConfig.apiBaseUrl && identityState.scoreboardSource !== 'remote') || !identityState.scoreboard.length);
@@ -18876,12 +19179,53 @@
     async function startGoogleSignInFlow() {
       if (!appConfig.googleClientId) {
         console.warn('Google client ID missing.');
+        const overlay = getGlobalOverlayController();
+        if (overlay) {
+          overlay.show({
+            mode: 'error',
+            title: 'Google Sign-In unavailable',
+            message: 'Google Sign-In is not configured for this deployment.',
+            actions: [
+              {
+                id: 'dismiss',
+                label: 'Dismiss',
+                variant: 'accent',
+                onClick: () => overlay.hide(),
+                autoFocus: true,
+              },
+            ],
+          });
+        }
         return;
       }
+      const overlay = getGlobalOverlayController();
+      overlay?.show({
+        mode: 'loading',
+        title: 'Connecting to Google',
+        message: 'Preparing secure sign-in…',
+        actions: [],
+      });
       try {
         const auth = await ensureGoogleAuthReady();
         if (!auth) {
-          alert('Google Sign-In is unavailable. Please try again later.');
+          if (overlay) {
+            overlay.show({
+              mode: 'error',
+              title: 'Google Sign-In unavailable',
+              message: 'Please try again later.',
+              actions: [
+                {
+                  id: 'dismiss',
+                  label: 'Dismiss',
+                  variant: 'accent',
+                  onClick: () => overlay.hide(),
+                  autoFocus: true,
+                },
+              ],
+            });
+          } else {
+            alert('Google Sign-In is unavailable. Please try again later.');
+          }
           return;
         }
         let googleUser = auth.currentUser?.get?.();
@@ -18889,9 +19233,27 @@
           googleUser = await auth.signIn();
         }
         await handleGoogleUserSignIn(googleUser);
+        overlay?.hide();
       } catch (error) {
         console.warn('Google Sign-In failed.', error);
-        alert('Google Sign-In failed. Please try again later.');
+        if (overlay) {
+          overlay.show({
+            mode: 'error',
+            title: 'Google Sign-In failed',
+            message: 'Please try again later.',
+            actions: [
+              {
+                id: 'dismiss',
+                label: 'Dismiss',
+                variant: 'accent',
+                onClick: () => overlay.hide(),
+                autoFocus: true,
+              },
+            ],
+          });
+        } else {
+          alert('Google Sign-In failed. Please try again later.');
+        }
       }
     }
 
@@ -19213,100 +19575,36 @@
       return { normalized: annotated, displayed };
     }
 
-    const leaderboardOverlayState = {
-      visible: false,
-      mode: 'idle',
-      title: '',
-      message: '',
-      allowRetry: false,
-      allowDismiss: false,
-    };
-    let lastLeaderboardOverlayVisible = false;
-
     function isLeaderboardModalVisible() {
       return Boolean(leaderboardModal && leaderboardModal.hidden === false);
     }
 
-    function renderLeaderboardOverlay() {
-      if (!leaderboardOverlay) {
-        return;
-      }
-      const { visible, mode, title, message, allowRetry, allowDismiss } = leaderboardOverlayState;
-      leaderboardOverlay.hidden = !visible;
-      leaderboardOverlay.setAttribute('aria-hidden', visible ? 'false' : 'true');
-      leaderboardOverlay.setAttribute('data-mode', mode);
-      if (leaderboardOverlayDialog) {
-        leaderboardOverlayDialog.setAttribute('role', mode === 'error' ? 'alertdialog' : 'dialog');
-        leaderboardOverlayDialog.setAttribute('aria-modal', visible ? 'true' : 'false');
-      }
-      if (leaderboardOverlayTitle) {
-        const fallbackTitle = mode === 'error' ? 'Leaderboard unavailable' : 'Syncing leaderboard';
-        leaderboardOverlayTitle.textContent = title || fallbackTitle;
-      }
-      if (leaderboardOverlayMessage) {
-        leaderboardOverlayMessage.textContent = message || '';
-      }
-      if (leaderboardOverlaySpinner) {
-        leaderboardOverlaySpinner.hidden = mode !== 'loading';
-      }
-      if (leaderboardOverlayRetry) {
-        leaderboardOverlayRetry.hidden = !allowRetry;
-        leaderboardOverlayRetry.disabled = mode === 'loading';
-      }
-      if (leaderboardOverlayDismiss) {
-        leaderboardOverlayDismiss.hidden = !allowDismiss;
-      }
-      if (leaderboardOverlayActions) {
-        leaderboardOverlayActions.hidden = !allowRetry && !allowDismiss;
-      }
-      if (leaderboardModal) {
-        leaderboardModal.setAttribute('aria-busy', identityState.loadingScores ? 'true' : 'false');
-      }
-      const shouldFocus = visible && !lastLeaderboardOverlayVisible && isLeaderboardModalVisible();
-      lastLeaderboardOverlayVisible = visible;
-      if (shouldFocus) {
-        if (allowRetry && !leaderboardOverlayRetry?.hidden) {
-          leaderboardOverlayRetry.focus({ preventScroll: true });
-        } else if (allowDismiss && !leaderboardOverlayDismiss?.hidden) {
-          leaderboardOverlayDismiss.focus({ preventScroll: true });
-        } else {
-          leaderboardOverlayDialog?.focus?.({ preventScroll: true });
-        }
-      }
-    }
-
-    function updateLeaderboardOverlayState(partial) {
-      Object.assign(leaderboardOverlayState, partial);
-      renderLeaderboardOverlay();
-    }
-
-    function showLeaderboardOverlay(options = {}) {
-      const {
-        mode = 'loading',
-        title = '',
-        message = '',
-        allowRetry = false,
-        allowDismiss = false,
-      } = options;
-      updateLeaderboardOverlayState({
-        visible: true,
-        mode,
-        title,
-        message,
-        allowRetry,
-        allowDismiss,
-      });
-    }
+    const leaderboardOverlayController = createComposeOverlayController(
+      {
+        overlay: leaderboardOverlay,
+        dialog: leaderboardOverlayDialog,
+        title: leaderboardOverlayTitle,
+        message: leaderboardOverlayMessage,
+        spinner: leaderboardOverlaySpinner,
+        actionsContainer: leaderboardOverlayActions,
+      },
+      {
+        defaults: {
+          loadingTitle: 'Syncing leaderboard',
+          errorTitle: 'Leaderboard unavailable',
+          idleTitle: '',
+        },
+        shouldAutoFocus: () => isLeaderboardModalVisible(),
+        onStateChange: (overlayState) => {
+          if (!leaderboardModal) return;
+          const busy = overlayState.visible && overlayState.mode === 'loading';
+          leaderboardModal.setAttribute('aria-busy', busy ? 'true' : 'false');
+        },
+      },
+    );
 
     function hideLeaderboardOverlay({ resetMessage = false } = {}) {
-      updateLeaderboardOverlayState({
-        visible: false,
-        mode: 'idle',
-        title: '',
-        message: '',
-        allowRetry: false,
-        allowDismiss: false,
-      });
+      leaderboardOverlayController.hide();
       if (resetMessage) {
         identityState.scoreboardError = null;
         identityState.scoreboardMessage = '';
@@ -19317,26 +19615,44 @@
     function presentLeaderboardLoading(message) {
       identityState.scoreboardError = null;
       identityState.scoreboardMessage = message;
-      showLeaderboardOverlay({
+      leaderboardOverlayController.show({
         mode: 'loading',
-        title: 'Syncing leaderboard',
         message,
-        allowRetry: false,
-        allowDismiss: false,
+        actions: [],
       });
       updateIdentityUI();
     }
 
     function presentLeaderboardError(message) {
       identityState.scoreboardError = message;
-      identityState.scoreboardMessage = message;
+      identityState.scoreboardMessage = '';
       identityState.loadingScores = false;
-      showLeaderboardOverlay({
+      const actions = [];
+      if (appConfig.apiBaseUrl) {
+        actions.push({
+          id: 'retry',
+          label: 'Retry',
+          variant: 'accent',
+          autoFocus: true,
+          onClick: () => {
+            if (identityState.loadingScores) {
+              return;
+            }
+            loadScoreboard();
+          },
+        });
+      }
+      actions.push({
+        id: 'dismiss',
+        label: appConfig.apiBaseUrl ? 'Dismiss' : 'OK',
+        variant: appConfig.apiBaseUrl ? 'ghost' : 'accent',
+        autoFocus: !appConfig.apiBaseUrl,
+        onClick: () => hideLeaderboardOverlay({ resetMessage: true }),
+      });
+      leaderboardOverlayController.show({
         mode: 'error',
-        title: 'Leaderboard unavailable',
         message,
-        allowRetry: Boolean(appConfig.apiBaseUrl),
-        allowDismiss: true,
+        actions,
       });
       updateIdentityUI();
     }
@@ -19598,15 +19914,6 @@
         }
         if (!appConfig.apiBaseUrl && (identityState.scoreboardSource === 'sample' || identityState.scoreboardSource === 'local')) {
           refreshOfflineScoreboard();
-          return;
-        }
-        loadScoreboard();
-      });
-      leaderboardOverlayDismiss?.addEventListener('click', () => {
-        hideLeaderboardOverlay();
-      });
-      leaderboardOverlayRetry?.addEventListener('click', () => {
-        if (identityState.loadingScores) {
           return;
         }
         loadScoreboard();

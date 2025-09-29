@@ -1039,22 +1039,7 @@
             <div class="compose-overlay__body">
               <h3 class="compose-overlay__title" id="leaderboardOverlayTitle">Syncing leaderboard</h3>
               <p class="compose-overlay__message" id="leaderboardOverlayMessage" aria-live="polite"></p>
-              <div class="compose-overlay__actions" id="leaderboardOverlayActions">
-                <button
-                  type="button"
-                  class="ghost small compose-overlay__action"
-                  id="leaderboardOverlayDismiss"
-                >
-                  Dismiss
-                </button>
-                <button
-                  type="button"
-                  class="accent small compose-overlay__action"
-                  id="leaderboardOverlayRetry"
-                >
-                  Retry
-                </button>
-              </div>
+              <div class="compose-overlay__actions" id="leaderboardOverlayActions"></div>
             </div>
           </div>
         </div>
@@ -1076,6 +1061,31 @@
     <footer class="site-footer" aria-label="Creator attribution">
       <p>Made by Manu</p>
     </footer>
+
+    <div
+      class="compose-overlay compose-overlay--global"
+      id="globalOverlay"
+      hidden
+      aria-hidden="true"
+      data-mode="idle"
+    >
+      <div
+        class="compose-overlay__dialog"
+        id="globalOverlayDialog"
+        tabindex="-1"
+        role="dialog"
+        aria-modal="false"
+        aria-labelledby="globalOverlayTitle"
+        aria-describedby="globalOverlayMessage"
+      >
+        <div class="compose-overlay__spinner" id="globalOverlaySpinner" aria-hidden="true"></div>
+        <div class="compose-overlay__body">
+          <h3 class="compose-overlay__title" id="globalOverlayTitle">Working…</h3>
+          <p class="compose-overlay__message" id="globalOverlayMessage" aria-live="polite"></p>
+          <div class="compose-overlay__actions" id="globalOverlayActions"></div>
+        </div>
+      </div>
+    </div>
 
     <footer
       class="made-by-manu"
