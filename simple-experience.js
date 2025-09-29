@@ -4,6 +4,7 @@
   const MIN_COLUMN_HEIGHT = 1;
   const MAX_COLUMN_HEIGHT = 6;
   const MAX_TERRAIN_VOXELS = WORLD_SIZE * WORLD_SIZE * MAX_COLUMN_HEIGHT;
+  const DEFAULT_TERRAIN_VOXEL_CAP = WORLD_SIZE * WORLD_SIZE * 4;
   const TERRAIN_CULLING_POSITION_EPSILON_SQ = 0.0001;
   const TERRAIN_CULLING_ROTATION_EPSILON = 0.0001;
   const LAZY_ASSET_WARMUP_DELAY_MS = 250;
@@ -560,11 +561,18 @@
       const minVoxelBudget = WORLD_SIZE * WORLD_SIZE * this.minColumnHeight;
       const requestedVoxelBudget = Number.isFinite(options.maxTerrainVoxels)
         ? Math.max(0, Math.floor(options.maxTerrainVoxels))
-        : MAX_TERRAIN_VOXELS;
-      this.maxTerrainVoxels = Math.min(
-        MAX_TERRAIN_VOXELS,
-        Math.max(minVoxelBudget, requestedVoxelBudget),
+        : DEFAULT_TERRAIN_VOXEL_CAP;
+      const maxTerrainCap = Math.min(MAX_TERRAIN_VOXELS, DEFAULT_TERRAIN_VOXEL_CAP);
+      this.maxTerrainVoxels = Math.max(
+        minVoxelBudget,
+        Math.min(requestedVoxelBudget, maxTerrainCap),
       );
+      this.renderAccumulator = 0;
+      this.renderActiveInterval = 1 / 60;
+      this.renderIdleInterval = 1 / 30;
+      this.renderIdleThresholdSeconds = 2.5;
+      const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+      this.lastInteractionTimeMs = now;
       this.lazyAssetLoading = options.lazyAssetLoading !== false;
       this.lazyModelWarmupQueue = [];
       this.lazyModelWarmupHandle = null;
@@ -2694,11 +2702,13 @@
       if (actionButton) {
         const handlePointerDown = (event) => {
           event.preventDefault();
+          this.markInteraction();
           this.touchActionPending = true;
           this.touchActionStart = performance.now();
         };
         const handlePointerUp = (event) => {
           event.preventDefault();
+          this.markInteraction();
           if (!this.touchActionPending) {
             return;
           }
@@ -2711,6 +2721,7 @@
           }
         };
         const handlePointerCancel = () => {
+          this.markInteraction();
           this.touchActionPending = false;
         };
         actionButton.addEventListener('pointerdown', handlePointerDown, { passive: false });
@@ -2727,11 +2738,14 @@
 
       const portalButton = controls.querySelector('button[data-action="portal"]');
       if (portalButton) {
+        const markPortalInteraction = () => this.markInteraction();
         portalButton.addEventListener('click', this.onPortalButton);
         portalButton.addEventListener('pointerdown', blockDefault, { passive: false });
+        portalButton.addEventListener('pointerdown', markPortalInteraction);
         this.mobileControlDisposers.push(() => {
           portalButton.removeEventListener('click', this.onPortalButton);
           portalButton.removeEventListener('pointerdown', blockDefault);
+          portalButton.removeEventListener('pointerdown', markPortalInteraction);
         });
       }
 
@@ -2791,6 +2805,7 @@
         return;
       }
       event.preventDefault();
+      this.markInteraction();
       this.joystickPointerId = event.pointerId ?? 'touch';
       this.updateJoystickFromPointer(event);
       this.virtualJoystickEl?.setPointerCapture?.(event.pointerId ?? 0);
@@ -2801,6 +2816,7 @@
       if (event.pointerId !== undefined && event.pointerId !== this.joystickPointerId) return;
       if (event.pointerType && event.pointerType !== 'touch' && event.pointerType !== 'pen') return;
       event.preventDefault();
+      this.markInteraction();
       this.updateJoystickFromPointer(event);
     }
 
@@ -2808,6 +2824,7 @@
       if (this.joystickPointerId === null) return;
       if (event.pointerId !== undefined && event.pointerId !== this.joystickPointerId) return;
       event.preventDefault();
+      this.markInteraction();
       this.virtualJoystickEl?.releasePointerCapture?.(event.pointerId ?? 0);
       this.resetJoystick();
     }
@@ -2841,6 +2858,7 @@
         return;
       }
       event.preventDefault();
+      this.markInteraction();
       const button = event.currentTarget;
       if (!button) return;
       button.setPointerCapture?.(event.pointerId ?? 0);
@@ -2856,6 +2874,7 @@
       if (!button) return;
       const action = button.dataset?.action;
       if (!action) return;
+      this.markInteraction();
       if (action === 'up' || action === 'down' || action === 'left' || action === 'right') {
         this.touchButtonStates[action] = false;
       }
@@ -2863,6 +2882,7 @@
 
     handlePortalButton(event) {
       event.preventDefault();
+      this.markInteraction();
       if (this.tryOpenNearbyChest()) {
         return;
       }
@@ -2885,6 +2905,7 @@
         return;
       }
       event.preventDefault();
+      this.markInteraction();
       this.touchLookPointerId = event.pointerId;
       this.touchLookLast = { x: event.clientX, y: event.clientY };
     }
@@ -2897,6 +2918,7 @@
         return;
       }
       event.preventDefault();
+      this.markInteraction();
       if (!this.touchLookLast) {
         this.touchLookLast = { x: event.clientX, y: event.clientY };
         return;
@@ -2917,6 +2939,7 @@
       if (this.touchLookPointerId !== event.pointerId) {
         return;
       }
+      this.markInteraction();
       this.touchLookPointerId = null;
       this.touchLookLast = null;
     }
@@ -2991,6 +3014,62 @@
       this.ensurePlayerArmsVisible();
     }
 
+    markInteraction() {
+      const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+      this.lastInteractionTimeMs = now;
+    }
+
+    isSceneActive() {
+      if (!this.started) {
+        return false;
+      }
+      if (this.pointerLocked) {
+        return true;
+      }
+      if (this.keys?.size) {
+        return true;
+      }
+      if (this.touchLookPointerId !== null) {
+        return true;
+      }
+      if (this.playerActionAnimation) {
+        return true;
+      }
+      if (this.joystickPointerId !== null) {
+        return true;
+      }
+      if (this.touchButtonStates) {
+        if (this.touchButtonStates.up || this.touchButtonStates.down || this.touchButtonStates.left || this.touchButtonStates.right) {
+          return true;
+        }
+      }
+      if (this.cameraShakeIntensity > 0 && this.cameraShakeTime < this.cameraShakeDuration) {
+        return true;
+      }
+      if (this.velocity?.lengthSq?.() > 0.0001) {
+        return true;
+      }
+      if (Math.abs(this.verticalVelocity ?? 0) > 0.0001) {
+        return true;
+      }
+      if (Array.isArray(this.zombies) && this.zombies.length > 0) {
+        return true;
+      }
+      if (Array.isArray(this.golems) && this.golems.length > 0) {
+        return true;
+      }
+      return false;
+    }
+
+    isRenderIdle() {
+      const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+      const idleSeconds = (now - (this.lastInteractionTimeMs ?? now)) / 1000;
+      if (idleSeconds < this.renderIdleThresholdSeconds) {
+        return false;
+      }
+      return !this.isSceneActive();
+    }
+
     queueCharacterPreload() {
       const scope = typeof window !== 'undefined' ? window : typeof globalThis !== 'undefined' ? globalThis : null;
       if (!scope) {
@@ -3054,7 +3133,7 @@
     }
 
     preloadCharacterModels() {
-      const eagerKeys = this.lazyAssetLoading ? ['steve'] : ['arm', 'steve', 'zombie', 'golem'];
+      const eagerKeys = this.lazyAssetLoading ? [] : ['arm', 'steve', 'zombie', 'golem'];
       eagerKeys.forEach((key) => {
         if (!key) return;
         if (this.loadedModels.has(key) || this.modelPromises.has(key)) {
@@ -3063,7 +3142,7 @@
         this.loadModel(key).catch(() => {});
       });
       if (this.lazyAssetLoading) {
-        this.enqueueLazyModelWarmup(['arm', 'zombie', 'golem']);
+        this.enqueueLazyModelWarmup(['steve', 'arm', 'zombie', 'golem']);
       }
     }
 
@@ -3093,7 +3172,9 @@
         this.runLazyModelWarmup();
         return;
       }
-      const delay = this.lazyAssetLoading ? LAZY_ASSET_WARMUP_DELAY_MS : 0;
+      const delay = this.lazyAssetLoading
+        ? Math.max(LAZY_ASSET_WARMUP_DELAY_MS, Math.round(this.renderIdleThresholdSeconds * 1000))
+        : 0;
       this.lazyModelWarmupHandle = scope.setTimeout(() => {
         this.lazyModelWarmupHandle = null;
         this.runLazyModelWarmup();
@@ -3106,6 +3187,10 @@
       }
       if (!this.started || this.rendererUnavailable) {
         this.lazyModelWarmupQueue = [];
+        return;
+      }
+      if (this.lazyAssetLoading && !this.isRenderIdle()) {
+        this.scheduleLazyModelWarmup();
         return;
       }
       const nextKey = this.lazyModelWarmupQueue.shift();
@@ -3491,9 +3576,10 @@
       const maxColumnHeight = Math.max(minColumnHeight, Math.floor(this.maxColumnHeight ?? MAX_COLUMN_HEIGHT));
       const targetBudget = Number.isFinite(this.maxTerrainVoxels)
         ? Math.max(0, Math.floor(this.maxTerrainVoxels))
-        : MAX_TERRAIN_VOXELS;
-      const safeBudget = Math.max(totalColumns * minColumnHeight, targetBudget);
-      const voxelBudget = Math.min(MAX_TERRAIN_VOXELS, safeBudget);
+        : DEFAULT_TERRAIN_VOXEL_CAP;
+      const maxTerrainCap = Math.min(MAX_TERRAIN_VOXELS, DEFAULT_TERRAIN_VOXEL_CAP);
+      const safeBudget = Math.max(totalColumns * minColumnHeight, Math.min(targetBudget, maxTerrainCap));
+      const voxelBudget = Math.min(maxTerrainCap, safeBudget);
       let remainingVoxels = voxelBudget;
       let cappedColumns = 0;
       let voxelCount = 0;
@@ -4768,10 +4854,12 @@
     handlePointerLockChange() {
       this.pointerLocked = document.pointerLockElement === this.canvas;
       if (this.pointerLocked) {
+        this.markInteraction();
         this.cancelPointerHintAutoHide();
         this.hidePointerHint(true);
         return;
       }
+      this.markInteraction();
       this.showDesktopPointerTutorialHint();
     }
 
@@ -4810,6 +4898,7 @@
 
     handleMouseMove(event) {
       if (!this.pointerLocked) return;
+      this.markInteraction();
       this.yaw -= event.movementX * POINTER_SENSITIVITY;
       this.pitch -= event.movementY * POINTER_SENSITIVITY;
       const maxPitch = Math.PI / 2 - 0.01;
@@ -4817,6 +4906,7 @@
     }
 
     handleKeyDown(event) {
+      this.markInteraction();
       this.keys.add(event.code);
       if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'Space'].includes(event.code)) {
         event.preventDefault();
@@ -4873,6 +4963,7 @@
     }
 
     handleKeyUp(event) {
+      this.markInteraction();
       this.keys.delete(event.code);
     }
 
@@ -4946,6 +5037,7 @@
 
     handleMouseDown(event) {
       if (!this.camera) return;
+      this.markInteraction();
       const isPrimary = event.button === 0;
       const isSecondary = event.button === 2;
       if (!isPrimary && !isSecondary) {
@@ -5007,6 +5099,26 @@
       });
     }
 
+    stepSimulation(delta) {
+      if (delta <= 0) {
+        return;
+      }
+      this.elapsed += delta;
+      this.updateDayNightCycle();
+      this.updateMovement(delta);
+      this.updateCameraShake(delta);
+      this.updateTerrainCulling(delta);
+      this.updateZombies(delta);
+      this.updateGolems(delta);
+      this.updatePortalAnimation(delta);
+      this.updateLootChests(delta);
+      this.updateNetheriteChallenge(delta);
+      this.updateHands(delta);
+      this.updatePlayerAnimation(delta);
+      this.updateScoreSync(delta);
+      this.updateScoreboardPolling(delta);
+    }
+
     renderFrame(timestamp) {
       if (this.rendererUnavailable || !this.renderer) {
         this.animationFrame = null;
@@ -5026,21 +5138,19 @@
         this.scheduleNextFrame();
         return;
       }
-      const delta = Math.min(0.05, Math.max(0, rawDelta));
-      this.elapsed += delta;
-      this.updateDayNightCycle();
-      this.updateMovement(delta);
-      this.updateCameraShake(delta);
-      this.updateTerrainCulling(delta);
-      this.updateZombies(delta);
-      this.updateGolems(delta);
-      this.updatePortalAnimation(delta);
-      this.updateLootChests(delta);
-      this.updateNetheriteChallenge(delta);
-      this.updateHands(delta);
-      this.updatePlayerAnimation(delta);
-      this.updateScoreSync(delta);
-      this.updateScoreboardPolling(delta);
+      const safeDelta = Math.min(0.05, Math.max(0, rawDelta));
+      this.renderAccumulator = Math.min(this.renderAccumulator + safeDelta, 0.5);
+      const targetInterval = this.isRenderIdle() ? this.renderIdleInterval : this.renderActiveInterval;
+      if (this.renderAccumulator + 1e-6 < targetInterval) {
+        this.scheduleNextFrame();
+        return;
+      }
+      const maxSteps = Math.min(3, Math.max(1, Math.floor(this.renderAccumulator / targetInterval)));
+      const stepDelta = Math.min(0.05, this.renderAccumulator / maxSteps || 0);
+      for (let i = 0; i < maxSteps; i += 1) {
+        this.stepSimulation(stepDelta);
+      }
+      this.renderAccumulator = Math.max(0, this.renderAccumulator - stepDelta * maxSteps);
       this.renderer.render(this.scene, this.camera);
       this.scheduleNextFrame();
     }
