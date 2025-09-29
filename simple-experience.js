@@ -635,6 +635,7 @@
       this.portalIgnitionLog = [];
       this.portalStatusState = 'inactive';
       this.portalStatusMessage = '';
+      this.portalStatusFlashTimer = null;
       this.dimensionIntroAutoHideTimer = null;
       this.dimensionIntroFadeTimer = null;
       this.victoryAchieved = false;
@@ -6667,19 +6668,43 @@
       }
       this.portalStatusState = nextState;
       this.portalStatusMessage = nextMessage;
-      const { portalStatusEl, portalStatusText } = this.ui;
+      const { portalStatusEl, portalStatusText, portalStatusIcon } = this.ui;
       if (portalStatusEl) {
         portalStatusEl.dataset.state = nextState;
         portalStatusEl.setAttribute('aria-label', `Portal status: ${nextMessage}`);
+        portalStatusEl.classList.remove('portal-status--flash');
+        void portalStatusEl.offsetWidth;
+        portalStatusEl.classList.add('portal-status--flash');
+        const globalScope = typeof globalThis !== 'undefined' ? globalThis : undefined;
+        const clearTimer =
+          (typeof window !== 'undefined' ? window?.clearTimeout : undefined) ||
+          globalScope?.clearTimeout ||
+          clearTimeout;
+        const setTimer =
+          (typeof window !== 'undefined' ? window?.setTimeout : undefined) ||
+          globalScope?.setTimeout ||
+          setTimeout;
+        if (typeof clearTimer === 'function' && typeof setTimer === 'function') {
+          clearTimer(this.portalStatusFlashTimer);
+          this.portalStatusFlashTimer = setTimer(() => {
+            portalStatusEl.classList.remove('portal-status--flash');
+            this.portalStatusFlashTimer = null;
+          }, 620);
+        }
       }
       if (portalStatusText) {
         portalStatusText.textContent = nextMessage;
+      }
+      if (portalStatusIcon) {
+        portalStatusIcon.dataset.state = nextState;
       }
       if (previousState !== nextState) {
         if (nextState === 'active') {
           this.audio.play('portalActivate', { volume: 0.7 });
         } else if (previousState === 'active' && nextState !== 'victory') {
           this.audio.play('portalDormant', { volume: 0.5 });
+        } else if (nextState === 'inactive' && previousState !== 'inactive') {
+          this.audio.play('portalDormant', { volume: 0.38 });
         }
       }
     }
@@ -6804,7 +6829,7 @@
         ? `${descriptors.join(' · ')}${description ? ` — ${description}` : ''}`
         : description || 'Adapt quickly to the realm\'s rules to survive.';
       dimensionIntroNameEl.textContent = name;
-      dimensionIntroRulesEl.textContent = rules;
+      dimensionIntroRulesEl.textContent = `Rules: ${rules}`;
       dimensionIntroEl.hidden = false;
       dimensionIntroEl.setAttribute('aria-hidden', 'false');
       dimensionIntroEl.classList.remove('active');
