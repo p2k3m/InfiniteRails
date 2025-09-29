@@ -53,7 +53,10 @@ describe('portal mechanics', () => {
     const result = enterPortal(portal, dimension);
     expect(result.fade).toBe(true);
     expect(result.resetPosition).toEqual({ x: 0, y: 0 });
-    expect(result.log).toBe('Entered Rock Dimension.');
+    expect(result.log).toBe(
+      'Entering Rock Dimension — Gravity ×1.50 — Heavier world with dense ore clusters.',
+    );
+    expect(result.announcement).toBe(result.log);
     expect(result.physics.gravity).toBeCloseTo(1.5);
     expect(result.pointsAwarded).toBe(5);
     expect(result.dimensionRules).toContain('Gravity ×1.50');
