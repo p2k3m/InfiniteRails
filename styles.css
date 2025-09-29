@@ -484,34 +484,13 @@ body:not(.game-active) .manu-logo {
   }
 }
 
+
 .background-sheen {
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
-  background:
-    radial-gradient(circle at 40% 24%, rgba(255, 255, 255, 0.3), transparent 58%),
-    radial-gradient(circle at 72% 38%, rgba(255, 255, 255, 0.22), transparent 64%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.2), rgba(124, 199, 111, 0.12));
-  mix-blend-mode: screen;
-  opacity: calc(0.35 + (1 - var(--time-phase)) * 0.25);
-  filter: saturate(1.05) contrast(1.05);
-  animation: pulse 14s ease-in-out infinite;
-  transition: background 0.8s ease, opacity 0.8s ease, filter 0.8s ease;
-  z-index: -1;
+  display: none;
 }
 
 body::after {
-  content: '';
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
-  background:
-    radial-gradient(circle at 28% 12%, rgba(255, 255, 255, 0.22), transparent 60%),
-    radial-gradient(circle at 76% 20%, rgba(255, 255, 255, 0.16), transparent 58%),
-    linear-gradient(200deg, rgba(124, 199, 111, 0.2), rgba(58, 87, 36, 0.22));
-  opacity: calc(0.25 + var(--time-phase) * 0.35);
-  transition: opacity 0.8s ease;
-  z-index: -2;
+  content: none;
 }
 
 @keyframes pulse {

@@ -2261,14 +2261,28 @@
     createAudioController() {
       const scope = typeof window !== 'undefined' ? window : typeof globalThis !== 'undefined' ? globalThis : null;
       const samples = scope?.INFINITE_RAILS_EMBEDDED_ASSETS?.audioSamples || null;
-      const HowlCtor = scope?.Howl;
-      if (!samples || typeof HowlCtor !== 'function') {
+      if (!samples || !Object.keys(samples).length) {
         return {
           has: () => false,
           play: () => {},
           playRandom: () => {},
           stopAll: () => {},
           setMasterVolume: () => {},
+        };
+      }
+      const HowlCtor = scope?.Howl;
+      const useHowler = typeof HowlCtor === 'function';
+      const AudioCtor = !useHowler
+        ? scope?.Audio || (typeof Audio !== 'undefined' ? Audio : null)
+        : null;
+      if (!useHowler && typeof AudioCtor !== 'function') {
+        return {
+          has: (name) => Boolean(samples[name]),
+          play: () => {},
+          playRandom: () => {},
+          stopAll: () => {},
+          setMasterVolume: () => {},
+          _resolve: (name) => (samples[name] ? name : null),
         };
       }
       const available = new Set(Object.keys(samples));
@@ -2305,30 +2319,87 @@
         aliasCache.set(name, resolved);
         return resolved;
       };
-      const cache = new Map();
+      const howlCache = useHowler ? new Map() : null;
+      const fallbackPlaying = useHowler ? null : new Map();
+      let masterVolume = 1;
+      const clampVolume = (value) => {
+        if (!Number.isFinite(value)) {
+          return 1;
+        }
+        return Math.max(0, Math.min(1, value));
+      };
+      const applyMasterVolume = (audio, baseVolume) => {
+        if (!audio) return;
+        const volume = clampVolume(baseVolume) * masterVolume;
+        audio.volume = clampVolume(volume);
+      };
       const playInternal = (requestedName, resolvedName, options = {}) => {
         if (!resolvedName || !samples[resolvedName]) {
           return;
         }
-        let howl = cache.get(resolvedName);
-        if (!howl) {
-          howl = new HowlCtor({
-            src: [`data:audio/wav;base64,${samples[resolvedName]}`],
-            volume: options.volume ?? 1,
-            preload: true,
-          });
-          cache.set(resolvedName, howl);
+        if (useHowler) {
+          let howl = howlCache.get(resolvedName);
+          if (!howl) {
+            howl = new HowlCtor({
+              src: [`data:audio/wav;base64,${samples[resolvedName]}`],
+              volume: options.volume ?? 1,
+              preload: true,
+            });
+            howlCache.set(resolvedName, howl);
+          }
+          if (options.volume !== undefined && typeof howl.volume === 'function') {
+            howl.volume(options.volume);
+          }
+          if (options.rate !== undefined && typeof howl.rate === 'function') {
+            howl.rate(options.rate);
+          }
+          if (options.loop !== undefined && typeof howl.loop === 'function') {
+            howl.loop(Boolean(options.loop));
+          }
+          howl.play();
+        } else {
+          const baseVolume = options.volume !== undefined ? clampVolume(options.volume) : 1;
+          const src = `data:audio/wav;base64,${samples[resolvedName]}`;
+          const instance = new AudioCtor(src);
+          instance.preload = 'auto';
+          instance.loop = Boolean(options.loop);
+          if (options.rate !== undefined && Number.isFinite(options.rate)) {
+            try {
+              instance.playbackRate = Math.max(0.5, Math.min(4, options.rate));
+            } catch (error) {
+              if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+                console.debug('Unable to apply playback rate to audio element.', error);
+              }
+            }
+          }
+          applyMasterVolume(instance, baseVolume);
+          const cleanup = () => {
+            fallbackPlaying.delete(instance);
+            instance.removeEventListener('ended', cleanup);
+            instance.removeEventListener('error', cleanup);
+          };
+          instance.addEventListener('ended', cleanup);
+          instance.addEventListener('error', cleanup);
+          fallbackPlaying.set(instance, baseVolume);
+          let playPromise;
+          try {
+            playPromise = instance.play();
+          } catch (error) {
+            fallbackPlaying.delete(instance);
+            if (typeof console !== 'undefined' && typeof console.warn === 'function') {
+              console.warn('Audio playback failed in fallback controller.', error);
+            }
+            return;
+          }
+          if (playPromise && typeof playPromise.catch === 'function') {
+            playPromise.catch((error) => {
+              fallbackPlaying.delete(instance);
+              if (typeof console !== 'undefined' && typeof console.warn === 'function') {
+                console.warn('Audio playback failed in fallback controller.', error);
+              }
+            });
+          }
         }
-        if (options.volume !== undefined && typeof howl.volume === 'function') {
-          howl.volume(options.volume);
-        }
-        if (options.rate !== undefined && typeof howl.rate === 'function') {
-          howl.rate(options.rate);
-        }
-        if (options.loop !== undefined && typeof howl.loop === 'function') {
-          howl.loop(Boolean(options.loop));
-        }
-        howl.play();
         if (
           requestedName &&
           requestedName !== resolvedName &&
@@ -2364,12 +2435,34 @@
           playInternal(choice.requested, choice.resolved, options);
         },
         stopAll() {
-          cache.forEach((howl) => howl.stop?.());
+          if (useHowler) {
+            howlCache.forEach((howl) => howl.stop?.());
+            if (scope?.Howler?.stop) {
+              scope.Howler.stop();
+            }
+            return;
+          }
+          Array.from(fallbackPlaying.keys()).forEach((audio) => {
+            audio.pause();
+            try {
+              audio.currentTime = 0;
+            } catch (error) {
+              if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+                console.debug('Unable to reset audio element state.', error);
+              }
+            }
+            fallbackPlaying.delete(audio);
+          });
         },
         setMasterVolume(volume) {
-          if (scope?.Howler?.volume) {
-            scope.Howler.volume(volume);
+          masterVolume = clampVolume(volume);
+          if (useHowler) {
+            if (scope?.Howler?.volume) {
+              scope.Howler.volume(masterVolume);
+            }
+            return;
           }
+          fallbackPlaying.forEach((baseVolume, audio) => applyMasterVolume(audio, baseVolume));
         },
         _resolve(name) {
           // Exposed for debugging and automated tests.
