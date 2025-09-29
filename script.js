@@ -403,7 +403,8 @@
       placeBlock: ['KeyQ'],
       toggleCrafting: ['KeyE'],
       toggleInventory: ['KeyI'],
-      resetPosition: ['KeyR'],
+      buildPortal: ['KeyR'],
+      resetPosition: ['KeyT'],
       toggleCameraPerspective: ['KeyV'],
       closeMenus: ['Escape'],
     };
@@ -423,6 +424,58 @@
       map[action] = Object.freeze([...map[action]]);
     });
     return Object.freeze(map);
+  })();
+
+  const KEY_BINDING_ACTION_GROUPS = Object.freeze([
+    {
+      id: 'movement',
+      title: 'Movement',
+      actions: [
+        { id: 'moveForward', label: 'Move forward' },
+        { id: 'moveBackward', label: 'Move backward' },
+        { id: 'moveLeft', label: 'Strafe left' },
+        { id: 'moveRight', label: 'Strafe right' },
+        { id: 'jump', label: 'Jump / Harvest' },
+      ],
+    },
+    {
+      id: 'interaction',
+      title: 'Core actions',
+      actions: [
+        { id: 'interact', label: 'Interact / Use' },
+        { id: 'placeBlock', label: 'Place block' },
+        { id: 'buildPortal', label: 'Ignite portal' },
+        { id: 'resetPosition', label: 'Reset position' },
+      ],
+    },
+    {
+      id: 'menus',
+      title: 'Menus & camera',
+      actions: [
+        { id: 'toggleCrafting', label: 'Toggle crafting' },
+        { id: 'toggleInventory', label: 'Toggle inventory' },
+        { id: 'toggleCameraPerspective', label: 'Toggle camera view' },
+        { id: 'closeMenus', label: 'Close menus' },
+      ],
+    },
+    {
+      id: 'hotbar',
+      title: 'Hotbar slots',
+      actions: Array.from({ length: HOTBAR_SLOT_COUNT }, (_, index) => ({
+        id: `hotbar${index + 1}`,
+        label: `Select slot ${index + 1}`,
+      })),
+    },
+  ]);
+
+  const KEY_BINDING_ACTION_LABELS = (() => {
+    const map = new Map();
+    KEY_BINDING_ACTION_GROUPS.forEach((group) => {
+      group.actions.forEach((action) => {
+        map.set(action.id, action.label);
+      });
+    });
+    return map;
   })();
 
   function cloneKeyBindingMap(source = {}) {
@@ -1044,7 +1097,12 @@
       music: document.querySelector('[data-volume-label="music"]'),
       effects: document.querySelector('[data-volume-label="effects"]'),
     };
+    const settingsKeyBindingsList = document.getElementById('settingsKeyBindingsList');
+    const resetKeyBindingsButton = document.getElementById('resetKeyBindingsButton');
     let lastFocusedBeforeGuide = null;
+    const keyBindingButtonMap = new Map();
+    const keyBindingDefaultLabelMap = new Map();
+    let activeKeyBindingCapture = null;
     const portalProgressLabel = portalProgressEl?.querySelector('.label') ?? null;
     const portalProgressBar = portalProgressEl?.querySelector('.bar') ?? null;
     const portalStatusText = portalStatusEl?.querySelector('.portal-status__text') ?? null;
@@ -20745,6 +20803,7 @@
     initEventListeners();
 
     setupSettingsModal();
+    setupKeyBindingPreferences();
     setupCraftingModal();
     setupInventoryModal();
 
@@ -20936,6 +20995,7 @@
       applyAudioSettingsToInputs();
       updateVolumeLabels();
       applyAccessibilitySettingsToInputs();
+      updateAllKeyBindingButtons();
       settingsModal.hidden = false;
       settingsModal.setAttribute('aria-hidden', 'false');
       openSettingsButton?.setAttribute('aria-expanded', 'true');
@@ -20948,6 +21008,7 @@
 
     function closeSettingsModal(shouldFocusTrigger = false) {
       if (!settingsModal) return;
+      stopKeyBindingCapture({ shouldRender: false });
       settingsModal.hidden = true;
       settingsModal.setAttribute('aria-hidden', 'true');
       openSettingsButton?.setAttribute('aria-expanded', 'false');
@@ -20967,6 +21028,201 @@
         }
       });
       closeSettingsButton?.addEventListener('click', () => closeSettingsModal(true));
+    }
+
+    function getActionLabel(action) {
+      return KEY_BINDING_ACTION_LABELS.get(action) ?? action;
+    }
+
+    function getBaseBindings(action) {
+      if (Array.isArray(state.baseKeyBindings?.[action]) && state.baseKeyBindings[action].length) {
+        return [...state.baseKeyBindings[action]];
+      }
+      if (Array.isArray(state.defaultKeyBindings?.[action]) && state.defaultKeyBindings[action].length) {
+        return [...state.defaultKeyBindings[action]];
+      }
+      if (Array.isArray(DEFAULT_KEY_BINDINGS?.[action])) {
+        return [...DEFAULT_KEY_BINDINGS[action]];
+      }
+      return [];
+    }
+
+    function updateKeyBindingButton(action) {
+      const button = keyBindingButtonMap.get(action);
+      if (!button) return;
+      const keysLabelEl = button.querySelector('.keybinding-row__keys');
+      const ctaEl = button.querySelector('.keybinding-row__cta');
+      const bindings = getBindingsForAction(action);
+      const baseBindings = getBaseBindings(action);
+      const labelParts = getActionKeyLabels(action);
+      const labelText = labelParts.length ? labelParts.join(' / ') : 'Unassigned';
+      if (keysLabelEl) {
+        keysLabelEl.textContent = labelText;
+      }
+      if (ctaEl) {
+        ctaEl.textContent = 'Change';
+      }
+      button.classList.remove('keybinding-row__button--listening');
+      button.removeAttribute('data-listening');
+      button.setAttribute(
+        'aria-label',
+        `Change ${getActionLabel(action)} binding (currently ${labelText || 'unassigned'})`,
+      );
+      const defaultLabel = keyBindingDefaultLabelMap.get(action);
+      if (defaultLabel) {
+        if (!areKeyListsEqual(bindings, baseBindings)) {
+          const defaultLabels = baseBindings.map((code) => formatKeyLabel(code)).filter(Boolean);
+          const defaultText = defaultLabels.length ? defaultLabels.join(' / ') : '—';
+          defaultLabel.textContent = `Default: ${defaultText}`;
+          defaultLabel.hidden = false;
+        } else {
+          defaultLabel.textContent = '';
+          defaultLabel.hidden = true;
+        }
+      }
+    }
+
+    function updateAllKeyBindingButtons() {
+      keyBindingButtonMap.forEach((_, action) => {
+        updateKeyBindingButton(action);
+      });
+    }
+
+    function stopKeyBindingCapture(options = {}) {
+      const { shouldRender = true } = options ?? {};
+      if (!activeKeyBindingCapture) {
+        return;
+      }
+      window.removeEventListener('keydown', handleKeyBindingCaptureKeydown, true);
+      window.removeEventListener('blur', cancelKeyBindingCaptureOnBlur);
+      const { action } = activeKeyBindingCapture;
+      activeKeyBindingCapture = null;
+      if (shouldRender) {
+        updateKeyBindingButton(action);
+      }
+    }
+
+    function cancelKeyBindingCaptureOnBlur() {
+      stopKeyBindingCapture({ shouldRender: true });
+    }
+
+    function handleKeyBindingCaptureKeydown(event) {
+      if (!activeKeyBindingCapture) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      const { action } = activeKeyBindingCapture;
+      if (event.key === 'Escape' || event.key === 'Tab') {
+        stopKeyBindingCapture({ shouldRender: true });
+        return;
+      }
+      if (event.key === 'Backspace' || event.key === 'Delete') {
+        setKeyBinding(action, []);
+        stopKeyBindingCapture({ shouldRender: true });
+        return;
+      }
+      const resolved = normaliseEventCode(event.code || '', event.key);
+      if (!resolved) {
+        return;
+      }
+      setKeyBinding(action, [resolved]);
+      stopKeyBindingCapture({ shouldRender: true });
+    }
+
+    function startKeyBindingCapture(action) {
+      const button = keyBindingButtonMap.get(action);
+      if (!button) {
+        return;
+      }
+      stopKeyBindingCapture({ shouldRender: false });
+      const keysLabelEl = button.querySelector('.keybinding-row__keys');
+      const ctaEl = button.querySelector('.keybinding-row__cta');
+      button.classList.add('keybinding-row__button--listening');
+      button.setAttribute('data-listening', 'true');
+      if (keysLabelEl) {
+        keysLabelEl.textContent = 'Press a key…';
+      }
+      if (ctaEl) {
+        ctaEl.textContent = 'Listening';
+      }
+      button.setAttribute(
+        'aria-label',
+        `Press a key to assign to ${getActionLabel(action)}. Press Escape to cancel or Backspace to restore the default.`,
+      );
+      activeKeyBindingCapture = { action };
+      window.addEventListener('keydown', handleKeyBindingCaptureKeydown, true);
+      window.addEventListener('blur', cancelKeyBindingCaptureOnBlur);
+    }
+
+    function buildKeyBindingRow(action) {
+      const actionLabel = getActionLabel(action.id);
+      const row = document.createElement('div');
+      row.className = 'keybinding-row';
+      const info = document.createElement('div');
+      info.className = 'keybinding-row__info';
+      const labelEl = document.createElement('span');
+      labelEl.className = 'keybinding-row__label';
+      labelEl.textContent = actionLabel;
+      info.appendChild(labelEl);
+      const defaultLabel = document.createElement('span');
+      defaultLabel.className = 'keybinding-row__default';
+      defaultLabel.hidden = true;
+      info.appendChild(defaultLabel);
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'keybinding-row__button';
+      button.dataset.action = action.id;
+      const keysLabel = document.createElement('span');
+      keysLabel.className = 'keybinding-row__keys';
+      button.appendChild(keysLabel);
+      const cta = document.createElement('span');
+      cta.className = 'keybinding-row__cta';
+      cta.textContent = 'Change';
+      button.appendChild(cta);
+      button.addEventListener('click', () => {
+        startKeyBindingCapture(action.id);
+      });
+      keyBindingButtonMap.set(action.id, button);
+      keyBindingDefaultLabelMap.set(action.id, defaultLabel);
+      row.appendChild(info);
+      row.appendChild(button);
+      updateKeyBindingButton(action.id);
+      return row;
+    }
+
+    function buildKeyBindingGroup(group) {
+      const container = document.createElement('section');
+      container.className = 'keybinding-group';
+      const title = document.createElement('h3');
+      title.className = 'keybinding-group__title';
+      title.textContent = group.title;
+      container.appendChild(title);
+      const list = document.createElement('div');
+      list.className = 'keybinding-group__list';
+      group.actions.forEach((action) => {
+        list.appendChild(buildKeyBindingRow(action));
+      });
+      container.appendChild(list);
+      return container;
+    }
+
+    function setupKeyBindingPreferences() {
+      if (!settingsKeyBindingsList) {
+        return;
+      }
+      settingsKeyBindingsList.innerHTML = '';
+      keyBindingButtonMap.clear();
+      keyBindingDefaultLabelMap.clear();
+      KEY_BINDING_ACTION_GROUPS.forEach((group) => {
+        settingsKeyBindingsList.appendChild(buildKeyBindingGroup(group));
+      });
+      updateAllKeyBindingButtons();
+      resetKeyBindingsButton?.addEventListener('click', () => {
+        stopKeyBindingCapture({ shouldRender: false });
+        resetKeyBindings();
+        updateAllKeyBindingButtons();
+      });
     }
 
     function openCraftingModal() {
