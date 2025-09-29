@@ -279,6 +279,17 @@
           </div>
           <div class="hud-layer__bottom">
             <div
+              class="portal-status"
+              id="portalStatus"
+              role="status"
+              aria-live="assertive"
+              data-state="inactive"
+              data-hint="Shows whether the current portal is dormant, primed, or active."
+            >
+              <span class="portal-status__icon" aria-hidden="true"></span>
+              <span class="portal-status__text">Portal dormant</span>
+            </div>
+            <div
               class="portal-progress"
               id="portalProgress"
               role="progressbar"
@@ -316,6 +327,17 @@
           ></div>
           <span class="hand-overlay__label" id="handOverlayLabel" data-hint="Name of the held item.">Fist</span>
         </div>
+        <section
+          class="dimension-intro"
+          id="dimensionIntro"
+          role="status"
+          aria-live="assertive"
+          hidden
+          data-hint="Displays the rules for the dimension you just entered."
+        >
+          <h2 class="dimension-intro__name" id="dimensionIntroName"></h2>
+          <p class="dimension-intro__rules" id="dimensionIntroRules"></p>
+        </section>
         <div
           class="subtitle-overlay"
           id="subtitleOverlay"

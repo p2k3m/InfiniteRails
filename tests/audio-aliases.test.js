@@ -9,7 +9,7 @@ function toArray(value) {
 
 describe('audio alias configuration', () => {
   it('provides fallbacks for gameplay-only cues', () => {
-    ['craftChime', 'zombieGroan'].forEach((name) => {
+    ['craftChime', 'zombieGroan', 'portalActivate', 'portalDormant'].forEach((name) => {
       const fallbacks = toArray(aliasConfig[name]);
       expect(fallbacks.length).toBeGreaterThan(0);
       const resolved = fallbacks.find((candidate) => Boolean(audioSamples[candidate]));
