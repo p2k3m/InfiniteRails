@@ -839,7 +839,17 @@
       if (hudRootEl) {
         document.body.classList.add('game-active');
       }
-      this.canvas.focus({ preventScroll: true });
+      if (this.canvas && typeof this.canvas.focus === 'function') {
+        try {
+          this.canvas.focus({ preventScroll: true });
+        } catch (error) {
+          try {
+            this.canvas.focus();
+          } catch (nestedError) {
+            console.debug('Canvas focus unavailable in this browser.', nestedError);
+          }
+        }
+      }
     }
 
     showBriefingOverlay() {
