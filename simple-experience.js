@@ -14,7 +14,7 @@
   const DAY_LENGTH_SECONDS = 600;
   const POINTER_SENSITIVITY = 0.0022;
   const POINTER_TUTORIAL_MESSAGE =
-    'Click the viewport to capture your mouse, then use WASD to move and left-click to mine.';
+    'Click the viewport to capture your mouse, then use WASD or the arrow keys to move and left-click to mine.';
   const FALLBACK_HEALTH = 10;
   const PORTAL_BLOCK_REQUIREMENT = 10;
   const PORTAL_INTERACTION_RANGE = 4.5;
@@ -22,6 +22,93 @@
   const ZOMBIE_SPAWN_INTERVAL = 8;
   const ZOMBIE_MAX_PER_DIMENSION = 4;
   const HOTBAR_SLOTS = 9;
+  const KEY_BINDINGS_STORAGE_KEY = 'infinite-rails-keybindings';
+  const MOVEMENT_ACTIONS = ['moveForward', 'moveBackward', 'moveLeft', 'moveRight'];
+  const DEFAULT_KEY_BINDINGS = (() => {
+    const map = {
+      moveForward: ['KeyW', 'ArrowUp'],
+      moveBackward: ['KeyS', 'ArrowDown'],
+      moveLeft: ['KeyA', 'ArrowLeft'],
+      moveRight: ['KeyD', 'ArrowRight'],
+      jump: ['Space'],
+      interact: ['KeyF'],
+      resetPosition: ['KeyR'],
+      placeBlock: ['KeyQ'],
+      toggleCameraPerspective: ['KeyV'],
+      toggleCrafting: ['KeyE'],
+      toggleInventory: ['KeyI'],
+      closeMenus: ['Escape'],
+    };
+    for (let slot = 1; slot <= HOTBAR_SLOTS; slot += 1) {
+      const digit = slot;
+      const action = `hotbar${slot}`;
+      const bindings = [`Digit${digit}`];
+      if (slot <= 9) {
+        bindings.push(`Numpad${slot}`);
+      }
+      map[action] = bindings;
+    }
+    Object.keys(map).forEach((action) => {
+      map[action] = Object.freeze([...map[action]]);
+    });
+    return Object.freeze(map);
+  })();
+
+  function cloneKeyBindingMap(source = {}) {
+    const result = {};
+    Object.entries(source).forEach(([action, keys]) => {
+      if (Array.isArray(keys)) {
+        result[action] = [...keys];
+      }
+    });
+    return result;
+  }
+
+  function normaliseKeyBindingValue(value) {
+    if (typeof value === 'string') {
+      const trimmed = value.trim();
+      return trimmed ? [trimmed] : [];
+    }
+    if (Array.isArray(value)) {
+      const seen = new Set();
+      const result = [];
+      value.forEach((entry) => {
+        if (typeof entry !== 'string') return;
+        const trimmed = entry.trim();
+        if (!trimmed || seen.has(trimmed)) return;
+        seen.add(trimmed);
+        result.push(trimmed);
+      });
+      return result;
+    }
+    return [];
+  }
+
+  function normaliseKeyBindingMap(source) {
+    if (!source || typeof source !== 'object') {
+      return null;
+    }
+    const result = {};
+    Object.entries(source).forEach(([action, value]) => {
+      const keys = normaliseKeyBindingValue(value);
+      if (keys.length) {
+        result[action] = keys;
+      }
+    });
+    return Object.keys(result).length ? result : null;
+  }
+
+  function mergeKeyBindingMaps(base, ...sources) {
+    const merged = cloneKeyBindingMap(base);
+    sources.forEach((source) => {
+      if (!source) return;
+      Object.entries(source).forEach(([action, keys]) => {
+        if (!Array.isArray(keys) || !keys.length) return;
+        merged[action] = [...keys];
+      });
+    });
+    return merged;
+  }
   const MAX_STACK_SIZE = 99;
   const GOLEM_CONTACT_RANGE = 1.6;
   const GOLEM_SPAWN_INTERVAL = 26;
@@ -585,6 +672,15 @@
       };
       this.assetLoadLog = [];
       this.materials = this.createMaterials();
+      this.defaultKeyBindings = cloneKeyBindingMap(DEFAULT_KEY_BINDINGS);
+      this.configKeyBindingOverrides = normaliseKeyBindingMap(window.APP_CONFIG?.keyBindings) || null;
+      this.optionKeyBindingOverrides = normaliseKeyBindingMap(options.keyBindings) || null;
+      this.baseKeyBindings = mergeKeyBindingMaps(
+        this.defaultKeyBindings,
+        this.configKeyBindingOverrides,
+        this.optionKeyBindingOverrides,
+      );
+      this.keyBindings = this.buildKeyBindings({ includeStored: true });
       this.keys = new Set();
       this.velocity = new THREE.Vector3();
       this.tmpForward = new THREE.Vector3();
@@ -4783,6 +4879,199 @@
       }
     }
 
+    buildKeyBindings({ includeStored = true } = {}) {
+      const base = this.baseKeyBindings
+        ? cloneKeyBindingMap(this.baseKeyBindings)
+        : cloneKeyBindingMap(this.defaultKeyBindings);
+      if (!includeStored) {
+        return base;
+      }
+      const stored = this.loadStoredKeyBindingOverrides();
+      return mergeKeyBindingMaps(base, stored);
+    }
+
+    loadStoredKeyBindingOverrides() {
+      if (typeof window === 'undefined' || !window.localStorage) {
+        return null;
+      }
+      try {
+        const raw = window.localStorage.getItem(KEY_BINDINGS_STORAGE_KEY);
+        if (!raw) {
+          return null;
+        }
+        const parsed = JSON.parse(raw);
+        return normaliseKeyBindingMap(parsed);
+      } catch (error) {
+        console.debug('Failed to load key bindings from storage.', error);
+        return null;
+      }
+    }
+
+    persistKeyBindings() {
+      if (typeof window === 'undefined' || !window.localStorage) {
+        return;
+      }
+      try {
+        const base = this.baseKeyBindings || this.defaultKeyBindings || {};
+        const overrides = {};
+        Object.entries(this.keyBindings || {}).forEach(([action, keys]) => {
+          if (!Array.isArray(keys)) {
+            return;
+          }
+          const baseline = base[action] || [];
+          if (!this.areKeyListsEqual(keys, baseline)) {
+            overrides[action] = [...keys];
+          }
+        });
+        if (Object.keys(overrides).length) {
+          window.localStorage.setItem(KEY_BINDINGS_STORAGE_KEY, JSON.stringify(overrides));
+        } else {
+          window.localStorage.removeItem(KEY_BINDINGS_STORAGE_KEY);
+        }
+      } catch (error) {
+        console.debug('Failed to persist key bindings.', error);
+      }
+    }
+
+    setKeyBinding(action, keys, options = {}) {
+      const { persist = true } = options;
+      if (typeof action !== 'string' || !action.trim()) {
+        return false;
+      }
+      const normalised = normaliseKeyBindingValue(keys);
+      let nextKeys = normalised;
+      if (!nextKeys.length) {
+        const fallback = this.baseKeyBindings?.[action.trim()];
+        nextKeys = fallback ? [...fallback] : [];
+      }
+      const changed = this.applyKeyBinding(action.trim(), nextKeys);
+      if (changed && persist) {
+        this.persistKeyBindings();
+      }
+      return changed;
+    }
+
+    setKeyBindings(overrides, options = {}) {
+      const { persist = true } = options;
+      const normalised = normaliseKeyBindingMap(overrides);
+      if (!normalised) {
+        return false;
+      }
+      let changed = false;
+      Object.entries(normalised).forEach(([action, keys]) => {
+        const updated = this.applyKeyBinding(action, [...keys]);
+        if (updated) {
+          changed = true;
+        }
+      });
+      if (changed && persist) {
+        this.persistKeyBindings();
+      }
+      return changed;
+    }
+
+    resetKeyBindings(options = {}) {
+      const { persist = true } = options;
+      this.keyBindings = this.buildKeyBindings({ includeStored: false });
+      if (persist) {
+        this.persistKeyBindings();
+      }
+      return cloneKeyBindingMap(this.keyBindings);
+    }
+
+    getKeyBindings() {
+      return cloneKeyBindingMap(this.keyBindings);
+    }
+
+    getDefaultKeyBindings() {
+      return cloneKeyBindingMap(this.defaultKeyBindings);
+    }
+
+    applyKeyBinding(action, keys) {
+      if (typeof action !== 'string' || !Array.isArray(keys)) {
+        return false;
+      }
+      const trimmedAction = action.trim();
+      if (!trimmedAction) {
+        return false;
+      }
+      const filteredKeys = [];
+      const seen = new Set();
+      keys.forEach((key) => {
+        if (typeof key !== 'string') {
+          return;
+        }
+        const trimmed = key.trim();
+        if (!trimmed || seen.has(trimmed)) {
+          return;
+        }
+        seen.add(trimmed);
+        filteredKeys.push(trimmed);
+      });
+      const nextKeys = filteredKeys.length
+        ? filteredKeys
+        : [...(this.baseKeyBindings?.[trimmedAction] ?? [])];
+      const current = this.keyBindings?.[trimmedAction] ?? [];
+      if (this.areKeyListsEqual(current, nextKeys)) {
+        return false;
+      }
+      if (!this.keyBindings) {
+        this.keyBindings = {};
+      }
+      this.keyBindings[trimmedAction] = [...nextKeys];
+      return true;
+    }
+
+    areKeyListsEqual(a = [], b = []) {
+      if (a.length !== b.length) {
+        return false;
+      }
+      for (let index = 0; index < a.length; index += 1) {
+        if (a[index] !== b[index]) {
+          return false;
+        }
+      }
+      return true;
+    }
+
+    isKeyForAction(code, action) {
+      if (!code || !action) {
+        return false;
+      }
+      const binding = this.keyBindings?.[action];
+      if (!binding || !binding.length) {
+        return false;
+      }
+      return binding.includes(code);
+    }
+
+    isActionActive(action) {
+      const binding = this.keyBindings?.[action];
+      if (!binding || !binding.length) {
+        return false;
+      }
+      return binding.some((code) => this.keys?.has(code));
+    }
+
+    isMovementKey(code) {
+      if (!code) {
+        return false;
+      }
+      return MOVEMENT_ACTIONS.some((action) => this.isKeyForAction(code, action));
+    }
+
+    getHotbarSlotFromKey(code) {
+      if (!code) {
+        return null;
+      }
+      for (let slot = 1; slot <= HOTBAR_SLOTS; slot += 1) {
+        if (this.isKeyForAction(code, `hotbar${slot}`)) {
+          return slot - 1;
+        }
+      }
+      return null;
+    }
+
     bindEvents() {
       document.addEventListener('pointerlockchange', this.onPointerLockChange);
       document.addEventListener('pointerlockerror', this.onPointerLockError);
@@ -4925,18 +5214,21 @@
 
     handleKeyDown(event) {
       this.markInteraction();
-      this.keys.add(event.code);
-      if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'Space'].includes(event.code)) {
+      const code = typeof event.code === 'string' ? event.code : '';
+      if (code) {
+        this.keys.add(code);
+      }
+      if (this.isMovementKey(code) || this.isKeyForAction(code, 'jump')) {
         event.preventDefault();
       }
-      if (event.code === 'KeyW' && !event.repeat) {
+      if (this.isKeyForAction(code, 'moveForward') && !event.repeat) {
         console.log('Moving forward');
       }
-      if (event.code === 'KeyR') {
+      if (this.isKeyForAction(code, 'resetPosition')) {
         this.resetPosition();
         event.preventDefault();
       }
-      if (event.code === 'KeyF') {
+      if (this.isKeyForAction(code, 'interact')) {
         const openedChest = this.tryOpenNearbyChest();
         if (openedChest) {
           event.preventDefault();
@@ -4949,40 +5241,41 @@
         }
         event.preventDefault();
       }
-      if (event.code === 'KeyQ') {
+      if (this.isKeyForAction(code, 'placeBlock')) {
         this.placeBlock();
         event.preventDefault();
       }
-      if (event.code === 'KeyV' && !event.repeat) {
+      if (this.isKeyForAction(code, 'toggleCameraPerspective') && !event.repeat) {
         this.toggleCameraPerspective();
         event.preventDefault();
       }
-      if (event.code === 'KeyE') {
+      if (this.isKeyForAction(code, 'toggleCrafting')) {
         const open = this.craftingModal?.hidden !== false;
         this.toggleCraftingModal(open);
         event.preventDefault();
       }
-      if (event.code === 'KeyI') {
+      if (this.isKeyForAction(code, 'toggleInventory')) {
         const open = this.inventoryModal?.hidden !== false;
         this.toggleInventoryModal(open);
         event.preventDefault();
       }
-      if (event.code === 'Escape') {
+      if (this.isKeyForAction(code, 'closeMenus')) {
         this.toggleCraftingModal(false);
         this.toggleInventoryModal(false);
       }
-      if (event.code.startsWith('Digit')) {
-        const index = Number.parseInt(event.code.slice(5), 10) - 1;
-        if (Number.isInteger(index)) {
-          this.selectHotbarSlot(index, true);
-          event.preventDefault();
-        }
+      const hotbarSlot = this.getHotbarSlotFromKey(code);
+      if (hotbarSlot !== null) {
+        this.selectHotbarSlot(hotbarSlot, true);
+        event.preventDefault();
       }
     }
 
     handleKeyUp(event) {
       this.markInteraction();
-      this.keys.delete(event.code);
+      const code = typeof event.code === 'string' ? event.code : '';
+      if (code) {
+        this.keys.delete(code);
+      }
     }
 
     handleResize() {
@@ -5338,16 +5631,16 @@
       if (right.lengthSq() > 0) right.normalize();
 
       const speed = this.currentSpeed;
-      if (this.keys.has('KeyW')) {
+      if (this.isActionActive('moveForward')) {
         this.velocity.addScaledVector(forward, speed * delta);
       }
-      if (this.keys.has('KeyS')) {
+      if (this.isActionActive('moveBackward')) {
         this.velocity.addScaledVector(forward, -speed * delta);
       }
-      if (this.keys.has('KeyA')) {
+      if (this.isActionActive('moveLeft')) {
         this.velocity.addScaledVector(right, -speed * delta);
       }
-      if (this.keys.has('KeyD')) {
+      if (this.isActionActive('moveRight')) {
         this.velocity.addScaledVector(right, speed * delta);
       }
 
@@ -5379,7 +5672,7 @@
       position.add(this.velocity);
 
       const groundHeight = this.sampleGroundHeight(position.x, position.z);
-      if ((this.keys.has('Space') || this.touchJumpRequested) && this.isGrounded) {
+      if ((this.isActionActive('jump') || this.touchJumpRequested) && this.isGrounded) {
         const jumpBoost = 4.6 + (1.5 - Math.min(1.5, this.gravityScale));
         this.verticalVelocity = jumpBoost;
         this.isGrounded = false;
