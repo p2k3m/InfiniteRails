@@ -3519,6 +3519,7 @@
     let latestVictoryShareDetails = null;
     let craftingDragGhost = null;
     let craftingDragTrailEl = null;
+    let activeHotbarDrag = null;
     let activeInventoryDrag = null;
     let dragFallbackSlotIndex = null;
     let craftSequenceErrorTimeout = null;
@@ -14466,6 +14467,7 @@
         victoryCelebrationVisible: false,
         victoryCelebrationShown: false,
         inventorySortMode: 'default',
+        hotbarExpanded: false,
         tarOverlayLevel: 0,
         movementHintDismissed: false,
         movementGlowHintShown: false,
@@ -15121,33 +15123,180 @@
       return total >= quantity;
     }
 
+    function getHotbarSlotIndexFromElement(element) {
+      if (!(element instanceof HTMLElement)) return null;
+      const raw = element.dataset?.hotbarSlot ?? element.dataset?.slotIndex ?? '-1';
+      const index = Number.parseInt(raw, 10);
+      if (!Number.isInteger(index) || index < 0 || index >= state.player.inventory.length) {
+        return null;
+      }
+      return index;
+    }
+
+    function swapHotbarSlots(fromIndex, toIndex) {
+      if (fromIndex === toIndex) return false;
+      if (!Number.isInteger(fromIndex) || !Number.isInteger(toIndex)) return false;
+      if (fromIndex < 0 || toIndex < 0) return false;
+      if (fromIndex >= state.player.inventory.length || toIndex >= state.player.inventory.length) return false;
+      const slots = state.player.inventory;
+      const fromSlot = slots[fromIndex] ?? null;
+      const toSlot = slots[toIndex] ?? null;
+      slots[fromIndex] = toSlot;
+      slots[toIndex] = fromSlot;
+      const selected = state.player.selectedSlot;
+      if (selected === fromIndex) {
+        state.player.selectedSlot = toIndex;
+      } else if (selected === toIndex) {
+        state.player.selectedSlot = fromIndex;
+      }
+      flagProgressDirty('inventory');
+      updateInventoryUI();
+      return true;
+    }
+
+    function clearHotbarDragIndicators() {
+      if (!hotbarEl) return;
+      hotbarEl
+        .querySelectorAll('.inventory-slot.dragging, .inventory-slot.drag-over')
+        .forEach((node) => node.classList.remove('dragging', 'drag-over'));
+    }
+
+    function handleHotbarDragStart(event) {
+      const target = event.currentTarget;
+      const index = getHotbarSlotIndexFromElement(target);
+      if (index === null) {
+        event.preventDefault();
+        return;
+      }
+      const slot = state.player.inventory[index];
+      if (!slot) {
+        event.preventDefault();
+        return;
+      }
+      activeHotbarDrag = { from: index };
+      target.classList.add('dragging');
+      if (event.dataTransfer) {
+        try {
+          event.dataTransfer.effectAllowed = 'move';
+          event.dataTransfer.setData('text/plain', String(index));
+        } catch (error) {
+          // Ignore data transfer issues on unsupported platforms.
+        }
+      }
+    }
+
+    function handleHotbarDragEnter(event) {
+      if (!activeHotbarDrag) return;
+      event.preventDefault();
+      event.currentTarget.classList.add('drag-over');
+    }
+
+    function handleHotbarDragOver(event) {
+      if (!activeHotbarDrag) return;
+      event.preventDefault();
+      if (event.dataTransfer) {
+        event.dataTransfer.dropEffect = 'move';
+      }
+    }
+
+    function handleHotbarDragLeave(event) {
+      if (!activeHotbarDrag) return;
+      const { currentTarget, relatedTarget } = event;
+      if (relatedTarget instanceof HTMLElement && currentTarget.contains(relatedTarget)) {
+        return;
+      }
+      currentTarget.classList.remove('drag-over');
+    }
+
+    function handleHotbarDragEnd(event) {
+      event.currentTarget.classList.remove('dragging');
+      clearHotbarDragIndicators();
+      activeHotbarDrag = null;
+    }
+
+    function handleHotbarDrop(event) {
+      if (!activeHotbarDrag) return;
+      event.preventDefault();
+      const targetIndex = getHotbarSlotIndexFromElement(event.currentTarget);
+      let fromIndex = activeHotbarDrag.from;
+      if (event.dataTransfer) {
+        try {
+          const raw = event.dataTransfer.getData('text/plain');
+          const parsed = Number.parseInt(raw, 10);
+          if (Number.isInteger(parsed)) {
+            fromIndex = parsed;
+          }
+        } catch (error) {
+          // Ignore unsupported data transfer operations.
+        }
+      }
+      clearHotbarDragIndicators();
+      activeHotbarDrag = null;
+      if (fromIndex === null || targetIndex === null) {
+        return;
+      }
+      swapHotbarSlots(fromIndex, targetIndex);
+    }
+
+    function updateHotbarExpansionUi() {
+      if (!extendedInventoryEl) return;
+      const expanded = Boolean(state.ui.hotbarExpanded);
+      extendedInventoryEl.dataset.visible = expanded ? 'true' : 'false';
+      extendedInventoryEl.setAttribute('aria-hidden', expanded ? 'false' : 'true');
+      if (toggleExtendedBtn) {
+        toggleExtendedBtn.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+        toggleExtendedBtn.textContent = expanded ? 'Collapse Inventory' : 'Expand Inventory';
+      }
+    }
+
+    function toggleHotbarExpansion(forceValue) {
+      const nextState = typeof forceValue === 'boolean' ? forceValue : !state.ui.hotbarExpanded;
+      state.ui.hotbarExpanded = nextState;
+      updateHotbarExpansionUi();
+    }
+
     function updateInventoryUI() {
+      if (!hotbarEl) return;
+      activeHotbarDrag = null;
       hotbarEl.innerHTML = '';
       state.player.inventory.forEach((slot, index) => {
         const el = document.createElement('div');
         el.className = 'inventory-slot';
+        el.dataset.hotbarSlot = String(index);
         if (index === state.player.selectedSlot) el.classList.add('active');
         if (slot) {
-          el.innerHTML = `<span>${ITEM_DEFS[slot.item]?.name ?? slot.item}</span><span class="quantity">${slot.quantity}</span>`;
+          const label = ITEM_DEFS[slot.item]?.name ?? slot.item;
+          el.innerHTML = `<span>${label}</span><span class="quantity">${slot.quantity}</span>`;
+          el.setAttribute('draggable', 'true');
+          el.addEventListener('dragstart', handleHotbarDragStart);
         } else {
           el.innerHTML = '<span>—</span>';
+          el.setAttribute('draggable', 'false');
         }
         el.addEventListener('click', () => {
           state.player.selectedSlot = index;
           updateInventoryUI();
         });
+        el.addEventListener('dragenter', handleHotbarDragEnter);
+        el.addEventListener('dragover', handleHotbarDragOver);
+        el.addEventListener('dragleave', handleHotbarDragLeave);
+        el.addEventListener('drop', handleHotbarDrop);
+        el.addEventListener('dragend', handleHotbarDragEnd);
         hotbarEl.appendChild(el);
       });
 
-      extendedInventoryEl.innerHTML = '';
       const combined = getInventoryDisplayBundles();
-      combined.forEach((bundle) => {
-        const el = document.createElement('div');
-        el.className = 'inventory-slot';
-        el.innerHTML = `<span>${ITEM_DEFS[bundle.item]?.name ?? bundle.item}</span><span class="quantity">${bundle.quantity}</span>`;
-        el.addEventListener('click', () => addToCraftSequence(bundle.item));
-        extendedInventoryEl.appendChild(el);
-      });
+      if (extendedInventoryEl) {
+        extendedInventoryEl.innerHTML = '';
+        combined.forEach((bundle) => {
+          const el = document.createElement('div');
+          el.className = 'inventory-slot';
+          el.innerHTML = `<span>${ITEM_DEFS[bundle.item]?.name ?? bundle.item}</span><span class="quantity">${bundle.quantity}</span>`;
+          el.addEventListener('click', () => addToCraftSequence(bundle.item));
+          extendedInventoryEl.appendChild(el);
+        });
+      }
+      updateHotbarExpansionUi();
       updateCraftingInventoryOverlay(combined);
       updateInventoryModalGrid(combined);
       updateInventorySortButtonState();
@@ -19409,12 +19558,9 @@
       if (!inventoryModal.hidden) return;
       inventoryModal.hidden = false;
       inventoryModal.setAttribute('aria-hidden', 'false');
-      toggleExtendedBtn?.setAttribute('aria-expanded', 'true');
-      if (toggleExtendedBtn) {
-        toggleExtendedBtn.textContent = 'Close Inventory';
-      }
       updateInventoryModalGrid();
       updateInventorySortButtonState();
+      updateHotbarExpansionUi();
       if (shouldFocusFirstSlot) {
         window.setTimeout(() => {
           const focusTarget =
@@ -19432,10 +19578,7 @@
       if (inventoryModal.hidden) return;
       inventoryModal.hidden = true;
       inventoryModal.setAttribute('aria-hidden', 'true');
-      toggleExtendedBtn?.setAttribute('aria-expanded', 'false');
-      if (toggleExtendedBtn) {
-        toggleExtendedBtn.textContent = 'Open Inventory';
-      }
+      updateHotbarExpansionUi();
       if (shouldFocusTrigger) {
         toggleExtendedBtn?.focus();
       }
@@ -19530,9 +19673,7 @@
       });
       craftingSearchInput?.addEventListener('input', updateCraftingSearchPanelResults);
       craftLauncherButton?.addEventListener('click', openCraftingModal);
-      toggleExtendedBtn?.addEventListener('click', () =>
-        toggleInventoryModal({ focusTrigger: true, focusFirstSlot: true })
-      );
+      toggleExtendedBtn?.addEventListener('click', () => toggleHotbarExpansion());
       inventorySortButton?.addEventListener('click', toggleInventorySortMode);
       initVirtualJoystick();
       if (mobileControls) {
@@ -21636,7 +21777,8 @@
       if (!inventoryModal) return;
       inventoryModal.hidden = true;
       inventoryModal.setAttribute('aria-hidden', 'true');
-      toggleExtendedBtn?.setAttribute('aria-expanded', 'false');
+      state.ui.hotbarExpanded = false;
+      updateHotbarExpansionUi();
       inventoryModal.addEventListener('click', (event) => {
         if (event.target === inventoryModal) {
           closeInventoryModal(true);
