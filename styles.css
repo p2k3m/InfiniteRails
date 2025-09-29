@@ -1856,11 +1856,17 @@ body.game-active #gameCanvas {
   backdrop-filter: blur(10px);
 }
 
+.portal-status--flash {
+  animation: portal-status-flash 0.62s ease-out;
+}
+
 .portal-status__text {
   white-space: nowrap;
 }
 
 .portal-status__icon {
+  position: relative;
+  display: inline-flex;
   width: 0.85rem;
   height: 0.85rem;
   border-radius: 50%;
@@ -1868,6 +1874,54 @@ body.game-active #gameCanvas {
   box-shadow: 0 0 12px rgba(126, 147, 255, 0.45);
   transition: transform 0.35s ease, box-shadow 0.35s ease, background 0.35s ease,
     opacity 0.35s ease;
+}
+
+.portal-status__icon::after {
+  content: '';
+  position: absolute;
+  inset: -6px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  opacity: 0;
+  transform: scale(0.6);
+  transition: opacity 0.45s ease, transform 0.45s ease, border-color 0.45s ease;
+  pointer-events: none;
+}
+
+.portal-status__icon[data-state='inactive']::after {
+  opacity: 0.4;
+  border-color: rgba(140, 145, 168, 0.35);
+  transform: scale(0.78);
+}
+
+.portal-status__icon[data-state='building']::after {
+  opacity: 0.6;
+  border-color: rgba(0, 176, 255, 0.4);
+  transform: scale(0.86);
+}
+
+.portal-status__icon[data-state='ready']::after {
+  opacity: 0.75;
+  border-color: rgba(0, 212, 255, 0.6);
+  animation: portal-status-ripple 2.1s ease-in-out infinite;
+}
+
+.portal-status__icon[data-state='active']::after {
+  opacity: 0.95;
+  border-color: rgba(204, 132, 255, 0.75);
+  animation: portal-status-ripple 1.6s ease-out infinite;
+}
+
+.portal-status__icon[data-state='blocked']::after {
+  opacity: 0.8;
+  border-color: rgba(255, 110, 110, 0.65);
+  transform: scale(0.9);
+}
+
+.portal-status__icon[data-state='victory']::after {
+  opacity: 0.9;
+  border-color: rgba(255, 193, 94, 0.7);
+  animation: portal-status-ripple 2.8s ease-in-out infinite;
 }
 
 @keyframes portal-status-pulse {
@@ -1882,6 +1936,35 @@ body.game-active #gameCanvas {
   100% {
     transform: scale(1);
     box-shadow: 0 0 12px rgba(140, 113, 255, 0.6), 0 0 26px rgba(84, 230, 255, 0.45);
+  }
+}
+
+@keyframes portal-status-ripple {
+  0% {
+    opacity: 0.05;
+    transform: scale(0.6);
+  }
+  35% {
+    opacity: 0.9;
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.25);
+  }
+}
+
+@keyframes portal-status-flash {
+  0% {
+    transform: translateY(0) scale(0.94);
+    box-shadow: 0 18px 36px rgba(0, 0, 0, 0.4), 0 0 18px rgba(90, 115, 255, 0.3);
+  }
+  40% {
+    transform: translateY(-2px) scale(1.05);
+    box-shadow: 0 26px 54px rgba(0, 0, 0, 0.45), 0 0 24px rgba(150, 90, 255, 0.55);
+  }
+  100% {
+    transform: translateY(0) scale(1);
+    box-shadow: 0 16px 36px rgba(0, 0, 0, 0.4), 0 0 16px rgba(90, 115, 255, 0.25);
   }
 }
 
