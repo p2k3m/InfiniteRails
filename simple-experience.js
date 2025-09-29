@@ -4,6 +4,9 @@
   const MIN_COLUMN_HEIGHT = 1;
   const MAX_COLUMN_HEIGHT = 6;
   const MAX_TERRAIN_VOXELS = WORLD_SIZE * WORLD_SIZE * MAX_COLUMN_HEIGHT;
+  const TERRAIN_CULLING_POSITION_EPSILON_SQ = 0.0001;
+  const TERRAIN_CULLING_ROTATION_EPSILON = 0.0001;
+  const LAZY_ASSET_WARMUP_DELAY_MS = 250;
   const PLAYER_EYE_HEIGHT = 1.8;
   const PLAYER_BASE_SPEED = 4.5;
   const PLAYER_INERTIA = 0.88;
@@ -556,9 +559,15 @@
       this.maxColumnHeight = Math.max(this.minColumnHeight, requestedMaxColumnHeight);
       const minVoxelBudget = WORLD_SIZE * WORLD_SIZE * this.minColumnHeight;
       const requestedVoxelBudget = Number.isFinite(options.maxTerrainVoxels)
-        ? Math.floor(options.maxTerrainVoxels)
+        ? Math.max(0, Math.floor(options.maxTerrainVoxels))
         : MAX_TERRAIN_VOXELS;
-      this.maxTerrainVoxels = Math.max(minVoxelBudget, requestedVoxelBudget);
+      this.maxTerrainVoxels = Math.min(
+        MAX_TERRAIN_VOXELS,
+        Math.max(minVoxelBudget, requestedVoxelBudget),
+      );
+      this.lazyAssetLoading = options.lazyAssetLoading !== false;
+      this.lazyModelWarmupQueue = [];
+      this.lazyModelWarmupHandle = null;
       this.assetLoadBudgetMs = Number.isFinite(options.assetLoadBudgetMs)
         ? Math.max(500, options.assetLoadBudgetMs)
         : 3000;
@@ -660,6 +669,9 @@
       this.chunkFrustumMatrix = new THREE.Matrix4();
       this.terrainCullingAccumulator = 0;
       this.terrainCullingInterval = 0.08;
+      this.lastCullingCameraPosition = new THREE.Vector3();
+      this.lastCullingCameraQuaternion = new THREE.Quaternion();
+      this.lastCullingCameraValid = false;
       this.debugChunkCulling = this.detectChunkDebugFlag();
       this.lastCullingDebugLog = 0;
       this.zombies = [];
@@ -1549,6 +1561,7 @@
     }
 
     stop() {
+      this.cancelQueuedModelPreload();
       if (this.animationFrame !== null) {
         cancelAnimationFrame(this.animationFrame);
         this.animationFrame = null;
@@ -1619,6 +1632,7 @@
       this.handMaterials = [];
       this.handMaterialsDynamic = true;
       this.handModelLoaded = false;
+      this.lastCullingCameraValid = false;
     }
 
     setupScene() {
@@ -3010,6 +3024,7 @@
     }
 
     cancelQueuedModelPreload() {
+      this.cancelLazyModelWarmup();
       if (this.modelPreloadHandle === null) {
         this.modelPreloadUsingIdle = false;
         return;
@@ -3026,11 +3041,87 @@
       this.modelPreloadUsingIdle = false;
     }
 
+    cancelLazyModelWarmup() {
+      if (this.lazyModelWarmupHandle !== null) {
+        const scope =
+          typeof window !== 'undefined' ? window : typeof globalThis !== 'undefined' ? globalThis : null;
+        if (scope && typeof scope.clearTimeout === 'function') {
+          scope.clearTimeout(this.lazyModelWarmupHandle);
+        }
+        this.lazyModelWarmupHandle = null;
+      }
+      this.lazyModelWarmupQueue = [];
+    }
+
     preloadCharacterModels() {
-      this.loadModel('arm').catch(() => {});
-      this.loadModel('steve').catch(() => {});
-      this.loadModel('zombie').catch(() => {});
-      this.loadModel('golem').catch(() => {});
+      const eagerKeys = this.lazyAssetLoading ? ['steve'] : ['arm', 'steve', 'zombie', 'golem'];
+      eagerKeys.forEach((key) => {
+        if (!key) return;
+        if (this.loadedModels.has(key) || this.modelPromises.has(key)) {
+          return;
+        }
+        this.loadModel(key).catch(() => {});
+      });
+      if (this.lazyAssetLoading) {
+        this.enqueueLazyModelWarmup(['arm', 'zombie', 'golem']);
+      }
+    }
+
+    enqueueLazyModelWarmup(keys = []) {
+      if (!Array.isArray(keys) || !keys.length) {
+        return;
+      }
+      const pending = keys
+        .map((key) => `${key || ''}`.trim())
+        .filter((key) => key && !this.loadedModels.has(key) && !this.modelPromises.has(key));
+      if (!pending.length) {
+        return;
+      }
+      const merged = new Set(this.lazyModelWarmupQueue);
+      pending.forEach((key) => merged.add(key));
+      this.lazyModelWarmupQueue = Array.from(merged);
+      this.scheduleLazyModelWarmup();
+    }
+
+    scheduleLazyModelWarmup() {
+      if (!this.lazyModelWarmupQueue.length || this.lazyModelWarmupHandle !== null) {
+        return;
+      }
+      const scope =
+        typeof window !== 'undefined' ? window : typeof globalThis !== 'undefined' ? globalThis : null;
+      if (!scope || typeof scope.setTimeout !== 'function') {
+        this.runLazyModelWarmup();
+        return;
+      }
+      const delay = this.lazyAssetLoading ? LAZY_ASSET_WARMUP_DELAY_MS : 0;
+      this.lazyModelWarmupHandle = scope.setTimeout(() => {
+        this.lazyModelWarmupHandle = null;
+        this.runLazyModelWarmup();
+      }, delay);
+    }
+
+    runLazyModelWarmup() {
+      if (!this.lazyModelWarmupQueue.length) {
+        return;
+      }
+      if (!this.started || this.rendererUnavailable) {
+        this.lazyModelWarmupQueue = [];
+        return;
+      }
+      const nextKey = this.lazyModelWarmupQueue.shift();
+      if (!nextKey) {
+        this.scheduleLazyModelWarmup();
+        return;
+      }
+      if (this.loadedModels.has(nextKey) || this.modelPromises.has(nextKey)) {
+        this.scheduleLazyModelWarmup();
+        return;
+      }
+      this.loadModel(nextKey)
+        .catch(() => {})
+        .finally(() => {
+          this.scheduleLazyModelWarmup();
+        });
     }
 
     loadModel(key, overrideUrl) {
@@ -3393,14 +3484,16 @@
       this.terrainChunkGroups = [];
       this.terrainChunkMap.clear();
       this.dirtyTerrainChunks.clear();
+      this.lastCullingCameraValid = false;
       const half = WORLD_SIZE / 2;
       const totalColumns = WORLD_SIZE * WORLD_SIZE;
       const minColumnHeight = Math.max(1, Math.floor(this.minColumnHeight ?? MIN_COLUMN_HEIGHT));
       const maxColumnHeight = Math.max(minColumnHeight, Math.floor(this.maxColumnHeight ?? MAX_COLUMN_HEIGHT));
       const targetBudget = Number.isFinite(this.maxTerrainVoxels)
-        ? Math.floor(this.maxTerrainVoxels)
+        ? Math.max(0, Math.floor(this.maxTerrainVoxels))
         : MAX_TERRAIN_VOXELS;
-      const voxelBudget = Math.max(totalColumns * minColumnHeight, targetBudget);
+      const safeBudget = Math.max(totalColumns * minColumnHeight, targetBudget);
+      const voxelBudget = Math.min(MAX_TERRAIN_VOXELS, safeBudget);
       let remainingVoxels = voxelBudget;
       let cappedColumns = 0;
       let voxelCount = 0;
@@ -3421,12 +3514,12 @@
           );
           const cappedHeight = Math.min(desiredHeight, maxColumnHeight);
           const columnsRemaining = totalColumns - columnIndex - 1;
-          const reservedForRemaining = columnsRemaining * minColumnHeight;
-          const availableForColumn = Math.max(minColumnHeight, remainingVoxels - reservedForRemaining);
-          const columnHeight = Math.max(
-            minColumnHeight,
-            Math.min(cappedHeight, availableForColumn, maxColumnHeight),
-          );
+          const reservedForRemaining = Math.max(0, columnsRemaining * minColumnHeight);
+          const budgetForColumn = Math.max(minColumnHeight, remainingVoxels - reservedForRemaining);
+          let columnHeight = Math.min(cappedHeight, maxColumnHeight, budgetForColumn, remainingVoxels);
+          if (columnHeight < minColumnHeight) {
+            columnHeight = Math.min(minColumnHeight, remainingVoxels);
+          }
           if (columnHeight < desiredHeight) {
             cappedColumns += 1;
           }
@@ -3474,6 +3567,9 @@
         this.recalculateTerrainChunkBounds(chunk);
       });
       this.terrainCullingAccumulator = this.terrainCullingInterval;
+      const voxelsUsed = voxelBudget - remainingVoxels;
+      this.terrainVoxelBudget = voxelBudget;
+      this.terrainVoxelUsage = voxelsUsed;
       if (typeof console !== 'undefined') {
         const columnCount = WORLD_SIZE * WORLD_SIZE;
         console.log(`World generated: ${columnCount} voxels`);
@@ -3482,6 +3578,9 @@
           console.info(
             `Terrain voxel budget applied: ${cappedColumns} columns trimmed to stay under ${voxelBudget} voxels`,
           );
+        }
+        if (voxelBudget < MAX_TERRAIN_VOXELS || remainingVoxels === 0) {
+          console.info(`Terrain voxel cap enforced at ${voxelsUsed}/${voxelBudget} blocks.`);
         }
       }
       this.portalAnchorGrid = this.computePortalAnchorGrid();
@@ -5261,9 +5360,37 @@
       if (this.terrainCullingAccumulator < this.terrainCullingInterval) {
         return;
       }
-      this.terrainCullingAccumulator = 0;
-      this.refreshDirtyTerrainChunks();
       this.camera.updateMatrixWorld();
+      const cameraPosition = this.camera.getWorldPosition
+        ? this.camera.getWorldPosition(this.tmpVector3)
+        : this.getCameraWorldPosition(this.tmpVector3);
+      let cameraQuaternion = null;
+      if (typeof this.camera.getWorldQuaternion === 'function') {
+        cameraQuaternion = this.camera.getWorldQuaternion(this.tmpQuaternion);
+      } else if (this.camera.quaternion) {
+        cameraQuaternion = this.tmpQuaternion.copy(this.camera.quaternion);
+      }
+      const hasDirtyChunks = this.dirtyTerrainChunks.size > 0;
+      let cameraMoved = !this.lastCullingCameraValid;
+      if (!cameraMoved) {
+        const positionDelta = cameraPosition.distanceToSquared(this.lastCullingCameraPosition);
+        if (positionDelta > TERRAIN_CULLING_POSITION_EPSILON_SQ) {
+          cameraMoved = true;
+        } else if (cameraQuaternion) {
+          const dot = Math.abs(cameraQuaternion.dot(this.lastCullingCameraQuaternion));
+          if (1 - dot > TERRAIN_CULLING_ROTATION_EPSILON) {
+            cameraMoved = true;
+          }
+        }
+      }
+      if (!cameraMoved && !hasDirtyChunks) {
+        this.terrainCullingAccumulator = 0;
+        return;
+      }
+      this.terrainCullingAccumulator = 0;
+      if (hasDirtyChunks) {
+        this.refreshDirtyTerrainChunks();
+      }
       this.chunkFrustumMatrix.multiplyMatrices(
         this.camera.projectionMatrix,
         this.camera.matrixWorldInverse,
@@ -5277,6 +5404,11 @@
         }
         chunk.visible = this.chunkFrustum.intersectsSphere(sphere);
       }
+      this.lastCullingCameraPosition.copy(cameraPosition);
+      if (cameraQuaternion) {
+        this.lastCullingCameraQuaternion.copy(cameraQuaternion);
+      }
+      this.lastCullingCameraValid = true;
       if (this.debugChunkCulling) {
         const visibleCount = this.terrainChunkGroups.reduce(
           (total, chunk) => total + (chunk.visible ? 1 : 0),
