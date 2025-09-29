@@ -6743,6 +6743,8 @@
           this.previewUpcomingDimension();
         } else if (nextState === 'ready') {
           this.audio.play('portalPrimed', { volume: 0.55 });
+        } else if (nextState === 'building') {
+          this.audio.play('portalPrimed', { volume: 0.35 });
         } else if (nextState === 'blocked') {
           this.audio.play('portalDormant', { volume: 0.45 });
         } else if (nextState === 'inactive' && previousState !== 'inactive') {
@@ -6758,9 +6760,16 @@
       const required = this.portalFrameRequiredCount || PORTAL_BLOCK_REQUIREMENT;
       const rawProgress = required > 0 ? this.portalBlocksPlaced / required : 0;
       const progress = Math.min(1, Math.max(0, rawProgress));
+      const progressPercent = Math.round(progress * 100);
+      const remainingBlocks = Math.max(0, Math.ceil(required - this.portalBlocksPlaced));
+      const nextTheme = DIMENSION_THEME[this.currentDimensionIndex + 1] ?? null;
+      const nextName = nextTheme?.name ?? null;
+      const nextRulesSummary = nextTheme ? this.buildDimensionRuleSummary(nextTheme) : '';
       let statusState = 'inactive';
       let statusLabel = 'Portal Dormant';
-      let statusMessage = 'Awaiting ignition sequence';
+      let statusMessage = remainingBlocks
+        ? `${remainingBlocks} frame block${remainingBlocks === 1 ? '' : 's'} required to stabilise.`
+        : 'Awaiting ignition sequence';
       if (portalProgressLabel) {
         if (this.victoryAchieved) {
           portalProgressLabel.textContent = 'Eternal Ingot secured';
@@ -6778,25 +6787,30 @@
         } else if (this.portalActivated) {
           portalProgressLabel.textContent = 'Portal stabilised';
           statusState = 'active';
-          const nextName = this.getNextDimensionName();
           statusLabel = 'Portal Active';
-          statusMessage = nextName ? `Next: ${nextName}` : 'Portal active';
+          if (nextName) {
+            statusMessage = `Next: ${nextName}${nextRulesSummary ? ` — ${nextRulesSummary}` : ''}`;
+          } else {
+            statusMessage = 'Gateway stabilised — return to base.';
+          }
         } else if (this.portalReady) {
           portalProgressLabel.textContent = 'Portal ready — press F to ignite';
           statusState = 'ready';
           statusLabel = 'Portal Ready';
-          statusMessage = 'Primed — ignite to travel';
+          statusMessage = nextName
+            ? `Ignite with F to access ${nextName}.`
+            : 'Ignite with F to open the final gateway.';
         } else if (!this.portalFrameInteriorValid && this.portalBlocksPlaced > 0) {
           portalProgressLabel.textContent = 'Clear the portal interior';
           statusState = 'blocked';
           statusLabel = 'Portal Blocked';
           statusMessage = 'Interior obstructed';
         } else {
-          portalProgressLabel.textContent = `Portal frame ${Math.round(progress * 100)}%`;
+          portalProgressLabel.textContent = `Portal frame ${progressPercent}%`;
           if (progress > 0) {
             statusState = 'building';
             statusLabel = 'Portal Stabilising';
-            statusMessage = `Stabilising ${Math.round(progress * 100)}%`;
+            statusMessage = `${progressPercent}% frame integrity`;
           }
         }
       }
