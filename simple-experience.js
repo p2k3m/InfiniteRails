@@ -15,6 +15,8 @@
   const POINTER_SENSITIVITY = 0.0022;
   const POINTER_TUTORIAL_MESSAGE =
     'Click the viewport to capture your mouse, then use your movement keys to move and left-click to mine.';
+  const POINTER_LOCK_CHANGE_EVENTS = ['pointerlockchange', 'mozpointerlockchange', 'webkitpointerlockchange'];
+  const POINTER_LOCK_ERROR_EVENTS = ['pointerlockerror', 'mozpointerlockerror', 'webkitpointerlockerror'];
   const FALLBACK_HEALTH = 10;
   const PORTAL_BLOCK_REQUIREMENT = 10;
   const PORTAL_INTERACTION_RANGE = 4.5;
@@ -1054,6 +1056,8 @@
         document.visibilityState === 'visible' ||
         document.visibilityState === 'prerender';
       this.onVisibilityChange = this.handleVisibilityChange.bind(this);
+      this.eventsBound = false;
+      this.onCanvasPointerLock = this.handleCanvasPointerLockRequest.bind(this);
     }
 
     emitGameEvent(type, detail = {}) {
@@ -1270,7 +1274,7 @@
         this.hidePointerHint(true);
         return;
       }
-      if (document.pointerLockElement === this.canvas) {
+      if (this.getPointerLockElement() === this.canvas) {
         this.hidePointerHint();
         this.pointerHintLastMessage = '';
         return;
@@ -5321,8 +5325,15 @@
     }
 
     bindEvents() {
-      document.addEventListener('pointerlockchange', this.onPointerLockChange);
-      document.addEventListener('pointerlockerror', this.onPointerLockError);
+      if (this.eventsBound) {
+        return;
+      }
+      POINTER_LOCK_CHANGE_EVENTS.forEach((eventName) => {
+        document.addEventListener(eventName, this.onPointerLockChange);
+      });
+      POINTER_LOCK_ERROR_EVENTS.forEach((eventName) => {
+        document.addEventListener(eventName, this.onPointerLockError);
+      });
       document.addEventListener('visibilitychange', this.onVisibilityChange);
       document.addEventListener('keydown', this.onKeyDown);
       document.addEventListener('keyup', this.onKeyUp);
@@ -5335,11 +5346,7 @@
       window.addEventListener('pointermove', this.onTouchLookPointerMove, { passive: false });
       window.addEventListener('pointerup', this.onTouchLookPointerUp);
       window.addEventListener('pointercancel', this.onTouchLookPointerUp);
-      this.canvas.addEventListener('click', () => {
-        if (document.pointerLockElement !== this.canvas) {
-          this.attemptPointerLock();
-        }
-      });
+      this.canvas.addEventListener('click', this.onCanvasPointerLock);
       this.canvas.addEventListener('contextmenu', this.preventContextMenu);
       if (this.hotbarEl) {
         this.hotbarEl.addEventListener('click', this.onHotbarClick);
@@ -5385,11 +5392,19 @@
       this.ui?.dimensionInfoEl?.addEventListener('click', this.onVictoryReplay);
       this.victoryCloseButton?.addEventListener('click', this.onVictoryClose);
       this.victoryShareButton?.addEventListener('click', this.onVictoryShare);
+      this.eventsBound = true;
     }
 
     unbindEvents() {
-      document.removeEventListener('pointerlockchange', this.onPointerLockChange);
-      document.removeEventListener('pointerlockerror', this.onPointerLockError);
+      if (!this.eventsBound) {
+        return;
+      }
+      POINTER_LOCK_CHANGE_EVENTS.forEach((eventName) => {
+        document.removeEventListener(eventName, this.onPointerLockChange);
+      });
+      POINTER_LOCK_ERROR_EVENTS.forEach((eventName) => {
+        document.removeEventListener(eventName, this.onPointerLockError);
+      });
       document.removeEventListener('visibilitychange', this.onVisibilityChange);
       document.removeEventListener('keydown', this.onKeyDown);
       document.removeEventListener('keyup', this.onKeyUp);
@@ -5402,6 +5417,7 @@
       window.removeEventListener('pointermove', this.onTouchLookPointerMove);
       window.removeEventListener('pointerup', this.onTouchLookPointerUp);
       window.removeEventListener('pointercancel', this.onTouchLookPointerUp);
+      this.canvas.removeEventListener('click', this.onCanvasPointerLock);
       this.canvas.removeEventListener('contextmenu', this.preventContextMenu);
       if (this.hotbarEl) {
         this.hotbarEl.removeEventListener('click', this.onHotbarClick);
@@ -5446,10 +5462,23 @@
       this.victoryCloseButton?.removeEventListener('click', this.onVictoryClose);
       this.victoryShareButton?.removeEventListener('click', this.onVictoryShare);
       this.teardownMobileControls();
+      this.eventsBound = false;
+    }
+
+    getPointerLockElement() {
+      if (typeof document === 'undefined') {
+        return null;
+      }
+      return (
+        document.pointerLockElement ||
+        document.mozPointerLockElement ||
+        document.webkitPointerLockElement ||
+        null
+      );
     }
 
     handlePointerLockChange() {
-      this.pointerLocked = document.pointerLockElement === this.canvas;
+      this.pointerLocked = this.getPointerLockElement() === this.canvas;
       if (this.pointerLocked) {
         this.markInteraction();
         this.cancelPointerHintAutoHide();
@@ -5470,15 +5499,22 @@
     }
 
     attemptPointerLock() {
-      if (!this.canvas || typeof this.canvas.requestPointerLock !== 'function') {
+      if (!this.canvas) {
+        return;
+      }
+      const requestPointerLock =
+        this.canvas.requestPointerLock ||
+        this.canvas.mozRequestPointerLock ||
+        this.canvas.webkitRequestPointerLock;
+      if (typeof requestPointerLock !== 'function') {
         return;
       }
       try {
-        const result = this.canvas.requestPointerLock({ unadjustedMovement: true });
+        const result = requestPointerLock.call(this.canvas, { unadjustedMovement: true });
         if (result && typeof result.catch === 'function') {
           result.catch(() => {
             try {
-              this.canvas.requestPointerLock();
+              requestPointerLock.call(this.canvas);
             } catch (fallbackError) {
               console.debug('Pointer lock fallback failed', fallbackError);
             }
@@ -5486,11 +5522,34 @@
         }
       } catch (error) {
         try {
-          this.canvas.requestPointerLock();
+          requestPointerLock.call(this.canvas);
         } catch (fallbackError) {
           console.debug('Pointer lock request failed', fallbackError);
         }
       }
+    }
+
+    handleCanvasPointerLockRequest() {
+      if (!this.canvas) {
+        return;
+      }
+      this.markInteraction();
+      if (this.pointerLocked || this.getPointerLockElement() === this.canvas) {
+        return;
+      }
+      if (typeof this.canvas.focus === 'function') {
+        try {
+          this.canvas.focus({ preventScroll: true });
+        } catch (error) {
+          try {
+            this.canvas.focus();
+          } catch (nestedError) {
+            console.debug('Canvas focus unavailable in this browser.', nestedError);
+          }
+        }
+      }
+      this.attemptPointerLock();
+      this.updatePointerHintForInputMode();
     }
 
     handleMouseMove(event) {
@@ -5657,7 +5716,7 @@
 
       event.preventDefault?.();
 
-      const alreadyLocked = this.pointerLocked || document.pointerLockElement === this.canvas;
+      const alreadyLocked = this.pointerLocked || this.getPointerLockElement() === this.canvas;
       if (!alreadyLocked) {
         this.attemptPointerLock();
         if (typeof this.canvas?.focus === 'function') {
