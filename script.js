@@ -15949,14 +15949,35 @@
 
       initializeScoreOverlayUI();
 
+      const formatPoints = (value) => {
+        const numeric = Number(value);
+        if (!Number.isFinite(numeric)) {
+          return '0';
+        }
+        const abs = Math.abs(numeric);
+        const maxFractionDigits = abs === 0 ? 0 : abs < 1 ? 2 : abs < 10 ? 1 : 0;
+        return numeric.toLocaleString(undefined, {
+          minimumFractionDigits: 0,
+          maximumFractionDigits: maxFractionDigits,
+        });
+      };
+
+      const toFiniteNumber = (value) => {
+        const numeric = Number(value);
+        return Number.isFinite(numeric) ? numeric : null;
+      };
+
       let summary = null;
       if (typeof window !== 'undefined' && window.__INFINITE_RAILS_STATE__?.simpleSummary) {
         summary = window.__INFINITE_RAILS_STATE__.simpleSummary;
       }
+
       let recipeCount = scoreState.recipes.size;
       let dimensionCount = scoreState.dimensions.size;
       let recipePoints = recipeCount * SCORE_POINTS.recipe;
       let dimensionPoints = dimensionCount * SCORE_POINTS.dimension;
+      let penaltyPoints = 0;
+      let bonusPoints = 0;
       let total = recipePoints + dimensionPoints;
 
       if (summary) {
@@ -15970,9 +15991,51 @@
           : Array.isArray(summary.dimensions)
             ? summary.dimensions.length
             : dimensionCount;
-        recipePoints = recipeCount * SCORE_POINTS.recipe;
-        dimensionPoints = dimensionCount * SCORE_POINTS.dimension;
-        total = Math.round(summary.score ?? recipePoints + dimensionPoints);
+
+        const breakdown = summary && typeof summary.breakdown === 'object' ? summary.breakdown : null;
+        const resolvedRecipePoints =
+          toFiniteNumber(summary.recipePoints) ?? toFiniteNumber(breakdown?.recipes);
+        const resolvedDimensionPoints =
+          toFiniteNumber(summary.dimensionPoints) ?? toFiniteNumber(breakdown?.dimensions);
+        const resolvedPenaltyPoints =
+          toFiniteNumber(summary.penalties) ?? toFiniteNumber(breakdown?.penalties);
+
+        if (resolvedRecipePoints !== null) {
+          recipePoints = resolvedRecipePoints;
+        } else {
+          recipePoints = recipeCount * SCORE_POINTS.recipe;
+        }
+
+        if (resolvedDimensionPoints !== null) {
+          dimensionPoints = resolvedDimensionPoints;
+        } else {
+          dimensionPoints = dimensionCount * SCORE_POINTS.dimension;
+        }
+
+        if (resolvedPenaltyPoints !== null) {
+          penaltyPoints = Math.max(0, resolvedPenaltyPoints);
+        }
+
+        if (breakdown) {
+          Object.entries(breakdown).forEach(([key, value]) => {
+            if (!key || typeof key !== 'string') return;
+            const normalizedKey = key.trim().toLowerCase();
+            if (!normalizedKey || normalizedKey === 'recipes' || normalizedKey === 'dimensions' || normalizedKey === 'penalties') {
+              return;
+            }
+            const numeric = toFiniteNumber(value);
+            if (numeric !== null) {
+              bonusPoints += numeric;
+            }
+          });
+        }
+
+        const summaryTotal = toFiniteNumber(summary.score);
+        if (summaryTotal !== null) {
+          total = summaryTotal;
+        } else {
+          total = recipePoints + dimensionPoints + bonusPoints - penaltyPoints;
+        }
       } else {
         const recalculated = recalculateScoreState();
         recipePoints = recalculated.recipePoints;
@@ -15982,11 +16045,17 @@
         dimensionCount = scoreState.dimensions.size;
       }
 
-      animateScoreDigits(scoreTotalEl, total);
-      animateMetricUpdate(scoreRecipesEl, `${recipeCount} (+${recipePoints} pts)`);
-      animateMetricUpdate(scoreDimensionsEl, `${dimensionCount} (+${dimensionPoints} pts)`);
+      const totalValue = Math.max(0, Math.round(total));
+      animateScoreDigits(scoreTotalEl, totalValue);
+      animateMetricUpdate(scoreRecipesEl, `${recipeCount} (+${formatPoints(recipePoints)} pts)`);
+      let dimensionMetric = `${dimensionCount} (+${formatPoints(dimensionPoints)} pts`;
+      if (penaltyPoints > 0) {
+        dimensionMetric += `, -${formatPoints(penaltyPoints)} penalty`;
+      }
+      dimensionMetric += ')';
+      animateMetricUpdate(scoreDimensionsEl, dimensionMetric);
       if (scorePanelEl) {
-        scorePanelEl.setAttribute('data-score', total.toString());
+        scorePanelEl.setAttribute('data-score', totalValue.toString());
         if (options.triggerFlip) {
           scorePanelEl.classList.add('flip');
           if (scoreFlipTimeout) {
