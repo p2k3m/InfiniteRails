@@ -3746,6 +3746,8 @@
     let torchLight;
     let ambientLight;
     let rimLight;
+    let lightingFallbackLight;
+    let lightingFallbackActive = false;
     let playerKeyLight;
     let playerLocator;
     let playerHintTimer = null;
@@ -4166,6 +4168,7 @@
       groundNight: new THREE.Color(BASE_ATMOSPHERE.groundNight),
       dayStrength: 1,
       nightStrength: 0,
+      fallbackActive: false,
     };
 
     const rimLightColors = {
@@ -5509,6 +5512,107 @@
       }
     }
 
+    function disposeLight(light, { removeTarget = false } = {}) {
+      if (!light) {
+        return;
+      }
+      try {
+        if (removeTarget && light.target && light.target.parent) {
+          light.target.parent.remove(light.target);
+        }
+      } catch (error) {
+        // Ignore target removal failures; fallback lighting will operate without it.
+      }
+      try {
+        if (light.parent) {
+          light.parent.remove(light);
+        }
+      } catch (error) {
+        // Parent removal failures are non-critical for fallback lighting.
+      }
+      try {
+        if (typeof light.dispose === 'function') {
+          light.dispose();
+        }
+      } catch (error) {
+        // Ignore dispose failures to avoid cascading issues during fallback.
+      }
+    }
+
+    function activateBasicLightingFallback(error) {
+      if (lightingFallbackActive) {
+        return false;
+      }
+      lightingFallbackActive = true;
+      lightingState.fallbackActive = true;
+
+      if (renderer) {
+        renderer.shadowMap.enabled = false;
+      }
+
+      disposeLight(sunLight, { removeTarget: true });
+      sunLight = null;
+      disposeLight(moonLight, { removeTarget: true });
+      moonLight = null;
+      disposeLight(rimLight, { removeTarget: true });
+      rimLight = null;
+      disposeLight(ambientLight);
+      ambientLight = null;
+
+      if (!hemiLight && scene) {
+        try {
+          hemiLight = new THREE.HemisphereLight(0xffffff, 0x555555, 0.9);
+          scene.add(hemiLight);
+        } catch (hemiError) {
+          hemiLight = null;
+        }
+      }
+
+      if (hemiLight) {
+        try {
+          hemiLight.intensity = 0.9;
+          hemiLight.color.set(0xffffff);
+          hemiLight.groundColor.set(0x555555);
+        } catch (hemiConfigError) {
+          // Ignore configuration failures; hemiLight will retain its previous settings.
+        }
+      }
+
+      if (torchLight) {
+        try {
+          torchLight.castShadow = false;
+        } catch (torchError) {
+          // Ignore failures when adjusting the torch for fallback lighting.
+        }
+      }
+
+      if (lightingFallbackLight && lightingFallbackLight.parent) {
+        lightingFallbackLight.parent.remove(lightingFallbackLight);
+      }
+      lightingFallbackLight = null;
+
+      if (scene) {
+        try {
+          lightingFallbackLight = new THREE.AmbientLight(0xffffff, 0.6);
+          lightingFallbackLight.name = 'basic-fallback-light';
+          scene.add(lightingFallbackLight);
+        } catch (ambientError) {
+          lightingFallbackLight = null;
+        }
+      }
+
+      if (error) {
+        console.warn('Advanced lighting unavailable; switching to basic lighting fallback.', error);
+      } else {
+        console.warn('Advanced lighting unavailable; switching to basic lighting fallback.');
+      }
+      announceVisualFallback(
+        'basic-lighting',
+        'Advanced lighting effects are disabled on this device. Using simplified lighting so the world remains visible.',
+      );
+      return true;
+    }
+
     function initRenderer() {
       if (renderer) return true;
       try {
@@ -5602,53 +5706,66 @@
       enemyHighlightHelper.visible = false;
       scene.add(enemyHighlightHelper);
 
-      hemiLight = new THREE.HemisphereLight(0xd5e8ff, 0x1a243f, 1.2);
-      scene.add(hemiLight);
+      try {
+        hemiLight = new THREE.HemisphereLight(0xd5e8ff, 0x1a243f, 1.2);
+        scene.add(hemiLight);
 
-      sunLight = new THREE.DirectionalLight(0xfff2d8, 1.6);
-      sunLight.position.set(12, 16, 6);
-      sunLight.target.position.set(0, 0, 0);
-      sunLight.castShadow = true;
-      const sunShadowSize = 24;
-      sunLight.shadow.mapSize.set(2048, 2048);
-      sunLight.shadow.camera.near = 0.5;
-      sunLight.shadow.camera.far = 80;
-      sunLight.shadow.camera.left = -sunShadowSize;
-      sunLight.shadow.camera.right = sunShadowSize;
-      sunLight.shadow.camera.top = sunShadowSize;
-      sunLight.shadow.camera.bottom = -sunShadowSize;
-      sunLight.shadow.bias = -0.0008;
-      sunLight.shadow.normalBias = 0.02;
-      sunLight.shadow.radius = 2.5;
-      sunLight.shadow.camera.updateProjectionMatrix();
-      scene.add(sunLight);
-      scene.add(sunLight.target);
+        sunLight = new THREE.DirectionalLight(0xfff2d8, 1.6);
+        sunLight.position.set(12, 16, 6);
+        sunLight.target.position.set(0, 0, 0);
+        sunLight.castShadow = true;
+        const sunShadowSize = 24;
+        sunLight.shadow.mapSize.set(2048, 2048);
+        sunLight.shadow.camera.near = 0.5;
+        sunLight.shadow.camera.far = 80;
+        sunLight.shadow.camera.left = -sunShadowSize;
+        sunLight.shadow.camera.right = sunShadowSize;
+        sunLight.shadow.camera.top = sunShadowSize;
+        sunLight.shadow.camera.bottom = -sunShadowSize;
+        sunLight.shadow.bias = -0.0008;
+        sunLight.shadow.normalBias = 0.02;
+        sunLight.shadow.radius = 2.5;
+        sunLight.shadow.camera.updateProjectionMatrix();
+        scene.add(sunLight);
+        scene.add(sunLight.target);
 
-      moonLight = new THREE.DirectionalLight(0x5a74ff, 0.5);
-      moonLight.position.set(-10, 10, -8);
-      moonLight.target.position.set(0, 0, 0);
-      scene.add(moonLight);
-      scene.add(moonLight.target);
+        moonLight = new THREE.DirectionalLight(0x5a74ff, 0.5);
+        moonLight.position.set(-10, 10, -8);
+        moonLight.target.position.set(0, 0, 0);
+        scene.add(moonLight);
+        scene.add(moonLight.target);
 
-      ambientLight = new THREE.AmbientLight(0xbddcff, 0.45);
-      scene.add(ambientLight);
+        ambientLight = new THREE.AmbientLight(0xbddcff, 0.45);
+        scene.add(ambientLight);
 
-      rimLight = new THREE.DirectionalLight(rimLightColors.day.clone(), 0.45);
-      rimLight.position.set(-14, 14, -6);
-      rimLight.target.position.set(0, 0, 0);
-      rimLight.castShadow = false;
-      scene.add(rimLight);
-      scene.add(rimLight.target);
+        rimLight = new THREE.DirectionalLight(rimLightColors.day.clone(), 0.45);
+        rimLight.position.set(-14, 14, -6);
+        rimLight.target.position.set(0, 0, 0);
+        rimLight.castShadow = false;
+        scene.add(rimLight);
+        scene.add(rimLight.target);
 
-      torchLight = new THREE.PointLight(0xffd27f, 0, 8, 2.4);
-      torchLight.castShadow = true;
-      torchLight.shadow.mapSize.set(1024, 1024);
-      torchLight.shadow.camera.near = 0.1;
-      torchLight.shadow.camera.far = 16;
-      torchLight.shadow.bias = -0.001;
-      torchLight.shadow.radius = 3;
-      torchLight.visible = false;
-      scene.add(torchLight);
+        torchLight = new THREE.PointLight(0xffd27f, 0, 8, 2.4);
+        torchLight.castShadow = true;
+        torchLight.shadow.mapSize.set(1024, 1024);
+        torchLight.shadow.camera.near = 0.1;
+        torchLight.shadow.camera.far = 16;
+        torchLight.shadow.bias = -0.001;
+        torchLight.shadow.radius = 3;
+        torchLight.visible = false;
+        scene.add(torchLight);
+
+        lightingFallbackActive = false;
+        lightingState.fallbackActive = false;
+        if (lightingFallbackLight && lightingFallbackLight.parent) {
+          lightingFallbackLight.parent.remove(lightingFallbackLight);
+        }
+        lightingFallbackLight = null;
+
+        updateLighting(0);
+      } catch (lightingError) {
+        activateBasicLightingFallback(lightingError);
+      }
 
       buildProceduralIsland();
       initPointerControls();
@@ -13964,82 +14081,93 @@
     }
 
     function updateLighting(delta) {
-      if (!scene || !state || !hemiLight || !sunLight || !moonLight) return;
-      const cycle = getDayNightMetrics();
-      const ratio = cycle.ratio;
+      if (!scene || !state) return;
+
       const playerFacing = state.player?.facing ?? { x: 0, y: 1 };
       const playerScene = worldToScene(state.player?.x ?? 0, state.player?.y ?? 0);
       const playerHeight = tileSurfaceHeight(state.player?.x ?? 0, state.player?.y ?? 0) + 0.6;
+      const advancedLightingReady = !lightingFallbackActive && hemiLight && sunLight && moonLight;
 
-      const sunAngle = cycle.isNight
-        ? Math.PI + cycle.nightProgress * Math.PI
-        : cycle.dayProgress * Math.PI;
-      const sunElevation = Math.sin(sunAngle);
-      const dayStrength = THREE.MathUtils.clamp((sunElevation + 1) / 2, 0, 1);
-      lightingState.dayStrength = dayStrength;
-      const sunRadius = 24;
-      sunLight.position.set(
-        playerScene.x + Math.cos(sunAngle) * sunRadius,
-        playerHeight + 8 + Math.max(0, sunElevation * 14),
-        playerScene.z + Math.sin(sunAngle) * sunRadius
-      );
-      sunLight.target.position.set(playerScene.x, playerHeight - 0.6, playerScene.z);
-      sunLight.target.updateMatrixWorld();
-      sunLight.intensity = 0.45 + dayStrength * 1.35;
+      if (advancedLightingReady) {
+        const cycle = getDayNightMetrics();
+        const ratio = cycle.ratio;
 
-      const moonAngle = sunAngle + Math.PI;
-      const moonElevation = Math.sin(moonAngle);
-      const nightStrength = THREE.MathUtils.clamp((moonElevation + 1) / 2, 0, 1);
-      lightingState.nightStrength = nightStrength;
-      const moonRadius = 22;
-      moonLight.position.set(
-        playerScene.x + Math.cos(moonAngle) * moonRadius,
-        playerHeight + 6 + Math.max(0, moonElevation * 10),
-        playerScene.z + Math.sin(moonAngle) * moonRadius
-      );
-      moonLight.target.position.copy(sunLight.target.position);
-      moonLight.target.updateMatrixWorld();
-      moonLight.intensity = 0.25 + nightStrength * 0.6;
-
-      hemiLight.intensity = 0.65 + dayStrength * 0.45;
-      hemiLight.color.lerpColors(lightingState.nightSky, lightingState.daySky, dayStrength);
-      hemiLight.groundColor.lerpColors(lightingState.groundNight, lightingState.groundDay, dayStrength);
-
-      if (ambientLight) {
-        const ambientStrength = 0.38 + dayStrength * 0.35;
-        ambientLight.intensity = ambientStrength;
-        tmpColorB
-          .copy(lightingState.nightSky)
-          .lerp(lightingState.daySky, Math.min(1, dayStrength * 0.85 + 0.25));
-        ambientLight.color.copy(tmpColorB);
-      }
-
-      if (rimLight) {
-        const rimRadius = 18;
-        const rimAngle = sunAngle + Math.PI * 0.65;
-        rimLight.position.set(
-          playerScene.x + Math.cos(rimAngle) * rimRadius,
-          playerHeight + 9,
-          playerScene.z + Math.sin(rimAngle) * rimRadius
+        const sunAngle = cycle.isNight
+          ? Math.PI + cycle.nightProgress * Math.PI
+          : cycle.dayProgress * Math.PI;
+        const sunElevation = Math.sin(sunAngle);
+        const dayStrength = THREE.MathUtils.clamp((sunElevation + 1) / 2, 0, 1);
+        lightingState.dayStrength = dayStrength;
+        const sunRadius = 24;
+        sunLight.position.set(
+          playerScene.x + Math.cos(sunAngle) * sunRadius,
+          playerHeight + 8 + Math.max(0, sunElevation * 14),
+          playerScene.z + Math.sin(sunAngle) * sunRadius
         );
-        rimLight.target.position.set(playerScene.x, playerHeight + 0.6, playerScene.z);
-        rimLight.target.updateMatrixWorld();
-        rimLight.intensity = 0.45 + dayStrength * 0.5;
-        rimLight.color.lerpColors(rimLightColors.night, rimLightColors.day, Math.min(1, dayStrength + 0.1));
-      }
+        sunLight.target.position.set(playerScene.x, playerHeight - 0.6, playerScene.z);
+        sunLight.target.updateMatrixWorld();
+        sunLight.intensity = 0.45 + dayStrength * 1.35;
 
-      const dawnDistance = Math.min(
-        Math.abs(ratio) / (cycle.dayPortion || 1),
-        Math.abs(ratio - 1) / (cycle.dayPortion || 1)
-      );
-      const duskDistance = Math.abs(ratio - cycle.dayPortion) / (cycle.nightPortion || 1);
-      const duskMix = Math.max(0, 0.22 - Math.min(dawnDistance, duskDistance)) / 0.22;
-      tmpColorA.copy(lightingState.nightSky).lerp(lightingState.daySky, dayStrength);
-      if (duskMix > 0) {
-        tmpColorB.copy(lightingState.duskSky);
-        tmpColorA.lerp(tmpColorB, duskMix * 0.6);
+        const moonAngle = sunAngle + Math.PI;
+        const moonElevation = Math.sin(moonAngle);
+        const nightStrength = THREE.MathUtils.clamp((moonElevation + 1) / 2, 0, 1);
+        lightingState.nightStrength = nightStrength;
+        const moonRadius = 22;
+        moonLight.position.set(
+          playerScene.x + Math.cos(moonAngle) * moonRadius,
+          playerHeight + 6 + Math.max(0, moonElevation * 10),
+          playerScene.z + Math.sin(moonAngle) * moonRadius
+        );
+        moonLight.target.position.copy(sunLight.target.position);
+        moonLight.target.updateMatrixWorld();
+        moonLight.intensity = 0.25 + nightStrength * 0.6;
+
+        hemiLight.intensity = 0.65 + dayStrength * 0.45;
+        hemiLight.color.lerpColors(lightingState.nightSky, lightingState.daySky, dayStrength);
+        hemiLight.groundColor.lerpColors(lightingState.groundNight, lightingState.groundDay, dayStrength);
+
+        if (ambientLight) {
+          const ambientStrength = 0.38 + dayStrength * 0.35;
+          ambientLight.intensity = ambientStrength;
+          tmpColorB
+            .copy(lightingState.nightSky)
+            .lerp(lightingState.daySky, Math.min(1, dayStrength * 0.85 + 0.25));
+          ambientLight.color.copy(tmpColorB);
+        }
+
+        if (rimLight) {
+          const rimRadius = 18;
+          const rimAngle = sunAngle + Math.PI * 0.65;
+          rimLight.position.set(
+            playerScene.x + Math.cos(rimAngle) * rimRadius,
+            playerHeight + 9,
+            playerScene.z + Math.sin(rimAngle) * rimRadius
+          );
+          rimLight.target.position.set(playerScene.x, playerHeight + 0.6, playerScene.z);
+          rimLight.target.updateMatrixWorld();
+          rimLight.intensity = 0.45 + dayStrength * 0.5;
+          rimLight.color.lerpColors(rimLightColors.night, rimLightColors.day, Math.min(1, dayStrength + 0.1));
+        }
+
+        const dawnDistance = Math.min(
+          Math.abs(ratio) / (cycle.dayPortion || 1),
+          Math.abs(ratio - 1) / (cycle.dayPortion || 1)
+        );
+        const duskDistance = Math.abs(ratio - cycle.dayPortion) / (cycle.nightPortion || 1);
+        const duskMix = Math.max(0, 0.22 - Math.min(dawnDistance, duskDistance)) / 0.22;
+        tmpColorA.copy(lightingState.nightSky).lerp(lightingState.daySky, dayStrength);
+        if (duskMix > 0) {
+          tmpColorB.copy(lightingState.duskSky);
+          tmpColorA.lerp(tmpColorB, duskMix * 0.6);
+        }
+        scene.fog.color.copy(tmpColorA);
+      } else {
+        lightingState.dayStrength = 1;
+        lightingState.nightStrength = 0;
+        if (scene?.fog?.color && lightingState.daySky) {
+          scene.fog.color.copy(lightingState.daySky);
+        }
       }
-      scene.fog.color.copy(tmpColorA);
 
       if (torchLight) {
         const selectedSlot = state.player?.inventory?.[state.player?.selectedSlot ?? 0];
@@ -14052,7 +14180,7 @@
         torchLight.distance = holdingTorch ? 7.5 : 4;
         torchLight.decay = 1.8;
         torchLight.visible = torchLight.intensity > 0.05;
-        torchLight.castShadow = torchLight.visible;
+        torchLight.castShadow = !lightingFallbackActive && torchLight.visible;
         torchLight.position.set(
           playerScene.x + playerFacing.x * 0.45,
           playerHeight + 0.65,
@@ -14154,6 +14282,33 @@
             rendererRecoveryFrames = Math.max(rendererRecoveryFrames, sanitizedNow ? 1 : 2);
             pendingUniformSanitizations = Math.max(pendingUniformSanitizations, sanitizedNow ? 1 : 2);
             return;
+          }
+          const lowerMessage = uniformValueErrorMessage.toLowerCase?.()
+            ? uniformValueErrorMessage.toLowerCase()
+            : uniformValueErrorMessage;
+          if (
+            !lightingFallbackActive &&
+            typeof lowerMessage === 'string' &&
+            !lowerMessage.includes('portal')
+          ) {
+            const lightingKeywords = [
+              'directionallight',
+              'hemispherelight',
+              'pointlight',
+              'spotlight',
+              'shadowmap',
+              'shadow map',
+              'shadow ',
+              ' lighting',
+            ];
+            const lightingFailureDetected = lightingKeywords.some((keyword) =>
+              lowerMessage.includes(keyword)
+            );
+            if (lightingFailureDetected && activateBasicLightingFallback(error)) {
+              rendererRecoveryFrames = Math.max(rendererRecoveryFrames, 2);
+              pendingUniformSanitizations = Math.max(pendingUniformSanitizations, 2);
+              return;
+            }
           }
           if (!disablePortalSurfaceShaders(error)) {
             console.error('Renderer encountered an unrecoverable error.', error);
