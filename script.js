@@ -12413,13 +12413,26 @@
       playerMeshSessionId = 0;
       resetPlayerAnimationState();
 
+      const loadSessionId = sessionId;
+      playerModelLoading = true;
+      const loadEmbeddedSteve = () => {
+        parseEmbeddedModel(
+          'steve',
+          (embeddedGltf) => {
+            handlePlayerGltfLoad(embeddedGltf, loadSessionId);
+          },
+          (parseError) => {
+            console.error('Failed to parse embedded Steve model.', parseError);
+            useFallbackPlayerMesh(loadSessionId);
+          }
+        );
+      };
+
       if (!SUPPORTS_MODEL_ASSETS) {
-        useFallbackPlayerMesh(sessionId);
+        loadEmbeddedSteve();
         return;
       }
 
-      const loadSessionId = sessionId;
-      playerModelLoading = true;
       getGltfLoaderInstance()
         .then((loader) => {
           loader.load(
@@ -12430,29 +12443,13 @@
             undefined,
             (error) => {
               console.error('Failed to load Steve model.', error);
-              parseEmbeddedModel(
-                'steve',
-                (embeddedGltf) => {
-                  handlePlayerGltfLoad(embeddedGltf, loadSessionId);
-                },
-                () => {
-                  useFallbackPlayerMesh(loadSessionId);
-                }
-              );
+              loadEmbeddedSteve();
             }
           );
         })
         .catch((error) => {
           console.error('GLTFLoader is unavailable; cannot create the Steve model.', error);
-          parseEmbeddedModel(
-            'steve',
-            (embeddedGltf) => {
-              handlePlayerGltfLoad(embeddedGltf, loadSessionId);
-            },
-            () => {
-              useFallbackPlayerMesh(loadSessionId);
-            }
-          );
+          loadEmbeddedSteve();
         });
     }
 
