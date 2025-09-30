@@ -14847,6 +14847,9 @@
     initRenderer();
     setupPreviewScene();
     updateScoreOverlay();
+    updateStatusBars();
+    updateInventoryUI();
+    updateDimensionOverlay();
 
     function generateOriginIsland(state) {
       const grid = [];
