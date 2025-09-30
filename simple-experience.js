@@ -3969,15 +3969,16 @@
                 : blockType === 'dirt'
                   ? this.materials.dirt
                   : this.materials.stone;
-            const mesh = new THREE.Mesh(this.blockGeometry, material);
-            mesh.castShadow = isSurface;
-            mesh.receiveShadow = true;
-            mesh.position.set(worldX, level * BLOCK_SIZE + BLOCK_SIZE / 2, worldZ);
-            mesh.userData = {
-              columnKey,
-              level,
-              gx,
-              gz,
+          const mesh = new THREE.Mesh(this.blockGeometry, material);
+          mesh.castShadow = isSurface;
+          mesh.receiveShadow = true;
+          mesh.position.set(worldX, level * BLOCK_SIZE + BLOCK_SIZE / 2, worldZ);
+          mesh.visible = true;
+          mesh.userData = {
+            columnKey,
+            level,
+            gx,
+            gz,
               blockType,
               chunkKey: this.getTerrainChunkKey(gx, gz),
             };
@@ -4050,6 +4051,7 @@
       const chunkZ = Number.parseInt(chunkZRaw ?? '0', 10) || 0;
       chunk = new THREE.Group();
       chunk.name = `TerrainChunk-${chunkX}-${chunkZ}`;
+      chunk.visible = true;
       chunk.userData = {
         chunkX,
         chunkZ,

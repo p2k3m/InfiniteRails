@@ -91,5 +91,8 @@ describe('simple experience terrain generation', () => {
     expect(experience.terrainGroup.children.length).toBeGreaterThan(0);
     expect(experience.terrainChunkGroups.length).toBeGreaterThan(0);
     expect(experience.terrainChunkGroups.every((chunk) => chunk.children.length > 0)).toBe(true);
+    expect(experience.terrainChunkGroups.every((chunk) => chunk.visible !== false)).toBe(true);
+    const blockMeshes = Array.from(experience.columns.values()).flat();
+    expect(blockMeshes.every((mesh) => mesh.visible !== false)).toBe(true);
   });
 });
