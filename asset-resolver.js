@@ -1,0 +1,120 @@
+(function () {
+  const scope =
+    (typeof window !== 'undefined' && window) ||
+    (typeof globalThis !== 'undefined' && globalThis) ||
+    (typeof global !== 'undefined' && global) ||
+    {};
+
+  if (scope.InfiniteRailsAssetResolver) {
+    if (typeof module !== 'undefined' && module.exports) {
+      module.exports = scope.InfiniteRailsAssetResolver;
+    }
+    return;
+  }
+
+  function normaliseAssetBase(base) {
+    if (!base || typeof base !== 'string') {
+      return null;
+    }
+    try {
+      const resolved = new URL(base, scope?.location?.href ?? undefined);
+      if (!resolved) return null;
+      let href = resolved.href;
+      if (!href.endsWith('/')) {
+        href += '/';
+      }
+      return href;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function pushCandidate(list, seen, value) {
+    if (!value || seen.has(value)) {
+      return;
+    }
+    seen.add(value);
+    list.push(value);
+  }
+
+  function createAssetUrlCandidates(relativePath) {
+    if (!relativePath || typeof relativePath !== 'string') {
+      return [];
+    }
+    const candidates = [];
+    const seen = new Set();
+
+    const configBase = normaliseAssetBase(scope.APP_CONFIG?.assetBaseUrl ?? null);
+    if (configBase) {
+      try {
+        pushCandidate(candidates, seen, new URL(relativePath, configBase).href);
+      } catch (error) {
+        // Ignore invalid configuration bases.
+      }
+    }
+
+    const documentRef = typeof document !== 'undefined' ? document : null;
+    const windowRef = typeof window !== 'undefined' ? window : null;
+
+    if (documentRef) {
+      const findScriptElement = () => {
+        if (documentRef.currentScript) {
+          return documentRef.currentScript;
+        }
+        const scripts = Array.from(documentRef.getElementsByTagName('script'));
+        return scripts.find((element) =>
+          typeof element.src === 'string' && /\bscript\.js(?:[?#].*)?$/i.test(element.src || ''),
+        );
+      };
+
+      const currentScript = findScriptElement();
+      if (currentScript?.src) {
+        try {
+          const scriptUrl = new URL(currentScript.src, windowRef?.location?.href);
+          const scriptDir = scriptUrl.href.replace(/[^/]*$/, '');
+          pushCandidate(candidates, seen, new URL(relativePath, scriptDir).href);
+          pushCandidate(candidates, seen, new URL(relativePath, `${scriptUrl.origin}/`).href);
+        } catch (error) {
+          // Continue gathering other fallbacks.
+        }
+      }
+
+      if (documentRef.baseURI) {
+        try {
+          pushCandidate(candidates, seen, new URL(relativePath, documentRef.baseURI).href);
+        } catch (error) {
+          // Ignore invalid base URIs.
+        }
+      }
+    }
+
+    if (windowRef?.location) {
+      try {
+        pushCandidate(candidates, seen, new URL(relativePath, `${windowRef.location.origin}/`).href);
+      } catch (error) {
+        // Fallback to relative resolution.
+      }
+    }
+
+    pushCandidate(candidates, seen, relativePath);
+
+    return candidates;
+  }
+
+  function resolveAssetUrl(relativePath) {
+    const candidates = createAssetUrlCandidates(relativePath);
+    return candidates.length ? candidates[0] : relativePath;
+  }
+
+  const resolver = {
+    normaliseAssetBase,
+    createAssetUrlCandidates,
+    resolveAssetUrl,
+  };
+
+  scope.InfiniteRailsAssetResolver = resolver;
+
+  if (typeof module !== 'undefined' && module.exports) {
+    module.exports = resolver;
+  }
+})();
