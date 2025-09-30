@@ -3740,6 +3740,64 @@
       COMBAT_UTILS_FALLBACK;
     let gridPathfinder = null;
     let zombieIdCounter = 0;
+    let ironGolemIdCounter = 0;
+    const ENTITY_LOG_PREFIX = '[Entity]';
+    const PLAYER_ENTITY_ID = 'player-steve';
+
+    function formatEntityVectorComponent(value) {
+      return Number.isFinite(value) ? value.toFixed(2) : 'n/a';
+    }
+
+    function logEntityAdded({ id, type, gridPosition, scenePosition, visible, note } = {}) {
+      if (typeof console === 'undefined' || typeof console.log !== 'function') return;
+      const parts = [ENTITY_LOG_PREFIX, 'added'];
+      if (type) parts.push(String(type));
+      if (id != null) parts.push(`#${id}`);
+      if (gridPosition) {
+        const gridX = gridPosition.x != null ? gridPosition.x : 'n/a';
+        const gridY = gridPosition.y != null ? gridPosition.y : 'n/a';
+        parts.push(`grid(${gridX},${gridY})`);
+      }
+      if (scenePosition) {
+        const sx = formatEntityVectorComponent(scenePosition.x);
+        const sy = formatEntityVectorComponent(scenePosition.y);
+        const sz = formatEntityVectorComponent(scenePosition.z);
+        parts.push(`scene(${sx},${sy},${sz})`);
+      }
+      if (typeof visible === 'boolean') {
+        parts.push(visible ? 'visible' : 'hidden');
+      }
+      if (note) {
+        parts.push(`- ${note}`);
+      }
+      console.log(parts.join(' '));
+    }
+
+    function verifyPlayerSpawnAtOrigin({ id, scenePosition, visible } = {}) {
+      if (typeof console === 'undefined') return;
+      const isVisible = visible !== false;
+      const atOrigin =
+        scenePosition && Math.abs(scenePosition.x ?? 0) < 0.01 && Math.abs(scenePosition.z ?? 0) < 0.01;
+      if (isVisible && atOrigin) {
+        console.log(
+          `${ENTITY_LOG_PREFIX} Player ${id ?? ''} spawn verified at origin and rendered.`.trim()
+        );
+        return;
+      }
+      const issues = [];
+      if (!atOrigin) {
+        const sx = formatEntityVectorComponent(scenePosition?.x);
+        const sz = formatEntityVectorComponent(scenePosition?.z);
+        issues.push(`position=${sx},${sz}`);
+      }
+      if (!isVisible) {
+        issues.push('not visible');
+      }
+      const detail = issues.length ? issues.join('; ') : 'unknown issue';
+      if (typeof console.warn === 'function') {
+        console.warn(`${ENTITY_LOG_PREFIX} Player ${id ?? ''} spawn verification failed: ${detail}.`);
+      }
+    }
     let hemiLight;
     let sunLight;
     let moonLight;
@@ -12281,6 +12339,28 @@
       attachPlayerKeyLight(playerMesh);
       resetPlayerAnimationState();
       ensurePlayerMeshVisibility();
+      const fallbackScenePosition = {
+        x: placeholder.position.x,
+        y: placeholder.position.y,
+        z: placeholder.position.z,
+      };
+      const fallbackGridPosition = state?.player
+        ? { x: state.player.x, y: state.player.y }
+        : null;
+      const fallbackVisible = placeholder.visible !== false;
+      logEntityAdded({
+        id: PLAYER_ENTITY_ID,
+        type: 'player',
+        gridPosition: fallbackGridPosition,
+        scenePosition: fallbackScenePosition,
+        visible: fallbackVisible,
+        note: 'Fallback avatar active',
+      });
+      verifyPlayerSpawnAtOrigin({
+        id: PLAYER_ENTITY_ID,
+        scenePosition: fallbackScenePosition,
+        visible: fallbackVisible,
+      });
       restartPlayerAnimationActions({ allowInitialization: false });
       playerModelLoading = false;
       announceVisualFallback(
@@ -12500,10 +12580,26 @@
       entityGroup.add(playerMesh);
       playerMeshSessionId = sessionId;
       attachPlayerKeyLight(playerMesh);
-
-      if (typeof console !== 'undefined') {
-        console.log('Steve visible in scene');
-      }
+      const playerScenePosition = {
+        x: playerMesh.position.x,
+        y: playerMesh.position.y,
+        z: playerMesh.position.z,
+      };
+      const playerGridPosition = state?.player ? { x: state.player.x, y: state.player.y } : null;
+      const playerVisible = playerMesh.visible !== false;
+      logEntityAdded({
+        id: PLAYER_ENTITY_ID,
+        type: 'player',
+        gridPosition: playerGridPosition,
+        scenePosition: playerScenePosition,
+        visible: playerVisible,
+        note: 'GLTF avatar loaded',
+      });
+      verifyPlayerSpawnAtOrigin({
+        id: PLAYER_ENTITY_ID,
+        scenePosition: playerScenePosition,
+        visible: playerVisible,
+      });
 
       const hairNode = playerMesh.getObjectByName('Hair') ?? null;
       const fringeNode = playerMesh.getObjectByName('Fringe') ?? null;
@@ -14762,6 +14858,7 @@
       unlockedDimensions: new Set(['origin']),
       simpleSummary: null,
       player: {
+        id: PLAYER_ENTITY_ID,
         x: 8,
         y: 6,
         facing: { x: 0, y: 1 },
@@ -16762,6 +16859,7 @@
       state.zombies = [];
       zombieIdCounter = 0;
       state.ironGolems = [];
+      ironGolemIdCounter = 0;
       refreshGridPathfinder();
       if (state.dayCycle) {
         state.dayCycle.isNight = false;
@@ -17089,12 +17187,10 @@
         { x: -1, y: -1 },
       ];
 
-      const placeGolemAt = (x, y) => {
-        if (state.ironGolems.length >= desiredCount) return true;
-        if (!isWalkable(x, y)) return false;
-        if (x === origin.x && y === origin.y) return false;
-        if (state.ironGolems.some((g) => g.x === x && g.y === y)) return false;
-        state.ironGolems.push({
+      const registerGolem = (x, y, note) => {
+        ironGolemIdCounter += 1;
+        const golem = {
+          id: ironGolemIdCounter,
           x,
           y,
           cooldown: 0,
@@ -17104,7 +17200,25 @@
           pathTargetId: null,
           pathTarget: null,
           repathAt: 0,
+        };
+        state.ironGolems.push(golem);
+        const golemScene = worldToScene(golem.x, golem.y);
+        const golemHeight = tileSurfaceHeight(golem.x, golem.y);
+        logEntityAdded({
+          id: golem.id,
+          type: 'iron-golem',
+          gridPosition: { x: golem.x, y: golem.y },
+          scenePosition: { x: golemScene.x, y: golemHeight, z: golemScene.z },
+          note,
         });
+      };
+
+      const placeGolemAt = (x, y) => {
+        if (state.ironGolems.length >= desiredCount) return true;
+        if (!isWalkable(x, y)) return false;
+        if (x === origin.x && y === origin.y) return false;
+        if (state.ironGolems.some((g) => g.x === x && g.y === y)) return false;
+        registerGolem(x, y);
         return true;
       };
 
@@ -17131,17 +17245,7 @@
       }
 
       if (state.ironGolems.length === 0) {
-        state.ironGolems.push({
-          x: origin.x,
-          y: origin.y,
-          cooldown: 0,
-          facing: { x: 0, y: 1 },
-          attackAnimation: null,
-          path: [],
-          pathTargetId: null,
-          pathTarget: null,
-          repathAt: 0,
-        });
+        registerGolem(origin.x, origin.y, 'Fallback placement');
       }
     }
 
@@ -17380,7 +17484,7 @@
 
       selections.forEach((spawn, index) => {
         zombieIdCounter += 1;
-        state.zombies.push({
+        const zombie = {
           id: zombieIdCounter,
           x: spawn.x,
           y: spawn.y,
@@ -17389,6 +17493,16 @@
           path: [],
           pathTarget: null,
           repathAt: 0,
+        };
+        state.zombies.push(zombie);
+        const zombieScene = worldToScene(zombie.x, zombie.y);
+        const zombieHeight = tileSurfaceHeight(zombie.x, zombie.y);
+        logEntityAdded({
+          id: zombie.id,
+          type: 'zombie',
+          gridPosition: { x: zombie.x, y: zombie.y },
+          scenePosition: { x: zombieScene.x, y: zombieHeight, z: zombieScene.z },
+          note: index === 0 ? 'Zombie wave initiated' : undefined,
         });
         if (index === 0) {
           logEvent('A horde of Minecraft zombies claws onto the rails.');
