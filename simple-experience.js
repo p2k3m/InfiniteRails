@@ -5977,6 +5977,21 @@
       this.updateScoreboardPolling(delta);
     }
 
+    handleRenderLoopError(stage, error) {
+      this.animationFrame = null;
+      this.prevTime = null;
+      if (this.rendererUnavailable) {
+        if (typeof console !== 'undefined' && error) {
+          const label = stage === 'simulation' ? 'updating the world' : 'rendering the scene';
+          console.error(`Render loop error encountered after renderer shutdown while ${label}.`, error);
+        }
+        return;
+      }
+      const label = stage === 'simulation' ? 'updating the world' : 'drawing the scene';
+      const message = `Rendering paused — a fatal error occurred while ${label}. Reload the page to continue your run.`;
+      this.presentRendererFailure(message, { error, stage });
+    }
+
     renderFrame(timestamp) {
       if (this.rendererUnavailable || !this.renderer) {
         this.animationFrame = null;
@@ -6005,11 +6020,21 @@
       }
       const maxSteps = Math.min(3, Math.max(1, Math.floor(this.renderAccumulator / targetInterval)));
       const stepDelta = Math.min(0.05, this.renderAccumulator / maxSteps || 0);
-      for (let i = 0; i < maxSteps; i += 1) {
-        this.stepSimulation(stepDelta);
+      try {
+        for (let i = 0; i < maxSteps; i += 1) {
+          this.stepSimulation(stepDelta);
+        }
+      } catch (error) {
+        this.handleRenderLoopError('simulation', error);
+        return;
       }
       this.renderAccumulator = Math.max(0, this.renderAccumulator - stepDelta * maxSteps);
-      this.renderer.render(this.scene, this.camera);
+      try {
+        this.renderer.render(this.scene, this.camera);
+      } catch (error) {
+        this.handleRenderLoopError('render', error);
+        return;
+      }
       this.scheduleNextFrame();
     }
 
