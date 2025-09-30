@@ -1,10 +1,18 @@
 (function () {
-  function normaliseAssetBase(base) {
+  const globalScope =
+    (typeof window !== 'undefined' && window) ||
+    (typeof globalThis !== 'undefined' && globalThis) ||
+    (typeof global !== 'undefined' && global) ||
+    {};
+
+  const externalAssetResolver = globalScope.InfiniteRailsAssetResolver || null;
+
+  function fallbackNormaliseAssetBase(base) {
     if (!base || typeof base !== 'string') {
       return null;
     }
     try {
-      const resolved = new URL(base, typeof window !== 'undefined' ? window.location?.href : undefined);
+      const resolved = new URL(base, globalScope?.location?.href ?? undefined);
       if (!resolved) return null;
       let href = resolved.href;
       if (!href.endsWith('/')) {
@@ -16,7 +24,10 @@
     }
   }
 
-  function createAssetUrlCandidates(relativePath) {
+  function fallbackCreateAssetUrlCandidates(relativePath, normaliseBaseFn) {
+    if (!relativePath || typeof relativePath !== 'string') {
+      return [];
+    }
     const candidates = [];
     const seen = new Set();
     const pushCandidate = (value) => {
@@ -27,52 +38,56 @@
       candidates.push(value);
     };
 
-    if (typeof window !== 'undefined') {
-      const configBase = normaliseAssetBase(window.APP_CONFIG?.assetBaseUrl ?? null);
-      if (configBase) {
-        try {
-          pushCandidate(new URL(relativePath, configBase).href);
-        } catch (error) {
-          // Ignore invalid config values and continue exploring fallbacks.
-        }
+    const configBase = normaliseBaseFn(globalScope.APP_CONFIG?.assetBaseUrl ?? null);
+    if (configBase) {
+      try {
+        pushCandidate(new URL(relativePath, configBase).href);
+      } catch (error) {
+        // Ignore invalid config values and continue exploring fallbacks.
       }
     }
 
-    if (typeof document !== 'undefined') {
+    const documentRef = typeof document !== 'undefined' ? document : globalScope.document || null;
+    const windowLocation =
+      typeof window !== 'undefined' ? window.location : globalScope.location || null;
+
+    if (documentRef) {
       const findScriptElement = () => {
-        if (document.currentScript) {
-          return document.currentScript;
+        if (documentRef.currentScript) {
+          return documentRef.currentScript;
         }
-        const scripts = Array.from(document.getElementsByTagName('script'));
+        const scripts = Array.from(documentRef.getElementsByTagName('script'));
         return scripts.find((element) =>
-          typeof element.src === 'string' && /\bscript\.js(?:[?#].*)?$/i.test(element.src || '')
+          typeof element.src === 'string' && /\bscript\.js(?:[?#].*)?$/i.test(element.src || ''),
         );
       };
 
       const currentScript = findScriptElement();
       if (currentScript?.src) {
         try {
-          const scriptUrl = new URL(currentScript.src, window?.location?.href);
+          const scriptUrl = new URL(currentScript.src, windowLocation?.href ?? undefined);
           const scriptDir = scriptUrl.href.replace(/[^/]*$/, '');
           pushCandidate(new URL(relativePath, scriptDir).href);
-          pushCandidate(new URL(relativePath, `${scriptUrl.origin}/`).href);
+          if (scriptUrl.origin) {
+            pushCandidate(new URL(relativePath, `${scriptUrl.origin}/`).href);
+          }
         } catch (error) {
           // Swallow and continue gathering fallbacks.
         }
       }
 
-      if (document.baseURI) {
+      if (documentRef.baseURI) {
         try {
-          pushCandidate(new URL(relativePath, document.baseURI).href);
+          pushCandidate(new URL(relativePath, documentRef.baseURI).href);
         } catch (error) {
           // Ignore invalid base URIs.
         }
       }
     }
 
-    if (typeof window !== 'undefined' && window.location) {
+    if (windowLocation?.origin) {
       try {
-        pushCandidate(new URL(relativePath, `${window.location.origin}/`).href);
+        pushCandidate(new URL(relativePath, `${windowLocation.origin}/`).href);
       } catch (error) {
         // Continue to relative fallbacks below.
       }
@@ -81,6 +96,30 @@
     pushCandidate(relativePath);
 
     return candidates;
+  }
+
+  function fallbackResolveAssetUrl(relativePath, createCandidatesFn) {
+    const candidates = createCandidatesFn(relativePath);
+    return candidates.length ? candidates[0] : relativePath;
+  }
+
+  const normaliseAssetBase =
+    externalAssetResolver?.normaliseAssetBase ?? fallbackNormaliseAssetBase;
+
+  const createAssetUrlCandidates =
+    externalAssetResolver?.createAssetUrlCandidates ??
+    ((relativePath) => fallbackCreateAssetUrlCandidates(relativePath, normaliseAssetBase));
+
+  const resolveAssetUrl =
+    externalAssetResolver?.resolveAssetUrl ??
+    ((relativePath) => fallbackResolveAssetUrl(relativePath, createAssetUrlCandidates));
+
+  if (!externalAssetResolver) {
+    globalScope.InfiniteRailsAssetResolver = {
+      normaliseAssetBase,
+      createAssetUrlCandidates,
+      resolveAssetUrl,
+    };
   }
 
   const THREE_CDN_URLS = [
@@ -95,15 +134,18 @@
     'https://unpkg.com/three@0.161.0/examples/js/loaders/GLTFLoader.js',
     'https://cdn.jsdelivr.net/npm/three@0.161.0/examples/js/loaders/GLTFLoader.js',
   ];
+  const MODEL_ASSET_URLS = {
+    arm: resolveAssetUrl('assets/arm.gltf'),
+    steve: resolveAssetUrl('assets/steve.gltf'),
+    zombie: resolveAssetUrl('assets/zombie.gltf'),
+    ironGolem: resolveAssetUrl('assets/iron_golem.gltf'),
+  };
   let gltfLoaderPromise = null;
   let threeLoaderPromise = null;
   let gltfLoaderInstancePromise = null;
 
   function getGlobalScope() {
-    if (typeof window !== 'undefined') return window;
-    if (typeof globalThis !== 'undefined') return globalThis;
-    if (typeof global !== 'undefined') return global;
-    return {};
+    return globalScope;
   }
 
   function createScoreboardUtilsFallback() {
@@ -2653,7 +2695,7 @@
 
     const AUDIO_SETTINGS_KEY = 'infinite-dimension-audio-settings';
     const ACCESSIBILITY_SETTINGS_KEY = 'infinite-dimension-accessibility';
-    const AUDIO_SAMPLE_URL = 'assets/audio-samples.json';
+    const AUDIO_SAMPLE_URL = resolveAssetUrl('assets/audio-samples.json');
     const CRUNCH_RESOURCES = new Set(['wood', 'tar']);
     const STATIC_EFFECT_SOURCES = {
       footstep: {
@@ -6699,7 +6741,7 @@
           .then((loader) =>
             new Promise((resolve) => {
               loader.load(
-                'assets/arm.gltf',
+                MODEL_ASSET_URLS.arm,
                 (gltf) => {
                   const template = gltf.scene || gltf.scenes?.[0] || createFallbackHand();
                   previewHandTemplate = template;
@@ -12381,7 +12423,7 @@
       getGltfLoaderInstance()
         .then((loader) => {
           loader.load(
-            'assets/steve.gltf',
+            MODEL_ASSET_URLS.steve,
             (gltf) => {
               handlePlayerGltfLoad(gltf, loadSessionId);
             },
@@ -12597,7 +12639,7 @@
               resolve(template);
             };
             loader.load(
-              'assets/zombie.gltf',
+              MODEL_ASSET_URLS.zombie,
               (gltf) => {
                 const zombieScene = gltf.scene || gltf.scenes?.[0];
                 if (!zombieScene) {
@@ -12865,7 +12907,7 @@
               resolve(template);
             };
             loader.load(
-              'assets/iron_golem.gltf',
+              MODEL_ASSET_URLS.ironGolem,
               (gltf) => {
                 const golemScene = gltf.scene || gltf.scenes?.[0];
                 if (!golemScene) {

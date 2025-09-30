@@ -294,6 +294,36 @@
     'https://cdn.jsdelivr.net/npm/three@0.161.0/examples/js/loaders/GLTFLoader.js',
   ];
 
+  const assetResolver =
+    (typeof window !== 'undefined' && window.InfiniteRailsAssetResolver) ||
+    (typeof globalThis !== 'undefined' && globalThis.InfiniteRailsAssetResolver) ||
+    null;
+
+  const createAssetUrlCandidates =
+    assetResolver?.createAssetUrlCandidates ||
+    ((relativePath) => {
+      if (!relativePath || typeof relativePath !== 'string') {
+        return [];
+      }
+      try {
+        const base =
+          (typeof document !== 'undefined' && document.baseURI) ||
+          (typeof window !== 'undefined' && window.location?.href) ||
+          undefined;
+        const resolved = new URL(relativePath, base);
+        return [resolved.href, relativePath];
+      } catch (error) {
+        return [relativePath];
+      }
+    });
+
+  const resolveAssetUrl =
+    assetResolver?.resolveAssetUrl ||
+    ((relativePath) => {
+      const candidates = createAssetUrlCandidates(relativePath);
+      return candidates.length ? candidates[0] : relativePath;
+    });
+
   const RECIPE_UNLOCK_STORAGE_KEY = 'infinite-rails-recipe-unlocks';
 
   const PORTAL_MECHANICS =
@@ -304,10 +334,10 @@
   const IDENTITY_STORAGE_KEY = 'infinite-rails-simple-identity';
 
   const MODEL_URLS = {
-    arm: 'assets/arm.gltf',
-    steve: 'assets/steve.gltf',
-    zombie: 'assets/zombie.gltf',
-    golem: 'assets/iron_golem.gltf',
+    arm: resolveAssetUrl('assets/arm.gltf'),
+    steve: resolveAssetUrl('assets/steve.gltf'),
+    zombie: resolveAssetUrl('assets/zombie.gltf'),
+    golem: resolveAssetUrl('assets/iron_golem.gltf'),
   };
 
   let cachedGltfLoaderPromise = null;
@@ -3443,7 +3473,7 @@
 
     loadModel(key, overrideUrl) {
       const THREE = this.THREE;
-      const url = overrideUrl || MODEL_URLS[key];
+      const url = overrideUrl ? resolveAssetUrl(overrideUrl) : MODEL_URLS[key];
       if (!url) {
         return Promise.reject(new Error(`No model URL configured for key "${key}".`));
       }
