@@ -16832,27 +16832,37 @@
 
     const TARGET_FRAME_TIME = 1 / 60;
     let frameAccumulator = 0;
+    let loopErrorNotified = false;
 
     function loop() {
-      frameCounter += 1;
-      const delta = Math.min(renderClock.getDelta(), 0.12);
-      frameAccumulator += delta;
-      frameAccumulator = Math.min(frameAccumulator, TARGET_FRAME_TIME * 5);
-      while (frameAccumulator >= TARGET_FRAME_TIME) {
-        if (state.isRunning) {
-          update(TARGET_FRAME_TIME);
-        } else {
-          state.elapsed += TARGET_FRAME_TIME;
-          updateLighting(TARGET_FRAME_TIME);
-        }
-        frameAccumulator -= TARGET_FRAME_TIME;
-      }
-      if (state.isRunning) {
-        draw();
-      } else if (renderer && scene && camera && !previewState.active) {
-        renderer.render(scene, camera);
-      }
       requestAnimationFrame(loop);
+      try {
+        frameCounter += 1;
+        const delta = Math.min(renderClock.getDelta(), 0.12);
+        frameAccumulator += delta;
+        frameAccumulator = Math.min(frameAccumulator, TARGET_FRAME_TIME * 5);
+        while (frameAccumulator >= TARGET_FRAME_TIME) {
+          if (state.isRunning) {
+            update(TARGET_FRAME_TIME);
+          } else {
+            state.elapsed += TARGET_FRAME_TIME;
+            updateLighting(TARGET_FRAME_TIME);
+          }
+          frameAccumulator -= TARGET_FRAME_TIME;
+        }
+        if (state.isRunning) {
+          draw();
+        } else if (renderer && scene && camera && !previewState.active) {
+          renderer.render(scene, camera);
+        }
+      } catch (loopError) {
+        if (!loopErrorNotified) {
+          loopErrorNotified = true;
+          console.error('Game loop encountered an error but will continue running.', loopError);
+        } else {
+          console.error('Game loop error', loopError);
+        }
+      }
     }
 
     function update(delta) {
