@@ -1256,14 +1256,14 @@
       if (explicitMode === 'simple') return true;
       if (params.get('advanced') === '1') return false;
       if (params.get('simple') === '1') return true;
-      if (window.APP_CONFIG?.forceAdvanced) return false;
+      const simpleAvailable = Boolean(window.SimpleExperience?.create);
+      const advancedAvailable = Boolean(window.APP_CONFIG?.enableAdvancedExperience);
       if (window.APP_CONFIG?.forceSimpleMode) return true;
+      if (window.APP_CONFIG?.forceAdvanced) return false;
       if (window.APP_CONFIG?.defaultMode) {
         if (window.APP_CONFIG.defaultMode === 'advanced') return false;
         if (window.APP_CONFIG.defaultMode === 'simple') return true;
       }
-      const simpleAvailable = Boolean(window.SimpleExperience?.create);
-      const advancedAvailable = Boolean(window.APP_CONFIG?.enableAdvancedExperience);
       if (!simpleAvailable) {
         return false;
       }
@@ -1960,9 +1960,38 @@
       renderGoogleButtons();
     }
 
+    function updateRendererModeMetadata(mode) {
+      const normalizedMode = mode === 'simple' ? 'simple' : 'advanced';
+      if (typeof document !== 'undefined') {
+        if (document.documentElement) {
+          document.documentElement.setAttribute('data-renderer-mode', normalizedMode);
+        }
+        if (document.body) {
+          document.body.setAttribute('data-renderer-mode', normalizedMode);
+        }
+      }
+      const scope =
+        (typeof window !== 'undefined' && window) ||
+        (typeof globalThis !== 'undefined' && globalThis) ||
+        null;
+      if (scope) {
+        const store =
+          scope.InfiniteRails && typeof scope.InfiniteRails === 'object'
+            ? scope.InfiniteRails
+            : {};
+        if (!scope.InfiniteRails || scope.InfiniteRails !== store) {
+          scope.InfiniteRails = store;
+        }
+        store.rendererMode = normalizedMode;
+        scope.__INFINITE_RAILS_RENDERER_MODE__ = normalizedMode;
+      }
+    }
+
     const simpleModeEnabled = shouldStartSimpleMode();
+    updateRendererModeMetadata('advanced');
     let simpleExperience = null;
     if (simpleModeEnabled && window.SimpleExperience?.create) {
+      updateRendererModeMetadata('simple');
       try {
         simpleExperience = window.SimpleExperience.create({
           canvas,
@@ -2070,6 +2099,7 @@
         launchSimple();
         if (!startFailed && simpleExperience.started) {
           setupSimpleExperienceIntegrations(simpleExperience);
+          updateRendererModeMetadata('simple');
           return;
         }
         console.warn('Simple experience could not start — continuing with advanced mode.');
@@ -2077,6 +2107,7 @@
       if (!simpleExperience) {
         console.warn('Simple experience unavailable — reverting to advanced mode.');
       }
+      updateRendererModeMetadata('advanced');
     }
     let previousLeaderboardSnapshot = new Map();
     let leaderboardHasRenderedOnce = false;
