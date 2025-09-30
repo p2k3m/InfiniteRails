@@ -15,6 +15,8 @@
   const POINTER_SENSITIVITY = 0.0022;
   const POINTER_TUTORIAL_MESSAGE =
     'Click the viewport to capture your mouse, then use your movement keys to move and left-click to mine.';
+  const POINTER_LOCK_FALLBACK_MESSAGE =
+    'Pointer lock is blocked by your browser. Click and drag to look around.';
   const POINTER_LOCK_CHANGE_EVENTS = ['pointerlockchange', 'mozpointerlockchange', 'webkitpointerlockchange'];
   const POINTER_LOCK_ERROR_EVENTS = ['pointerlockerror', 'mozpointerlockerror', 'webkitpointerlockerror'];
   const FALLBACK_HEALTH = 10;
@@ -747,6 +749,11 @@
       this.pointerHintHideTimer = null;
       this.pointerHintAutoDismissTimer = null;
       this.pointerHintLastMessage = '';
+      this.pointerLockFallbackActive = false;
+      this.pointerLockWarningShown = false;
+      this.pointerFallbackDragging = false;
+      this.pointerFallbackLast = null;
+      this.pointerFallbackButton = null;
       this.lastHintMessage = '';
       this.craftingModal = this.ui.craftingModal || null;
       this.craftSequenceEl = this.ui.craftSequenceEl || null;
@@ -995,6 +1002,7 @@
       this.audio = this.createAudioController();
       this.onPointerLockChange = this.handlePointerLockChange.bind(this);
       this.onPointerLockError = this.handlePointerLockError.bind(this);
+      this.onMouseUp = this.handleMouseUp.bind(this);
       this.onMouseMove = this.handleMouseMove.bind(this);
       this.onKeyDown = this.handleKeyDown.bind(this);
       this.onKeyUp = this.handleKeyUp.bind(this);
@@ -1274,12 +1282,19 @@
         this.hidePointerHint(true);
         return;
       }
+      const override = typeof message === 'string' ? message : null;
+      if (this.pointerLockFallbackActive) {
+        const fallbackMessage = override || this.getPointerLockFallbackMessage();
+        if (!this.pointerHintActive || this.pointerHintLastMessage !== fallbackMessage) {
+          this.showPointerHint(fallbackMessage);
+        }
+        return;
+      }
       if (this.getPointerLockElement() === this.canvas) {
         this.hidePointerHint();
         this.pointerHintLastMessage = '';
         return;
       }
-      const override = typeof message === 'string' ? message : null;
       if (!override && this.pointerHintActive && this.pointerHintLastMessage) {
         // Avoid re-triggering the animation if the hint is already visible with the same text.
         return;
@@ -1317,6 +1332,67 @@
       }
       this.updatePointerHintForInputMode(this.getPointerTutorialMessage());
       this.schedulePointerHintAutoHide(5);
+    }
+
+    enablePointerLockFallback(reason = 'unavailable', error = null) {
+      const reasonDetail = typeof reason === 'string' && reason ? ` (${reason})` : '';
+      if (this.pointerLockFallbackActive) {
+        if (!this.pointerLockWarningShown) {
+          this.pointerLockWarningShown = true;
+          if (typeof console !== 'undefined') {
+            if (error) {
+              console.warn(
+                `Pointer lock unavailable${reasonDetail}; continuing with drag-to-look fallback.`,
+                error
+              );
+            } else {
+              console.warn(
+                `Pointer lock unavailable${reasonDetail}; continuing with drag-to-look fallback.`
+              );
+            }
+          }
+        }
+        this.updatePointerHintForInputMode(this.getPointerLockFallbackMessage());
+        this.schedulePointerHintAutoHide(8);
+        return;
+      }
+      this.pointerLockFallbackActive = true;
+      this.pointerLocked = false;
+      this.endPointerFallbackDrag();
+      if (!this.pointerLockWarningShown && typeof console !== 'undefined') {
+        if (error) {
+          console.warn(
+            `Pointer lock unavailable${reasonDetail}; switching to drag-to-look fallback.`,
+            error
+          );
+        } else {
+          console.warn(
+            `Pointer lock unavailable${reasonDetail}; switching to drag-to-look fallback.`
+          );
+        }
+        this.pointerLockWarningShown = true;
+      }
+      this.emitGameEvent('pointer-lock-fallback', { reason });
+      this.updatePointerHintForInputMode(this.getPointerLockFallbackMessage());
+      this.schedulePointerHintAutoHide(8);
+    }
+
+    beginPointerFallbackDrag(event) {
+      if (!this.pointerLockFallbackActive) {
+        return;
+      }
+      if (event?.button !== 0 && event?.button !== 2 && event?.button !== 1) {
+        return;
+      }
+      this.pointerFallbackDragging = true;
+      this.pointerFallbackButton = event?.button ?? 0;
+      this.pointerFallbackLast = { x: event?.clientX ?? 0, y: event?.clientY ?? 0 };
+    }
+
+    endPointerFallbackDrag() {
+      this.pointerFallbackDragging = false;
+      this.pointerFallbackLast = null;
+      this.pointerFallbackButton = null;
     }
 
     initializeScoreboardUi() {
@@ -5239,6 +5315,10 @@
       return POINTER_TUTORIAL_MESSAGE;
     }
 
+    getPointerLockFallbackMessage() {
+      return POINTER_LOCK_FALLBACK_MESSAGE;
+    }
+
     applyKeyBinding(action, keys) {
       if (typeof action !== 'string' || !Array.isArray(keys)) {
         return false;
@@ -5339,6 +5419,7 @@
       document.addEventListener('keyup', this.onKeyUp);
       document.addEventListener('mousemove', this.onMouseMove);
       document.addEventListener('mousedown', this.onMouseDown);
+      document.addEventListener('mouseup', this.onMouseUp);
       window.addEventListener('resize', this.onResize);
       window.addEventListener('beforeunload', this.onBeforeUnload);
       this.canvas.addEventListener('wheel', this.onCanvasWheel, { passive: false });
@@ -5410,6 +5491,7 @@
       document.removeEventListener('keyup', this.onKeyUp);
       document.removeEventListener('mousemove', this.onMouseMove);
       document.removeEventListener('mousedown', this.onMouseDown);
+      document.removeEventListener('mouseup', this.onMouseUp);
       window.removeEventListener('resize', this.onResize);
       window.removeEventListener('beforeunload', this.onBeforeUnload);
       this.canvas.removeEventListener('wheel', this.onCanvasWheel);
@@ -5480,22 +5562,27 @@
     handlePointerLockChange() {
       this.pointerLocked = this.getPointerLockElement() === this.canvas;
       if (this.pointerLocked) {
+        this.pointerLockFallbackActive = false;
+        this.pointerLockWarningShown = false;
+        this.endPointerFallbackDrag();
         this.markInteraction();
         this.cancelPointerHintAutoHide();
         this.hidePointerHint(true);
         return;
       }
       this.markInteraction();
-      this.showDesktopPointerTutorialHint();
+      if (this.pointerLockFallbackActive) {
+        this.updatePointerHintForInputMode(this.getPointerLockFallbackMessage());
+        this.schedulePointerHintAutoHide(8);
+      } else {
+        this.showDesktopPointerTutorialHint();
+      }
     }
 
-    handlePointerLockError() {
+    handlePointerLockError(event) {
       this.pointerLocked = false;
       this.cancelPointerHintAutoHide();
-      this.updatePointerHintForInputMode(
-        'Pointer lock was blocked. Allow mouse capture in your browser settings.'
-      );
-      this.schedulePointerHintAutoHide(6);
+      this.enablePointerLockFallback('error', event?.error || event || null);
     }
 
     attemptPointerLock() {
@@ -5507,25 +5594,30 @@
         this.canvas.mozRequestPointerLock ||
         this.canvas.webkitRequestPointerLock;
       if (typeof requestPointerLock !== 'function') {
+        this.enablePointerLockFallback('unsupported');
         return;
       }
+      const requestWithoutOptions = (initialError = null) => {
+        try {
+          const fallbackResult = requestPointerLock.call(this.canvas);
+          if (fallbackResult && typeof fallbackResult.catch === 'function') {
+            fallbackResult.catch((fallbackError) => {
+              this.enablePointerLockFallback('request-rejected', fallbackError || initialError);
+            });
+          }
+        } catch (fallbackError) {
+          this.enablePointerLockFallback('request-error', fallbackError || initialError);
+        }
+      };
       try {
         const result = requestPointerLock.call(this.canvas, { unadjustedMovement: true });
         if (result && typeof result.catch === 'function') {
-          result.catch(() => {
-            try {
-              requestPointerLock.call(this.canvas);
-            } catch (fallbackError) {
-              console.debug('Pointer lock fallback failed', fallbackError);
-            }
+          result.catch((error) => {
+            requestWithoutOptions(error);
           });
         }
       } catch (error) {
-        try {
-          requestPointerLock.call(this.canvas);
-        } catch (fallbackError) {
-          console.debug('Pointer lock request failed', fallbackError);
-        }
+        requestWithoutOptions(error);
       }
     }
 
@@ -5553,12 +5645,74 @@
     }
 
     handleMouseMove(event) {
-      if (!this.pointerLocked) return;
+      if (this.pointerLocked) {
+        this.markInteraction();
+        this.yaw -= event.movementX * POINTER_SENSITIVITY;
+        this.pitch -= event.movementY * POINTER_SENSITIVITY;
+        const maxPitch = Math.PI / 2 - 0.01;
+        this.pitch = Math.max(-maxPitch, Math.min(maxPitch, this.pitch));
+        return;
+      }
+      if (!this.pointerLockFallbackActive) {
+        return;
+      }
+      if (!this.pointerFallbackDragging) {
+        if (event.buttons === 0) {
+          return;
+        }
+        this.pointerFallbackDragging = true;
+        if (typeof event.buttons === 'number') {
+          if (event.buttons & 1) {
+            this.pointerFallbackButton = 0;
+          } else if (event.buttons & 2) {
+            this.pointerFallbackButton = 2;
+          } else if (event.buttons & 4) {
+            this.pointerFallbackButton = 1;
+          } else {
+            this.pointerFallbackButton = null;
+          }
+        } else {
+          this.pointerFallbackButton = this.pointerFallbackButton ?? 0;
+        }
+        this.pointerFallbackLast = { x: event.clientX ?? 0, y: event.clientY ?? 0 };
+      }
+      if (event.buttons === 0) {
+        this.endPointerFallbackDrag();
+        return;
+      }
       this.markInteraction();
-      this.yaw -= event.movementX * POINTER_SENSITIVITY;
-      this.pitch -= event.movementY * POINTER_SENSITIVITY;
+      if (!this.pointerFallbackLast) {
+        this.pointerFallbackLast = { x: event.clientX ?? 0, y: event.clientY ?? 0 };
+      }
+      const movementX = Number.isFinite(event.movementX)
+        ? event.movementX
+        : (event.clientX ?? 0) - this.pointerFallbackLast.x;
+      const movementY = Number.isFinite(event.movementY)
+        ? event.movementY
+        : (event.clientY ?? 0) - this.pointerFallbackLast.y;
+      this.pointerFallbackLast = { x: event.clientX ?? 0, y: event.clientY ?? 0 };
+      this.yaw -= movementX * POINTER_SENSITIVITY;
+      this.pitch -= movementY * POINTER_SENSITIVITY;
       const maxPitch = Math.PI / 2 - 0.01;
       this.pitch = Math.max(-maxPitch, Math.min(maxPitch, this.pitch));
+      if (event.preventDefault) {
+        event.preventDefault();
+      }
+    }
+
+    handleMouseUp(event) {
+      this.markInteraction();
+      if (!this.pointerLockFallbackActive || !this.pointerFallbackDragging) {
+        return;
+      }
+      if (
+        typeof event?.button === 'number' &&
+        this.pointerFallbackButton !== null &&
+        event.button !== this.pointerFallbackButton
+      ) {
+        return;
+      }
+      this.endPointerFallbackDrag();
     }
 
     handleKeyDown(event) {
@@ -5726,6 +5880,10 @@
             this.canvas.focus();
           }
         }
+      }
+
+      if (!alreadyLocked && this.pointerLockFallbackActive) {
+        this.beginPointerFallbackDrag(event);
       }
 
       if (isPrimary) {
