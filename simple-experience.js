@@ -707,6 +707,19 @@
       this.renderer = null;
       this.sunLight = null;
       this.hemiLight = null;
+      this.moonLight = null;
+      this.ambientLight = null;
+      this.daySkyColor = new THREE.Color('#87ceeb');
+      this.nightSkyColor = new THREE.Color('#0b1738');
+      this.duskSkyColor = new THREE.Color('#ff9a64');
+      this.dayFogColor = new THREE.Color('#87ceeb');
+      this.nightFogColor = new THREE.Color('#0f182f');
+      this.daySunColor = new THREE.Color('#fff4cc');
+      this.nightMoonColor = new THREE.Color('#8ea2ff');
+      this.dayGroundColor = new THREE.Color('#3e4e2a');
+      this.nightGroundColor = new THREE.Color('#101522');
+      this.tmpColorA = new THREE.Color();
+      this.tmpColorB = new THREE.Color();
       this.terrainGroup = null;
       this.railsGroup = null;
       this.portalGroup = null;
@@ -2043,8 +2056,14 @@
       this.scene.add(this.sunLight);
       this.scene.add(this.sunLight.target);
 
-      const ambient = new THREE.AmbientLight(0xffffff, 0.18);
-      this.scene.add(ambient);
+      this.moonLight = new THREE.DirectionalLight(0x8ea2ff, 0.4);
+      this.moonLight.position.set(-32, 18, -20);
+      this.moonLight.castShadow = false;
+      this.scene.add(this.moonLight);
+      this.scene.add(this.moonLight.target);
+
+      this.ambientLight = new THREE.AmbientLight(0xffffff, 0.18);
+      this.scene.add(this.ambientLight);
 
       this.terrainGroup = new THREE.Group();
       this.railsGroup = new THREE.Group();
@@ -3863,6 +3882,10 @@
       if (palette?.dirt) this.materials.dirt.color.set(palette.dirt);
       if (palette?.stone) this.materials.stone.color.set(palette.stone);
       if (palette?.rails) this.materials.rails.color.set(palette.rails);
+      if (palette?.dirt) {
+        this.dayGroundColor.set(palette.dirt);
+        this.nightGroundColor.copy(this.dayGroundColor).offsetHSL(-0.05, -0.12, -0.35);
+      }
       if (palette?.rails) {
         this.materials.portal.uniforms.uColorA.value.set(palette.rails);
       }
@@ -3887,12 +3910,27 @@
       if (this.scene?.fog && theme.fog) {
         this.scene.fog.color.set(theme.fog);
       }
+      if (theme.sky) {
+        this.daySkyColor.set(theme.sky);
+        this.nightSkyColor.copy(this.daySkyColor).offsetHSL(-0.02, -0.12, -0.45);
+        this.duskSkyColor.copy(this.daySkyColor).offsetHSL(0.06, 0.08, -0.18);
+      }
+      if (theme.fog) {
+        this.dayFogColor.set(theme.fog);
+        this.nightFogColor.copy(this.dayFogColor).offsetHSL(-0.04, -0.1, -0.32);
+      }
       if (this.hemiLight && theme.hemi) {
         this.hemiLight.color.set(theme.hemi);
       }
       if (this.sunLight && theme.sun) {
         this.sunLight.color.set(theme.sun);
+        this.daySunColor.set(theme.sun);
       }
+      if (this.moonLight) {
+        this.nightMoonColor.copy(this.daySkyColor).offsetHSL(0.12, -0.05, -0.35);
+        this.moonLight.color.copy(this.nightMoonColor);
+      }
+      this.updateDayNightCycle();
       this.updateDimensionInfoPanel();
       console.log(`Dimension online: ${theme.name}`);
     }
@@ -6360,26 +6398,97 @@
     }
 
     updateDayNightCycle() {
-      if (!this.sunLight || !this.hemiLight) return;
+      const THREE = this.THREE;
+      if (!this.sunLight || !this.hemiLight || !THREE?.MathUtils) return;
       const cycle = (this.elapsed % DAY_LENGTH_SECONDS) / DAY_LENGTH_SECONDS;
-      const angle = cycle * Math.PI * 2;
-      const intensity = Math.max(0.12, Math.sin(angle) * 0.5 + 0.55);
-      this.daylightIntensity = intensity;
-      this.sunLight.position.set(Math.cos(angle) * 60, Math.sin(angle) * 45, Math.sin(angle * 0.7) * 40);
-      this.sunLight.intensity = 0.6 + intensity * 0.8;
-      this.hemiLight.intensity = 0.6 + intensity * 0.4;
-      if (this.scene?.fog) {
-        this.scene.fog.color.setHSL(0.55, 0.5, 0.7 - intensity * 0.2);
+      const sunAngle = cycle * Math.PI * 2;
+      const sunElevation = Math.sin(sunAngle);
+      const dayStrength = THREE.MathUtils.clamp((sunElevation + 1) / 2, 0, 1);
+      this.daylightIntensity = dayStrength;
+
+      const sunRadius = 70;
+      const sunHeight = 12 + Math.max(0, sunElevation * 48);
+      this.sunLight.position.set(
+        Math.cos(sunAngle) * sunRadius,
+        sunHeight,
+        Math.sin(sunAngle) * sunRadius * 0.7,
+      );
+      this.sunLight.target.position.set(0, 0, 0);
+      this.sunLight.target.updateMatrixWorld();
+      this.sunLight.intensity = 0.35 + dayStrength * 1.1;
+      const warmFactor = THREE.MathUtils.clamp(1 - Math.abs(sunElevation) * 1.1, 0, 1);
+      this.tmpColorA.copy(this.daySunColor);
+      this.tmpColorB.copy(this.duskSkyColor);
+      this.tmpColorA.lerp(this.tmpColorB, warmFactor * 0.5);
+      this.tmpColorA.offsetHSL(0, -0.05 * (1 - dayStrength), (dayStrength - 0.5) * 0.2);
+      this.sunLight.color.copy(this.tmpColorA);
+
+      const moonAngle = sunAngle + Math.PI;
+      const moonElevation = Math.sin(moonAngle);
+      const nightStrength = THREE.MathUtils.clamp((moonElevation + 1) / 2, 0, 1);
+      if (this.moonLight) {
+        const moonRadius = 70;
+        const moonHeight = 10 + Math.max(0, moonElevation * 38);
+        this.moonLight.position.set(
+          Math.cos(moonAngle) * moonRadius,
+          moonHeight,
+          Math.sin(moonAngle) * moonRadius * 0.7,
+        );
+        this.moonLight.target.position.set(0, 0, 0);
+        this.moonLight.target.updateMatrixWorld();
+        this.moonLight.intensity = 0.12 + nightStrength * 0.45;
+        this.tmpColorA.copy(this.nightMoonColor);
+        this.tmpColorB.copy(this.duskSkyColor);
+        this.tmpColorA.lerp(this.tmpColorB, Math.max(0, 0.6 - nightStrength) * 0.35);
+        this.moonLight.color.copy(this.tmpColorA);
       }
+
+      if (this.ambientLight) {
+        const ambientStrength = 0.18 + dayStrength * 0.36;
+        this.ambientLight.intensity = ambientStrength;
+        this.tmpColorA
+          .copy(this.nightSkyColor)
+          .lerp(this.daySkyColor, Math.min(1, dayStrength * 0.85 + 0.15));
+        this.ambientLight.color.copy(this.tmpColorA);
+      }
+
+      this.hemiLight.intensity = 0.42 + dayStrength * 0.58;
+      this.hemiLight.color.lerpColors(this.nightSkyColor, this.daySkyColor, dayStrength);
+      if (this.hemiLight.groundColor) {
+        this.tmpColorB.copy(this.nightGroundColor).lerp(this.dayGroundColor, dayStrength);
+        this.hemiLight.groundColor.copy(this.tmpColorB);
+      }
+
+      const horizonGlow = THREE.MathUtils.clamp(1 - Math.abs(sunElevation) * 1.6, 0, 1);
+      const fogBlend = Math.min(1, dayStrength * 0.85 + 0.15);
+      this.tmpColorA.copy(this.nightSkyColor).lerp(this.daySkyColor, dayStrength);
+      if (horizonGlow > 0) {
+        this.tmpColorB.copy(this.duskSkyColor);
+        this.tmpColorA.lerp(this.tmpColorB, horizonGlow * 0.6);
+      }
+      if (this.scene?.background) {
+        this.scene.background.copy(this.tmpColorA);
+      }
+
+      if (this.scene?.fog) {
+        this.tmpColorB.copy(this.nightFogColor).lerp(this.dayFogColor, fogBlend);
+        if (horizonGlow > 0.2) {
+          this.tmpColorB.lerp(this.duskSkyColor, horizonGlow * 0.25);
+        }
+        this.scene.fog.color.copy(this.tmpColorB);
+      }
+
       if (this.ui?.timeEl) {
-        const daylight = Math.round(Math.min(1, Math.max(0, intensity)) * 100);
+        const daylight = Math.round(dayStrength * 100);
         let label = 'Daylight';
-        if (intensity < 0.28) {
+        if (dayStrength < 0.16) {
+          label = 'Midnight';
+        } else if (dayStrength < 0.32) {
           label = 'Nightfall';
-        } else if (intensity < 0.45) {
-          label = 'Dusk';
-        } else if (intensity > 0.85) {
+        } else if (dayStrength < 0.52) {
           label = 'Dawn';
+        } else if (dayStrength > 0.82) {
+          label = 'High Sun';
         }
         this.ui.timeEl.textContent = `${label} ${daylight}%`;
       }
