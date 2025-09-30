@@ -6742,18 +6742,32 @@
             new Promise((resolve) => {
               loader.load(
                 MODEL_ASSET_URLS.arm,
-                (gltf) => {
-                  const template = gltf.scene || gltf.scenes?.[0] || createFallbackHand();
-                  previewHandTemplate = template;
-                  resolve(template);
-                },
+                  (gltf) => {
+                    const template = gltf.scene || gltf.scenes?.[0] || null;
+                    if (!template) {
+                      console.error('Arm model did not include a scene.');
+                      const fallback = createFallbackHand();
+                      previewHandTemplate = fallback;
+                      resolve(fallback);
+                      return;
+                    }
+                    previewHandTemplate = template;
+                    resolve(template);
+                  },
                 undefined,
                 (error) => {
-                  console.warn('Failed to load first-person hand model.', error);
+                  console.error('Failed to load first-person hand model.', error);
                   parseEmbeddedModel(
                     'arm',
                     (embeddedGltf) => {
-                      const template = embeddedGltf.scene || embeddedGltf.scenes?.[0] || createFallbackHand();
+                      const template = embeddedGltf.scene || embeddedGltf.scenes?.[0] || null;
+                      if (!template) {
+                        console.error('Embedded arm model did not include a scene.');
+                        const fallback = createFallbackHand();
+                        previewHandTemplate = fallback;
+                        resolve(fallback);
+                        return;
+                      }
                       previewHandTemplate = template;
                       resolve(template);
                     },
@@ -6768,7 +6782,7 @@
             })
           )
           .catch((error) => {
-            console.warn('GLTFLoader unavailable for preview hand; using fallback.', error);
+            console.error('GLTFLoader unavailable for preview hand; using fallback.', error);
             const fallback = createFallbackHand();
             previewHandTemplate = fallback;
             return fallback;
@@ -12163,7 +12177,9 @@
 
     function parseEmbeddedModel(key, onLoad, onError) {
       if (!EMBEDDED_ASSETS?.models?.[key]) {
-        onError?.(new Error(`Embedded model "${key}" is unavailable.`));
+        const error = new Error(`Embedded model "${key}" is unavailable.`);
+        console.error(`Embedded model reference missing for "${key}".`, error);
+        onError?.(error);
         return;
       }
       const modelString = EMBEDDED_ASSETS.models[key];
@@ -12175,14 +12191,17 @@
               '',
               onLoad,
               (parseError) => {
+                console.error(`Failed to parse embedded model "${key}".`, parseError);
                 onError?.(parseError);
               },
             );
           } catch (error) {
+            console.error(`Failed to parse embedded model "${key}".`, error);
             onError?.(error);
           }
         })
         .catch((error) => {
+          console.error(`Failed to initialise embedded model "${key}".`, error);
           onError?.(error);
         });
     }
@@ -12663,6 +12682,7 @@
                   (embeddedGltf) => {
                     const zombieScene = embeddedGltf.scene || embeddedGltf.scenes?.[0];
                     if (!zombieScene) {
+                      console.error('Embedded zombie model did not include a scene.');
                       resolveWithTemplate(createFallbackZombieTemplate());
                       return;
                     }
@@ -12931,6 +12951,7 @@
                   (embeddedGltf) => {
                     const golemScene = embeddedGltf.scene || embeddedGltf.scenes?.[0];
                     if (!golemScene) {
+                      console.error('Embedded iron golem model did not include a scene.');
                       resolveWithTemplate(createFallbackGolemTemplate());
                       return;
                     }
