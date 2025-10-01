@@ -7,6 +7,32 @@
 
   const externalAssetResolver = globalScope.InfiniteRailsAssetResolver || null;
 
+  const assetResolutionWarnings = new Set();
+
+  function logAssetResolutionIssue(message, error, context = {}) {
+    const consoleRef = typeof console !== 'undefined' ? console : globalScope.console;
+    if (!consoleRef) {
+      return;
+    }
+    const sortedContextKeys = Object.keys(context).sort();
+    const dedupeKey = `${message}|${sortedContextKeys
+      .map((key) => `${key}:${context[key]}`)
+      .join(',')}`;
+    if (assetResolutionWarnings.has(dedupeKey)) {
+      return;
+    }
+    assetResolutionWarnings.add(dedupeKey);
+    const details = { ...context };
+    if (error) {
+      details.error = error;
+    }
+    if (typeof consoleRef.warn === 'function') {
+      consoleRef.warn(message, details);
+    } else if (typeof consoleRef.error === 'function') {
+      consoleRef.error(message, details);
+    }
+  }
+
   function fallbackNormaliseAssetBase(base) {
     if (!base || typeof base !== 'string') {
       return null;
@@ -20,6 +46,9 @@
       }
       return href;
     } catch (error) {
+      logAssetResolutionIssue('Invalid asset base URL encountered; ignoring configuration value.', error, {
+        base,
+      });
       return null;
     }
   }
@@ -43,7 +72,11 @@
       try {
         pushCandidate(new URL(relativePath, configBase).href);
       } catch (error) {
-        // Ignore invalid config values and continue exploring fallbacks.
+        logAssetResolutionIssue(
+          'Failed to resolve asset URL using configured base; falling back to defaults.',
+          error,
+          { base: globalScope.APP_CONFIG?.assetBaseUrl ?? null, relativePath }
+        );
       }
     }
 
@@ -72,7 +105,11 @@
             pushCandidate(new URL(relativePath, `${scriptUrl.origin}/`).href);
           }
         } catch (error) {
-          // Swallow and continue gathering fallbacks.
+          logAssetResolutionIssue(
+            'Unable to derive asset URL from current script location; trying alternative fallbacks.',
+            error,
+            { scriptSrc: currentScript?.src ?? null, relativePath }
+          );
         }
       }
 
@@ -80,7 +117,11 @@
         try {
           pushCandidate(new URL(relativePath, documentRef.baseURI).href);
         } catch (error) {
-          // Ignore invalid base URIs.
+          logAssetResolutionIssue(
+            'Document base URI produced an invalid asset URL; continuing with other fallbacks.',
+            error,
+            { baseURI: documentRef.baseURI, relativePath }
+          );
         }
       }
     }
@@ -89,7 +130,11 @@
       try {
         pushCandidate(new URL(relativePath, `${windowLocation.origin}/`).href);
       } catch (error) {
-        // Continue to relative fallbacks below.
+        logAssetResolutionIssue(
+          'Window origin fallback failed while resolving asset URL; relying on relative paths.',
+          error,
+          { origin: windowLocation.origin, relativePath }
+        );
       }
     }
 
@@ -12091,7 +12136,12 @@
         try {
           renderer.renderLists.dispose();
         } catch (error) {
-          // Continue even if render list disposal fails.
+          if (typeof console !== 'undefined' && typeof console.warn === 'function') {
+            console.warn(
+              'Failed to dispose renderer lists while disabling portal shaders. Manual cleanup may be required.',
+              error
+            );
+          }
         }
       }
     }
@@ -12105,7 +12155,12 @@
       try {
         rebuildInvalidMaterialUniforms(repairError);
       } catch (error) {
-        // Ignore repair failures; runtime sanitisation will handle issues if they persist.
+        if (typeof console !== 'undefined' && typeof console.warn === 'function') {
+          console.warn(
+            'Failed to repair portal shader uniforms during proactive sweep; runtime sanitisation will retry.',
+            error
+          );
+        }
       }
     }
 
@@ -18272,6 +18327,29 @@
         if (occupied.has(key)) continue;
         occupied.add(key);
         selections.push(edge);
+      }
+
+      if (!selections.length) {
+        if (typeof console !== 'undefined' && typeof console.warn === 'function') {
+          console.warn(`${ENTITY_LOG_PREFIX} Zombie spawn failed: no valid spawn locations found.`, {
+            requested: spawnCount,
+            player: { x: playerX, y: playerY },
+            worldSize: { width: state.width, height: state.height },
+          });
+        }
+        return 0;
+      }
+
+      if (selections.length < spawnCount) {
+        if (typeof console !== 'undefined' && typeof console.warn === 'function') {
+          console.warn(`${ENTITY_LOG_PREFIX} Zombie spawn limited by world layout.`, {
+            requested: spawnCount,
+            spawned: selections.length,
+            blocked: spawnCount - selections.length,
+            player: { x: playerX, y: playerY },
+            worldSize: { width: state.width, height: state.height },
+          });
+        }
       }
 
       selections.forEach((spawn, index) => {
