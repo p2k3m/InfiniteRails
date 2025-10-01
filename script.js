@@ -441,6 +441,21 @@
     zombie: resolveAssetUrl('assets/zombie.gltf'),
     ironGolem: resolveAssetUrl('assets/iron_golem.gltf'),
   };
+
+  const missingModelAssetKeys = Object.entries(MODEL_ASSET_URLS)
+    .filter(([, url]) => typeof url !== 'string' || !url.trim())
+    .map(([key]) => key);
+
+  if (missingModelAssetKeys.length > 0) {
+    logAssetResolutionIssue(
+      'Model asset URLs were unavailable; embedded fallbacks will be used instead.',
+      null,
+      { missingModels: missingModelAssetKeys.join(', ') },
+    );
+  }
+
+  const MODEL_ASSETS_READY =
+    SUPPORTS_MODEL_ASSETS && missingModelAssetKeys.length === 0;
   let gltfLoaderPromise = null;
   let threeLoaderPromise = null;
   let gltfLoaderInstancePromise = null;
@@ -1770,6 +1785,31 @@
         return options.fallback;
       }
     }
+
+    function addSafeEventListener(target, eventName, handler, context, options = {}) {
+      if (!target || typeof target.addEventListener !== 'function' || typeof handler !== 'function') {
+        return () => {};
+      }
+      const {
+        eventOptions = false,
+        suppressOverlay = true,
+        dedupeKey = null,
+        hint = null,
+      } = options;
+      const label = context || `handling ${eventName}`;
+      const safeHandler = (...args) =>
+        safelyExecute(
+          () => handler(...args),
+          label,
+          { suppressOverlay, dedupeKey, hint },
+        );
+      target.addEventListener(eventName, safeHandler, eventOptions);
+      return () => {
+        if (typeof target.removeEventListener === 'function') {
+          target.removeEventListener(eventName, safeHandler, eventOptions);
+        }
+      };
+    }
     const settingsVolumeInputs = {
       master: document.getElementById('masterVolume'),
       music: document.getElementById('musicVolume'),
@@ -1889,9 +1929,16 @@
 
       function registerSimpleEvent(eventName, handler) {
         const scope = getGlobalInteractionScope();
-        if (!scope || typeof scope.addEventListener !== 'function') return;
-        scope.addEventListener(eventName, handler);
-        simpleEventCleanup.push(() => scope.removeEventListener(eventName, handler));
+        if (!scope || typeof scope.addEventListener !== 'function' || typeof handler !== 'function') return;
+        const contextLabel = `handling ${eventName}`;
+        const dedupeKey = `${eventName}|simple-event-handler`;
+        const wrapped = (...args) =>
+          safelyExecute(() => handler(...args), contextLabel, {
+            suppressOverlay: eventName.startsWith('infinite-rails:'),
+            dedupeKey,
+          });
+        scope.addEventListener(eventName, wrapped);
+        simpleEventCleanup.push(() => scope.removeEventListener(eventName, wrapped));
       }
 
       function getActiveGameState() {
@@ -2952,20 +2999,38 @@
         ? window.matchMedia('(prefers-reduced-motion: reduce)')
         : null;
 
-    victoryCloseButton?.addEventListener('click', () => {
-      dismissVictoryCelebration();
-    });
-
-    victoryShareButton?.addEventListener('click', handleVictoryShareClick);
-
-    victoryCelebrationEl?.addEventListener('click', (event) => {
-      if (
-        event.target === victoryCelebrationEl ||
-        (event.target instanceof HTMLElement && event.target.classList.contains('victory-celebration__backdrop'))
-      ) {
+    addSafeEventListener(
+      victoryCloseButton,
+      'click',
+      () => {
         dismissVictoryCelebration();
-      }
-    });
+      },
+      'closing the victory celebration',
+      { dedupeKey: 'victory-close-click' },
+    );
+
+    addSafeEventListener(
+      victoryShareButton,
+      'click',
+      handleVictoryShareClick,
+      'sharing victory summary',
+      { dedupeKey: 'victory-share-click' },
+    );
+
+    addSafeEventListener(
+      victoryCelebrationEl,
+      'click',
+      (event) => {
+        if (
+          event.target === victoryCelebrationEl ||
+          (event.target instanceof HTMLElement && event.target.classList.contains('victory-celebration__backdrop'))
+        ) {
+          dismissVictoryCelebration();
+        }
+      },
+      'interacting with victory celebration overlay',
+      { dedupeKey: 'victory-overlay-dismiss' },
+    );
 
     const HUD_INACTIVITY_TIMEOUT = 12000;
     let hudInactivityTimer = null;
@@ -2998,14 +3063,26 @@
     const hudActivityEvents = ['pointerdown', 'pointermove', 'keydown', 'wheel', 'touchstart'];
     hudActivityEvents.forEach((eventName) => {
       const listenerOptions = eventName === 'keydown' ? false : { passive: true };
-      window.addEventListener(eventName, resetHudInactivityTimer, listenerOptions);
+      addSafeEventListener(
+        window,
+        eventName,
+        resetHudInactivityTimer,
+        'tracking HUD activity',
+        { eventOptions: listenerOptions, dedupeKey: `hud-activity-${eventName}` },
+      );
     });
 
-    document.addEventListener('visibilitychange', () => {
-      if (!document.hidden) {
-        resetHudInactivityTimer();
-      }
-    });
+    addSafeEventListener(
+      document,
+      'visibilitychange',
+      () => {
+        if (!document.hidden) {
+          resetHudInactivityTimer();
+        }
+      },
+      'handling visibility change for HUD',
+      { dedupeKey: 'visibilitychange-hud' },
+    );
 
     resetHudInactivityTimer();
 
@@ -7936,7 +8013,7 @@
       if (gltfLoader) {
         return Promise.resolve(gltfLoader);
       }
-      if (!SUPPORTS_MODEL_ASSETS) {
+      if (!MODEL_ASSETS_READY) {
         return Promise.reject(new Error('Model assets are disabled.'));
       }
       if (gltfLoaderInstancePromise) {
@@ -7968,7 +8045,7 @@
       if (previewHandTemplate) {
         return Promise.resolve(previewHandTemplate);
       }
-      if (!SUPPORTS_MODEL_ASSETS) {
+      if (!MODEL_ASSETS_READY) {
         previewHandTemplate = createFallbackHand();
         return Promise.resolve(previewHandTemplate);
       }
@@ -13731,7 +13808,7 @@
         );
       };
 
-      if (!SUPPORTS_MODEL_ASSETS) {
+      if (!MODEL_ASSETS_READY) {
         loadEmbeddedSteve();
         return;
       }
@@ -13926,7 +14003,7 @@
 
     function ensureZombieModelTemplate() {
       if (zombieModelTemplate || zombieModelPromise) return zombieModelPromise;
-      if (!SUPPORTS_MODEL_ASSETS) {
+      if (!MODEL_ASSETS_READY) {
         zombieModelTemplate = createFallbackZombieTemplate();
         zombieModelPromise = Promise.resolve(zombieModelTemplate);
         return zombieModelPromise;
@@ -14195,7 +14272,7 @@
 
     function ensureIronGolemModelTemplate() {
       if (ironGolemModelTemplate || ironGolemModelPromise) return ironGolemModelPromise;
-      if (!SUPPORTS_MODEL_ASSETS) {
+      if (!MODEL_ASSETS_READY) {
         ironGolemModelTemplate = createFallbackGolemTemplate();
         ironGolemModelPromise = Promise.resolve(ironGolemModelTemplate);
         return ironGolemModelPromise;
@@ -15526,6 +15603,15 @@
           }
           if (!disablePortalSurfaceShaders(error)) {
             console.error('Renderer encountered an unrecoverable error.', error);
+            handleInteractionError('rendering the 3D scene', error, {
+              fatal: true,
+              dedupeKey: 'render-scene-unrecoverable',
+              hint: 'The renderer hit a fatal glitch. Reload to continue exploring.',
+              overlayOptions: {
+                title: 'Renderer unavailable',
+                reloadLabel: 'Reload experience',
+              },
+            });
             pendingUniformSanitizations = Math.max(pendingUniformSanitizations, 2);
             return;
           }
@@ -16087,6 +16173,37 @@
     updateStatusBars();
     updateInventoryUI();
     updateDimensionOverlay();
+
+    function prewarmInitialPresentation() {
+      if (!featureFlags?.entityPrewarm) {
+        return;
+      }
+      safelyExecute(
+        () => {
+          if (!Array.isArray(state.world) || !state.world.length) {
+            state.world = createFallbackWorldGrid(state);
+            markAllTilesDirty();
+          }
+          ensurePlayerAvatarReady({ forceReload: true, resetAnimations: true });
+          updateWorldMeshes();
+          if (renderer && scene && camera) {
+            rendererRecoveryFrames = Math.max(rendererRecoveryFrames, 1);
+            renderScene();
+          }
+          updateStatusBars();
+          updateInventoryUI();
+          updateDimensionOverlay();
+        },
+        'prewarming the initial world state',
+        {
+          suppressOverlay: true,
+          dedupeKey: 'initial-prewarm',
+          hint: 'Preparing a fallback island while assets finish loading.',
+        },
+      );
+    }
+
+    prewarmInitialPresentation();
 
     function generateOriginIsland(state) {
       const grid = [];
@@ -18311,6 +18428,15 @@
         } else {
           console.error('Game loop error', loopError);
         }
+        handleInteractionError('running the render loop', loopError, {
+          fatal: true,
+          dedupeKey: 'render-loop-error',
+          hint: 'The simulation stalled. Reload to continue exploring.',
+          overlayOptions: {
+            title: 'Simulation stalled',
+            reloadLabel: 'Reload adventure',
+          },
+        });
       }
     }
 
@@ -21755,60 +21881,118 @@
         return;
       }
       eventListenersBound = true;
-      document.addEventListener('keydown', handleKeyDown);
-      document.addEventListener('keyup', handleKeyUp);
-      document.addEventListener('keydown', (event) => {
-        if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
-          if (!craftingModal?.hidden) {
-            event.preventDefault();
-            openCraftingSearchPanel();
-          }
-        }
+      const bindSafe = (target, type, handler, context, options) =>
+        addSafeEventListener(target, type, handler, context, options);
+      bindSafe(document, 'keydown', handleKeyDown, 'processing keydown input', {
+        suppressOverlay: false,
+        dedupeKey: 'document-keydown-handler',
       });
-      craftButton?.addEventListener('click', attemptCraft);
-      clearCraftButton?.addEventListener('click', () => {
+      bindSafe(document, 'keyup', handleKeyUp, 'processing keyup input', {
+        suppressOverlay: false,
+        dedupeKey: 'document-keyup-handler',
+      });
+      bindSafe(
+        document,
+        'keydown',
+        (event) => {
+          if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+            if (!craftingModal?.hidden) {
+              event.preventDefault();
+              openCraftingSearchPanel();
+            }
+          }
+        },
+        'triggering crafting search shortcut',
+        { dedupeKey: 'crafting-search-shortcut' },
+      );
+      bindSafe(craftButton, 'click', attemptCraft, 'crafting an item', {
+        dedupeKey: 'craft-button-click',
+      });
+      bindSafe(clearCraftButton, 'click', () => {
         state.craftSequence = [];
         clearCraftSequenceErrorState();
         updateCraftSequenceDisplay();
         updateAutocompleteSuggestions();
         flagProgressDirty('craft');
+      }, 'clearing the crafting sequence', { dedupeKey: 'clear-craft-sequence' });
+      bindSafe(recipeSearchEl, 'focus', updateAutocompleteSuggestions, 'priming recipe suggestions', {
+        dedupeKey: 'recipe-search-focus',
       });
-      recipeSearchEl?.addEventListener('focus', updateAutocompleteSuggestions);
-      recipeSearchEl?.addEventListener('input', () => {
+      bindSafe(recipeSearchEl, 'input', () => {
         updateAutocompleteSuggestions();
         updateRecipesList();
-      });
-      recipeSearchEl?.addEventListener('blur', () => {
+      }, 'updating recipe search', { dedupeKey: 'recipe-search-input' });
+      bindSafe(recipeSearchEl, 'blur', () => {
         window.setTimeout(() => craftSuggestionsEl?.setAttribute('data-visible', 'false'), 140);
+      }, 'hiding recipe suggestions', { dedupeKey: 'recipe-search-blur' });
+      bindSafe(openCraftingSearchButton, 'click', openCraftingSearchPanel, 'opening crafting search', {
+        dedupeKey: 'open-crafting-search',
       });
-      openCraftingSearchButton?.addEventListener('click', openCraftingSearchPanel);
-      closeCraftingSearchButton?.addEventListener('click', () => closeCraftingSearchPanel(true));
-      craftingSearchPanel?.addEventListener('click', (event) => {
+      bindSafe(
+        closeCraftingSearchButton,
+        'click',
+        () => closeCraftingSearchPanel(true),
+        'closing crafting search',
+        { dedupeKey: 'close-crafting-search' },
+      );
+      bindSafe(craftingSearchPanel, 'click', (event) => {
         if (event.target === craftingSearchPanel) {
           closeCraftingSearchPanel(true);
         }
+      }, 'dismissing crafting search overlay', { dedupeKey: 'crafting-panel-dismiss' });
+      bindSafe(
+        craftingSearchInput,
+        'input',
+        updateCraftingSearchPanelResults,
+        'updating crafting search results',
+        { dedupeKey: 'crafting-search-input' },
+      );
+      bindSafe(craftLauncherButton, 'click', openCraftingModal, 'opening crafting modal', {
+        dedupeKey: 'crafting-modal-launch',
       });
-      craftingSearchInput?.addEventListener('input', updateCraftingSearchPanelResults);
-      craftLauncherButton?.addEventListener('click', openCraftingModal);
-      toggleExtendedBtn?.addEventListener('click', () => toggleHotbarExpansion());
-      inventorySortButton?.addEventListener('click', toggleInventorySortMode);
+      bindSafe(toggleExtendedBtn, 'click', () => toggleHotbarExpansion(), 'toggling extended hotbar', {
+        dedupeKey: 'toggle-hotbar',
+      });
+      bindSafe(
+        inventorySortButton,
+        'click',
+        toggleInventorySortMode,
+        'toggling inventory sort mode',
+        { dedupeKey: 'toggle-inventory-sort' },
+      );
       initVirtualJoystick();
       if (mobileControls) {
         mobileControls.querySelectorAll('button').forEach((button) => {
-          button.addEventListener('click', () => updateFromMobile(button.dataset.action));
+          bindSafe(
+            button,
+            'click',
+            () => updateFromMobile(button.dataset.action),
+            'processing mobile control input',
+            { dedupeKey: `mobile-control-${button.dataset.action || 'unknown'}` },
+          );
         });
       }
-      openGuideButton?.addEventListener('click', openGuideModal);
-      landingGuideButton?.addEventListener('click', () => {
+      bindSafe(openGuideButton, 'click', openGuideModal, 'opening guide modal', {
+        dedupeKey: 'open-guide-modal',
+      });
+      bindSafe(landingGuideButton, 'click', () => {
         openGuideModal();
+      }, 'opening guide modal from landing', { dedupeKey: 'landing-guide-open' });
+      bindSafe(openSettingsButton, 'click', openSettingsModal, 'opening settings modal', {
+        dedupeKey: 'open-settings-modal',
       });
-      openSettingsButton?.addEventListener('click', openSettingsModal);
-      toggleSidebarButton?.addEventListener('click', toggleSidebar);
-      sidePanelScrim?.addEventListener('click', () => closeSidebar(true));
+      bindSafe(toggleSidebarButton, 'click', toggleSidebar, 'toggling sidebar', {
+        dedupeKey: 'toggle-sidebar',
+      });
+      bindSafe(sidePanelScrim, 'click', () => closeSidebar(true), 'closing sidebar from scrim', {
+        dedupeKey: 'scrim-close-sidebar',
+      });
       document.querySelectorAll('[data-close-sidebar]').forEach((button) => {
-        button.addEventListener('click', () => closeSidebar(true));
+        bindSafe(button, 'click', () => closeSidebar(true), 'closing sidebar via control', {
+          dedupeKey: 'control-close-sidebar',
+        });
       });
-      window.addEventListener('keydown', (event) => {
+      bindSafe(window, 'keydown', (event) => {
         const code = normaliseEventCode(event.code || '', event.key);
         if (!isKeyForAction('closeMenus', code)) return;
         if (inventoryModal && !inventoryModal.hidden) {
@@ -21837,6 +22021,8 @@
         if (gameBriefingEl?.classList.contains('is-visible')) {
           hideGameBriefing();
         }
+      }, 'processing global escape shortcuts', {
+        dedupeKey: 'global-close-shortcut',
       });
     }
 
@@ -22564,7 +22750,7 @@
       if (!appConfig.googleClientId) {
         return Promise.resolve(null);
       }
-      if (!SUPPORTS_MODEL_ASSETS) {
+      if (!MODEL_ASSETS_READY) {
         return Promise.resolve(null);
       }
       if (!gapiScriptPromise) {
@@ -23394,7 +23580,7 @@
     initializeAudioControls();
     initializeAccessibilityControls();
 
-    startButton.addEventListener('click', startGame);
+    addSafeEventListener(startButton, 'click', startGame, 'starting the adventure');
     initEventListeners();
 
     setupSettingsModal();
