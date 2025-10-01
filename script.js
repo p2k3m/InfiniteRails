@@ -6970,6 +6970,12 @@
         }
       } catch (error) {
         renderer = null;
+        if (typeof console !== 'undefined') {
+          console.error('Renderer initialisation failed; activating fallback renderer.', error);
+          if (error && error.stack) {
+            console.error('Renderer initialisation stack trace:', error.stack);
+          }
+        }
         return activateRendererFallback({
           reason: 'initialisation-error',
           error,
