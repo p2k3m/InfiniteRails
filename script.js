@@ -5,6 +5,35 @@
     (typeof global !== 'undefined' && global) ||
     {};
 
+  if (globalScope.__infiniteRailsBootstrapFallback) {
+    try {
+      const fallbackController = globalScope.__infiniteRailsBootstrapFallback;
+      if (fallbackController && typeof fallbackController.cancel === 'function') {
+        fallbackController.cancel();
+      } else if (fallbackController && fallbackController.timer) {
+        clearTimeout(fallbackController.timer);
+      }
+    } catch (error) {
+      try {
+        const consoleRef =
+          (typeof globalScope.console !== 'undefined' && globalScope.console) ||
+          (typeof window !== 'undefined' && window.console) ||
+          (typeof globalThis !== 'undefined' && globalThis.console) ||
+          null;
+        if (consoleRef && typeof consoleRef.warn === 'function') {
+          consoleRef.warn('Failed to cancel bootstrap fallback overlay.', error);
+        }
+      } catch (logError) {
+        // Swallow secondary logging failures to avoid breaking startup.
+      }
+    }
+    try {
+      delete globalScope.__infiniteRailsBootstrapFallback;
+    } catch (error) {
+      globalScope.__infiniteRailsBootstrapFallback = undefined;
+    }
+  }
+
   const externalAssetResolver = globalScope.InfiniteRailsAssetResolver || null;
 
   const assetResolutionWarnings = new Set();
