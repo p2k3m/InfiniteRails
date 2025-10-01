@@ -1368,6 +1368,7 @@ body.game-active #gameCanvas {
   height: 100%;
   display: block;
   background: linear-gradient(180deg, rgba(143, 214, 255, 0.95) 0%, rgba(128, 206, 255, 0.88) 36%, rgba(118, 190, 104, 0.95) 76%, rgba(88, 132, 62, 0.98) 100%);
+  touch-action: none;
 }
 
 #gameCanvas:focus {

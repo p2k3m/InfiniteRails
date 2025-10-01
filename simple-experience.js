@@ -3184,6 +3184,16 @@
         return;
       }
       const controls = this.mobileControlsRoot;
+      const controlsVerified = this.verifyMobileControlsDom();
+      if (!controlsVerified) {
+        this.teardownMobileControls();
+        controls.dataset.active = 'false';
+        controls.setAttribute('aria-hidden', 'true');
+        this.virtualJoystickEl?.setAttribute?.('aria-hidden', 'true');
+        this.mobileControlsActive = false;
+        this.updatePointerHintForInputMode();
+        return;
+      }
       const shouldActivate = Boolean(this.isTouchPreferred);
       if (shouldActivate === this.mobileControlsActive) {
         controls.setAttribute('aria-hidden', shouldActivate ? 'false' : 'true');
@@ -3293,6 +3303,50 @@
       this.mobileControlsActive = true;
     }
 
+    verifyMobileControlsDom() {
+      const controls = this.mobileControlsRoot;
+      if (!controls) {
+        return false;
+      }
+      if (!this.virtualJoystickEl && typeof controls.querySelector === 'function') {
+        const fallbackJoystick = controls.querySelector('.virtual-joystick');
+        if (fallbackJoystick) {
+          this.virtualJoystickEl = fallbackJoystick;
+        }
+      }
+      if (!this.virtualJoystickThumb && this.virtualJoystickEl?.querySelector) {
+        const thumb = this.virtualJoystickEl.querySelector('.virtual-joystick__thumb');
+        if (thumb) {
+          this.virtualJoystickThumb = thumb;
+        }
+      }
+      let buttonCount = 0;
+      if (typeof controls.querySelectorAll === 'function') {
+        try {
+          const buttons = controls.querySelectorAll('button[data-action]');
+          if (Array.isArray(buttons)) {
+            buttonCount = buttons.length;
+          } else if (buttons && typeof buttons.length === 'number') {
+            buttonCount = buttons.length;
+          } else if (buttons && typeof buttons[Symbol.iterator] === 'function') {
+            buttonCount = Array.from(buttons).length;
+          }
+        } catch (error) {
+          if (typeof console !== 'undefined') {
+            console.warn('Failed to inspect mobile control buttons.', error);
+          }
+          buttonCount = 0;
+        }
+      }
+      const joystickReady = Boolean(this.virtualJoystickEl);
+      const verified = joystickReady && buttonCount > 0;
+      controls.dataset.ready = verified ? 'true' : 'false';
+      if (!verified && typeof console !== 'undefined') {
+        console.warn('Mobile controls unavailable — virtual joystick or buttons missing.');
+      }
+      return verified;
+    }
+
     attachPointerPreferenceObserver() {
       if (this.detachPointerPreferenceObserver || typeof window === 'undefined') {
         return;
@@ -3340,6 +3394,71 @@
       if (prefersTouch !== this.mobileControlsActive) {
         this.initializeMobileControls();
       }
+    }
+
+    getPointerInputTargets() {
+      const targets = [];
+      if (this.canvas) {
+        targets.push(this.canvas);
+      }
+      const doc =
+        this.canvas?.ownerDocument ||
+        (typeof document !== 'undefined' ? document : null);
+      if (!doc || typeof doc.querySelectorAll !== 'function') {
+        return targets;
+      }
+      let canvases = [];
+      try {
+        const nodeList = doc.querySelectorAll('canvas');
+        if (Array.isArray(nodeList)) {
+          canvases = nodeList.slice();
+        } else if (nodeList && typeof nodeList.length === 'number') {
+          canvases = Array.from(nodeList);
+        } else if (nodeList && typeof nodeList[Symbol.iterator] === 'function') {
+          canvases = Array.from(nodeList);
+        }
+      } catch (error) {
+        canvases = [];
+      }
+      if (!canvases.length) {
+        return targets;
+      }
+      const view = doc.defaultView || (typeof window !== 'undefined' ? window : null);
+      const getStyle = typeof view?.getComputedStyle === 'function' ? (element) => view.getComputedStyle(element) : null;
+      let topmost = null;
+      let bestScore = -Infinity;
+      canvases.forEach((element, index) => {
+        if (!element) {
+          return;
+        }
+        if (getStyle) {
+          const style = getStyle(element);
+          if (!style) {
+            return;
+          }
+          if (style.display === 'none' || style.visibility === 'hidden' || style.pointerEvents === 'none') {
+            return;
+          }
+          const zIndex = Number.parseFloat(style.zIndex);
+          const zScore = Number.isFinite(zIndex) ? zIndex : 0;
+          const positionScore = style.position !== 'static' ? 1 : 0;
+          const orderScore = index / 1000;
+          const score = zScore * 100 + positionScore * 10 + orderScore;
+          if (score >= bestScore) {
+            bestScore = score;
+            topmost = element;
+          }
+        } else {
+          topmost = element;
+        }
+      });
+      if (!topmost && canvases.length) {
+        topmost = canvases[canvases.length - 1];
+      }
+      if (topmost && !targets.includes(topmost)) {
+        targets.push(topmost);
+      }
+      return targets;
     }
 
     handleGlobalPointerDown(event) {
@@ -5750,8 +5869,11 @@
       add(window, 'resize', this.onResize, 'resizing the renderer');
       add(window, 'beforeunload', this.onBeforeUnload, 'saving session state before unload');
       add(this.canvas, 'wheel', this.onCanvasWheel, 'scrolling the viewport', { passive: false });
-      add(this.canvas, 'pointerdown', this.onTouchLookPointerDown, 'starting touch look drag', {
-        passive: false,
+      const pointerTargets = this.getPointerInputTargets();
+      pointerTargets.forEach((target) => {
+        add(target, 'pointerdown', this.onTouchLookPointerDown, 'starting touch look drag', {
+          passive: false,
+        });
       });
       add(window, 'pointermove', this.onTouchLookPointerMove, 'tracking touch look drag', {
         passive: false,
@@ -5762,8 +5884,10 @@
         passive: true,
       });
       add(window, 'touchstart', this.onGlobalTouchStart, 'tracking touch activity', { passive: true });
-      add(this.canvas, 'click', this.onCanvasPointerLock, 'engaging pointer lock');
-      add(this.canvas, 'contextmenu', this.preventContextMenu, 'preventing context menu');
+      pointerTargets.forEach((target) => {
+        add(target, 'click', this.onCanvasPointerLock, 'engaging pointer lock');
+        add(target, 'contextmenu', this.preventContextMenu, 'preventing context menu');
+      });
       add(this.hotbarEl, 'click', this.onHotbarClick, 'selecting hotbar slots');
       add(this.craftLauncherButton, 'click', this.onOpenCrafting, 'opening crafting');
       add(this.closeCraftingButton, 'click', this.onCloseCrafting, 'closing crafting');
