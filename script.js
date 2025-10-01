@@ -2403,9 +2403,11 @@
         if (!summary) return false;
         syncScoreStateFromSummary(summary);
         const applied = applySummaryToState(summary);
-        if (applied || getActiveGameState()) {
-          updateScoreOverlay({ flash: options.flash, triggerFlip: options.triggerFlip });
+        const activeState = getActiveGameState();
+        if (applied && activeState) {
+          activeState.simpleSummary = summary;
         }
+        updateScoreOverlay({ flash: options.flash, triggerFlip: options.triggerFlip });
         return applied;
       }
 
@@ -2465,6 +2467,192 @@
         }
         queueMetadataSync('victory', { includeProgress: true, summary, immediate: true });
       });
+
+      function getHotbarInventoryCount(target) {
+        if (!target) return 0;
+        if (typeof target.getTotalInventoryCount === 'function') {
+          try {
+            const total = target.getTotalInventoryCount();
+            if (Number.isFinite(total)) {
+              return total;
+            }
+          } catch (error) {
+            console.debug('Inventory count lookup failed for simple integration.', error);
+          }
+        }
+        if (Array.isArray(target.hotbar)) {
+          return target.hotbar.reduce((sum, slot) => sum + (Number(slot?.quantity) || 0), 0);
+        }
+        return 0;
+      }
+
+      const SIMPLE_HUD_BASE_HEALTH = 10;
+      let pendingHudAnnouncement = null;
+      let lastHudSnapshot = {
+        health: Number.isFinite(experience.health) ? experience.health : SIMPLE_HUD_BASE_HEALTH,
+        maxHealth: Number.isFinite(experience.health)
+          ? Math.max(SIMPLE_HUD_BASE_HEALTH, experience.health)
+          : SIMPLE_HUD_BASE_HEALTH,
+        inventoryCount: getHotbarInventoryCount(experience),
+        score: Math.round(Number(experience.score ?? 0) || 0),
+      };
+
+      function queueHudAnnouncement(reason, options = {}) {
+        pendingHudAnnouncement = { reason, options };
+      }
+
+      function announceHudChange(reason, options = {}) {
+        const context = options.experience || experience;
+        if (!context) {
+          pendingHudAnnouncement = null;
+          return;
+        }
+        const hudReason = reason || 'hud-refresh';
+        const currentHealth = Number.isFinite(context.health) ? context.health : lastHudSnapshot.health;
+        const maxHealthCandidate = Number.isFinite(context.maxHealth) ? Number(context.maxHealth) : null;
+        const maxHealth = Math.max(
+          maxHealthCandidate ?? SIMPLE_HUD_BASE_HEALTH,
+          currentHealth,
+          lastHudSnapshot.maxHealth ?? SIMPLE_HUD_BASE_HEALTH,
+        );
+
+        const heartsHost = context.ui?.heartsEl || document.getElementById('hearts');
+        if (heartsHost) {
+          const heartsInner = heartsHost.querySelector('.hud-hearts');
+          if (heartsInner) {
+            heartsInner.classList.remove('is-damaged', 'is-healing');
+            void heartsInner.offsetWidth;
+            if (currentHealth < lastHudSnapshot.health) {
+              heartsInner.classList.add('is-damaged');
+            } else if (currentHealth > lastHudSnapshot.health) {
+              heartsInner.classList.add('is-healing');
+            }
+            const criticalThreshold = Math.max(2, Math.floor(maxHealth * 0.2));
+            heartsInner.classList.toggle('is-critical', currentHealth <= criticalThreshold);
+            heartsInner.setAttribute('data-health', currentHealth.toString());
+          }
+        }
+
+        const newScore = Math.round(Number(context.score ?? lastHudSnapshot.score) || 0);
+        const scoreDelta = newScore - (lastHudSnapshot.score ?? 0);
+        const inventoryCount = Number.isFinite(options.nextInventory)
+          ? options.nextInventory
+          : getHotbarInventoryCount(context);
+        const shouldFlash =
+          options.flash ??
+          (hudReason === 'crafting' || hudReason === 'pickup' || (hudReason === 'damage' && scoreDelta !== 0));
+        const shouldFlip = options.triggerFlip ?? (hudReason === 'crafting' && scoreDelta > 0);
+
+        if (typeof context.createRunSummary === 'function') {
+          const summaryPayload = context.createRunSummary(hudReason);
+          const normalizedSummary = mergeSimpleSummary(normaliseSimpleSummary({ summary: summaryPayload }));
+          if (normalizedSummary) {
+            updateScoreFromSummary(normalizedSummary, { flash: shouldFlash, triggerFlip: shouldFlip });
+          } else if (shouldFlash || shouldFlip) {
+            updateScoreOverlay({ flash: shouldFlash, triggerFlip: shouldFlip });
+          } else {
+            updateScoreOverlay();
+          }
+        } else if (shouldFlash || shouldFlip) {
+          updateScoreOverlay({ flash: shouldFlash, triggerFlip: shouldFlip });
+        } else {
+          updateScoreOverlay();
+        }
+
+        if (typeof resetHudInactivityTimer === 'function') {
+          resetHudInactivityTimer();
+        }
+
+        lastHudSnapshot = {
+          health: currentHealth,
+          maxHealth,
+          inventoryCount,
+          score: newScore,
+        };
+
+        if (
+          typeof window !== 'undefined' &&
+          typeof window.dispatchEvent === 'function' &&
+          typeof CustomEvent === 'function'
+        ) {
+          try {
+            window.dispatchEvent(
+              new CustomEvent('infinite-rails:hud-refresh', {
+                detail: {
+                  reason: hudReason,
+                  health: currentHealth,
+                  maxHealth,
+                  inventoryCount,
+                  score: newScore,
+                  scoreDelta,
+                },
+              }),
+            );
+          } catch (error) {
+            console.debug('Failed to broadcast simple HUD refresh event.', error);
+          }
+        }
+
+        pendingHudAnnouncement = null;
+      }
+
+      if (typeof experience.updateHud === 'function') {
+        const originalUpdateHud = experience.updateHud;
+        experience.updateHud = function (...args) {
+          const result = originalUpdateHud.apply(this, args);
+          const queued = pendingHudAnnouncement;
+          pendingHudAnnouncement = null;
+          if (queued) {
+            announceHudChange(queued.reason, { ...queued.options, experience: this });
+          } else {
+            announceHudChange('hud-refresh', { experience: this });
+          }
+          return result;
+        };
+      }
+
+      if (typeof experience.damagePlayer === 'function') {
+        const originalDamagePlayer = experience.damagePlayer;
+        experience.damagePlayer = function (...args) {
+          const previousHealth = Number(this.health);
+          queueHudAnnouncement('damage', { previousHealth });
+          const result = originalDamagePlayer.apply(this, args);
+          if (!Number.isFinite(previousHealth) || Number(this.health) === previousHealth) {
+            pendingHudAnnouncement = null;
+          }
+          return result;
+        };
+      }
+
+      if (typeof experience.collectDrops === 'function') {
+        const originalCollectDrops = experience.collectDrops;
+        experience.collectDrops = function (...args) {
+          const previousInventory = getHotbarInventoryCount(this);
+          queueHudAnnouncement('pickup', { previousInventory });
+          const result = originalCollectDrops.apply(this, args);
+          const nextInventory = getHotbarInventoryCount(this);
+          if (nextInventory === previousInventory) {
+            pendingHudAnnouncement = null;
+          }
+          return result;
+        };
+      }
+
+      if (typeof experience.handleCraftButton === 'function') {
+        const originalHandleCraftButton = experience.handleCraftButton;
+        experience.handleCraftButton = function (...args) {
+          const previousScore = Math.round(Number(this.score ?? 0) || 0);
+          queueHudAnnouncement('crafting', { previousScore, triggerFlip: true });
+          const result = originalHandleCraftButton.apply(this, args);
+          const nextScore = Math.round(Number(this.score ?? previousScore) || 0);
+          if (nextScore === previousScore) {
+            pendingHudAnnouncement = null;
+          }
+          return result;
+        };
+      }
+
+      announceHudChange('hud-refresh', { experience, flash: false });
 
       if (typeof experience?.createRunSummary === 'function') {
         const bootstrapSummary = mergeSimpleSummary(
