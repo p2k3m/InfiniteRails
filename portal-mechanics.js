@@ -146,7 +146,36 @@ function formatDimensionRules(dimension) {
   return 'Expect the unexpected beyond the portal.';
 }
 
+function normaliseSpawnPoint(spawn, fallback = { x: 0, y: 0, z: 0 }) {
+  if (!spawn || typeof spawn !== 'object') {
+    return { ...fallback };
+  }
+  const axes = ['x', 'y', 'z'];
+  const result = {};
+  axes.forEach((axis) => {
+    const value = Number(spawn[axis]);
+    if (Number.isFinite(value)) {
+      result[axis] = value;
+    } else if (fallback && Object.prototype.hasOwnProperty.call(fallback, axis)) {
+      result[axis] = fallback[axis];
+    }
+  });
+  return result;
+}
+
 function enterPortal(portal, dimension) {
+  if (!portal || portal.active !== true) {
+    throw new Error('Portal must be active to initiate a transition.');
+  }
+  const targetId = dimension?.id ?? dimension?.name;
+  if (!targetId) {
+    throw new Error('Target dimension must provide an id or name.');
+  }
+  const currentId =
+    portal?.currentDimensionId ?? portal?.currentDimension ?? portal?.dimensionId ?? null;
+  if (currentId && currentId === targetId) {
+    throw new Error('Portal is already aligned with the requested dimension.');
+  }
   const name = dimension?.name ?? dimension?.id ?? 'Unknown Dimension';
   const physics = {
     gravity: dimension?.physics?.gravity ?? 1,
@@ -154,9 +183,20 @@ function enterPortal(portal, dimension) {
   };
   const rules = formatDimensionRules(dimension);
   const announcement = `Entering ${name} — ${rules}`;
+  const playerSpawn = normaliseSpawnPoint(dimension?.spawn?.player, {
+    x: 0,
+    y: 0,
+    z: 0,
+  });
+  const worldSpawn = normaliseSpawnPoint(dimension?.spawn?.world, {
+    x: 0,
+    y: 0,
+    z: 0,
+  });
+  const dimensionChanged = currentId ? currentId !== targetId : true;
   return {
     fade: true,
-    resetPosition: { x: 0, y: 0 },
+    resetPosition: { x: playerSpawn.x, y: playerSpawn.y },
     log: announcement,
     pointsAwarded: Number.isFinite(dimension?.unlockPoints) ? dimension.unlockPoints : 5,
     physics,
@@ -164,6 +204,15 @@ function enterPortal(portal, dimension) {
     dimensionName: name,
     dimensionRules: rules,
     announcement,
+    dimensionChanged,
+    spawn: {
+      player: playerSpawn,
+      world: worldSpawn,
+    },
+    regeneration: {
+      player: { required: true, spawn: playerSpawn },
+      world: { required: true, spawn: worldSpawn },
+    },
   };
 }
 
