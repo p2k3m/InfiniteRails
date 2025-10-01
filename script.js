@@ -7531,8 +7531,25 @@
         horizontalRadius * horizontalRadius * 2 + verticalRadius * verticalRadius
       );
       if (typeof console !== 'undefined') {
+        let chunkColumns = 0;
+        if (islandMesh && Number.isFinite(islandMesh.count)) {
+          chunkColumns = islandMesh.count;
+        } else if (fallbackGroup) {
+          chunkColumns = fallbackGroup.children?.length ?? 0;
+        }
+        if (chunkColumns <= 0 && tileCount > 0) {
+          chunkColumns = tileCount;
+        }
         console.log(`World generated: ${tileCount} voxels`);
         console.log(`Terrain blocks placed: ${voxelCount}`);
+        console.log(`Terrain chunks populated: ${chunkColumns}`);
+        if (chunkColumns <= 0 || voxelCount <= 0) {
+          console.warn('Procedural island generation produced no voxel columns or blocks.', {
+            chunkColumns,
+            voxelCount,
+            voxelBudget,
+          });
+        }
         if (cappedColumns > 0) {
           console.info(
             `Terrain voxel budget applied: ${cappedColumns} columns trimmed to stay under ${voxelBudget} voxels`,
