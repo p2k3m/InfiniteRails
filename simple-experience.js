@@ -1,5 +1,11 @@
 (function () {
   const WORLD_SIZE = 64;
+  const DEFAULT_PROCEDURAL_VOXEL_PALETTE = {
+    base: '#9a9a9a',
+    highlight: '#c7c7c7',
+    shadow: '#6e6e6e',
+    accent: '#b5b5b5',
+  };
   const BLOCK_SIZE = 1;
   const MIN_COLUMN_HEIGHT = 1;
   const MAX_COLUMN_HEIGHT = 6;
@@ -822,6 +828,7 @@
       this.blockGeometry = new THREE.BoxGeometry(BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE);
       this.railGeometry = new THREE.BoxGeometry(BLOCK_SIZE * 0.9, BLOCK_SIZE * 0.15, BLOCK_SIZE * 1.2);
       this.textureCache = new Map();
+      this.defaultVoxelTexturePalettes = new Map();
       this.textureLoader = null;
       this.pendingTextureLoads = new Map();
       this.minColumnHeight = MIN_COLUMN_HEIGHT;
@@ -2760,7 +2767,36 @@
       this.persistIdentitySnapshot();
     }
 
+    registerDefaultVoxelTexturePalette(key, palette) {
+      if (!key || !palette || typeof palette !== 'object') {
+        return;
+      }
+      const safePalette = {
+        base: palette.base || DEFAULT_PROCEDURAL_VOXEL_PALETTE.base,
+        highlight: palette.highlight || palette.base || DEFAULT_PROCEDURAL_VOXEL_PALETTE.highlight,
+        shadow: palette.shadow || palette.base || DEFAULT_PROCEDURAL_VOXEL_PALETTE.shadow,
+        accent: palette.accent || palette.highlight || DEFAULT_PROCEDURAL_VOXEL_PALETTE.accent,
+      };
+      this.defaultVoxelTexturePalettes.set(key, safePalette);
+    }
+
+    ensureProceduralTexture(key) {
+      if (!key) {
+        return null;
+      }
+      let texture = this.textureCache.get(key) || null;
+      if (texture) {
+        return texture;
+      }
+      const storedPalette = this.defaultVoxelTexturePalettes.get(key) || DEFAULT_PROCEDURAL_VOXEL_PALETTE;
+      texture = this.createVoxelTexture(key, storedPalette);
+      return texture;
+    }
+
     createVoxelTexture(key, palette) {
+      if (palette && typeof palette === 'object') {
+        this.registerDefaultVoxelTexturePalette(key, palette);
+      }
       const cached = this.textureCache.get(key);
       if (cached) {
         return cached;
@@ -2862,7 +2898,7 @@
         }
       }
       const useCachedFallbackTexture = (options = {}) => {
-        const fallbackTexture = this.textureCache.get(key) || null;
+        const fallbackTexture = this.ensureProceduralTexture(key);
         if (fallbackTexture) {
           if (!options.silent) {
             const lastUrl = options.url ? ` after ${options.url}` : '';
@@ -2870,6 +2906,8 @@
               `Falling back to default ${key} texture${lastUrl} because external sources failed.`,
             );
           }
+        } else if (!options.silent) {
+          console.warn(`No procedural fallback texture is available for ${key}.`);
         }
         return fallbackTexture;
       };
