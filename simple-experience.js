@@ -27,6 +27,7 @@
   const ZOMBIE_MAX_PER_DIMENSION = 4;
   const HOTBAR_SLOTS = 9;
   const KEY_BINDINGS_STORAGE_KEY = 'infinite-rails-keybindings';
+  const SCOREBOARD_STORAGE_KEY = 'infinite-dimension-scoreboard';
   const MOVEMENT_ACTIONS = ['moveForward', 'moveBackward', 'moveLeft', 'moveRight'];
   const DEFAULT_KEY_BINDINGS = (() => {
     const map = {
@@ -747,6 +748,7 @@
         (typeof document !== 'undefined' && document.getElementById('leaderboardEmptyMessage')) || null;
       this.scoreboardPollIntervalSeconds = 45;
       this.scoreboardPollTimer = 0;
+      this.scoreboardStorageKey = options.scoreboardStorageKey || SCOREBOARD_STORAGE_KEY;
       this.lastScoreboardFetch = 0;
       this.hotbarEl = this.ui.hotbarEl || null;
       this.playerHintEl = this.ui.playerHintEl || null;
@@ -959,6 +961,7 @@
       this.lastGolemSpawn = 0;
       this.scoreboardUtils = window.ScoreboardUtils || null;
       this.scoreEntries = [];
+      this.restoreScoreboardEntries();
       this.sessionId =
         (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
           ? crypto.randomUUID()
@@ -1527,6 +1530,69 @@
       this.loadScoreboard();
     }
 
+    getStoredScoreboardEntries() {
+      if (typeof localStorage === 'undefined' || !this.scoreboardStorageKey) {
+        return [];
+      }
+      try {
+        const raw = localStorage.getItem(this.scoreboardStorageKey);
+        if (!raw) {
+          return [];
+        }
+        const parsed = JSON.parse(raw);
+        return Array.isArray(parsed) ? parsed : [];
+      } catch (error) {
+        console.warn('Unable to load cached scoreboard snapshot', error);
+        return [];
+      }
+    }
+
+    persistScoreboardEntries() {
+      if (typeof localStorage === 'undefined' || !this.scoreboardStorageKey) {
+        return;
+      }
+      try {
+        if (!Array.isArray(this.scoreEntries) || this.scoreEntries.length === 0) {
+          localStorage.removeItem(this.scoreboardStorageKey);
+          return;
+        }
+        const snapshotLimit = 25;
+        const entries = this.scoreEntries
+          .slice(0, snapshotLimit)
+          .map((entry) => {
+            if (!entry || typeof entry !== 'object') {
+              return null;
+            }
+            const copy = { ...entry };
+            delete copy.rank;
+            delete copy.highlight;
+            delete copy.isPlayer;
+            return copy;
+          })
+          .filter(Boolean);
+        if (!entries.length) {
+          localStorage.removeItem(this.scoreboardStorageKey);
+          return;
+        }
+        localStorage.setItem(this.scoreboardStorageKey, JSON.stringify(entries));
+      } catch (error) {
+        console.warn('Unable to persist scoreboard snapshot', error);
+      }
+    }
+
+    restoreScoreboardEntries() {
+      const stored = this.getStoredScoreboardEntries();
+      if (!stored.length) {
+        return;
+      }
+      const utils = this.scoreboardUtils;
+      const normalized = utils?.normalizeScoreEntries
+        ? utils.normalizeScoreEntries(stored)
+        : stored.slice();
+      this.scoreEntries = normalized;
+      this.renderScoreboard();
+    }
+
     updateLocalScoreEntry(reason) {
       const entry = this.createRunSummary(reason);
       this.mergeScoreEntries([entry]);
@@ -1620,6 +1686,7 @@
         combined.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
         this.scoreEntries = combined;
       }
+      this.persistScoreboardEntries();
       this.renderScoreboard();
     }
 
