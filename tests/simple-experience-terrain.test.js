@@ -140,4 +140,51 @@ describe('simple experience terrain generation', () => {
       window.APP_CONFIG = {};
     }
   });
+
+  it('procedurally regenerates textures when external sources are unavailable', async () => {
+    window.APP_CONFIG = {
+      textures: {
+        obsidian: 'https://cdn.example.com/obsidian.png',
+      },
+    };
+
+    const canvas = {
+      width: 512,
+      height: 512,
+      clientWidth: 512,
+      clientHeight: 512,
+      getContext: () => null,
+    };
+
+    const loadSpy = vi
+      .spyOn(THREE.TextureLoader.prototype, 'load')
+      .mockImplementation((url, onLoad, onProgress, onError) => {
+        const texture = new THREE.Texture();
+        setTimeout(() => {
+          onError?.(new Error('Failed to fetch texture'));
+        }, 0);
+        return texture;
+      });
+
+    try {
+      const experience = window.SimpleExperience.create({ canvas, ui: {} });
+
+      experience.textureCache.delete('obsidian');
+      experience.defaultVoxelTexturePalettes.delete('obsidian');
+
+      const loadPromise = experience.loadExternalVoxelTexture('obsidian');
+      expect(loadPromise).not.toBeNull();
+
+      const resolvedTexture = await loadPromise;
+      await Promise.resolve();
+
+      expect(loadSpy).toHaveBeenCalled();
+      expect(resolvedTexture).toBeInstanceOf(THREE.Texture);
+      expect(resolvedTexture.isTexture).toBe(true);
+      expect(experience.textureCache.get('obsidian')).toBe(resolvedTexture);
+    } finally {
+      loadSpy.mockRestore();
+      window.APP_CONFIG = {};
+    }
+  });
 });
