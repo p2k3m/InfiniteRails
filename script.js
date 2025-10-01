@@ -16904,6 +16904,13 @@
     function loadDimension(id, fromId = null) {
       const dim = DIMENSIONS[id];
       if (!dim) return;
+      console.info('Loading dimension.', {
+        from: fromId,
+        to: id,
+        name: dim.name,
+        gravity: dim.physics?.gravity ?? 1,
+        shaderProfile: dim.physics?.shaderProfile ?? 'default',
+      });
       state.dimension = dim;
       state.unlockedDimensions.add(id);
       if (!state.dimensionHistory.includes(id)) {
@@ -18433,6 +18440,17 @@
       return tile.portalState;
     }
 
+    function ensurePortalDebugState(portal) {
+      if (!portal) return null;
+      if (!portal.debug) {
+        portal.debug = {
+          shaderPrimedLogged: false,
+          shaderActivationLogged: false,
+        };
+      }
+      return portal.debug;
+    }
+
     function setDimensionTransitionOverlay(active) {
       if (!dimensionTransitionEl) return;
       if (active) {
@@ -18472,10 +18490,19 @@
         stageStart: state.elapsed,
         portalTiles,
         loaded: false,
+        log: {
+          stage: null,
+          completionLogged: false,
+        },
       };
       setDimensionTransitionOverlay(true);
       updateTransitionOverlay(0, 0);
       logEvent(`Stabilising bridge to ${DIMENSIONS[toId]?.name ?? toId}...`);
+      console.info('Dimension transition initiated.', {
+        from: fromId,
+        to: toId,
+        portal: portal.label,
+      });
     }
 
     function clearTransitionPortalTiles(transition) {
@@ -18563,6 +18590,15 @@
         method: activationMethod,
         shaderPrimed: activationMethod === 'torch',
       };
+      const portalDebug = ensurePortalDebugState(frame);
+      if (portalDebug) {
+        portalDebug.shaderPrimedLogged = false;
+        portalDebug.shaderActivationLogged = false;
+      }
+      console.info('Portal ignition started.', {
+        portal: frame.label,
+        method: activationMethod,
+      });
       frame.announcedActive = false;
       frame.tiles.forEach(({ x: tx, y: ty }) => {
         const tile = getTile(tx, ty);
@@ -18581,6 +18617,13 @@
         }
       });
       if (activationMethod === 'torch') {
+        if (portalDebug && !portalDebug.shaderPrimedLogged) {
+          console.info('Portal shader primed by torch.', {
+            portal: frame.label,
+            activationStart: state.elapsed,
+          });
+          portalDebug.shaderPrimedLogged = true;
+        }
         logEvent(`${frame.label} drinks in the torchlight.`);
       } else {
         logEvent(`${frame.label} begins to awaken.`);
@@ -18751,6 +18794,7 @@
       const now = state.elapsed;
       for (const portal of state.portals) {
         if (portal.activation) {
+          const portalDebug = ensurePortalDebugState(portal);
           const duration = portal.activation.duration ?? PORTAL_ACTIVATION_DURATION;
           const progress = duration > 0 ? THREE.MathUtils.clamp((now - portal.activation.start) / duration, 0, 1) : 1;
           portal.activation.progress = progress;
@@ -18771,7 +18815,22 @@
               markTileDirty(x, y);
             }
           });
+          if (shaderPrimed && portalDebug && !portalDebug.shaderPrimedLogged) {
+            console.info('Portal shader animation activated.', {
+              portal: portal.label,
+              method: portal.activation.method,
+              progress,
+            });
+            portalDebug.shaderPrimedLogged = true;
+          }
           if (progress >= 1) {
+            if (portalDebug && !portalDebug.shaderActivationLogged) {
+              console.info('Portal shader animation completed.', {
+                portal: portal.label,
+                method: portal.activation.method,
+              });
+              portalDebug.shaderActivationLogged = true;
+            }
             portal.active = true;
             portal.activation = null;
             portal.tiles.forEach(({ x, y }) => {
@@ -18837,6 +18896,15 @@
     function updateDimensionTransition(delta) {
       const transition = state.ui.dimensionTransition;
       if (!transition) return;
+      if (transition.log && transition.log.stage !== transition.stage) {
+        console.info('Dimension transition stage changed.', {
+          stage: transition.stage,
+          from: transition.from,
+          to: transition.to,
+          portal: transition.portal?.label,
+        });
+        transition.log.stage = transition.stage;
+      }
       const now = state.elapsed;
       if (transition.stage === 'build') {
         const progress = Math.min(1, (now - transition.stageStart) / PORTAL_TRANSITION_BUILDUP);
@@ -18862,6 +18930,10 @@
           transition.loaded = true;
           const targetId = transition.to;
           const fromId = transition.from;
+          console.info('Dimension transition fade-out complete. Loading target dimension.', {
+            from: fromId,
+            to: targetId,
+          });
           loadDimension(targetId, fromId);
           transition.stage = 'fade-in';
           transition.stageStart = state.elapsed;
@@ -18873,6 +18945,14 @@
         const progress = Math.min(1, (now - transition.stageStart) / PORTAL_TRANSITION_FADE);
         updateTransitionOverlay(0, Math.max(0, 1 - progress));
         if (progress >= 1) {
+          if (transition.log && !transition.log.completionLogged) {
+            console.info('Dimension transition completed.', {
+              from: transition.from,
+              to: transition.to,
+              portal: transition.portal?.label,
+            });
+            transition.log.completionLogged = true;
+          }
           setDimensionTransitionOverlay(false);
           state.ui.dimensionTransition = null;
         }
