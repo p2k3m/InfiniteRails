@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -19,7 +19,13 @@ function instantiateShouldStartSimpleMode(windowStub) {
   const factory = new Function(
     'window',
     'URLSearchParams',
-    "'use strict';" + shouldStartSimpleModeSource + '\nreturn shouldStartSimpleMode;'
+    "'use strict';" +
+      'function queueBootstrapFallbackNotice(key, message) {' +
+      '  if (!window.__bootstrapNotices) { window.__bootstrapNotices = []; }' +
+      '  window.__bootstrapNotices.push({ key, message });' +
+      '}' +
+      shouldStartSimpleModeSource +
+      '\nreturn shouldStartSimpleMode;'
   );
   return factory(windowStub, URLSearchParams);
 }
@@ -41,6 +47,16 @@ function instantiateSimpleFallback(scope) {
   );
   return factory(scope);
 }
+
+const originalDocument = global.document;
+
+afterEach(() => {
+  if (originalDocument === undefined) {
+    delete global.document;
+  } else {
+    global.document = originalDocument;
+  }
+});
 
 describe('renderer mode selection', () => {
   it('prefers the advanced renderer when advanced mode is configured', () => {
@@ -83,6 +99,39 @@ describe('renderer mode selection', () => {
     };
     const shouldStartSimpleMode = instantiateShouldStartSimpleMode(windowStub);
     expect(shouldStartSimpleMode()).toBe(true);
+  });
+
+  it('falls back to the simple renderer when WebGL support is unavailable', () => {
+    const canvasStub = {
+      getContext: () => null,
+    };
+    global.document = {
+      createElement: (tagName) => {
+        if (tagName !== 'canvas') {
+          throw new Error(`Unexpected element request: ${tagName}`);
+        }
+        return canvasStub;
+      },
+    };
+    const windowStub = {
+      location: { search: '' },
+      APP_CONFIG: {
+        enableAdvancedExperience: true,
+      },
+      SimpleExperience: { create: () => ({}) },
+      console: { warn: () => {} },
+    };
+    const shouldStartSimpleMode = instantiateShouldStartSimpleMode(windowStub);
+    expect(shouldStartSimpleMode()).toBe(true);
+    expect(windowStub.APP_CONFIG.preferAdvanced).toBe(false);
+    expect(windowStub.APP_CONFIG.webglSupport).toBe(false);
+    expect(windowStub.__bootstrapNotices).toEqual([
+      {
+        key: 'webgl-unavailable-simple-mode',
+        message:
+          'WebGL is unavailable on this device, so the mission briefing view is shown instead of the full 3D renderer.',
+      },
+    ]);
   });
 
   describe('simple fallback bootstrap', () => {

@@ -1898,6 +1898,73 @@
       if (!advancedAvailable) {
         return true;
       }
+
+      const evaluateWebglAvailability = () => {
+        const appConfig = window.APP_CONFIG || {};
+        if (typeof appConfig.webglSupportOverride === 'boolean') {
+          return { supported: appConfig.webglSupportOverride, reason: 'override' };
+        }
+        if (typeof document === 'undefined') {
+          return { supported: true, reason: 'no-document' };
+        }
+        try {
+          const probe = document.createElement('canvas');
+          if (!probe || typeof probe.getContext !== 'function') {
+            return { supported: false, reason: 'no-canvas' };
+          }
+          const attributeCandidates = [
+            { failIfMajorPerformanceCaveat: true, powerPreference: 'high-performance' },
+            { powerPreference: 'high-performance' },
+            {},
+          ];
+          for (const attributes of attributeCandidates) {
+            const context =
+              probe.getContext('webgl2', attributes) ||
+              probe.getContext('webgl', attributes) ||
+              probe.getContext('experimental-webgl', attributes);
+            if (context) {
+              try {
+                const loseContext = context.getExtension?.('WEBGL_lose_context');
+                loseContext?.loseContext?.();
+              } catch (loseError) {
+                // Ignore cleanup failures; the browser will reclaim the context.
+              }
+              return { supported: true, reason: 'context-acquired', attributes };
+            }
+          }
+          return { supported: false, reason: 'context-unavailable' };
+        } catch (error) {
+          return { supported: false, reason: 'probe-error', error };
+        }
+      };
+
+      const webglStatus = evaluateWebglAvailability();
+      if (!webglStatus.supported) {
+        const appConfig = window.APP_CONFIG || (window.APP_CONFIG = {});
+        appConfig.webglSupport = false;
+        if (appConfig.preferAdvanced === undefined || appConfig.preferAdvanced === true) {
+          appConfig.preferAdvanced = false;
+        }
+        const fallbackMessage =
+          'WebGL is unavailable on this device, so the mission briefing view is shown instead of the full 3D renderer.';
+        if (typeof queueBootstrapFallbackNotice === 'function') {
+          queueBootstrapFallbackNotice('webgl-unavailable-simple-mode', fallbackMessage);
+        }
+        if (window.console?.warn) {
+          const detail = webglStatus.reason ? ` (${webglStatus.reason})` : '';
+          if (webglStatus.error) {
+            window.console.warn(
+              `WebGL probe failed${detail}; forcing simplified renderer mode.`,
+              webglStatus.error,
+            );
+          } else {
+            window.console.warn(`WebGL probe failed${detail}; forcing simplified renderer mode.`);
+          }
+        }
+        window.APP_CONFIG = appConfig;
+        return true;
+      }
+
       return window.APP_CONFIG?.preferAdvanced !== true;
     }
 
