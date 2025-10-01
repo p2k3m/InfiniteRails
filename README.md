@@ -250,6 +250,18 @@ This repository ships with a GitHub Actions workflow that deploys the static sit
 
 If no CloudFront distribution matches the S3 bucket, the workflow fails with instructions to create or tag one before redeploying.
 
+### Static asset permissions
+
+Every file uploaded during the deploy—including JavaScript bundles, GLTF models, textures, ambient audio, and any future additions under `assets/` or `vendor/`—must be readable by CloudFront. The GitHub Actions workflow configures the bucket with a permissive `s3:GetObject` statement by default, but infrastructure teams can swap this for an Origin Access Identity (OAI) or Origin Access Control (OAC) as long as the identity retains read access to the same object prefixes.
+
+To confirm nothing blocks the experience from loading:
+
+1. Run `aws s3api get-bucket-policy --bucket <bucket>` and ensure either the public-read statement or an OAI/OAC-specific principal grants `s3:GetObject` to `arn:aws:s3:::<bucket>/*`.
+2. Pick a representative asset (for example `assets/steve.gltf` or `assets/audio-samples.json`) and fetch it anonymously: `curl -I https://<distribution-domain>/assets/steve.gltf`. A `200` response confirms CloudFront can reach the object.
+3. Repeat the curl check for any new asset prefix you introduce (such as `textures/` or `audio/`) to avoid regressions.
+
+If the curl test returns `403`, revisit the bucket policy or OAI/OAC bindings until the CDN can retrieve every static asset.
+
 ## Enhancement Roadmap
 
 The existing build focuses on the UI shell and backend connectivity. For an
