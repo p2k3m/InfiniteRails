@@ -72,6 +72,74 @@
     return Object.freeze(map);
   })();
 
+  const configWarningDeduper = new Set();
+
+  function logConfigWarning(message, context = {}) {
+    const consoleRef = typeof console !== 'undefined' ? console : null;
+    if (!consoleRef) {
+      return;
+    }
+    const sortedKeys = Object.keys(context).sort();
+    const dedupeKey = `${message}|${sortedKeys.map((key) => `${key}:${context[key]}`).join(',')}`;
+    if (configWarningDeduper.has(dedupeKey)) {
+      return;
+    }
+    configWarningDeduper.add(dedupeKey);
+    if (typeof consoleRef.warn === 'function') {
+      consoleRef.warn(message, context);
+    } else if (typeof consoleRef.error === 'function') {
+      consoleRef.error(message, context);
+    } else if (typeof consoleRef.log === 'function') {
+      consoleRef.log(message, context);
+    }
+  }
+
+  function normaliseApiBaseUrl(base) {
+    if (!base || typeof base !== 'string') {
+      return null;
+    }
+    const trimmed = base.trim();
+    if (!trimmed) {
+      return null;
+    }
+    let resolved;
+    try {
+      const scope = typeof window !== 'undefined' ? window : typeof globalThis !== 'undefined' ? globalThis : null;
+      resolved = new URL(trimmed, scope?.location?.href ?? undefined);
+    } catch (error) {
+      logConfigWarning('Invalid APP_CONFIG.apiBaseUrl detected; remote sync disabled.', {
+        apiBaseUrl: base,
+        error: error?.message ?? String(error),
+      });
+      return null;
+    }
+    const hasExplicitProtocol = /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(trimmed);
+    if (!hasExplicitProtocol) {
+      logConfigWarning('APP_CONFIG.apiBaseUrl must be an absolute URL including the protocol.', {
+        apiBaseUrl: base,
+        resolved: resolved.href,
+      });
+      return null;
+    }
+    if (resolved.protocol !== 'https:' && resolved.protocol !== 'http:') {
+      logConfigWarning('APP_CONFIG.apiBaseUrl must use HTTP or HTTPS.', {
+        apiBaseUrl: base,
+        protocol: resolved.protocol,
+      });
+      return null;
+    }
+    if (resolved.search || resolved.hash) {
+      logConfigWarning('APP_CONFIG.apiBaseUrl should not include query strings or fragments; ignoring extras.', {
+        apiBaseUrl: base,
+        search: resolved.search,
+        hash: resolved.hash,
+      });
+      resolved.search = '';
+      resolved.hash = '';
+    }
+    return resolved.href.replace(/\/+$/, '');
+  }
+
   function cloneKeyBindingMap(source = {}) {
     const result = {};
     Object.entries(source).forEach(([action, keys]) => {
@@ -695,7 +763,7 @@
       this.victoryShareButton = this.ui.victoryShareButton || null;
       this.victoryCloseButton = this.ui.victoryCloseButton || null;
       this.victoryShareStatusEl = this.ui.victoryShareStatusEl || null;
-      this.apiBaseUrl = options.apiBaseUrl || null;
+      this.apiBaseUrl = normaliseApiBaseUrl(options.apiBaseUrl || null);
       this.playerDisplayName = (options.playerName || '').trim() || 'Explorer';
       this.defaultPlayerName = this.playerDisplayName;
       this.playerGoogleId = null;
