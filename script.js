@@ -103,6 +103,223 @@
     return candidates.length ? candidates[0] : relativePath;
   }
 
+  function normaliseStatusMeterBoolean(value, fallback) {
+    if (value === null || value === undefined) {
+      return fallback;
+    }
+    if (typeof value === 'boolean') {
+      return value;
+    }
+    if (typeof value === 'number') {
+      if (!Number.isFinite(value)) {
+        return fallback;
+      }
+      if (value === 0) {
+        return false;
+      }
+      if (value === 1) {
+        return true;
+      }
+    }
+    if (typeof value === 'string') {
+      const trimmed = value.trim().toLowerCase();
+      if (!trimmed) {
+        return fallback;
+      }
+      if (['true', '1', 'yes', 'on', 'enabled', 'enable'].includes(trimmed)) {
+        return true;
+      }
+      if (['false', '0', 'no', 'off', 'disabled', 'disable'].includes(trimmed)) {
+        return false;
+      }
+    }
+    return fallback;
+  }
+
+  function toFiniteNumber(value, fallback) {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? numeric : fallback;
+  }
+
+  function normaliseStatusMeters(source) {
+    const defaults = {
+      bubbles: { enabled: true, max: 10, initial: 10, drainRate: 2, refillRate: 3 },
+      hunger: { enabled: false, max: 10, initial: 10, drainRate: 0.3, refillRate: 0.5, idleDelayMs: 1500 },
+    };
+    const result = {
+      bubbles: { ...defaults.bubbles },
+      hunger: { ...defaults.hunger },
+    };
+
+    const queue = [];
+
+    const enqueue = (value) => {
+      if (value === null || value === undefined) {
+        return;
+      }
+      if (Array.isArray(value)) {
+        value.forEach(enqueue);
+        return;
+      }
+      if (typeof value === 'object') {
+        const hasBubbles = Object.prototype.hasOwnProperty.call(value, 'bubbles');
+        const hasHunger = Object.prototype.hasOwnProperty.call(value, 'hunger');
+        if (hasBubbles || hasHunger) {
+          if (hasBubbles) {
+            const entry = value.bubbles;
+            if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
+              enqueue({ type: 'bubbles', ...entry });
+            } else {
+              enqueue({ type: 'bubbles', enabled: entry });
+            }
+          }
+          if (hasHunger) {
+            const entry = value.hunger;
+            if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
+              enqueue({ type: 'hunger', ...entry });
+            } else {
+              enqueue({ type: 'hunger', enabled: entry });
+            }
+          }
+          return;
+        }
+      }
+      queue.push(value);
+    };
+
+    enqueue(source);
+
+    const applyEntry = (type, entry) => {
+      const target = result[type];
+      if (!target) {
+        return;
+      }
+
+      let enabledOverride = entry.enabled ?? entry.enable ?? entry.visible ?? entry.show;
+      if (entry.disabled !== undefined || entry.disable !== undefined) {
+        const disabled = normaliseStatusMeterBoolean(entry.disabled ?? entry.disable, false);
+        enabledOverride = !disabled;
+      }
+      const resolvedEnabled = normaliseStatusMeterBoolean(enabledOverride, target.enabled);
+      target.enabled = resolvedEnabled;
+
+      const maxCandidate = entry.max ?? entry.capacity ?? entry.units ?? entry.total;
+      const resolvedMax = toFiniteNumber(maxCandidate, target.max);
+      if (Number.isFinite(resolvedMax) && resolvedMax >= 0) {
+        target.max = resolvedMax;
+      }
+
+      const initialCandidate = entry.initial ?? entry.start ?? entry.value ?? entry.default ?? entry.current;
+      const resolvedInitial = toFiniteNumber(initialCandidate, target.initial ?? target.max);
+      if (Number.isFinite(resolvedInitial)) {
+        target.initial = resolvedInitial;
+      }
+
+      const drainCandidate =
+        entry.drainRate ?? entry.drain ?? entry.lossPerSecond ?? entry.deplete ?? entry.depletionRate ?? entry.consumeRate;
+      const resolvedDrain = toFiniteNumber(drainCandidate, target.drainRate);
+      if (Number.isFinite(resolvedDrain) && resolvedDrain >= 0) {
+        target.drainRate = resolvedDrain;
+      }
+
+      const refillCandidate =
+        entry.refillRate ??
+        entry.refill ??
+        entry.restoreRate ??
+        entry.recoverPerSecond ??
+        entry.rechargeRate ??
+        entry.gainPerSecond;
+      const resolvedRefill = toFiniteNumber(refillCandidate, target.refillRate);
+      if (Number.isFinite(resolvedRefill) && resolvedRefill >= 0) {
+        target.refillRate = resolvedRefill;
+      }
+
+      if (type === 'hunger') {
+        const idleSecondsCandidate = entry.idleDelay ?? entry.idleDelaySeconds ?? entry.restDelay ?? entry.recoveryDelay;
+        const idleMsCandidate = entry.idleDelayMs ?? entry.idleThresholdMs ?? entry.idleWindowMs;
+        const idleMs = toFiniteNumber(idleMsCandidate, null);
+        const idleSeconds = toFiniteNumber(idleSecondsCandidate, null);
+        if (Number.isFinite(idleMs)) {
+          target.idleDelayMs = Math.max(0, idleMs);
+        } else if (Number.isFinite(idleSeconds)) {
+          target.idleDelayMs = Math.max(0, idleSeconds * 1000);
+        }
+      }
+    };
+
+    for (const entry of queue) {
+      let type = null;
+      let payload = {};
+      if (typeof entry === 'string') {
+        const trimmed = entry.trim();
+        if (!trimmed) {
+          continue;
+        }
+        type = trimmed.toLowerCase();
+        payload = { enabled: true };
+      } else if (entry && typeof entry === 'object') {
+        payload = entry;
+        const rawType = entry.type ?? entry.meter ?? entry.id ?? entry.kind ?? entry.name ?? entry.key;
+        if (typeof rawType === 'string') {
+          type = rawType.trim().toLowerCase();
+        }
+      } else {
+        continue;
+      }
+
+      if (!type) {
+        continue;
+      }
+
+      if (type === 'bubble' || type === 'bubbles' || type === 'air' || type === 'oxygen') {
+        type = 'bubbles';
+      } else if (
+        type === 'hunger' ||
+        type === 'food' ||
+        type === 'stamina' ||
+        type === 'satiety' ||
+        type === 'satiation'
+      ) {
+        type = 'hunger';
+      }
+
+      if (type !== 'bubbles' && type !== 'hunger') {
+        continue;
+      }
+
+      applyEntry(type, payload);
+    }
+
+    const sanitiseMeter = (meterKey) => {
+      const spec = result[meterKey];
+      if (!spec) {
+        return;
+      }
+      const defaultsForMeter = defaults[meterKey];
+      const max = Number.isFinite(spec.max) ? Math.max(0, spec.max) : defaultsForMeter.max;
+      spec.max = max;
+      const initialFallback = Number.isFinite(spec.initial) ? spec.initial : max;
+      const initial = Math.min(Math.max(initialFallback, 0), max);
+      spec.initial = initial;
+      spec.drainRate = Math.max(0, Number.isFinite(spec.drainRate) ? spec.drainRate : defaultsForMeter.drainRate);
+      spec.refillRate = Math.max(0, Number.isFinite(spec.refillRate) ? spec.refillRate : defaultsForMeter.refillRate);
+      if (meterKey === 'hunger') {
+        spec.idleDelayMs = Math.max(
+          0,
+          Number.isFinite(spec.idleDelayMs) ? spec.idleDelayMs : defaultsForMeter.idleDelayMs
+        );
+      }
+      if (!spec.enabled) {
+        spec.initial = Math.min(spec.initial, spec.max);
+      }
+    };
+
+    sanitiseMeter('bubbles');
+    sanitiseMeter('hunger');
+
+    return result;
+  }
+
   const normaliseAssetBase =
     externalAssetResolver?.normaliseAssetBase ?? fallbackNormaliseAssetBase;
 
@@ -494,6 +711,9 @@
       }
       if (Number.isFinite(player.maxAir)) {
         player.air = player.maxAir;
+      }
+      if (Number.isFinite(player.maxHunger)) {
+        player.hunger = player.maxHunger;
       }
       player.zombieHits = 0;
     }
@@ -1153,7 +1373,25 @@
       (typeof globalThis !== 'undefined' && globalThis.ScoreboardUtils) ||
       SCOREBOARD_UTILS_FALLBACK;
 
-    const { normalizeScoreEntries, upsertScoreEntry, formatScoreNumber, formatRunTime, formatLocationLabel } = scoreboardUtils;
+    const {
+      normalizeScoreEntries,
+      upsertScoreEntry,
+      formatScoreNumber,
+      formatRunTime,
+      formatLocationLabel,
+    } = scoreboardUtils;
+
+    const appConfig =
+      (typeof window !== 'undefined' && window.APP_CONFIG) ||
+      (typeof globalThis !== 'undefined' && globalThis.APP_CONFIG) ||
+      globalScope?.APP_CONFIG ||
+      {};
+    const statusMeters = normaliseStatusMeters([
+      appConfig.statusMeters,
+      appConfig.statusBars,
+      appConfig.hud?.statusMeters,
+      appConfig.hud?.statusBars,
+    ]);
 
     const canvas = document.getElementById('gameCanvas');
     if (canvas && !canvas.hasAttribute('tabindex')) {
@@ -1167,6 +1405,7 @@
     const virtualJoystickThumb = virtualJoystickEl?.querySelector('.virtual-joystick__thumb') ?? null;
     const heartsEl = document.getElementById('hearts');
     const bubblesEl = document.getElementById('bubbles');
+    let hungerEl = document.getElementById('hunger');
     const timeEl = document.getElementById('timeOfDay');
     const dimensionInfoEl = document.getElementById('dimensionInfo');
     const portalProgressEl = document.getElementById('portalProgress');
@@ -14898,6 +15137,17 @@
     const HEALTH_REGEN_IDLE_DELAY = 5;
     const HEALTH_REGEN_FULL_RESTORE_DURATION = 60;
 
+    const bubbleMax = Math.max(statusMeters.bubbles.max ?? 0, 0);
+    const bubbleInitial = Math.min(
+      Math.max(statusMeters.bubbles.initial ?? bubbleMax, 0),
+      bubbleMax,
+    );
+    const hungerMax = Math.max(statusMeters.hunger.max ?? 0, 0);
+    const hungerInitial = Math.min(
+      Math.max(statusMeters.hunger.initial ?? hungerMax, 0),
+      hungerMax,
+    );
+
     const state = {
       width: 16,
       height: 12,
@@ -14924,10 +15174,11 @@
       ironGolems: [],
       lootables: [],
       chests: [],
-      lastMoveAt: 0,
+      lastMoveAt: Number.NEGATIVE_INFINITY,
       moveDelay: DEFAULT_MOVE_DELAY_SECONDS,
       cameraPerspective: 'third',
       baseMoveDelay: DEFAULT_MOVE_DELAY_SECONDS,
+      statusMeters,
       hooks: {
         onMove: [],
         onAction: [],
@@ -14946,8 +15197,10 @@
         facing: { x: 0, y: 1 },
         hearts: 10,
         maxHearts: 10,
-        air: 10,
-        maxAir: 10,
+        air: statusMeters.bubbles.enabled ? bubbleInitial : 0,
+        maxAir: statusMeters.bubbles.enabled ? bubbleMax : 0,
+        hunger: statusMeters.hunger.enabled ? hungerInitial : 0,
+        maxHunger: statusMeters.hunger.enabled ? hungerMax : 0,
         selectedSlot: 0,
         inventory: Array.from({ length: 10 }, () => null),
         satchel: [],
@@ -14973,6 +15226,8 @@
         heartsValue: null,
         airValue: null,
         lastAirUnits: null,
+        hungerValue: null,
+        lastHungerUnits: null,
         drowningFadeTimeout: null,
         lastDrowningCueAt: -Infinity,
         lastBubblePopAt: -Infinity,
@@ -15974,8 +16229,24 @@
 
     function resetStatusMeterMemory() {
       state.ui.heartsValue = state.player.hearts;
-      state.ui.airValue = state.player.air;
-      state.ui.lastAirUnits = Math.ceil(state.player.air);
+      const bubblesEnabled =
+        Boolean(state.statusMeters?.bubbles?.enabled) && Number(state.player.maxAir) > 0;
+      if (bubblesEnabled) {
+        state.ui.airValue = state.player.air;
+        state.ui.lastAirUnits = Math.ceil(state.player.air);
+      } else {
+        state.ui.airValue = null;
+        state.ui.lastAirUnits = null;
+      }
+      const hungerEnabled =
+        Boolean(state.statusMeters?.hunger?.enabled) && Number(state.player.maxHunger) > 0;
+      if (hungerEnabled) {
+        state.ui.hungerValue = state.player.hunger;
+        state.ui.lastHungerUnits = Math.ceil(state.player.hunger);
+      } else {
+        state.ui.hungerValue = null;
+        state.ui.lastHungerUnits = null;
+      }
     }
 
     const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -16039,8 +16310,14 @@
     function updateStatusBars() {
       if (!heartsEl || !bubblesEl || !timeEl) return;
 
+      const bubbleConfig = state.statusMeters?.bubbles;
+      const hungerConfig = state.statusMeters?.hunger;
+      const bubbleEnabled = Boolean(bubbleConfig?.enabled) && state.player.maxAir > 0;
+      const hungerEnabled = Boolean(hungerConfig?.enabled) && state.player.maxHunger > 0;
+
       const previousHearts = state.ui.heartsValue ?? state.player.maxHearts;
-      const previousAir = state.ui.airValue ?? state.player.maxAir;
+      const previousAir = bubbleEnabled ? state.ui.airValue ?? state.player.maxAir : 0;
+      const previousHunger = hungerEnabled ? state.ui.hungerValue ?? state.player.maxHunger : 0;
 
       heartClipIdCounter = 0;
 
@@ -16067,38 +16344,113 @@
         : heartLabelValue.toFixed(1);
       heartsEl.setAttribute('aria-label', `${heartLabel} hearts remaining`);
 
-      bubblesEl.innerHTML = '';
-      bubblesEl.classList.add('hud-bubbles');
-      bubblesEl.setAttribute('data-max-air', state.player.maxAir.toString());
-      const airDelta = state.player.air - previousAir;
-      bubblesEl.classList.toggle('is-losing', airDelta < -0.05);
-      bubblesEl.classList.toggle('is-gaining', airDelta > 0.05);
-      const airLowThreshold = Math.max(2, state.player.maxAir * 0.2);
-      bubblesEl.classList.toggle('is-low', state.player.air <= airLowThreshold);
-      bubblesEl.classList.toggle('is-drowning', state.player.air <= 0);
+      if (!bubbleEnabled) {
+        bubblesEl.innerHTML = '';
+        bubblesEl.style.display = 'none';
+        bubblesEl.setAttribute('aria-hidden', 'true');
+        bubblesEl.removeAttribute('aria-label');
+        bubblesEl.classList.remove('is-losing', 'is-gaining', 'is-low', 'is-drowning');
+        state.ui.airValue = null;
+        state.ui.lastAirUnits = null;
+      } else {
+        bubblesEl.style.display = '';
+        bubblesEl.removeAttribute('aria-hidden');
+        bubblesEl.innerHTML = '';
+        bubblesEl.classList.add('hud-bubbles');
+        bubblesEl.setAttribute('data-max-air', state.player.maxAir.toString());
+        const airDelta = state.player.air - previousAir;
+        bubblesEl.classList.toggle('is-losing', airDelta < -0.05);
+        bubblesEl.classList.toggle('is-gaining', airDelta > 0.05);
+        const airLowThreshold = Math.max(2, state.player.maxAir * 0.2);
+        bubblesEl.classList.toggle('is-low', state.player.air <= airLowThreshold);
+        bubblesEl.classList.toggle('is-drowning', state.player.air <= 0);
 
-      const bubbleFrame = document.createElement('div');
-      bubbleFrame.className = 'hud-bubbles__frame';
-      const bubbleStack = document.createElement('div');
-      bubbleStack.className = 'hud-bubbles__stack';
-      for (let i = 0; i < state.player.maxAir; i++) {
-        const fill = clamp(state.player.air - i, 0, 1);
-        const bubble = document.createElement('span');
-        bubble.className = 'bubble-indicator';
-        bubble.style.setProperty('--bubble-index', i.toString());
-        const opacityLevel = fill <= 0 ? 0.18 : fill >= 1 ? 1 : 0.3 + fill * 0.7;
-        bubble.style.setProperty('--opacity-level', opacityLevel.toFixed(2));
-        if (fill <= 0) {
-          bubble.classList.add('is-empty');
-        } else if (fill < 1) {
-          bubble.classList.add('is-partial');
+        const bubbleFrame = document.createElement('div');
+        bubbleFrame.className = 'hud-bubbles__frame';
+        const bubbleStack = document.createElement('div');
+        bubbleStack.className = 'hud-bubbles__stack';
+        for (let i = 0; i < state.player.maxAir; i++) {
+          const fill = clamp(state.player.air - i, 0, 1);
+          const bubble = document.createElement('span');
+          bubble.className = 'bubble-indicator';
+          bubble.style.setProperty('--bubble-index', i.toString());
+          const opacityLevel = fill <= 0 ? 0.18 : fill >= 1 ? 1 : 0.3 + fill * 0.7;
+          bubble.style.setProperty('--opacity-level', opacityLevel.toFixed(2));
+          if (fill <= 0) {
+            bubble.classList.add('is-empty');
+          } else if (fill < 1) {
+            bubble.classList.add('is-partial');
+          }
+          bubbleStack.appendChild(bubble);
         }
-        bubbleStack.appendChild(bubble);
+        bubbleFrame.appendChild(bubbleStack);
+        bubblesEl.appendChild(bubbleFrame);
+        const airRemaining = Math.max(0, Math.ceil(state.player.air));
+        bubblesEl.setAttribute('aria-label', `${airRemaining} bubbles of air remaining`);
+        state.ui.airValue = state.player.air;
+        state.ui.lastAirUnits = Math.ceil(state.player.air);
       }
-      bubbleFrame.appendChild(bubbleStack);
-      bubblesEl.appendChild(bubbleFrame);
-      const airRemaining = Math.max(0, Math.ceil(state.player.air));
-      bubblesEl.setAttribute('aria-label', `${airRemaining} bubbles of air remaining`);
+
+      if (!hungerEnabled) {
+        if (hungerEl && hungerEl.parentElement) {
+          hungerEl.parentElement.removeChild(hungerEl);
+        }
+        hungerEl = null;
+        state.ui.hungerValue = null;
+        state.ui.lastHungerUnits = null;
+      } else {
+        if (!hungerEl) {
+          const statusContainer = heartsEl?.parentElement ?? null;
+          if (statusContainer) {
+            hungerEl = document.createElement('div');
+            hungerEl.id = 'hunger';
+            hungerEl.className = 'status-item hunger';
+            hungerEl.setAttribute('data-hint', 'Hunger remaining before you tire.');
+            if (timeEl && timeEl.parentElement === statusContainer) {
+              statusContainer.insertBefore(hungerEl, timeEl);
+            } else {
+              statusContainer.appendChild(hungerEl);
+            }
+          }
+        }
+        if (hungerEl) {
+          hungerEl.style.display = '';
+          hungerEl.innerHTML = '';
+          hungerEl.classList.add('hud-hunger');
+          hungerEl.setAttribute('data-max-hunger', state.player.maxHunger.toString());
+          const hungerDelta = state.player.hunger - previousHunger;
+          hungerEl.classList.toggle('is-draining', hungerDelta < -0.05);
+          hungerEl.classList.toggle('is-refilling', hungerDelta > 0.05);
+          const hungerLowThreshold = Math.max(2, state.player.maxHunger * 0.25);
+          hungerEl.classList.toggle('is-low', state.player.hunger <= hungerLowThreshold);
+          hungerEl.classList.toggle('is-empty', state.player.hunger <= 0.01);
+
+          const hungerFrame = document.createElement('div');
+          hungerFrame.className = 'hud-hunger__frame';
+          const hungerStack = document.createElement('div');
+          hungerStack.className = 'hud-hunger__stack';
+          for (let i = 0; i < state.player.maxHunger; i++) {
+            const fill = clamp(state.player.hunger - i, 0, 1);
+            const pip = document.createElement('span');
+            pip.className = 'hunger-indicator';
+            pip.style.setProperty('--hunger-index', i.toString());
+            const opacity = fill <= 0 ? 0.25 : fill >= 1 ? 1 : 0.35 + fill * 0.65;
+            pip.style.setProperty('--opacity-level', opacity.toFixed(2));
+            if (fill <= 0) {
+              pip.classList.add('is-empty');
+            } else if (fill < 1) {
+              pip.classList.add('is-partial');
+            }
+            hungerStack.appendChild(pip);
+          }
+          hungerFrame.appendChild(hungerStack);
+          hungerEl.appendChild(hungerFrame);
+          const hungerRemaining = Math.max(0, Math.ceil(state.player.hunger));
+          hungerEl.setAttribute('aria-label', `${hungerRemaining} hunger bars remaining`);
+          state.ui.hungerValue = state.player.hunger;
+          state.ui.lastHungerUnits = Math.ceil(state.player.hunger);
+        }
+      }
 
       const cycle = getDayNightMetrics();
       rootElement.style.setProperty('--time-phase', cycle.ratio.toFixed(3));
@@ -16119,8 +16471,14 @@
       timeEl.appendChild(track);
 
       state.ui.heartsValue = state.player.hearts;
-      state.ui.airValue = state.player.air;
-      state.ui.lastAirUnits = Math.ceil(state.player.air);
+      if (!bubbleEnabled) {
+        state.ui.airValue = null;
+        state.ui.lastAirUnits = null;
+      }
+      if (!hungerEnabled) {
+        state.ui.hungerValue = null;
+        state.ui.lastHungerUnits = null;
+      }
     }
 
     function updateScoreOverlay(options = {}) {
@@ -16850,6 +17208,7 @@
       state.dimensionHistory = ['origin'];
       state.unlockedDimensions = new Set(['origin']);
       state.knownRecipes = new Set(['stick', 'stone-pickaxe']);
+      state.lastMoveAt = Number.NEGATIVE_INFINITY;
       resetScoreTracking();
       state.player.inventory = Array.from({ length: 10 }, () => null);
       state.player.satchel = [];
@@ -17100,6 +17459,7 @@
       updateIronGolems(delta);
       updateZombies(delta);
       handleAir(delta);
+      handleHunger(delta);
       handleHealthRegen(delta);
       processEchoQueue();
       updatePortalActivation();
@@ -17152,11 +17512,24 @@
     }
 
     function handleAir(delta) {
+      const bubbleConfig = state.statusMeters?.bubbles;
+      const bubblesEnabled = Boolean(bubbleConfig?.enabled) && Number(state.player.maxAir) > 0;
+      if (!bubblesEnabled) {
+        state.player.air = 0;
+        state.ui.lastAirUnits = null;
+        return;
+      }
+      if (!Number.isFinite(state.player.air)) {
+        state.player.air = state.player.maxAir;
+      }
+      const drainRate = Math.max(0, bubbleConfig?.drainRate ?? 2);
+      const refillRate = Math.max(0, bubbleConfig?.refillRate ?? 3);
       const tile = getTile(state.player.x, state.player.y);
       if (tile?.type === 'water') {
         const previousAir = state.player.air;
         const previousUnits = Math.ceil(previousAir);
-        state.player.air = Math.max(0, state.player.air - delta * 2);
+        const nextAir = clamp(state.player.air - delta * drainRate, 0, state.player.maxAir);
+        state.player.air = nextAir;
         const currentUnits = Math.ceil(state.player.air);
         if (currentUnits < previousUnits) {
           triggerDrowningCue();
@@ -17169,13 +17542,55 @@
         }
       } else {
         const previousAir = state.player.air;
-        state.player.air = clamp(state.player.air + delta * 3, 0, state.player.maxAir);
+        const nextAir = clamp(state.player.air + delta * refillRate, 0, state.player.maxAir);
+        state.player.air = nextAir;
         if (state.player.air > previousAir && drowningVignetteEl) {
           drowningVignetteEl.setAttribute('data-active', 'false');
           drowningVignetteEl.classList.remove('drowning-vignette--flash');
         }
       }
       state.ui.lastAirUnits = Math.ceil(state.player.air);
+    }
+
+    function handleHunger(delta) {
+      const hungerConfig = state.statusMeters?.hunger;
+      const hungerEnabled = Boolean(hungerConfig?.enabled) && Number(state.player.maxHunger) > 0;
+      if (!hungerEnabled) {
+        state.player.hunger = 0;
+        state.ui.lastHungerUnits = null;
+        return;
+      }
+      if (!Number.isFinite(state.player.hunger)) {
+        const baseline = Number.isFinite(hungerConfig?.initial)
+          ? hungerConfig.initial
+          : state.player.maxHunger;
+        state.player.hunger = clamp(baseline, 0, state.player.maxHunger);
+      }
+      const now =
+        typeof performance !== 'undefined' && typeof performance.now === 'function'
+          ? performance.now()
+          : Date.now();
+      const lastMove = Number.isFinite(state.lastMoveAt) ? state.lastMoveAt : -Infinity;
+      const idleDelayMs = Number.isFinite(hungerConfig?.idleDelayMs)
+        ? hungerConfig.idleDelayMs
+        : 1500;
+      const recentlyMoved = now - lastMove <= idleDelayMs;
+      const drainRate = recentlyMoved ? Math.max(0, hungerConfig?.drainRate ?? 0.3) : 0;
+      const refillRate = recentlyMoved ? 0 : Math.max(0, hungerConfig?.refillRate ?? 0.5);
+      if (drainRate > 0) {
+        state.player.hunger = clamp(
+          state.player.hunger - delta * drainRate,
+          0,
+          state.player.maxHunger
+        );
+      } else if (refillRate > 0) {
+        state.player.hunger = clamp(
+          state.player.hunger + delta * refillRate,
+          0,
+          state.player.maxHunger
+        );
+      }
+      state.ui.lastHungerUnits = Math.ceil(state.player.hunger);
     }
 
     function handleHealthRegen(delta) {
@@ -17899,8 +18314,10 @@
       } else {
         state.player.hearts = state.player.maxHearts;
         state.player.air = state.player.maxAir;
+        state.player.hunger = state.player.maxHunger;
         state.player.zombieHits = 0;
       }
+      state.lastMoveAt = Number.NEGATIVE_INFINITY;
       loadDimension('origin');
       ensurePlayerAvatarReady({ forceReload: true, resetAnimations: true });
       if (combatUtils?.restoreInventory) {
