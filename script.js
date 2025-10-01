@@ -55,6 +55,8 @@
     score: 0,
     recipes: new Set(),
     dimensions: new Set(),
+    bonuses: new Map(),
+    penalties: 0,
     points: {
       recipe: 0,
       dimension: 0,
@@ -1839,12 +1841,19 @@
           const metricValue = document.createElement('span');
           metricValue.id = id;
           metricValue.className = 'score-overlay__metric-value';
-          metricValue.textContent = '0 (+0 pts)';
+          const defaultText =
+            labelText === 'Portals' || labelText === 'Combat' || labelText === 'Loot'
+              ? '+0 pts'
+              : '0 (+0 pts)';
+          metricValue.textContent = defaultText;
           item.appendChild(metricValue);
           breakdown.appendChild(item);
         };
-        createMetric('scoreRecipes', 'Recipes');
+        createMetric('scoreRecipes', 'Crafting');
         createMetric('scoreDimensions', 'Dimensions');
+        createMetric('scorePortals', 'Portals');
+        createMetric('scoreCombat', 'Combat');
+        createMetric('scoreLoot', 'Loot');
         cornerContainer.insertBefore(scorePanel, cornerContainer.firstChild ?? null);
       } else {
         scorePanel.classList.add('score-overlay');
@@ -1903,14 +1912,22 @@
             valueEl = document.createElement('span');
             valueEl.id = id;
             valueEl.className = 'score-overlay__metric-value';
-            valueEl.textContent = '0 (+0 pts)';
+            const defaultText =
+              labelText === 'Portals' || labelText === 'Combat' || labelText === 'Loot'
+                ? '+0 pts'
+                : '0 (+0 pts)';
+            valueEl.textContent = defaultText;
             item.appendChild(valueEl);
             breakdown.appendChild(item);
             return valueEl;
           }
           valueEl.classList.add('score-overlay__metric-value');
           if (!valueEl.textContent?.trim()) {
-            valueEl.textContent = '0 (+0 pts)';
+            const defaultText =
+              labelText === 'Portals' || labelText === 'Combat' || labelText === 'Loot'
+                ? '+0 pts'
+                : '0 (+0 pts)';
+            valueEl.textContent = defaultText;
           }
           let container = valueEl.closest('li');
           if (!container) {
@@ -1932,8 +1949,11 @@
           }
           return valueEl;
         };
-        ensureMetric('scoreRecipes', 'Recipes');
+        ensureMetric('scoreRecipes', 'Crafting');
         ensureMetric('scoreDimensions', 'Dimensions');
+        ensureMetric('scorePortals', 'Portals');
+        ensureMetric('scoreCombat', 'Combat');
+        ensureMetric('scoreLoot', 'Loot');
       }
       return scorePanel;
     };
@@ -2159,6 +2179,9 @@
     const scoreTotalEl = document.getElementById('scoreTotal');
     const scoreRecipesEl = document.getElementById('scoreRecipes');
     const scoreDimensionsEl = document.getElementById('scoreDimensions');
+    const scorePortalsEl = document.getElementById('scorePortals');
+    const scoreCombatEl = document.getElementById('scoreCombat');
+    const scoreLootEl = document.getElementById('scoreLoot');
     const playerHintEl = document.getElementById('playerHint');
     const inventoryModal = document.getElementById('inventoryModal');
     const closeInventoryButton = document.getElementById('closeInventory');
@@ -2329,6 +2352,10 @@
         if (!source || typeof source !== 'object') {
           return null;
         }
+        const toFiniteNumber = (value) => {
+          const numeric = Number(value);
+          return Number.isFinite(numeric) ? numeric : null;
+        };
         const normalizedDimensions = ensureArrayOfStrings(source.dimensions ?? []);
         const normalizedRecipes = ensureArrayOfStrings(source.recipes ?? []);
         const dimensionCount = Number.isFinite(source.dimensionCount)
@@ -2337,6 +2364,46 @@
         const recipeCount = Number.isFinite(source.recipeCount)
           ? Number(source.recipeCount)
           : normalizedRecipes.length;
+        const normalizeBreakdown = (raw) => {
+          if (!raw || typeof raw !== 'object') {
+            return {};
+          }
+          const normalized = {};
+          Object.entries(raw).forEach(([key, value]) => {
+            if (typeof key !== 'string') return;
+            const trimmed = key.trim();
+            if (!trimmed) return;
+            const numeric = toFiniteNumber(value);
+            if (numeric === null) return;
+            normalized[trimmed.toLowerCase()] = numeric;
+          });
+          return normalized;
+        };
+        const breakdown = normalizeBreakdown(source.breakdown);
+        const resolveBreakdownValue = (...keys) => {
+          for (const key of keys) {
+            if (typeof key !== 'string') continue;
+            const normalizedKey = key.trim().toLowerCase();
+            if (!normalizedKey) continue;
+            if (Object.prototype.hasOwnProperty.call(breakdown, normalizedKey)) {
+              const numeric = toFiniteNumber(breakdown[normalizedKey]);
+              if (numeric !== null) {
+                return numeric;
+              }
+            }
+          }
+          return null;
+        };
+        const recipePoints =
+          toFiniteNumber(source.recipePoints) ?? resolveBreakdownValue('recipes', 'crafting');
+        const dimensionPoints =
+          toFiniteNumber(source.dimensionPoints) ?? resolveBreakdownValue('dimensions');
+        const penalties =
+          toFiniteNumber(source.penalties) ?? resolveBreakdownValue('penalties');
+        const portalPoints =
+          toFiniteNumber(source.portalPoints ?? source.portalScore) ?? resolveBreakdownValue('portal', 'portals');
+        const combatPoints = toFiniteNumber(source.combatPoints) ?? resolveBreakdownValue('combat');
+        const lootPoints = toFiniteNumber(source.lootPoints) ?? resolveBreakdownValue('loot');
         return {
           score: Number.isFinite(source.score) ? Math.round(Number(source.score)) : null,
           runTimeSeconds: Number.isFinite(source.runTimeSeconds)
@@ -2350,6 +2417,13 @@
           dimensions: normalizedDimensions,
           recipes: normalizedRecipes,
           reason: payload?.reason ?? source.reason ?? null,
+          recipePoints,
+          dimensionPoints,
+          penalties: penalties !== null ? Math.max(0, penalties) : null,
+          portalPoints,
+          combatPoints,
+          lootPoints,
+          breakdown,
         };
       }
 
@@ -2357,6 +2431,16 @@
         if (!partial) return null;
         const currentState = getActiveGameState();
         const existing = (currentState && currentState.simpleSummary) || pendingSummary || {};
+        const mergeBreakdown = () => {
+          const existingBreakdown =
+            existing.breakdown && typeof existing.breakdown === 'object' ? existing.breakdown : {};
+          const incomingBreakdown =
+            partial.breakdown && typeof partial.breakdown === 'object' ? partial.breakdown : null;
+          if (!incomingBreakdown) {
+            return existingBreakdown;
+          }
+          return { ...existingBreakdown, ...incomingBreakdown };
+        };
         return {
           score: Number.isFinite(partial.score) ? partial.score : existing.score ?? null,
           runTimeSeconds: Number.isFinite(partial.runTimeSeconds)
@@ -2378,6 +2462,37 @@
           dimensions: partial.dimensions?.length ? partial.dimensions : existing.dimensions ?? [],
           recipes: partial.recipes?.length ? partial.recipes : existing.recipes ?? [],
           reason: partial.reason ?? existing.reason ?? null,
+          recipePoints: Number.isFinite(partial.recipePoints)
+            ? partial.recipePoints
+            : Number.isFinite(existing.recipePoints)
+              ? existing.recipePoints
+              : null,
+          dimensionPoints: Number.isFinite(partial.dimensionPoints)
+            ? partial.dimensionPoints
+            : Number.isFinite(existing.dimensionPoints)
+              ? existing.dimensionPoints
+              : null,
+          penalties: Number.isFinite(partial.penalties)
+            ? partial.penalties
+            : Number.isFinite(existing.penalties)
+              ? existing.penalties
+              : null,
+          portalPoints: Number.isFinite(partial.portalPoints)
+            ? partial.portalPoints
+            : Number.isFinite(existing.portalPoints)
+              ? existing.portalPoints
+              : null,
+          combatPoints: Number.isFinite(partial.combatPoints)
+            ? partial.combatPoints
+            : Number.isFinite(existing.combatPoints)
+              ? existing.combatPoints
+              : null,
+          lootPoints: Number.isFinite(partial.lootPoints)
+            ? partial.lootPoints
+            : Number.isFinite(existing.lootPoints)
+              ? existing.lootPoints
+              : null,
+          breakdown: mergeBreakdown(),
         };
       }
 
@@ -2418,6 +2533,67 @@
         }
         if (Number.isFinite(summary.score)) {
           scoreState.score = summary.score;
+        }
+        if (!(scoreState.bonuses instanceof Map)) {
+          scoreState.bonuses = new Map();
+        }
+        scoreState.bonuses.clear();
+        const parsePoints = (value) => {
+          const numeric = Number(value);
+          return Number.isFinite(numeric) ? numeric : null;
+        };
+        const setBonusPoints = (key, points) => {
+          if (points === null) return;
+          const normalizedKey = key;
+          const existing = scoreState.bonuses.get(normalizedKey) ?? { points: 0, count: null };
+          scoreState.bonuses.set(normalizedKey, { ...existing, points });
+        };
+        const breakdown = summary && typeof summary.breakdown === 'object' ? summary.breakdown : null;
+        const breakdownEntries = breakdown ? Object.entries(breakdown) : [];
+        scoreState.penalties = 0;
+        breakdownEntries.forEach(([key, value]) => {
+          if (typeof key !== 'string') return;
+          const normalizedKey = key.trim().toLowerCase();
+          const numeric = parsePoints(value);
+          if (numeric === null) return;
+          if (normalizedKey === 'recipes' || normalizedKey === 'dimensions') {
+            return;
+          }
+          if (normalizedKey === 'penalties') {
+            scoreState.penalties = Math.max(0, numeric);
+            return;
+          }
+          if (normalizedKey === 'portal' || normalizedKey === 'portals') {
+            setBonusPoints('portal', numeric);
+            return;
+          }
+          if (normalizedKey === 'combat') {
+            setBonusPoints('combat', numeric);
+            return;
+          }
+          if (normalizedKey === 'loot') {
+            setBonusPoints('loot', numeric);
+            return;
+          }
+          scoreState.bonuses.set(normalizedKey, { points: numeric, count: null });
+        });
+        const summaryPenalty = parsePoints(summary.penalties ?? null);
+        if (summaryPenalty !== null) {
+          scoreState.penalties = Math.max(0, summaryPenalty);
+        }
+        const portalPoints = parsePoints(summary.portalPoints ?? summary.portalScore ?? null);
+        const combatPoints = parsePoints(summary.combatPoints ?? null);
+        const lootPoints = parsePoints(summary.lootPoints ?? null);
+        if (!scoreState.bonuses.has('portal')) {
+          setBonusPoints('portal', portalPoints);
+        } else if (portalPoints !== null) {
+          setBonusPoints('portal', portalPoints);
+        }
+        if (combatPoints !== null) {
+          setBonusPoints('combat', combatPoints);
+        }
+        if (lootPoints !== null) {
+          setBonusPoints('loot', lootPoints);
         }
       }
 
@@ -3714,6 +3890,18 @@
         scoreDimensionsEl.dataset.value = scoreDimensionsEl.textContent ?? '';
       }
 
+      if (scorePortalsEl) {
+        scorePortalsEl.dataset.value = scorePortalsEl.textContent ?? '';
+      }
+
+      if (scoreCombatEl) {
+        scoreCombatEl.dataset.value = scoreCombatEl.textContent ?? '';
+      }
+
+      if (scoreLootEl) {
+        scoreLootEl.dataset.value = scoreLootEl.textContent ?? '';
+      }
+
       scoreOverlayInitialized = true;
     }
 
@@ -3831,14 +4019,19 @@
     function recalculateScoreState() {
       const recipePoints = scoreState.recipes.size * SCORE_POINTS.recipe;
       const dimensionPoints = scoreState.dimensions.size * SCORE_POINTS.dimension;
-      const total = recipePoints + dimensionPoints;
+      const bonusEntries = scoreState.bonuses instanceof Map ? Array.from(scoreState.bonuses.values()) : [];
+      const bonusTotal = bonusEntries
+        .map((entry) => Number(entry?.points) || 0)
+        .reduce((sum, value) => sum + value, 0);
+      const penaltyPoints = Math.max(0, Number(scoreState.penalties) || 0);
+      const total = recipePoints + dimensionPoints + bonusTotal - penaltyPoints;
       scoreState.points.recipe = SCORE_POINTS.recipe;
       scoreState.points.dimension = SCORE_POINTS.dimension;
       scoreState.score = total;
       if (state) {
         state.score = total;
       }
-      return { recipePoints, dimensionPoints, total };
+      return { recipePoints, dimensionPoints, bonusPoints: bonusTotal, penaltyPoints, total };
     }
 
     function updateScore(type, value, options = {}) {
@@ -17462,6 +17655,8 @@
       };
       scoreState.recipes = breakdown.recipes;
       scoreState.dimensions = breakdown.dimensions;
+      scoreState.bonuses = new Map();
+      scoreState.penalties = 0;
       scoreState.score = 0;
       return breakdown;
     }
@@ -18442,7 +18637,7 @@
     }
 
     function updateScoreOverlay(options = {}) {
-      if (!scoreTotalEl || !scoreRecipesEl || !scoreDimensionsEl) return;
+      if (!scoreTotalEl) return;
 
       initializeScoreOverlayUI();
 
@@ -18474,7 +18669,10 @@
       let recipePoints = recipeCount * SCORE_POINTS.recipe;
       let dimensionPoints = dimensionCount * SCORE_POINTS.dimension;
       let penaltyPoints = 0;
-      let bonusPoints = 0;
+      let portalPoints = 0;
+      let combatPoints = 0;
+      let lootPoints = 0;
+      let otherBonusPoints = 0;
       let total = recipePoints + dimensionPoints;
 
       if (summary) {
@@ -18522,35 +18720,93 @@
             }
             const numeric = toFiniteNumber(value);
             if (numeric !== null) {
-              bonusPoints += numeric;
+              if (normalizedKey === 'portal' || normalizedKey === 'portals') {
+                portalPoints += numeric;
+                return;
+              }
+              if (normalizedKey === 'combat') {
+                combatPoints += numeric;
+                return;
+              }
+              if (normalizedKey === 'loot') {
+                lootPoints += numeric;
+                return;
+              }
+              otherBonusPoints += numeric;
             }
           });
         }
+
+        const explicitPortalPoints =
+          toFiniteNumber(summary.portalPoints) ?? toFiniteNumber(summary.portalScore);
+        if (explicitPortalPoints !== null) {
+          portalPoints = explicitPortalPoints;
+        }
+        const explicitCombatPoints = toFiniteNumber(summary.combatPoints);
+        if (explicitCombatPoints !== null) {
+          combatPoints = explicitCombatPoints;
+        }
+        const explicitLootPoints = toFiniteNumber(summary.lootPoints);
+        if (explicitLootPoints !== null) {
+          lootPoints = explicitLootPoints;
+        }
+
+        const combinedBonus = portalPoints + combatPoints + lootPoints + otherBonusPoints;
 
         const summaryTotal = toFiniteNumber(summary.score);
         if (summaryTotal !== null) {
           total = summaryTotal;
         } else {
-          total = recipePoints + dimensionPoints + bonusPoints - penaltyPoints;
+          total = recipePoints + dimensionPoints + combinedBonus - penaltyPoints;
         }
       } else {
         const recalculated = recalculateScoreState();
         recipePoints = recalculated.recipePoints;
         dimensionPoints = recalculated.dimensionPoints;
+        penaltyPoints = recalculated.penaltyPoints ?? 0;
         total = recalculated.total;
         recipeCount = scoreState.recipes.size;
         dimensionCount = scoreState.dimensions.size;
+        if (scoreState.bonuses instanceof Map) {
+          portalPoints = Number(scoreState.bonuses.get('portal')?.points) || 0;
+          combatPoints = Number(scoreState.bonuses.get('combat')?.points) || 0;
+          lootPoints = Number(scoreState.bonuses.get('loot')?.points) || 0;
+          const combinedKnownBonus = portalPoints + combatPoints + lootPoints;
+          const totalBonusPoints = Number(recalculated.bonusPoints) || 0;
+          otherBonusPoints = Math.max(0, totalBonusPoints - combinedKnownBonus);
+        }
       }
+
+      const craftingMetric = `${recipeCount} (+${formatPoints(recipePoints)} pts)`;
+      const dimensionMetricParts = [`${dimensionCount} (+${formatPoints(dimensionPoints)} pts`];
+      if (penaltyPoints > 0) {
+        dimensionMetricParts.push(`, -${formatPoints(penaltyPoints)} penalty`);
+      }
+      dimensionMetricParts.push(')');
+      const dimensionMetric = dimensionMetricParts.join('');
+
+      const formatBonusMetric = (points) => {
+        const safePoints = Math.max(0, Number(points) || 0);
+        return `+${formatPoints(safePoints)} pts`;
+      };
 
       const totalValue = Math.max(0, Math.round(total));
       animateScoreDigits(scoreTotalEl, totalValue);
-      animateMetricUpdate(scoreRecipesEl, `${recipeCount} (+${formatPoints(recipePoints)} pts)`);
-      let dimensionMetric = `${dimensionCount} (+${formatPoints(dimensionPoints)} pts`;
-      if (penaltyPoints > 0) {
-        dimensionMetric += `, -${formatPoints(penaltyPoints)} penalty`;
+      if (scoreRecipesEl) {
+        animateMetricUpdate(scoreRecipesEl, craftingMetric);
       }
-      dimensionMetric += ')';
-      animateMetricUpdate(scoreDimensionsEl, dimensionMetric);
+      if (scoreDimensionsEl) {
+        animateMetricUpdate(scoreDimensionsEl, dimensionMetric);
+      }
+      if (scorePortalsEl) {
+        animateMetricUpdate(scorePortalsEl, formatBonusMetric(portalPoints));
+      }
+      if (scoreCombatEl) {
+        animateMetricUpdate(scoreCombatEl, formatBonusMetric(combatPoints));
+      }
+      if (scoreLootEl) {
+        animateMetricUpdate(scoreLootEl, formatBonusMetric(lootPoints));
+      }
       if (scorePanelEl) {
         scorePanelEl.setAttribute('data-score', totalValue.toString());
         if (options.triggerFlip) {
