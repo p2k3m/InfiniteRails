@@ -293,4 +293,113 @@ describe('simple experience entity lifecycle', () => {
     expect(experience.chestGroup.parent).toBe(experience.scene);
     expect(experience.chestGroup.children.length).toBeGreaterThan(0);
   });
+
+  it('blocks portal activation when the player occupies the portal footprint', async () => {
+    const { experience } = createExperienceForTest();
+    const igniteStub = vi.fn(() => ({ events: ['Test spark'], portal: { frame: [], tiles: [] } }));
+    experience.portalMechanics = {
+      ...experience.portalMechanics,
+      ignitePortalFrame: igniteStub,
+    };
+
+    experience.start();
+    await Promise.resolve();
+
+    const worldSize = experience.heightMap.length;
+    experience.initialHeightMap = Array.from({ length: worldSize }, () => Array(worldSize).fill(0));
+    experience.portalAnchorGrid = experience.computePortalAnchorGrid();
+    const anchor = experience.portalAnchorGrid;
+    const half = worldSize / 2;
+    const centerX = (anchor.x - half) * 1;
+    const centerZ = (anchor.z - half) * 1;
+    const baseHeight = experience.initialHeightMap[anchor.x][anchor.z] ?? 0;
+
+    experience.portalReady = true;
+    experience.portalFrameInteriorValid = true;
+    experience.portalBlocksPlaced = experience.portalFrameRequiredCount;
+    experience.portalActivated = false;
+    experience.score = 0;
+    experience.showHint.mockClear();
+    experience.scheduleScoreSync.mockClear();
+
+    experience.playerRig.position.set(centerX, baseHeight + 1.8, centerZ);
+
+    experience.ignitePortal('torch');
+
+    expect(experience.portalActivated).toBe(false);
+    expect(experience.portalReady).toBe(true);
+    expect(experience.score).toBe(0);
+    expect(experience.portalFootprintObstructed).toBe(true);
+    expect(experience.portalIgnitionLog[0]).toContain('Portal activation blocked');
+    expect(experience.scheduleScoreSync).not.toHaveBeenCalledWith('portal-primed');
+    const blockedHint = experience.showHint.mock.calls.at(-1)?.[0] ?? '';
+    expect(blockedHint).toContain('Portal activation blocked');
+    expect(blockedHint).toContain('player');
+
+    experience.showHint.mockClear();
+    experience.scheduleScoreSync.mockClear();
+    experience.portalReady = true;
+    experience.portalFootprintObstructed = false;
+    experience.playerRig.position.set(centerX, baseHeight + 1.8, centerZ + 6);
+
+    experience.ignitePortal('torch');
+
+    expect(experience.portalActivated).toBe(true);
+    expect(experience.portalReady).toBe(false);
+    expect(experience.score).toBe(5);
+    expect(experience.scheduleScoreSync).toHaveBeenCalledWith('portal-primed');
+    const successHint = experience.showHint.mock.calls.at(-1)?.[0] ?? '';
+    expect(successHint).toBe('Test spark');
+  });
+
+  it('blocks portal activation when a chest occupies the portal footprint', async () => {
+    const { experience } = createExperienceForTest();
+    const igniteStub = vi.fn(() => ({ events: [], portal: { frame: [], tiles: [] } }));
+    experience.portalMechanics = {
+      ...experience.portalMechanics,
+      ignitePortalFrame: igniteStub,
+    };
+
+    experience.start();
+    await Promise.resolve();
+
+    const worldSize = experience.heightMap.length;
+    experience.initialHeightMap = Array.from({ length: worldSize }, () => Array(worldSize).fill(0));
+    experience.portalAnchorGrid = experience.computePortalAnchorGrid();
+    const anchor = experience.portalAnchorGrid;
+    const half = worldSize / 2;
+    const centerX = (anchor.x - half) * 1;
+    const centerZ = (anchor.z - half) * 1;
+    const baseHeight = experience.initialHeightMap[anchor.x][anchor.z] ?? 0;
+
+    experience.portalReady = true;
+    experience.portalFrameInteriorValid = true;
+    experience.portalBlocksPlaced = experience.portalFrameRequiredCount;
+    experience.portalActivated = false;
+    experience.score = 0;
+    experience.showHint.mockClear();
+    experience.scheduleScoreSync.mockClear();
+
+    const chestMesh = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.5, 0.5), new THREE.MeshBasicMaterial());
+    chestMesh.position.set(centerX, baseHeight + 0.45, centerZ);
+    experience.chestGroup = experience.chestGroup || new THREE.Group();
+    experience.chestGroup.add(chestMesh);
+    experience.chests = [
+      {
+        id: 'test-chest',
+        mesh: chestMesh,
+        opened: false,
+      },
+    ];
+
+    experience.ignitePortal('torch');
+
+    expect(experience.portalActivated).toBe(false);
+    expect(experience.portalReady).toBe(true);
+    expect(experience.portalFootprintObstructed).toBe(true);
+    const hint = experience.showHint.mock.calls.at(-1)?.[0] ?? '';
+    expect(hint).toContain('Portal activation blocked');
+    expect(hint).toContain('loot chest');
+    expect(experience.scheduleScoreSync).not.toHaveBeenCalledWith('portal-primed');
+  });
 });

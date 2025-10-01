@@ -946,6 +946,8 @@
       this.portalFrameRequiredCount = PORTAL_BLOCK_REQUIREMENT;
       this.portalFrameInteriorValid = false;
       this.portalHiddenInterior = [];
+      this.portalFootprintObstructed = false;
+      this.portalFootprintObstructionSummary = '';
       this.challengeGroup = null;
       this.railSegments = [];
       this.crumblingRails = [];
@@ -5292,6 +5294,167 @@
       };
     }
 
+    getPortalInteriorBounds(padding = 0.2) {
+      const anchor = this.portalAnchorGrid || this.computePortalAnchorGrid();
+      if (!anchor) {
+        return null;
+      }
+      const gridX = Math.max(0, Math.min(WORLD_SIZE - 1, anchor.x));
+      const gridZ = Math.max(0, Math.min(WORLD_SIZE - 1, anchor.z));
+      const baseHeight = this.initialHeightMap?.[gridX]?.[gridZ] ?? 0;
+      const centerX = (gridX - WORLD_SIZE / 2) * BLOCK_SIZE;
+      const centerZ = (gridZ - WORLD_SIZE / 2) * BLOCK_SIZE;
+      const centerY = (baseHeight + 1.5) * BLOCK_SIZE;
+      const halfWidth = 0.5 + padding;
+      const halfDepth = 0.45 + padding;
+      const minY = baseHeight * BLOCK_SIZE - padding;
+      const maxY = (baseHeight + 3) * BLOCK_SIZE + padding;
+      return {
+        centerX,
+        centerY,
+        centerZ,
+        halfWidth,
+        halfDepth,
+        minY,
+        maxY,
+      };
+    }
+
+    isEntityWithinPortalBounds(entry, bounds) {
+      if (!entry?.position || !bounds) {
+        return false;
+      }
+      const position = entry.position;
+      const x = Number(position.x);
+      const y = Number(position.y);
+      const z = Number(position.z);
+      if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) {
+        return false;
+      }
+      const radius = Number.isFinite(entry.radius) ? entry.radius : 0.5;
+      const bottom = Number.isFinite(entry.bottom) ? entry.bottom : y - radius;
+      const top = Number.isFinite(entry.top) ? entry.top : y + radius;
+      if (top < bounds.minY || bottom > bounds.maxY) {
+        return false;
+      }
+      const dx = Math.abs(x - bounds.centerX);
+      const dz = Math.abs(z - bounds.centerZ);
+      if (dx > bounds.halfWidth + radius) {
+        return false;
+      }
+      if (dz > bounds.halfDepth + radius) {
+        return false;
+      }
+      return true;
+    }
+
+    collectPortalFootprintObstructions() {
+      const bounds = this.getPortalInteriorBounds(0.25);
+      if (!bounds) {
+        return [];
+      }
+      const obstructions = [];
+      const addIfBlocking = (entry) => {
+        if (!entry) return;
+        if (this.isEntityWithinPortalBounds(entry, bounds)) {
+          obstructions.push(entry);
+        }
+      };
+      if (this.playerRig?.position) {
+        const playerPosition = this.playerRig.position;
+        addIfBlocking({
+          kind: 'player',
+          description: 'player',
+          position: playerPosition,
+          radius: 0.6,
+          bottom: playerPosition.y - PLAYER_EYE_HEIGHT,
+          top: playerPosition.y + 0.2,
+        });
+      }
+      if (Array.isArray(this.zombies)) {
+        this.zombies.forEach((zombie) => {
+          const mesh = zombie?.mesh;
+          if (!mesh?.position) return;
+          addIfBlocking({
+            kind: 'zombie',
+            description: 'zombie',
+            position: mesh.position,
+            radius: 0.6,
+            bottom: mesh.position.y - 0.9,
+            top: mesh.position.y + 0.9,
+          });
+        });
+      }
+      if (Array.isArray(this.golems)) {
+        this.golems.forEach((golem) => {
+          const mesh = golem?.mesh;
+          if (!mesh?.position) return;
+          addIfBlocking({
+            kind: 'golem',
+            description: 'iron golem',
+            position: mesh.position,
+            radius: 0.9,
+            bottom: mesh.position.y - 1.1,
+            top: mesh.position.y + 1.6,
+          });
+        });
+      }
+      if (Array.isArray(this.chests)) {
+        this.chests.forEach((chest) => {
+          const mesh = chest?.mesh;
+          if (!mesh?.position) return;
+          addIfBlocking({
+            kind: 'chest',
+            description: 'loot chest',
+            position: mesh.position,
+            radius: 0.6,
+            bottom: mesh.position.y - 0.5,
+            top: mesh.position.y + 0.5,
+          });
+        });
+      }
+      return obstructions;
+    }
+
+    formatPortalObstructionMessage(obstructions = []) {
+      if (!Array.isArray(obstructions) || !obstructions.length) {
+        return '';
+      }
+      const descriptors = [];
+      obstructions.forEach((entry) => {
+        if (entry?.description) {
+          descriptors.push(entry.description);
+        } else if (entry?.kind) {
+          descriptors.push(entry.kind);
+        }
+      });
+      if (!descriptors.length) {
+        return 'Portal activation blocked — clear the obstruction occupying the gateway.';
+      }
+      const unique = Array.from(new Set(descriptors));
+      let label;
+      if (unique.length === 1) {
+        label = unique[0];
+      } else if (unique.length === 2) {
+        label = `${unique[0]} and ${unique[1]}`;
+      } else {
+        label = `${unique.slice(0, -1).join(', ')}, and ${unique[unique.length - 1]}`;
+      }
+      return `Portal activation blocked — clear the ${label} occupying the gateway.`;
+    }
+
+    refreshPortalObstructionState() {
+      const obstructions = this.collectPortalFootprintObstructions();
+      const blocked = obstructions.length > 0;
+      const summary = blocked ? this.formatPortalObstructionMessage(obstructions) : '';
+      const changed =
+        this.portalFootprintObstructed !== blocked ||
+        this.portalFootprintObstructionSummary !== summary;
+      this.portalFootprintObstructed = blocked;
+      this.portalFootprintObstructionSummary = summary;
+      return { blocked, summary, obstructions, changed };
+    }
+
     ignitePortal(tool = 'torch') {
       if (!this.portalReady || this.portalActivated) {
         return;
@@ -5312,10 +5475,13 @@
           console.warn('Portal ignition mechanics failed', error);
         }
       }
+      const activated = this.activatePortal();
+      if (!activated) {
+        return;
+      }
       this.portalReady = false;
       this.score += 5;
       this.addScoreBreakdown('dimensions', 5);
-      this.activatePortal();
       const message = events.length ? events.join(' ') : 'Portal ignited — step through to travel.';
       this.showHint(message);
       this.scheduleScoreSync('portal-primed');
@@ -5368,6 +5534,8 @@
       this.portalReady = false;
       this.portalState = null;
       this.portalIgnitionLog = [];
+      this.portalFootprintObstructed = false;
+      this.portalFootprintObstructionSummary = '';
       this.restorePortalInteriorBlocks();
       this.updatePortalInteriorValidity();
       this.updatePortalProgress();
@@ -5381,6 +5549,17 @@
     }
 
     activatePortal() {
+      const { blocked, summary } = this.refreshPortalObstructionState();
+      if (blocked) {
+        const message = summary ||
+          'Portal activation blocked — clear the obstruction occupying the gateway.';
+        if (typeof this.showHint === 'function') {
+          this.showHint(message);
+        }
+        this.portalIgnitionLog = [message];
+        this.updatePortalProgress();
+        return false;
+      }
       const THREE = this.THREE;
       const anchor = this.portalAnchorGrid || this.computePortalAnchorGrid();
       const gridX = Math.max(0, Math.min(WORLD_SIZE - 1, anchor.x));
@@ -5422,6 +5601,7 @@
         dimension: this.dimensionSettings?.id ?? null,
         summary: this.createRunSummary('portal-activated'),
       });
+      return true;
     }
 
     isPlayerNearPortal() {
@@ -8868,6 +9048,7 @@
 
     updatePortalProgress() {
       const { portalProgressLabel, portalProgressBar } = this.ui;
+      const obstructionState = this.refreshPortalObstructionState();
       const required = this.portalFrameRequiredCount || PORTAL_BLOCK_REQUIREMENT;
       const rawProgress = required > 0 ? this.portalBlocksPlaced / required : 0;
       const progress = Math.min(1, Math.max(0, rawProgress));
@@ -8911,6 +9092,11 @@
           statusMessage = nextName
             ? `Ignite with F to access ${nextName}.`
             : 'Ignite with F to open the final gateway.';
+        } else if (obstructionState.blocked && !this.portalActivated) {
+          portalProgressLabel.textContent = 'Clear the portal footprint';
+          statusState = 'blocked';
+          statusLabel = 'Portal Blocked';
+          statusMessage = obstructionState.summary || 'Gateway occupied';
         } else if (!this.portalFrameInteriorValid && this.portalBlocksPlaced > 0) {
           portalProgressLabel.textContent = 'Clear the portal interior';
           statusState = 'blocked';
@@ -8930,6 +9116,8 @@
         let displayProgress = this.victoryAchieved ? 1 : progress;
         if (this.portalReady && !this.portalActivated) {
           displayProgress = 1;
+        } else if (obstructionState.blocked && !this.portalActivated) {
+          displayProgress = Math.min(displayProgress, 0.5);
         } else if (!this.portalFrameInteriorValid && !this.portalActivated) {
           displayProgress = Math.min(displayProgress, 0.5);
         } else if (this.netheriteChallengeActive && this.dimensionSettings?.id === 'netherite') {
