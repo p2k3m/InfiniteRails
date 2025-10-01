@@ -4262,8 +4262,19 @@
       this.terrainVoxelUsage = voxelsUsed;
       if (typeof console !== 'undefined') {
         const columnCount = WORLD_SIZE * WORLD_SIZE;
+        const chunkCount = Array.isArray(this.terrainChunkGroups)
+          ? this.terrainChunkGroups.length
+          : 0;
         console.log(`World generated: ${columnCount} voxels`);
         console.log(`Terrain blocks placed: ${voxelCount}`);
+        console.log(`Terrain chunks populated: ${chunkCount}`);
+        if (chunkCount <= 0 || voxelCount <= 0) {
+          console.warn('Terrain generation produced no active chunk groups or voxels.', {
+            chunkCount,
+            voxelCount,
+            voxelBudget,
+          });
+        }
         if (cappedColumns > 0) {
           console.info(
             `Terrain voxel budget applied: ${cappedColumns} columns trimmed to stay under ${voxelBudget} voxels`,
