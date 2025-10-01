@@ -1559,6 +1559,8 @@
     let rendererRecoveryFrames = 0;
     let pendingUniformSanitizations = 0;
     let uniformSanitizationFailureStreak = 0;
+    const runtimeIssueDeduper = new Set();
+    let runtimeErrorOverlayVisible = false;
 
     const scoreboardUtils =
       (typeof window !== 'undefined' && window.ScoreboardUtils) ||
@@ -1578,6 +1580,17 @@
       (typeof globalThis !== 'undefined' && globalThis.APP_CONFIG) ||
       globalScope?.APP_CONFIG ||
       {};
+    const defaultFeatureFlags = {
+      strictWorldValidation: true,
+      hudVisibleOnBootstrap: true,
+      entityPrewarm: true,
+    };
+    const featureFlags = {
+      ...defaultFeatureFlags,
+      ...(globalAppConfig && typeof globalAppConfig.featureFlags === 'object'
+        ? globalAppConfig.featureFlags
+        : {}),
+    };
     const statusMeters = normaliseStatusMeters([
       globalAppConfig.statusMeters,
       globalAppConfig.statusBars,
@@ -1674,6 +1687,89 @@
       resetPosition: document.querySelector('[data-keybinding-table="resetPosition"]'),
       hotbar: document.querySelector('[data-keybinding-table="hotbar"]'),
     };
+
+    function showRuntimeErrorOverlay(message, options = {}) {
+      if (runtimeErrorOverlayVisible) {
+        return;
+      }
+      const overlay = getGlobalOverlayController();
+      const reloadAllowed = options.enableReload !== false;
+      if (overlay) {
+        runtimeErrorOverlayVisible = true;
+        overlay.show({
+          mode: 'error',
+          title: options.title || 'Exploration interrupted',
+          message,
+          actions: [
+            {
+              id: 'reload',
+              label: options.reloadLabel || 'Reload adventure',
+              variant: 'accent',
+              autoFocus: true,
+              onClick: () => {
+                runtimeErrorOverlayVisible = false;
+                overlay.hide();
+                if (reloadAllowed && typeof window !== 'undefined' && window.location) {
+                  try {
+                    window.location.reload();
+                  } catch (reloadError) {
+                    console.warn('Reload failed after runtime error prompt.', reloadError);
+                  }
+                }
+              },
+            },
+            {
+              id: 'dismiss',
+              label: options.dismissLabel || 'Dismiss',
+              onClick: () => {
+                runtimeErrorOverlayVisible = false;
+                overlay.hide();
+              },
+            },
+          ],
+          focusActionId: 'reload',
+        });
+      } else if (typeof alert === 'function') {
+        runtimeErrorOverlayVisible = true;
+        alert(message);
+        runtimeErrorOverlayVisible = false;
+      }
+    }
+
+    function handleInteractionError(context, error, options = {}) {
+      const { fatal = false, hint = null, dedupeKey = null, suppressOverlay = false } = options;
+      const actionLabel = context ? `while ${context}` : 'during the last action';
+      const prefix = `Encountered a glitch ${actionLabel}.`;
+      const message = hint || `${prefix} Try reloading if the world stops responding.`;
+      const key = dedupeKey || `${prefix}|${error?.message ?? 'unknown'}`;
+      if (key && runtimeIssueDeduper.has(key)) {
+        return;
+      }
+      if (key) {
+        runtimeIssueDeduper.add(key);
+      }
+      console.error(prefix, error);
+      showPlayerHint(message, { variant: 'error', persist: true });
+      if ((fatal || !suppressOverlay) && !runtimeErrorOverlayVisible) {
+        showRuntimeErrorOverlay(`${prefix} Reload the page to continue.`, options.overlayOptions || {});
+      }
+    }
+
+    function safelyExecute(callback, context, options = {}) {
+      try {
+        const result = callback();
+        if (result && typeof result.then === 'function') {
+          return result.catch((error) => {
+            handleInteractionError(context, error, options);
+            return options.fallback;
+          });
+        }
+        return result;
+      } catch (error) {
+        handleInteractionError(context, error, options);
+        return options.fallback;
+      }
+    }
     const settingsVolumeInputs = {
       master: document.getElementById('masterVolume'),
       music: document.getElementById('musicVolume'),
@@ -5694,29 +5790,31 @@
     }
 
     function handleResize() {
-      updateLayoutMetrics();
-      syncSidebarForViewport();
-      if (!renderer || !camera) return;
-      const width = canvas.clientWidth || canvas.width || 1;
-      const height = canvas.clientHeight || canvas.height || 1;
-      renderer.setSize(width, height, false);
-      const aspect = width / height;
-      if (camera.isPerspectiveCamera) {
-        camera.aspect = aspect;
-      } else if (camera.isOrthographicCamera) {
-        const halfHeight = CAMERA_FRUSTUM_HEIGHT / 2;
-        const halfWidth = halfHeight * aspect;
-        camera.left = -halfWidth;
-        camera.right = halfWidth;
-        camera.top = halfHeight;
-        camera.bottom = -halfHeight;
-      }
-      camera.updateProjectionMatrix();
-      if (previewCamera) {
-        updatePreviewCameraFrustum();
-        updatePreviewCameraPosition();
-      }
-      syncCameraToPlayer({ idleBob: 0, walkBob: 0, movementStrength: 0 });
+      safelyExecute(() => {
+        updateLayoutMetrics();
+        syncSidebarForViewport();
+        if (!renderer || !camera) return;
+        const width = canvas.clientWidth || canvas.width || 1;
+        const height = canvas.clientHeight || canvas.height || 1;
+        renderer.setSize(width, height, false);
+        const aspect = width / height;
+        if (camera.isPerspectiveCamera) {
+          camera.aspect = aspect;
+        } else if (camera.isOrthographicCamera) {
+          const halfHeight = CAMERA_FRUSTUM_HEIGHT / 2;
+          const halfWidth = halfHeight * aspect;
+          camera.left = -halfWidth;
+          camera.right = halfWidth;
+          camera.top = halfHeight;
+          camera.bottom = -halfHeight;
+        }
+        camera.updateProjectionMatrix();
+        if (previewCamera) {
+          updatePreviewCameraFrustum();
+          updatePreviewCameraPosition();
+        }
+        syncCameraToPlayer({ idleBob: 0, walkBob: 0, movementStrength: 0 });
+      }, 'handling a resize event', { suppressOverlay: true });
     }
 
     function syncCameraToPlayer(options = {}) {
@@ -5895,20 +5993,21 @@
       }
     }
 
-    const handleGlobalPointerDown = (event) => {
-      if (!event) return;
-      const type = event.pointerType || '';
-      if (type === 'touch' || type === 'pen') {
-        updateMobileControlsVisibility('touch');
-      } else if (type === 'mouse') {
-        updateMobileControlsVisibility('desktop');
-      }
-    };
+    const handleGlobalPointerDown = (event) =>
+      safelyExecute(() => {
+        if (!event) return;
+        const type = event.pointerType || '';
+        if (type === 'touch' || type === 'pen') {
+          updateMobileControlsVisibility('touch');
+        } else if (type === 'mouse') {
+          updateMobileControlsVisibility('desktop');
+        }
+      }, 'tracking pointer input', { suppressOverlay: true });
 
     window.addEventListener('pointerdown', handleGlobalPointerDown, { passive: true });
     window.addEventListener(
       'touchstart',
-      () => updateMobileControlsVisibility('touch'),
+      () => safelyExecute(() => updateMobileControlsVisibility('touch'), 'tracking pointer input', { suppressOverlay: true }),
       { passive: true },
     );
 
@@ -5932,49 +6031,52 @@
 
       virtualJoystickEl.addEventListener(
         'pointerdown',
-        (event) => {
-          joystickState.active = true;
-          joystickState.pointerId = event.pointerId;
-          handleVirtualJoystickMove(event);
-          if (typeof virtualJoystickEl.setPointerCapture === 'function') {
-            try {
-              virtualJoystickEl.setPointerCapture(event.pointerId);
-            } catch (error) {
-              // Ignore pointer capture failures on unsupported browsers.
+        (event) =>
+          safelyExecute(() => {
+            joystickState.active = true;
+            joystickState.pointerId = event.pointerId;
+            handleVirtualJoystickMove(event);
+            if (typeof virtualJoystickEl.setPointerCapture === 'function') {
+              try {
+                virtualJoystickEl.setPointerCapture(event.pointerId);
+              } catch (error) {
+                // Ignore pointer capture failures on unsupported browsers.
+              }
             }
-          }
-          event.preventDefault();
-        },
+            event.preventDefault();
+          }, 'using the virtual joystick'),
         { passive: false },
       );
 
       virtualJoystickEl.addEventListener(
         'pointermove',
-        (event) => {
-          if (!joystickState.active || event.pointerId !== joystickState.pointerId) return;
-          handleVirtualJoystickMove(event);
-          event.preventDefault();
-        },
+        (event) =>
+          safelyExecute(() => {
+            if (!joystickState.active || event.pointerId !== joystickState.pointerId) return;
+            handleVirtualJoystickMove(event);
+            event.preventDefault();
+          }, 'using the virtual joystick'),
         { passive: false },
       );
 
-      const handleRelease = (event) => {
-        if (joystickState.pointerId != null && event.pointerId !== joystickState.pointerId) {
-          return;
-        }
-        if (
-          virtualJoystickEl &&
-          typeof virtualJoystickEl.releasePointerCapture === 'function' &&
-          joystickState.pointerId != null
-        ) {
-          try {
-            virtualJoystickEl.releasePointerCapture(joystickState.pointerId);
-          } catch (error) {
-            // Ignore release errors when the pointer capture is no longer active.
+      const handleRelease = (event) =>
+        safelyExecute(() => {
+          if (joystickState.pointerId != null && event.pointerId !== joystickState.pointerId) {
+            return;
           }
-        }
-        resetJoystickVector();
-      };
+          if (
+            virtualJoystickEl &&
+            typeof virtualJoystickEl.releasePointerCapture === 'function' &&
+            joystickState.pointerId != null
+          ) {
+            try {
+              virtualJoystickEl.releasePointerCapture(joystickState.pointerId);
+            } catch (error) {
+              // Ignore release errors when the pointer capture is no longer active.
+            }
+          }
+          resetJoystickVector();
+        }, 'using the virtual joystick');
 
       virtualJoystickEl.addEventListener('pointerup', handleRelease);
       virtualJoystickEl.addEventListener('pointercancel', handleRelease);
@@ -6092,125 +6194,142 @@
         pointer.moved = false;
       };
 
-      canvas.addEventListener('pointerdown', (event) => {
-        if (event.pointerType === 'mouse' && event.button !== 0 && event.button !== 2) {
-          return;
-        }
-        pointer.active = true;
-        pointer.id = event.pointerId;
-        pointer.pointerType = event.pointerType;
-        pointer.button = event.button;
-        pointer.startX = event.clientX;
-        pointer.startY = event.clientY;
-        pointer.lastX = event.clientX;
-        pointer.lastY = event.clientY;
-        pointer.moved = false;
-        if (typeof canvas.setPointerCapture === 'function') {
-          try {
-            canvas.setPointerCapture(event.pointerId);
-          } catch (error) {
-            // Ignore pointer capture failures (e.g., unsupported browsers).
-          }
-        }
-      });
+      canvas.addEventListener(
+        'pointerdown',
+        (event) =>
+          safelyExecute(() => {
+            if (event.pointerType === 'mouse' && event.button !== 0 && event.button !== 2) {
+              return;
+            }
+            pointer.active = true;
+            pointer.id = event.pointerId;
+            pointer.pointerType = event.pointerType;
+            pointer.button = event.button;
+            pointer.startX = event.clientX;
+            pointer.startY = event.clientY;
+            pointer.lastX = event.clientX;
+            pointer.lastY = event.clientY;
+            pointer.moved = false;
+            if (typeof canvas.setPointerCapture === 'function') {
+              try {
+                canvas.setPointerCapture(event.pointerId);
+              } catch (error) {
+                // Ignore pointer capture failures (e.g., unsupported browsers).
+              }
+            }
+          }, 'processing pointer input'),
+      );
 
-      canvas.addEventListener('pointermove', (event) => {
-        if (!pointer.active || event.pointerId !== pointer.id) return;
-        const dx = event.clientX - pointer.lastX;
-        const dy = event.clientY - pointer.lastY;
-        pointer.lastX = event.clientX;
-        pointer.lastY = event.clientY;
+      canvas.addEventListener(
+        'pointermove',
+        (event) =>
+          safelyExecute(() => {
+            if (!pointer.active || event.pointerId !== pointer.id) return;
+            const dx = event.clientX - pointer.lastX;
+            const dy = event.clientY - pointer.lastY;
+            pointer.lastX = event.clientX;
+            pointer.lastY = event.clientY;
 
-        if (Math.abs(dx) + Math.abs(dy) > 0) {
-          const totalDelta = Math.hypot(event.clientX - pointer.startX, event.clientY - pointer.startY);
-          if (totalDelta > CAMERA_DRAG_SUPPRESS_THRESHOLD) {
-            pointer.moved = true;
-          }
-        }
+            if (Math.abs(dx) + Math.abs(dy) > 0) {
+              const totalDelta = Math.hypot(event.clientX - pointer.startX, event.clientY - pointer.startY);
+              if (totalDelta > CAMERA_DRAG_SUPPRESS_THRESHOLD) {
+                pointer.moved = true;
+              }
+            }
 
-        if (!state.isRunning && previewState.active && previewCamera) {
-          const previewSensitivity =
-            pointer.pointerType === 'mouse'
-              ? PREVIEW_MOUSE_SENSITIVITY
-              : pointer.pointerType === 'touch' || pointer.pointerType === 'pen'
-              ? PREVIEW_TOUCH_SENSITIVITY
-              : PREVIEW_MOUSE_SENSITIVITY;
-          if (Math.abs(dx) > 0.0001 && previewSensitivity > 0) {
-            setPreviewYaw(previewState.yaw - dx * previewSensitivity);
-            pointer.moved = true;
-          }
-          if (Math.abs(dy) > 0.0001 && previewSensitivity > 0) {
-            setPreviewPitch(previewState.pitch - dy * previewSensitivity * 0.6);
-            pointer.moved = true;
-          }
-          if (pointer.pointerType === 'touch') {
-            event.preventDefault();
-          }
-          return;
-        }
+            if (!state.isRunning && previewState.active && previewCamera) {
+              const previewSensitivity =
+                pointer.pointerType === 'mouse'
+                  ? PREVIEW_MOUSE_SENSITIVITY
+                  : pointer.pointerType === 'touch' || pointer.pointerType === 'pen'
+                    ? PREVIEW_TOUCH_SENSITIVITY
+                    : PREVIEW_MOUSE_SENSITIVITY;
+              if (Math.abs(dx) > 0.0001 && previewSensitivity > 0) {
+                setPreviewYaw(previewState.yaw - dx * previewSensitivity);
+                pointer.moved = true;
+              }
+              if (Math.abs(dy) > 0.0001 && previewSensitivity > 0) {
+                setPreviewPitch(previewState.pitch - dy * previewSensitivity * 0.6);
+                pointer.moved = true;
+              }
+              if (pointer.pointerType === 'touch') {
+                event.preventDefault();
+              }
+              return;
+            }
 
-        if (!camera) return;
-        const sensitivity =
-          pointer.pointerType === 'mouse'
-            ? CAMERA_MOUSE_SENSITIVITY
-            : pointer.pointerType === 'touch' || pointer.pointerType === 'pen'
-            ? CAMERA_TOUCH_SENSITIVITY
-            : CAMERA_MOUSE_SENSITIVITY;
-        if (Math.abs(dx) > 0.0001 && sensitivity > 0) {
-          const previousOffset = cameraState.yawOffset;
-          cameraState.yawOffset = THREE.MathUtils.clamp(
-            previousOffset - dx * sensitivity,
-            -CAMERA_MAX_YAW_OFFSET,
-            CAMERA_MAX_YAW_OFFSET,
-          );
-          if (Math.abs(cameraState.yawOffset - previousOffset) > 0.00001) {
-            pointer.moved = true;
-            syncCameraToPlayer({
-              facing: state.player?.facing,
-            });
-          }
-        }
+            if (!camera) return;
+            const sensitivity =
+              pointer.pointerType === 'mouse'
+                ? CAMERA_MOUSE_SENSITIVITY
+                : pointer.pointerType === 'touch' || pointer.pointerType === 'pen'
+                  ? CAMERA_TOUCH_SENSITIVITY
+                  : CAMERA_MOUSE_SENSITIVITY;
+            if (Math.abs(dx) > 0.0001 && sensitivity > 0) {
+              const previousOffset = cameraState.yawOffset;
+              cameraState.yawOffset = THREE.MathUtils.clamp(
+                previousOffset - dx * sensitivity,
+                -CAMERA_MAX_YAW_OFFSET,
+                CAMERA_MAX_YAW_OFFSET,
+              );
+              if (Math.abs(cameraState.yawOffset - previousOffset) > 0.00001) {
+                pointer.moved = true;
+                syncCameraToPlayer({
+                  facing: state.player?.facing,
+                });
+              }
+            }
 
-        if (pointer.pointerType === 'touch') {
-          event.preventDefault();
-        }
-      });
+            if (pointer.pointerType === 'touch') {
+              event.preventDefault();
+            }
+          }, 'processing pointer input'),
+      );
 
-      canvas.addEventListener('pointerup', (event) => {
-        if (!pointer.active) return;
-        const wasTouch = pointer.pointerType === 'touch' || pointer.pointerType === 'pen';
-        const releasedButton = event.button ?? pointer.button ?? 0;
-        if (state.isRunning && !pointer.moved) {
-          const buttonToUse = wasTouch ? 0 : pointer.button ?? releasedButton ?? 0;
-          suppressNextClick = true;
-          if (typeof event.preventDefault === 'function') {
-            event.preventDefault();
-          }
-          handlePointerClick(event, buttonToUse);
-        } else if (pointer.pointerType === 'mouse' && pointer.moved) {
-          suppressNextClick = true;
-        }
-        resetPointerState();
-      });
+      canvas.addEventListener(
+        'pointerup',
+        (event) =>
+          safelyExecute(() => {
+            if (!pointer.active) return;
+            const wasTouch = pointer.pointerType === 'touch' || pointer.pointerType === 'pen';
+            const releasedButton = event.button ?? pointer.button ?? 0;
+            if (state.isRunning && !pointer.moved) {
+              const buttonToUse = wasTouch ? 0 : pointer.button ?? releasedButton ?? 0;
+              suppressNextClick = true;
+              if (typeof event.preventDefault === 'function') {
+                event.preventDefault();
+              }
+              handlePointerClick(event, buttonToUse);
+            } else if (pointer.pointerType === 'mouse' && pointer.moved) {
+              suppressNextClick = true;
+            }
+            resetPointerState();
+          }, 'processing pointer input'),
+      );
 
-      const cancelPointer = () => {
-        if (!pointer.active) return;
-        suppressNextClick = pointer.moved || suppressNextClick;
-        resetPointerState();
-      };
+      const cancelPointer = () =>
+        safelyExecute(() => {
+          if (!pointer.active) return;
+          suppressNextClick = pointer.moved || suppressNextClick;
+          resetPointerState();
+        }, 'processing pointer input');
 
       canvas.addEventListener('pointerleave', cancelPointer);
       canvas.addEventListener('pointercancel', cancelPointer);
       canvas.addEventListener('contextmenu', (event) => {
-        event.preventDefault();
+        safelyExecute(() => {
+          event.preventDefault();
+        }, 'handling context menu');
       });
       canvas.addEventListener('click', (event) => {
-        if (suppressNextClick) {
-          suppressNextClick = false;
-          return;
-        }
-        if (!state.isRunning) return;
-        handlePointerClick(event, event.button ?? 0);
+        safelyExecute(() => {
+          if (suppressNextClick) {
+            suppressNextClick = false;
+            return;
+          }
+          if (!state.isRunning) return;
+          handlePointerClick(event, event.button ?? 0);
+        }, 'processing pointer input');
       });
     }
 
@@ -15868,6 +15987,7 @@
       knownRecipes: new Set(['stick', 'stone-pickaxe']),
       unlockedDimensions: new Set(['origin']),
       simpleSummary: null,
+      featureFlags,
       player: {
         id: PLAYER_ENTITY_ID,
         x: 8,
@@ -17780,47 +17900,49 @@
     }
 
     async function handleVictoryShareClick() {
-      if (!state.victory) {
-        if (victoryShareStatusEl) {
-          victoryShareStatusEl.textContent = 'Secure the Eternal Ingot and return home to share your run.';
-        }
-        return;
-      }
-      const snapshot = computeScoreSnapshot();
-      latestVictoryShareDetails = getVictoryShareDetails(snapshot);
-      const shareDetails = latestVictoryShareDetails;
-      if (victoryShareStatusEl) {
-        victoryShareStatusEl.textContent = 'Preparing share message...';
-      }
-      if (navigator.share) {
-        try {
-          await navigator.share({ title: shareDetails.title, text: shareDetails.text, url: shareDetails.url });
+      return safelyExecute(async () => {
+        if (!state.victory) {
           if (victoryShareStatusEl) {
-            victoryShareStatusEl.textContent = 'Shared! Challenge your crew to beat your run.';
+            victoryShareStatusEl.textContent = 'Secure the Eternal Ingot and return home to share your run.';
           }
           return;
-        } catch (error) {
-          if (error?.name === 'AbortError') {
+        }
+        const snapshot = computeScoreSnapshot();
+        latestVictoryShareDetails = getVictoryShareDetails(snapshot);
+        const shareDetails = latestVictoryShareDetails;
+        if (victoryShareStatusEl) {
+          victoryShareStatusEl.textContent = 'Preparing share message...';
+        }
+        if (navigator.share) {
+          try {
+            await navigator.share({ title: shareDetails.title, text: shareDetails.text, url: shareDetails.url });
             if (victoryShareStatusEl) {
-              victoryShareStatusEl.textContent = 'Share cancelled.';
+              victoryShareStatusEl.textContent = 'Shared! Challenge your crew to beat your run.';
             }
             return;
+          } catch (error) {
+            if (error?.name === 'AbortError') {
+              if (victoryShareStatusEl) {
+                victoryShareStatusEl.textContent = 'Share cancelled.';
+              }
+              return;
+            }
+            console.warn('Share failed.', error);
           }
-          console.warn('Share failed.', error);
         }
-      }
-      try {
-        const copied = await copyVictoryShareText(shareDetails.fallbackText);
-        if (victoryShareStatusEl) {
-          victoryShareStatusEl.textContent = copied
-            ? 'Run details copied to your clipboard.'
-            : `Share support unavailable. Copy this message manually: ${shareDetails.fallbackText}`;
+        try {
+          const copied = await copyVictoryShareText(shareDetails.fallbackText);
+          if (victoryShareStatusEl) {
+            victoryShareStatusEl.textContent = copied
+              ? 'Run details copied to your clipboard.'
+              : `Share support unavailable. Copy this message manually: ${shareDetails.fallbackText}`;
+          }
+        } catch (error) {
+          if (victoryShareStatusEl) {
+            victoryShareStatusEl.textContent = `Share support unavailable. Copy this message manually: ${shareDetails.fallbackText}`;
+          }
         }
-      } catch (error) {
-        if (victoryShareStatusEl) {
-          victoryShareStatusEl.textContent = `Share support unavailable. Copy this message manually: ${shareDetails.fallbackText}`;
-        }
-      }
+      }, 'sharing your victory', { suppressOverlay: true });
     }
 
     function logEvent(message) {
@@ -17834,119 +17956,216 @@
     }
 
     function startGame() {
-      if (state.isRunning) return;
-      const pendingProgress = consumePendingProgressSnapshot();
-      const progressSnapshot = pendingProgress?.snapshot ?? null;
-      const progressSource = pendingProgress?.source ?? null;
-      const startDimensionId =
-        progressSnapshot?.dimensions?.current && DIMENSIONS[progressSnapshot.dimensions.current]
-          ? progressSnapshot.dimensions.current
-          : 'origin';
-      const startingWithRestoredProgress = Boolean(progressSnapshot);
-      if (!startingWithRestoredProgress) {
-        const cycleRatio = THREE.MathUtils.clamp(DEFAULT_DAY_START_RATIO, 0, 0.99);
-        state.elapsed = state.dayLength * cycleRatio;
+      return safelyExecute(() => {
+        if (state.isRunning) return;
+        const pendingProgress = consumePendingProgressSnapshot();
+        const progressSnapshot = pendingProgress?.snapshot ?? null;
+        const progressSource = pendingProgress?.source ?? null;
+        const startDimensionId =
+          progressSnapshot?.dimensions?.current && DIMENSIONS[progressSnapshot.dimensions.current]
+            ? progressSnapshot.dimensions.current
+            : 'origin';
+        const startingWithRestoredProgress = Boolean(progressSnapshot);
+        if (!startingWithRestoredProgress) {
+          const cycleRatio = THREE.MathUtils.clamp(DEFAULT_DAY_START_RATIO, 0, 0.99);
+          state.elapsed = state.dayLength * cycleRatio;
+        }
+        renderClock.stop();
+        renderClock.start();
+        renderClock.getDelta();
+        teardownPreviewScene();
+        resetRendererUniformCaches();
+        pendingUniformSanitizations = Math.max(pendingUniformSanitizations, 2);
+        rendererRecoveryFrames = Math.max(rendererRecoveryFrames, 1);
+        uniformSanitizationFailureStreak = 0;
+        const context = ensureAudioContext();
+        context?.resume?.().catch(() => {});
+        if (window.Howler?.ctx?.state === 'suspended') {
+          window.Howler.ctx.resume().catch(() => {});
+        }
+        setDimensionTransitionOverlay(false);
+        state.ui.dimensionTransition = null;
+        clearMarbleGhosts();
+        if (introModal) {
+          introModal.hidden = true;
+          introModal.setAttribute('aria-hidden', 'true');
+          introModal.style.display = 'none';
+        }
+        if (startButton) {
+          startButton.disabled = true;
+          startButton.setAttribute('aria-hidden', 'true');
+          startButton.setAttribute('tabindex', '-1');
+          startButton.blur();
+        }
+        hideGameBriefing({ immediate: true });
+        canvas?.focus();
+        document.body?.classList.add('game-active');
+        if (featureFlags.hudVisibleOnBootstrap) {
+          if (hudRootEl) {
+            hudRootEl.hidden = false;
+            hudRootEl.setAttribute('aria-hidden', 'false');
+          }
+          if (objectivesPanelEl) {
+            objectivesPanelEl.hidden = false;
+            objectivesPanelEl.setAttribute('aria-hidden', 'false');
+          }
+        }
+        resetHudInactivityTimer();
+        updateLayoutMetrics();
+        state.isRunning = true;
+        if (state.ui) {
+          state.ui.movementHintDismissed = false;
+          state.ui.movementGlowHintShown = false;
+        }
+        state.player.effects = {};
+        state.victory = false;
+        state.scoreSubmitted = false;
+        dismissVictoryCelebration({ reset: true, immediate: true });
+        state.dimensionHistory = ['origin'];
+        state.unlockedDimensions = new Set(['origin']);
+        state.knownRecipes = new Set(['stick', 'stone-pickaxe']);
+        state.lastMoveAt = Number.NEGATIVE_INFINITY;
+        resetScoreTracking();
+        state.player.inventory = Array.from({ length: 10 }, () => null);
+        state.player.satchel = [];
+        state.player.selectedSlot = 0;
+        state.craftSequence = [];
+        ensurePlayerAvatarReady({ forceReload: true, resetAnimations: true });
+        renderVictoryBanner();
+        loadDimension(startDimensionId);
+        if (!startingWithRestoredProgress && state.dayCycle) {
+          state.dayCycle.isNight = false;
+          state.dayCycle.spawnTimer = ZOMBIE_SPAWN_INTERVAL;
+          state.dayCycle.waveCount = 0;
+        }
+        resetStatusMeterMemory();
+        if (progressSnapshot) {
+          applyProgressSnapshotToState(progressSnapshot, {
+            source: progressSource || 'local',
+            announce: progressSource === 'remote',
+          });
+        } else {
+          updateInventoryUI();
+          updateRecipesList();
+          updateCraftSequenceDisplay();
+          updateAutocompleteSuggestions();
+          addItemToInventory('wood', 2);
+          addItemToInventory('stone', 1);
+        }
+        updateStatusBars();
+        updateDimensionOverlay();
+        try {
+          updateWorldMeshes();
+          sanitizeSceneUniforms();
+          ensureSceneUniformValuePresence();
+          preemptivelyRepairRendererUniforms();
+        } catch (initializationError) {
+          console.warn('Unable to pre-sanitise world uniforms before starting the run.', initializationError);
+        }
+        requestAnimationFrame(loop);
+        if (!progressSnapshot) {
+          logEvent('You awaken on a floating island.');
+        }
+        flagProgressDirty('start');
+        queueProgressSave('start');
+        promptForOptionalSync();
+        window.setTimeout(() => {
+          if (state.isRunning) {
+            const preferredScheme = prefersTouchControls() ? 'touch' : 'desktop';
+            showPlayerHint(null, {
+              html: createControlsHintMarkup(preferredScheme),
+              variant: 'controls',
+              persist: true,
+            });
+          }
+        }, 900);
+      }, 'starting the adventure', { fatal: true });
+    }
+
+    function isValidWorldGrid(grid, width, height) {
+      if (!Array.isArray(grid) || grid.length !== height) {
+        return false;
       }
-      renderClock.stop();
-      renderClock.start();
-      renderClock.getDelta();
-      teardownPreviewScene();
-      resetRendererUniformCaches();
-      pendingUniformSanitizations = Math.max(pendingUniformSanitizations, 2);
-      rendererRecoveryFrames = Math.max(rendererRecoveryFrames, 1);
-      uniformSanitizationFailureStreak = 0;
-      const context = ensureAudioContext();
-      context?.resume?.().catch(() => {});
-      if (window.Howler?.ctx?.state === 'suspended') {
-        window.Howler.ctx.resume().catch(() => {});
+      for (let y = 0; y < height; y += 1) {
+        const row = grid[y];
+        if (!Array.isArray(row) || row.length !== width) {
+          return false;
+        }
+        for (let x = 0; x < width; x += 1) {
+          const tile = row[x];
+          if (!tile || typeof tile !== 'object') {
+            return false;
+          }
+          if (typeof tile.type !== 'string' || !tile.type) {
+            return false;
+          }
+        }
       }
-      setDimensionTransitionOverlay(false);
-      state.ui.dimensionTransition = null;
-      clearMarbleGhosts();
-      if (introModal) {
-        introModal.hidden = true;
-        introModal.setAttribute('aria-hidden', 'true');
-        introModal.style.display = 'none';
+      return true;
+    }
+
+    function createFallbackWorldGrid(state) {
+      const width = Math.max(4, Math.floor(Number.isFinite(state?.width) ? state.width : 16));
+      const height = Math.max(4, Math.floor(Number.isFinite(state?.height) ? state.height : 12));
+      const grid = [];
+      for (let y = 0; y < height; y += 1) {
+        const row = [];
+        for (let x = 0; x < width; x += 1) {
+          const edge = x === 0 || y === 0 || x === width - 1 || y === height - 1;
+          row.push(edge ? { type: 'void', walkable: false } : { type: 'grass', walkable: true });
+        }
+        grid.push(row);
       }
-      if (startButton) {
-        startButton.disabled = true;
-        startButton.setAttribute('aria-hidden', 'true');
-        startButton.setAttribute('tabindex', '-1');
-        startButton.blur();
+      const spawnX = Math.floor(width / 2);
+      const spawnY = Math.floor(height / 2);
+      if (grid[spawnY]?.[spawnX]) {
+        grid[spawnY][spawnX] = { type: 'platform', walkable: true };
       }
-      hideGameBriefing({ immediate: true });
-      canvas?.focus();
-      document.body?.classList.add('game-active');
-      resetHudInactivityTimer();
-      updateLayoutMetrics();
-      state.isRunning = true;
-      if (state.ui) {
-        state.ui.movementHintDismissed = false;
-        state.ui.movementGlowHintShown = false;
+      return grid;
+    }
+
+    function resolveWorldGridForDimension(dimension, state) {
+      if (!dimension) {
+        return createFallbackWorldGrid(state);
       }
-      state.player.effects = {};
-      state.victory = false;
-      state.scoreSubmitted = false;
-      dismissVictoryCelebration({ reset: true, immediate: true });
-      state.dimensionHistory = ['origin'];
-      state.unlockedDimensions = new Set(['origin']);
-      state.knownRecipes = new Set(['stick', 'stone-pickaxe']);
-      state.lastMoveAt = Number.NEGATIVE_INFINITY;
-      resetScoreTracking();
-      state.player.inventory = Array.from({ length: 10 }, () => null);
-      state.player.satchel = [];
-      state.player.selectedSlot = 0;
-      state.craftSequence = [];
-      ensurePlayerAvatarReady({ forceReload: true, resetAnimations: true });
-      renderVictoryBanner();
-      loadDimension(startDimensionId);
-      if (!startingWithRestoredProgress && state.dayCycle) {
-        state.dayCycle.isNight = false;
-        state.dayCycle.spawnTimer = ZOMBIE_SPAWN_INTERVAL;
-        state.dayCycle.waveCount = 0;
+      const generator = typeof dimension.generator === 'function' ? dimension.generator : null;
+      let generated = null;
+      if (generator) {
+        generated = safelyExecute(
+          () => generator(state),
+          `generating the ${dimension.name || dimension.id || 'dimension'} terrain`,
+          {
+            suppressOverlay: featureFlags.strictWorldValidation !== true,
+            dedupeKey: `world-generator|${dimension.id || 'unknown'}`,
+            hint: 'The terrain generator misfired. Stabilising a fallback island.',
+            fallback: null,
+          },
+        );
       }
-      resetStatusMeterMemory();
-      if (progressSnapshot) {
-        applyProgressSnapshotToState(progressSnapshot, {
-          source: progressSource || 'local',
-          announce: progressSource === 'remote',
-        });
-      } else {
-        updateInventoryUI();
-        updateRecipesList();
-        updateCraftSequenceDisplay();
-        updateAutocompleteSuggestions();
-        addItemToInventory('wood', 2);
-        addItemToInventory('stone', 1);
+      if (!featureFlags.strictWorldValidation) {
+        return generated || createFallbackWorldGrid(state);
       }
-      updateStatusBars();
-      updateDimensionOverlay();
-      // Prime the world meshes and shader uniforms before the first frame render.
-      try {
-        updateWorldMeshes();
-        sanitizeSceneUniforms();
-        ensureSceneUniformValuePresence();
-        preemptivelyRepairRendererUniforms();
-      } catch (initializationError) {
-        console.warn('Unable to pre-sanitise world uniforms before starting the run.', initializationError);
-      }
-      requestAnimationFrame(loop);
-      if (!progressSnapshot) {
-        logEvent('You awaken on a floating island.');
-      }
-      flagProgressDirty('start');
-      queueProgressSave('start');
-      promptForOptionalSync();
-      window.setTimeout(() => {
-        if (state.isRunning) {
-          const preferredScheme = prefersTouchControls() ? 'touch' : 'desktop';
-          showPlayerHint(null, {
-            html: createControlsHintMarkup(preferredScheme),
-            variant: 'controls',
-            persist: true,
+      if (!isValidWorldGrid(generated, state.width, state.height)) {
+        if (generated) {
+          console.warn('World generator returned an invalid grid. Using fallback island instead.', {
+            dimensionId: dimension.id,
+            width: state.width,
+            height: state.height,
+          });
+        } else {
+          console.warn('World generator did not return a grid. Using fallback island instead.', {
+            dimensionId: dimension.id,
+            width: state.width,
+            height: state.height,
           });
         }
-      }, 900);
+        announceVisualFallback(
+          `world-fallback-${dimension.id || 'unknown'}`,
+          'The terrain stabiliser activated a backup island while assets finished loading.',
+        );
+        return createFallbackWorldGrid(state);
+      }
+      return generated;
     }
 
     function loadDimension(id, fromId = null) {
@@ -17976,7 +18195,8 @@
       applyDimensionTheme(dim);
       applyDimensionAtmosphere(dim);
       document.title = `Infinite Dimension · ${dim.name}`;
-      state.world = dim.generator(state);
+      const resolvedWorld = resolveWorldGridForDimension(dim, state);
+      state.world = resolvedWorld;
       state.physics = {
         gravity: dim.physics?.gravity ?? 1,
         shaderProfile: dim.physics?.shaderProfile ?? 'default',
@@ -21240,108 +21460,112 @@
     }
 
     function handleKeyDown(event) {
-      if (event.repeat) return;
-      const rawKey = typeof event.key === 'string' ? event.key : '';
-      const code = normaliseEventCode(event.code || '', rawKey);
-      const target = event.target;
-      if (!state.isRunning && previewState.active) {
-        if (isKeyForAction('moveLeft', code) || isKeyForAction('moveRight', code)) {
-          const delta = isKeyForAction('moveRight', code) ? PREVIEW_KEY_YAW_DELTA : -PREVIEW_KEY_YAW_DELTA;
-          setPreviewYaw(previewState.yaw + delta);
+      return safelyExecute(() => {
+        if (event.repeat) return;
+        const rawKey = typeof event.key === 'string' ? event.key : '';
+        const code = normaliseEventCode(event.code || '', rawKey);
+        const target = event.target;
+        if (!state.isRunning && previewState.active) {
+          if (isKeyForAction('moveLeft', code) || isKeyForAction('moveRight', code)) {
+            const delta = isKeyForAction('moveRight', code) ? PREVIEW_KEY_YAW_DELTA : -PREVIEW_KEY_YAW_DELTA;
+            setPreviewYaw(previewState.yaw + delta);
+            event.preventDefault();
+            return;
+          }
+          if (code === 'ArrowUp' || code === 'ArrowDown') {
+            const delta = code === 'ArrowUp' ? PREVIEW_KEY_YAW_DELTA * 0.5 : -PREVIEW_KEY_YAW_DELTA * 0.5;
+            setPreviewPitch(previewState.pitch + delta);
+            event.preventDefault();
+            return;
+          }
+        }
+        if (
+          target instanceof HTMLElement &&
+          (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)
+        ) {
+          const allowedInInput =
+            isKeyForAction('toggleInventory', code) ||
+            isKeyForAction('toggleCrafting', code) ||
+            isKeyForAction('closeMenus', code);
+          if (!allowedInInput) {
+            return;
+          }
+        }
+        if (isInventoryModalOpen()) {
+          const allowed = isKeyForAction('toggleInventory', code) || isKeyForAction('closeMenus', code);
+          if (!allowed) {
+            event.preventDefault();
+            return;
+          }
+        }
+        if (state.isRunning && handleMovementKey(code, true, rawKey)) {
           event.preventDefault();
           return;
         }
-        if (code === 'ArrowUp' || code === 'ArrowDown') {
-          const delta = code === 'ArrowUp' ? PREVIEW_KEY_YAW_DELTA * 0.5 : -PREVIEW_KEY_YAW_DELTA * 0.5;
-          setPreviewPitch(previewState.pitch + delta);
+        if (isKeyForAction('jump', code)) {
+          console.log('Jump triggered');
+          if (!attemptJump()) {
+            interact();
+          }
           event.preventDefault();
           return;
         }
-      }
-      if (
-        target instanceof HTMLElement &&
-        (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)
-      ) {
-        const allowedInInput =
-          isKeyForAction('toggleInventory', code) ||
-          isKeyForAction('toggleCrafting', code) ||
-          isKeyForAction('closeMenus', code);
-        if (!allowedInInput) {
-          return;
-        }
-      }
-      if (isInventoryModalOpen()) {
-        const allowed = isKeyForAction('toggleInventory', code) || isKeyForAction('closeMenus', code);
-        if (!allowed) {
+        if (isKeyForAction('placeBlock', code)) {
+          placeBlock();
           event.preventDefault();
           return;
         }
-      }
-      if (state.isRunning && handleMovementKey(code, true, rawKey)) {
-        event.preventDefault();
-        return;
-      }
-      if (isKeyForAction('jump', code)) {
-        console.log('Jump triggered');
-        if (!attemptJump()) {
+        if (isKeyForAction('toggleCrafting', code)) {
+          toggleCraftingModal({ focusReturn: canvas });
+          event.preventDefault();
+          return;
+        }
+        if (isKeyForAction('toggleInventory', code)) {
+          const opening = !isInventoryModalOpen();
+          toggleInventoryModal({ focusFirstSlot: opening });
+          if (!opening) {
+            canvas?.focus();
+          }
+          event.preventDefault();
+          return;
+        }
+        if (isKeyForAction('resetPosition', code)) {
+          if (resetPlayerPosition()) {
+            event.preventDefault();
+          }
+          return;
+        }
+        if (isKeyForAction('toggleCameraPerspective', code)) {
+          if (toggleCameraPerspective()) {
+            event.preventDefault();
+          }
+          return;
+        }
+        if (isKeyForAction('buildPortal', code)) {
+          promptPortalBuild();
+          event.preventDefault();
+          return;
+        }
+        if (isKeyForAction('interact', code)) {
           interact();
+          event.preventDefault();
+          return;
         }
-        event.preventDefault();
-        return;
-      }
-      if (isKeyForAction('placeBlock', code)) {
-        placeBlock();
-        event.preventDefault();
-        return;
-      }
-      if (isKeyForAction('toggleCrafting', code)) {
-        toggleCraftingModal({ focusReturn: canvas });
-        event.preventDefault();
-        return;
-      }
-      if (isKeyForAction('toggleInventory', code)) {
-        const opening = !isInventoryModalOpen();
-        toggleInventoryModal({ focusFirstSlot: opening });
-        if (!opening) {
-          canvas?.focus();
-        }
-        event.preventDefault();
-        return;
-      }
-      if (isKeyForAction('resetPosition', code)) {
-        if (resetPlayerPosition()) {
+        const hotbarSlot = getHotbarSlotFromCode(code);
+        if (hotbarSlot !== null) {
+          state.player.selectedSlot = hotbarSlot;
+          updateInventoryUI();
           event.preventDefault();
         }
-        return;
-      }
-      if (isKeyForAction('toggleCameraPerspective', code)) {
-        if (toggleCameraPerspective()) {
-          event.preventDefault();
-        }
-        return;
-      }
-      if (isKeyForAction('buildPortal', code)) {
-        promptPortalBuild();
-        event.preventDefault();
-        return;
-      }
-      if (isKeyForAction('interact', code)) {
-        interact();
-        event.preventDefault();
-        return;
-      }
-      const hotbarSlot = getHotbarSlotFromCode(code);
-      if (hotbarSlot !== null) {
-        state.player.selectedSlot = hotbarSlot;
-        updateInventoryUI();
-        event.preventDefault();
-      }
+      }, 'handling keyboard input');
     }
 
     function handleKeyUp(event) {
-      const rawKey = typeof event.key === 'string' ? event.key : '';
-      const code = normaliseEventCode(event.code || '', rawKey);
-      handleMovementKey(code, false, rawKey);
+      return safelyExecute(() => {
+        const rawKey = typeof event.key === 'string' ? event.key : '';
+        const code = normaliseEventCode(event.code || '', rawKey);
+        handleMovementKey(code, false, rawKey);
+      }, 'handling keyboard input');
     }
 
     function clearBlockActionHudTimers() {
