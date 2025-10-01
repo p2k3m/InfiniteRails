@@ -2091,15 +2091,36 @@
 
     setupScene() {
       const THREE = this.THREE;
-      this.scene = new THREE.Scene();
-      this.scene.background = new THREE.Color('#87ceeb');
-      this.scene.fog = new THREE.Fog(0x87ceeb, 40, 140);
-
       const width = this.canvas.clientWidth || this.canvas.width || 1;
       const height = this.canvas.clientHeight || this.canvas.height || 1;
       const aspect = width / Math.max(1, height);
       const frustumHeight = this.cameraFrustumHeight ?? 6;
       const frustumWidth = frustumHeight * aspect;
+
+      let renderer;
+      try {
+        renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: true });
+      } catch (error) {
+        console.error('Failed to initialise Three.js renderer.', error);
+        this.renderer = null;
+        throw error;
+      }
+
+      this.renderer = renderer;
+      this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+      this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      this.renderer.toneMappingExposure = 1.05;
+      this.renderer.shadowMap.enabled = true;
+      this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+      this.renderer.setPixelRatio(window.devicePixelRatio ?? 1);
+      this.renderer.setSize(width, height, false);
+      this.applyTextureAnisotropy();
+      this.bindWebglContextEvents();
+
+      this.scene = new THREE.Scene();
+      this.scene.background = new THREE.Color('#87ceeb');
+      this.scene.fog = new THREE.Fog(0x87ceeb, 40, 140);
+
       this.camera = new THREE.OrthographicCamera(
         -frustumWidth / 2,
         frustumWidth / 2,
@@ -2121,17 +2142,6 @@
       this.camera.position.set(0, 0, 0);
       this.camera.lookAt(new THREE.Vector3(0, PLAYER_EYE_HEIGHT, 10));
       this.updateCameraFrustum(width, height);
-
-      this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: true });
-      this.renderer.outputColorSpace = THREE.SRGBColorSpace;
-      this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-      this.renderer.toneMappingExposure = 1.05;
-      this.renderer.shadowMap.enabled = true;
-      this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-      this.renderer.setPixelRatio(window.devicePixelRatio ?? 1);
-      this.renderer.setSize(width, height, false);
-      this.applyTextureAnisotropy();
-      this.bindWebglContextEvents();
 
       this.hemiLight = new THREE.HemisphereLight(0xbddcff, 0x34502d, 0.9);
       this.scene.add(this.hemiLight);
