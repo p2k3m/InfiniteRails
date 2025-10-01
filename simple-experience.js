@@ -16,7 +16,10 @@
   const POINTER_TUTORIAL_MESSAGE =
     'Click the viewport to capture your mouse, then use your movement keys to move and left-click to mine.';
   const POINTER_LOCK_FALLBACK_MESSAGE =
-    'Pointer lock is blocked by your browser. Click and drag to look around.';
+    'Pointer lock is blocked by your browser or an extension. Click and drag to look around, or allow mouse capture to re-enable full look controls.';
+  const POINTER_LOCK_MAX_RETRIES = 2;
+  const POINTER_LOCK_RETRY_DELAY_MS = 200;
+  const POINTER_LOCK_RETRY_HINT_MESSAGE = 'Browser blocked mouse capture — retrying…';
   const POINTER_LOCK_CHANGE_EVENTS = ['pointerlockchange', 'mozpointerlockchange', 'webkitpointerlockchange'];
   const POINTER_LOCK_ERROR_EVENTS = ['pointerlockerror', 'mozpointerlockerror', 'webkitpointerlockerror'];
   const FALLBACK_HEALTH = 10;
@@ -771,6 +774,9 @@
       this.pointerLockWarningShown = false;
       this.pointerLockFallbackNoticeShown = false;
       this.pointerLockFallbackMessageActive = false;
+      this.pointerLockRetryTimer = null;
+      this.pointerLockRetryAttempts = 0;
+      this.pointerLockBlockWarningIssued = false;
       this.pointerFallbackDragging = false;
       this.pointerFallbackLast = null;
       this.pointerFallbackButton = null;
@@ -1366,28 +1372,44 @@
       this.schedulePointerHintAutoHide(5);
     }
 
-    enablePointerLockFallback(reason = 'unavailable', error = null) {
+    enablePointerLockFallback(reason = 'unavailable', error = null, options = {}) {
       const reasonDetail = typeof reason === 'string' && reason ? ` (${reason})` : '';
+      const fallbackMessage =
+        typeof options?.message === 'string' && options.message.trim() ? options.message.trim() : null;
+      this.cancelPointerLockRetry();
+      this.pointerLockRetryAttempts = 0;
+      this.pointerLockBlockWarningIssued = false;
       if (this.pointerLockFallbackActive) {
         if (!this.pointerLockWarningShown) {
           this.pointerLockWarningShown = true;
           if (typeof console !== 'undefined') {
             if (error) {
               console.warn(
-                `Pointer lock unavailable${reasonDetail}; continuing with drag-to-look fallback.`,
+                `Pointer lock unavailable${reasonDetail}; continuing with drag-to-look fallback.${
+                  reason === 'error' || reason === 'request-rejected'
+                    ? ' Browser privacy settings or extensions may be blocking mouse capture.'
+                    : ''
+                }`,
                 error
               );
             } else {
               console.warn(
-                `Pointer lock unavailable${reasonDetail}; continuing with drag-to-look fallback.`
+                `Pointer lock unavailable${reasonDetail}; continuing with drag-to-look fallback.${
+                  reason === 'error' || reason === 'request-rejected'
+                    ? ' Browser privacy settings or extensions may be blocking mouse capture.'
+                    : ''
+                }`
               );
             }
           }
         }
-        if (!this.pointerLockFallbackMessageActive) {
+        if (fallbackMessage) {
+          this.showPointerLockFallbackNotice(fallbackMessage);
+        } else if (!this.pointerLockFallbackMessageActive) {
           this.showPointerLockFallbackNotice();
         } else {
-          this.updatePointerHintForInputMode(this.getPointerLockFallbackMessage());
+          const message = fallbackMessage || this.getPointerLockFallbackMessage();
+          this.updatePointerHintForInputMode(message);
           this.schedulePointerHintAutoHide(8);
         }
         return;
@@ -1398,12 +1420,20 @@
       if (!this.pointerLockWarningShown && typeof console !== 'undefined') {
         if (error) {
           console.warn(
-            `Pointer lock unavailable${reasonDetail}; switching to drag-to-look fallback.`,
+            `Pointer lock unavailable${reasonDetail}; switching to drag-to-look fallback.${
+              reason === 'error' || reason === 'request-rejected'
+                ? ' Browser privacy settings or extensions may be blocking mouse capture.'
+                : ''
+            }`,
             error
           );
         } else {
           console.warn(
-            `Pointer lock unavailable${reasonDetail}; switching to drag-to-look fallback.`
+            `Pointer lock unavailable${reasonDetail}; switching to drag-to-look fallback.${
+              reason === 'error' || reason === 'request-rejected'
+                ? ' Browser privacy settings or extensions may be blocking mouse capture.'
+                : ''
+            }`
           );
         }
         this.pointerLockWarningShown = true;
@@ -1411,9 +1441,10 @@
       this.emitGameEvent('pointer-lock-fallback', { reason });
       if (!this.pointerLockFallbackNoticeShown) {
         this.pointerLockFallbackNoticeShown = true;
-        this.showPointerLockFallbackNotice();
+        this.showPointerLockFallbackNotice(fallbackMessage || undefined);
       } else {
-        this.updatePointerHintForInputMode(this.getPointerLockFallbackMessage());
+        const message = fallbackMessage || this.getPointerLockFallbackMessage();
+        this.updatePointerHintForInputMode(message);
         this.schedulePointerHintAutoHide(8);
       }
     }
@@ -5803,6 +5834,8 @@
       this.pointerPreferenceObserver = null;
       this.detachPointerPreferenceObserver = null;
       this.teardownMobileControls();
+      this.cancelPointerLockRetry();
+      this.pointerLockRetryAttempts = 0;
       this.eventsBound = false;
     }
 
@@ -5818,9 +5851,37 @@
       );
     }
 
+    cancelPointerLockRetry() {
+      if (!this.pointerLockRetryTimer) {
+        return;
+      }
+      const scope = typeof window !== 'undefined' ? window : globalThis;
+      scope.clearTimeout(this.pointerLockRetryTimer);
+      this.pointerLockRetryTimer = null;
+    }
+
+    schedulePointerLockRetry(delayMs = POINTER_LOCK_RETRY_DELAY_MS) {
+      if (!this.canvas) {
+        return;
+      }
+      const scope = typeof window !== 'undefined' ? window : globalThis;
+      this.cancelPointerLockRetry();
+      const timeout = Number.isFinite(delayMs) && delayMs > 0 ? delayMs : POINTER_LOCK_RETRY_DELAY_MS;
+      this.pointerLockRetryTimer = scope.setTimeout(() => {
+        this.pointerLockRetryTimer = null;
+        if (!this.canvas || this.pointerLocked || this.getPointerLockElement() === this.canvas) {
+          return;
+        }
+        this.attemptPointerLock();
+      }, timeout);
+    }
+
     handlePointerLockChange() {
       this.pointerLocked = this.getPointerLockElement() === this.canvas;
       if (this.pointerLocked) {
+        this.cancelPointerLockRetry();
+        this.pointerLockRetryAttempts = 0;
+        this.pointerLockBlockWarningIssued = false;
         this.pointerLockFallbackActive = false;
         this.pointerLockWarningShown = false;
         this.pointerLockFallbackNoticeShown = false;
@@ -5847,7 +5908,40 @@
     handlePointerLockError(event) {
       this.pointerLocked = false;
       this.cancelPointerHintAutoHide();
-      this.enablePointerLockFallback('error', event?.error || event || null);
+      const error = event?.error || event || null;
+      const attempts = this.pointerLockRetryAttempts ?? 0;
+      if (!this.pointerLockFallbackActive && attempts < POINTER_LOCK_MAX_RETRIES) {
+        this.pointerLockRetryAttempts = attempts + 1;
+        const backoff = POINTER_LOCK_RETRY_DELAY_MS * Math.pow(2, this.pointerLockRetryAttempts - 1);
+        this.schedulePointerLockRetry(backoff);
+        if (typeof console !== 'undefined' && !this.pointerLockBlockWarningIssued) {
+          if (error) {
+            console.warn(
+              'Pointer lock request was blocked by the browser or an extension. Retrying shortly.',
+              error,
+            );
+          } else {
+            console.warn('Pointer lock request was blocked by the browser or an extension. Retrying shortly.');
+          }
+          this.pointerLockBlockWarningIssued = true;
+        }
+        this.updatePointerHintForInputMode(POINTER_LOCK_RETRY_HINT_MESSAGE);
+        this.schedulePointerHintAutoHide(4);
+        return;
+      }
+      if (typeof console !== 'undefined' && attempts >= POINTER_LOCK_MAX_RETRIES) {
+        if (error) {
+          console.warn(
+            'Pointer lock could not be acquired after multiple attempts. The browser or an extension may be blocking mouse capture. Falling back to drag-to-look controls.',
+            error,
+          );
+        } else {
+          console.warn(
+            'Pointer lock could not be acquired after multiple attempts. The browser or an extension may be blocking mouse capture. Falling back to drag-to-look controls.',
+          );
+        }
+      }
+      this.enablePointerLockFallback('error', error, { message: POINTER_LOCK_FALLBACK_MESSAGE });
     }
 
     attemptPointerLock() {
@@ -5891,6 +5985,9 @@
         return;
       }
       this.markInteraction();
+      this.cancelPointerLockRetry();
+      this.pointerLockRetryAttempts = 0;
+      this.pointerLockBlockWarningIssued = false;
       if (this.pointerLocked || this.getPointerLockElement() === this.canvas) {
         return;
       }
