@@ -1156,6 +1156,137 @@
       </div>
     </div>
 
+    <script>
+      (function setupBootstrapFallback() {
+        var doc = document;
+        var timer = null;
+        var fallbackActive = false;
+        var originalTitle = null;
+        var originalMessage = null;
+
+        function restoreOverlayContent() {
+          var title = doc.getElementById('globalOverlayTitle');
+          if (title && originalTitle !== null) {
+            title.textContent = originalTitle;
+          }
+          var message = doc.getElementById('globalOverlayMessage');
+          if (message && originalMessage !== null) {
+            message.textContent = originalMessage;
+          }
+        }
+
+        function showOverlayFallback() {
+          var overlay = doc.getElementById('globalOverlay');
+          if (!overlay) {
+            return false;
+          }
+          var dialog = doc.getElementById('globalOverlayDialog');
+          var spinner = doc.getElementById('globalOverlaySpinner');
+          var title = doc.getElementById('globalOverlayTitle');
+          var message = doc.getElementById('globalOverlayMessage');
+
+          overlay.hidden = false;
+          overlay.removeAttribute('hidden');
+          overlay.setAttribute('aria-hidden', 'false');
+          overlay.setAttribute('data-mode', 'loading');
+          overlay.setAttribute('data-fallback-active', 'true');
+
+          if (dialog) {
+            dialog.setAttribute('aria-busy', 'true');
+          }
+          if (spinner) {
+            spinner.removeAttribute('aria-hidden');
+          }
+          if (title) {
+            if (originalTitle === null) {
+              originalTitle = title.textContent;
+            }
+            title.textContent = 'Preparing experience…';
+          }
+          if (message) {
+            if (originalMessage === null) {
+              originalMessage = message.textContent;
+            }
+            message.textContent = 'Still loading — please check your connection if this persists.';
+          }
+          return true;
+        }
+
+        function ensureFallbackVisible() {
+          if (fallbackActive) {
+            return;
+          }
+          fallbackActive = showOverlayFallback();
+          if (fallbackActive) {
+            return;
+          }
+
+          var basicFallback = doc.getElementById('bootstrapFallbackMessage');
+          if (!basicFallback) {
+            basicFallback = doc.createElement('div');
+            basicFallback.id = 'bootstrapFallbackMessage';
+            basicFallback.setAttribute('role', 'status');
+            basicFallback.setAttribute('aria-live', 'assertive');
+            basicFallback.style.position = 'fixed';
+            basicFallback.style.inset = '0';
+            basicFallback.style.display = 'grid';
+            basicFallback.style.placeItems = 'center';
+            basicFallback.style.background = 'rgba(4, 18, 29, 0.86)';
+            basicFallback.style.color = '#e8f6ff';
+            basicFallback.style.fontFamily = "'Chakra Petch', 'Exo 2', sans-serif";
+            basicFallback.style.fontSize = '1.25rem';
+            basicFallback.style.textAlign = 'center';
+            basicFallback.style.padding = '2rem';
+            basicFallback.textContent = 'Preparing experience… Still loading — please check your connection if this persists.';
+            doc.body.appendChild(basicFallback);
+          }
+          fallbackActive = true;
+        }
+
+        function hideFallback() {
+          if (timer) {
+            clearTimeout(timer);
+            timer = null;
+          }
+          if (!fallbackActive) {
+            return;
+          }
+          var overlay = doc.getElementById('globalOverlay');
+          if (overlay && overlay.getAttribute('data-fallback-active') === 'true') {
+            overlay.setAttribute('aria-hidden', 'true');
+            overlay.setAttribute('data-mode', 'idle');
+            overlay.removeAttribute('data-fallback-active');
+            overlay.setAttribute('hidden', '');
+            overlay.hidden = true;
+
+            var dialog = doc.getElementById('globalOverlayDialog');
+            if (dialog) {
+              dialog.removeAttribute('aria-busy');
+            }
+            var spinner = doc.getElementById('globalOverlaySpinner');
+            if (spinner) {
+              spinner.setAttribute('aria-hidden', 'true');
+            }
+            restoreOverlayContent();
+          }
+
+          var basicFallback = doc.getElementById('bootstrapFallbackMessage');
+          if (basicFallback && basicFallback.parentNode) {
+            basicFallback.parentNode.removeChild(basicFallback);
+          }
+
+          fallbackActive = false;
+        }
+
+        timer = setTimeout(ensureFallbackVisible, 2000);
+
+        window.__infiniteRailsBootstrapFallback = {
+          cancel: hideFallback,
+          timer: timer,
+        };
+      })();
+    </script>
+
     <footer
       class="made-by-manu"
       id="siteFooter"
