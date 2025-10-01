@@ -1208,6 +1208,7 @@
     const closeSettingsButton = document.getElementById('closeSettings');
     const subtitleOverlay = document.getElementById('subtitleOverlay');
     const crosshairEl = document.getElementById('crosshair');
+    const blockActionHudEl = document.getElementById('blockActionHud');
     const pointerHintEl = document.getElementById('pointerHint');
     const handOverlayEl = document.getElementById('handOverlay');
     const handOverlayLabel = document.getElementById('handOverlayLabel');
@@ -2205,6 +2206,8 @@
 
     const HUD_INACTIVITY_TIMEOUT = 12000;
     let hudInactivityTimer = null;
+    let blockActionHudFadeTimer = null;
+    let blockActionHudHideTimer = null;
 
     function hasActiveBlockingOverlay() {
       if (document.body.classList.contains('sidebar-open')) return true;
@@ -3232,6 +3235,7 @@
       loadingSamples: false,
       staticEffectsRegistered: false,
       lastHarvestAt: 0,
+      lastPlacementAt: 0,
       lastFootstepAt: 0,
       lastZombieGroanAt: 0,
     };
@@ -3628,6 +3632,31 @@
         const base = 320 + Math.random() * 60;
         playFallbackEffect({ startFreq: base, endFreq: base * 0.45, duration: 0.2, type: 'sawtooth', peak: 0.2 });
       }
+    }
+
+    function playPlacementAudio(itemId) {
+      if (typeof state?.elapsed === 'number') {
+        if (state.elapsed - audioState.lastPlacementAt < 0.12) {
+          return;
+        }
+        audioState.lastPlacementAt = state.elapsed;
+      }
+      const baseFrequencies = {
+        netherite: 210,
+        marble: 250,
+        tar: 170,
+        stone: 230,
+        rock: 220,
+        wood: 260,
+      };
+      const base = (baseFrequencies[itemId] ?? 240) + Math.random() * 18;
+      playFallbackEffect({
+        startFreq: base,
+        endFreq: base * 0.58,
+        duration: 0.18,
+        type: 'triangle',
+        peak: 0.16,
+      });
     }
 
     function playFootstepSound() {
@@ -14068,6 +14097,53 @@
       });
     }
 
+    function spawnBlockPlacementParticles(x, y, color) {
+      if (!particleGroup) return;
+      const count = 26;
+      const positions = new Float32Array(count * 3);
+      const velocities = new Float32Array(count * 3);
+      for (let i = 0; i < count; i += 1) {
+        const baseIndex = i * 3;
+        const angle = Math.random() * Math.PI * 2;
+        const radius = Math.random() * 0.32;
+        positions[baseIndex] = Math.cos(angle) * radius;
+        positions[baseIndex + 1] = Math.random() * 0.24 + 0.18;
+        positions[baseIndex + 2] = Math.sin(angle) * radius;
+        const outward = 0.42 + Math.random() * 0.35;
+        velocities[baseIndex] = Math.cos(angle) * outward;
+        velocities[baseIndex + 1] = Math.random() * 0.95 + 0.45;
+        velocities[baseIndex + 2] = Math.sin(angle) * outward;
+      }
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      const material = new THREE.PointsMaterial({
+        size: 0.14,
+        transparent: true,
+        depthWrite: false,
+        opacity: 0.92,
+        blending: THREE.AdditiveBlending,
+        map: getParticleTexture(),
+        color: new THREE.Color(color ?? '#8fd8ff'),
+        sizeAttenuation: true,
+      });
+      const points = new THREE.Points(geometry, material);
+      const { x: sx, z: sz } = worldToScene(x, y);
+      points.position.set(sx, tileSurfaceHeight(x, y) + 0.5, sz);
+      particleGroup.add(points);
+      particleSystems.push({
+        points,
+        positions,
+        velocities,
+        life: 0,
+        maxLife: 0.9,
+        count,
+        gravityScale: 0.42,
+        swirlStrength: 0.22,
+        swirlFrequency: 8.4,
+        fadePower: 1.55,
+      });
+    }
+
     function spawnRailCrumbleParticles(x, y, accentColor) {
       if (!particleGroup) return;
       const count = 34;
@@ -18329,6 +18405,7 @@
       tile.data.yield -= 1;
       addItemToInventory(itemId, 1);
       logEvent(`Gathered ${ITEM_DEFS[itemId]?.name ?? itemId}.`);
+      triggerBlockBreakFeedback(itemId);
       if (itemId === 'wood') {
         markObjectiveComplete('gather-wood');
       }
@@ -20043,6 +20120,58 @@
       handleMovementKey(code, false, rawKey);
     }
 
+    function clearBlockActionHudTimers() {
+      if (blockActionHudFadeTimer) {
+        window.clearTimeout(blockActionHudFadeTimer);
+        blockActionHudFadeTimer = null;
+      }
+      if (blockActionHudHideTimer) {
+        window.clearTimeout(blockActionHudHideTimer);
+        blockActionHudHideTimer = null;
+      }
+    }
+
+    function showBlockActionHud(message, variant = 'neutral', options = {}) {
+      if (!blockActionHudEl) return;
+      const text = typeof message === 'string' ? message : '';
+      clearBlockActionHudTimers();
+      blockActionHudEl.textContent = text;
+      blockActionHudEl.dataset.variant = variant || 'neutral';
+      blockActionHudEl.hidden = false;
+      blockActionHudEl.setAttribute('aria-hidden', 'false');
+      blockActionHudEl.classList.remove('block-action-hud--visible');
+      // Force layout so the transition retriggers when the class is re-applied.
+      void blockActionHudEl.offsetWidth;
+      blockActionHudEl.classList.add('block-action-hud--visible');
+      const prefersReducedMotion = reduceMotionQuery?.matches === true;
+      const displayDuration = Math.max(400, options.duration ?? (prefersReducedMotion ? 1100 : 1300));
+      blockActionHudFadeTimer = window.setTimeout(() => {
+        blockActionHudEl.classList.remove('block-action-hud--visible');
+      }, displayDuration);
+      blockActionHudHideTimer = window.setTimeout(() => {
+        blockActionHudEl.hidden = true;
+        blockActionHudEl.setAttribute('aria-hidden', 'true');
+      }, displayDuration + 220);
+    }
+
+    function triggerBlockBreakFeedback(itemId) {
+      const itemName = ITEM_DEFS[itemId]?.name ?? itemId;
+      if (!itemName) return;
+      showBlockActionHud(`+1 ${itemName}`, 'break');
+    }
+
+    function triggerBlockPlacementFeedback(itemId, x, y) {
+      if (!itemId) return;
+      const tile = getTile(x, y);
+      const accent = TILE_TYPES[tile?.type]?.accent ?? '#8fd8ff';
+      spawnBlockPlacementParticles(x, y, accent);
+      playPlacementAudio(itemId);
+      const itemName = ITEM_DEFS[itemId]?.name ?? itemId;
+      if (itemName) {
+        showBlockActionHud(`${itemName} placed`, 'place');
+      }
+    }
+
     function placeBlock(targetTile = null) {
       const slot = state.player.inventory[state.player.selectedSlot];
       if (!slot) {
@@ -20073,6 +20202,7 @@
       markTileDirty(tx, ty);
       removeItem(slot.item, 1);
       logEvent(`${ITEM_DEFS[slot.item].name} placed.`);
+      triggerBlockPlacementFeedback(slot.item, tx, ty);
       return true;
     }
 

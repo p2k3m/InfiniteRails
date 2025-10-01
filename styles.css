@@ -6270,6 +6270,51 @@ body.game-active .crosshair {
   opacity: 0.9;
 }
 
+.block-action-hud {
+  position: absolute;
+  top: 16%;
+  left: 50%;
+  transform: translate(-50%, -60%) scale(0.95);
+  padding: 0.55rem 1.25rem;
+  border-radius: 999px;
+  background: rgba(12, 18, 26, 0.72);
+  box-shadow: 0 14px 28px rgba(6, 10, 18, 0.45);
+  color: #e8f4ff;
+  font-family: 'Chakra Petch', 'Exo 2', sans-serif;
+  font-size: 0.95rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.18s ease, transform 0.22s ease;
+  z-index: 38;
+  filter: drop-shadow(0 0 4px rgba(8, 14, 20, 0.45));
+}
+
+.block-action-hud--visible {
+  opacity: 1;
+  transform: translate(-50%, -65%) scale(1);
+}
+
+.block-action-hud[data-variant='break'] {
+  background: rgba(54, 18, 12, 0.78);
+  color: #ffd7b8;
+  box-shadow: 0 16px 32px rgba(68, 24, 16, 0.55);
+}
+
+.block-action-hud[data-variant='place'] {
+  background: rgba(12, 36, 56, 0.78);
+  color: #bfe6ff;
+  box-shadow: 0 16px 32px rgba(18, 48, 72, 0.55);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .block-action-hud {
+    transition: none;
+  }
+}
+
 .pointer-hint {
   position: absolute;
   top: 1.5rem;
