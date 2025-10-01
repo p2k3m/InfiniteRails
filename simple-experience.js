@@ -1004,6 +1004,7 @@
       this.mobileControlsRoot = this.ui.mobileControls || null;
       this.virtualJoystickEl = this.ui.virtualJoystick || null;
       this.virtualJoystickThumb = this.ui.virtualJoystickThumb || null;
+      this.mobileControlsActive = false;
       this.touchButtonStates = { up: false, down: false, left: false, right: false };
       this.joystickVector = new THREE.Vector2();
       this.joystickPointerId = null;
@@ -1014,6 +1015,8 @@
       this.touchJumpRequested = false;
       this.mobileControlDisposers = [];
       this.isTouchPreferred = this.detectTouchPreferred();
+      this.pointerPreferenceObserver = null;
+      this.detachPointerPreferenceObserver = null;
       this.prefersReducedMotion = this.detectReducedMotion();
       this.audio = this.createAudioController();
       this.onPointerLockChange = this.handlePointerLockChange.bind(this);
@@ -1064,6 +1067,9 @@
       this.onVictoryClose = this.handleVictoryClose.bind(this);
       this.onVictoryShare = this.handleVictoryShare.bind(this);
       this.onBeforeUnload = this.handleBeforeUnload.bind(this);
+      this.onPointerPreferenceChange = this.handlePointerPreferenceChange.bind(this);
+      this.onGlobalPointerDown = this.handleGlobalPointerDown.bind(this);
+      this.onGlobalTouchStart = this.handleGlobalTouchStart.bind(this);
       this.onCraftingModalBackdrop = (event) => {
         if (event?.target === this.craftingModal) {
           this.handleCloseCrafting(event);
@@ -3095,11 +3101,22 @@
         return;
       }
       const controls = this.mobileControlsRoot;
+      const shouldActivate = Boolean(this.isTouchPreferred);
+      if (shouldActivate === this.mobileControlsActive) {
+        controls.setAttribute('aria-hidden', shouldActivate ? 'false' : 'true');
+        controls.dataset.active = shouldActivate ? 'true' : 'false';
+        if (shouldActivate) {
+          this.virtualJoystickEl?.setAttribute('aria-hidden', 'false');
+        } else {
+          this.virtualJoystickEl?.setAttribute('aria-hidden', 'true');
+          this.updatePointerHintForInputMode();
+        }
+        return;
+      }
       this.teardownMobileControls();
-      const active = Boolean(this.isTouchPreferred);
-      controls.setAttribute('aria-hidden', active ? 'false' : 'true');
-      controls.dataset.active = active ? 'true' : 'false';
-      if (!active) {
+      controls.setAttribute('aria-hidden', shouldActivate ? 'false' : 'true');
+      controls.dataset.active = shouldActivate ? 'true' : 'false';
+      if (!shouldActivate) {
         this.updatePointerHintForInputMode();
         return;
       }
@@ -3190,6 +3207,81 @@
           window.removeEventListener('pointercancel', this.onJoystickPointerUp);
         });
       }
+      this.mobileControlsActive = true;
+    }
+
+    attachPointerPreferenceObserver() {
+      if (this.detachPointerPreferenceObserver || typeof window === 'undefined') {
+        return;
+      }
+      if (typeof window.matchMedia !== 'function') {
+        return;
+      }
+      try {
+        const query = window.matchMedia('(pointer: coarse)');
+        this.pointerPreferenceObserver = query;
+        const handler = this.onPointerPreferenceChange;
+        if (typeof query.addEventListener === 'function') {
+          query.addEventListener('change', handler);
+          this.detachPointerPreferenceObserver = () => {
+            try {
+              query.removeEventListener('change', handler);
+            } catch (error) {
+              console.debug('Unable to detach coarse pointer listener', error);
+            }
+            this.detachPointerPreferenceObserver = null;
+          };
+        } else if (typeof query.addListener === 'function') {
+          query.addListener(handler);
+          this.detachPointerPreferenceObserver = () => {
+            try {
+              query.removeListener(handler);
+            } catch (error) {
+              console.debug('Unable to detach coarse pointer listener', error);
+            }
+            this.detachPointerPreferenceObserver = null;
+          };
+        }
+      } catch (error) {
+        console.debug('Unable to observe pointer preference changes', error);
+        this.pointerPreferenceObserver = null;
+        this.detachPointerPreferenceObserver = null;
+      }
+    }
+
+    handlePointerPreferenceChange(event) {
+      const prefersTouch = Boolean(event?.matches) || this.detectTouchPreferred();
+      if (prefersTouch !== this.isTouchPreferred) {
+        this.isTouchPreferred = prefersTouch;
+      }
+      if (prefersTouch !== this.mobileControlsActive) {
+        this.initializeMobileControls();
+      }
+    }
+
+    handleGlobalPointerDown(event) {
+      if (!event) {
+        return;
+      }
+      const type = event.pointerType || '';
+      if (type !== 'touch' && type !== 'pen') {
+        return;
+      }
+      if (!this.isTouchPreferred) {
+        this.isTouchPreferred = true;
+      }
+      if (!this.mobileControlsActive) {
+        this.initializeMobileControls();
+      }
+    }
+
+    handleGlobalTouchStart() {
+      if (!this.isTouchPreferred) {
+        this.isTouchPreferred = true;
+      }
+      if (!this.mobileControlsActive) {
+        this.initializeMobileControls();
+      }
     }
 
     teardownMobileControls() {
@@ -3217,6 +3309,7 @@
       if (this.virtualJoystickEl) {
         this.virtualJoystickEl.setAttribute('aria-hidden', 'true');
       }
+      this.mobileControlsActive = false;
       this.updatePointerHintForInputMode();
     }
 
@@ -5534,6 +5627,8 @@
       window.addEventListener('pointermove', this.onTouchLookPointerMove, { passive: false });
       window.addEventListener('pointerup', this.onTouchLookPointerUp);
       window.addEventListener('pointercancel', this.onTouchLookPointerUp);
+      window.addEventListener('pointerdown', this.onGlobalPointerDown, { passive: true });
+      window.addEventListener('touchstart', this.onGlobalTouchStart, { passive: true });
       this.canvas.addEventListener('click', this.onCanvasPointerLock);
       this.canvas.addEventListener('contextmenu', this.preventContextMenu);
       if (this.hotbarEl) {
@@ -5580,6 +5675,7 @@
       this.ui?.dimensionInfoEl?.addEventListener('click', this.onVictoryReplay);
       this.victoryCloseButton?.addEventListener('click', this.onVictoryClose);
       this.victoryShareButton?.addEventListener('click', this.onVictoryShare);
+      this.attachPointerPreferenceObserver();
       this.eventsBound = true;
     }
 
@@ -5606,6 +5702,8 @@
       window.removeEventListener('pointermove', this.onTouchLookPointerMove);
       window.removeEventListener('pointerup', this.onTouchLookPointerUp);
       window.removeEventListener('pointercancel', this.onTouchLookPointerUp);
+      window.removeEventListener('pointerdown', this.onGlobalPointerDown);
+      window.removeEventListener('touchstart', this.onGlobalTouchStart);
       this.canvas.removeEventListener('click', this.onCanvasPointerLock);
       this.canvas.removeEventListener('contextmenu', this.preventContextMenu);
       if (this.hotbarEl) {
@@ -5650,6 +5748,15 @@
       this.ui?.dimensionInfoEl?.removeEventListener('click', this.onVictoryReplay);
       this.victoryCloseButton?.removeEventListener('click', this.onVictoryClose);
       this.victoryShareButton?.removeEventListener('click', this.onVictoryShare);
+      if (this.detachPointerPreferenceObserver) {
+        try {
+          this.detachPointerPreferenceObserver();
+        } catch (error) {
+          console.debug('Failed to detach pointer preference observer', error);
+        }
+      }
+      this.pointerPreferenceObserver = null;
+      this.detachPointerPreferenceObserver = null;
       this.teardownMobileControls();
       this.eventsBound = false;
     }
