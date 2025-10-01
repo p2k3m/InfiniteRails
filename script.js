@@ -4316,6 +4316,7 @@
     let virtualJoystickReady = false;
 
     let renderer;
+    let rendererFallbackActive = false;
     const renderClock = new THREE.Clock();
     let scene;
     let camera;
@@ -6344,8 +6345,194 @@
       return true;
     }
 
+    const WEBGL_PROBE_ATTRIBUTES = [
+      { failIfMajorPerformanceCaveat: true, powerPreference: 'high-performance' },
+      { powerPreference: 'high-performance' },
+      {},
+    ];
+
+    function probeWebglSupport() {
+      if (typeof document === 'undefined') {
+        return { supported: true, reason: 'server-render' };
+      }
+      try {
+        const probeCanvas = document.createElement('canvas');
+        let attributesUsed = null;
+        let context = null;
+        for (const attributes of WEBGL_PROBE_ATTRIBUTES) {
+          context =
+            probeCanvas.getContext('webgl2', attributes) ||
+            probeCanvas.getContext('webgl', attributes) ||
+            probeCanvas.getContext('experimental-webgl', attributes);
+          if (context) {
+            attributesUsed = attributes;
+            break;
+          }
+        }
+        if (!context) {
+          return { supported: false, reason: 'context-unavailable' };
+        }
+        let rendererLabel = '';
+        try {
+          const debugInfo = context.getExtension('WEBGL_debug_renderer_info');
+          rendererLabel = debugInfo
+            ? context.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL)
+            : context.getParameter(context.RENDERER);
+        } catch (contextError) {
+          rendererLabel = '';
+        }
+        try {
+          const loseContext = context.getExtension?.('WEBGL_lose_context');
+          loseContext?.loseContext?.();
+        } catch (loseError) {
+          // Ignore failures when releasing the throwaway probe context.
+        }
+        return {
+          supported: true,
+          attributes: attributesUsed,
+          rendererLabel: typeof rendererLabel === 'string' ? rendererLabel : '',
+        };
+      } catch (error) {
+        return { supported: false, reason: 'probe-error', error };
+      }
+    }
+
+    function drawRendererFallbackNotice(message) {
+      if (!canvas) {
+        return false;
+      }
+      const context2d = canvas.getContext('2d');
+      if (!context2d) {
+        return false;
+      }
+      const ratio = Math.max(1, Math.floor(window.devicePixelRatio || 1));
+      const width = Math.max(320, Math.floor(canvas.clientWidth || canvas.width || 960));
+      const height = Math.max(240, Math.floor(canvas.clientHeight || canvas.height || 540));
+      canvas.width = width * ratio;
+      canvas.height = height * ratio;
+      context2d.save();
+      context2d.scale(ratio, ratio);
+      const gradient = context2d.createLinearGradient(0, 0, width, height);
+      gradient.addColorStop(0, '#0c1624');
+      gradient.addColorStop(1, '#1a2f4d');
+      context2d.fillStyle = gradient;
+      context2d.fillRect(0, 0, width, height);
+
+      const railY = height - 120;
+      context2d.fillStyle = '#223b60';
+      context2d.fillRect(40, railY, width - 80, 24);
+      context2d.fillStyle = '#58b0ff';
+      for (let i = 40; i < width - 60; i += 90) {
+        context2d.fillRect(i, railY - 12, 42, 12);
+      }
+      context2d.fillStyle = '#8bf6ff';
+      context2d.beginPath();
+      context2d.arc(width / 2, railY - 26, 18, 0, Math.PI * 2);
+      context2d.fill();
+
+      const heading = '3D renderer unavailable';
+      context2d.fillStyle = '#ffffff';
+      context2d.font = '24px "Chakra Petch", "Exo 2", sans-serif';
+      context2d.fillText(heading, 40, 72);
+
+      const wrapWidth = width - 80;
+      context2d.font = '16px "Exo 2", "Segoe UI", sans-serif';
+      const words = String(message || '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .split(' ');
+      const lines = [];
+      let current = '';
+      words.forEach((word) => {
+        if (!word) {
+          return;
+        }
+        const candidate = current ? `${current} ${word}` : word;
+        if (context2d.measureText(candidate).width > wrapWidth) {
+          if (current) {
+            lines.push(current);
+          }
+          current = word;
+        } else {
+          current = candidate;
+        }
+      });
+      if (current) {
+        lines.push(current);
+      }
+      let textY = 108;
+      lines.forEach((line) => {
+        context2d.fillText(line, 40, textY);
+        textY += 24;
+      });
+
+      const checklist = [
+        'Enable hardware acceleration and reload the page.',
+        'Update your graphics drivers or GPU settings.',
+        'Try a browser with WebGL 2.0 support.',
+      ];
+      context2d.font = '15px "Exo 2", "Segoe UI", sans-serif';
+      context2d.fillStyle = 'rgba(214, 233, 255, 0.9)';
+      let checklistY = textY + 12;
+      checklist.forEach((item) => {
+        context2d.fillText(`• ${item}`, 40, checklistY);
+        checklistY += 22;
+      });
+      context2d.restore();
+      return true;
+    }
+
+    function activateRendererFallback(options = {}) {
+      if (rendererFallbackActive) {
+        return false;
+      }
+      rendererFallbackActive = true;
+      state.ui.rendererFallbackActive = true;
+      const { message, error, reason } = options;
+      const fallbackMessage =
+        typeof message === 'string' && message.trim()
+          ? message.trim()
+          : 'Your browser disabled WebGL, so the interactive 3D renderer cannot start. A static mission briefing is shown instead.';
+      if (typeof console !== 'undefined') {
+        const prefix = reason ? `(${reason}) ` : '';
+        if (error) {
+          console.warn(`${prefix}WebGL unavailable; activating fallback renderer.`, error);
+        } else {
+          console.warn(`${prefix}WebGL unavailable; activating fallback renderer.`);
+        }
+      }
+      drawRendererFallbackNotice(fallbackMessage);
+      if (typeof showPlayerHint === 'function') {
+        showPlayerHint(fallbackMessage, { variant: 'warning', duration: 12000, persist: true });
+      }
+      announceVisualFallback('webgl-unavailable', fallbackMessage);
+      if (!state.ui.fallbackNoticeShown) {
+        state.ui.fallbackNoticeShown = true;
+      }
+      if (canvas) {
+        canvas.setAttribute('data-renderer', 'fallback');
+      }
+      showDependencyError(
+        'Interactive rendering is unavailable because your browser blocked WebGL. Enable hardware acceleration or switch to a compatible browser to explore the realms.',
+        error || null,
+      );
+      return false;
+    }
+
     function initRenderer() {
       if (renderer) return true;
+      const webglProbe = probeWebglSupport();
+      if (!webglProbe.supported) {
+        return activateRendererFallback({
+          reason: webglProbe.reason || 'webgl-unavailable',
+          error: webglProbe.error || null,
+          message:
+            'WebGL support is disabled on this device, so the full 3D experience is paused. Enable WebGL and reload to resume exploration.',
+        });
+      }
+      if (typeof console !== 'undefined' && webglProbe.rendererLabel) {
+        console.info(`WebGL probe succeeded (${webglProbe.rendererLabel}).`);
+      }
       try {
         renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
         renderer.shadowMap.enabled = true;
@@ -6387,11 +6574,12 @@
         }
       } catch (error) {
         renderer = null;
-        showDependencyError(
-          'Your browser could not initialise the 3D renderer. Please ensure WebGL is enabled and refresh to try again.',
-          error
-        );
-        return false;
+        return activateRendererFallback({
+          reason: 'initialisation-error',
+          error,
+          message:
+            'The 3D renderer failed to initialise. Enable WebGL in your browser settings or switch to a compatible device to explore the realms.',
+        });
       }
       renderer.setPixelRatio(window.devicePixelRatio ?? 1);
       renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -15652,6 +15840,7 @@
         movementGlowHintShown: false,
         briefingAcknowledged: false,
         fallbackNoticeShown: false,
+        rendererFallbackActive: false,
       },
       persistence: {
         autoSaveAccumulator: 0,
