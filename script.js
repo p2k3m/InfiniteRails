@@ -878,15 +878,62 @@
   const SCOREBOARD_UTILS_FALLBACK = createScoreboardUtilsFallback();
   const COMBAT_UTILS_FALLBACK = createCombatUtilsFallback();
 
-  const runtimeGlobalScope = getGlobalScope();
+  function resolveRuntimeScope() {
+    const scope = getGlobalScope();
+    if (scope && typeof scope === 'object') {
+      return scope;
+    }
+    if (typeof window !== 'undefined') {
+      return window;
+    }
+    if (typeof globalThis !== 'undefined') {
+      return globalThis;
+    }
+    if (typeof global !== 'undefined') {
+      return global;
+    }
+    return null;
+  }
+
+  function resolveScoreboardUtils(scope = resolveRuntimeScope()) {
+    const target = scope && typeof scope === 'object' ? scope : null;
+    const existing = target?.ScoreboardUtils;
+    if (
+      existing &&
+      typeof existing === 'object' &&
+      typeof existing.normalizeScoreEntries === 'function' &&
+      typeof existing.upsertScoreEntry === 'function'
+    ) {
+      return existing;
+    }
+    if (target) {
+      target.ScoreboardUtils = SCOREBOARD_UTILS_FALLBACK;
+    }
+    return SCOREBOARD_UTILS_FALLBACK;
+  }
+
+  function resolveCombatUtils(scope = resolveRuntimeScope()) {
+    const target = scope && typeof scope === 'object' ? scope : null;
+    const existing = target?.CombatUtils;
+    if (
+      existing &&
+      typeof existing === 'object' &&
+      typeof existing.calculateZombieSpawnCount === 'function' &&
+      typeof existing.createGridPathfinder === 'function'
+    ) {
+      return existing;
+    }
+    if (target) {
+      target.CombatUtils = COMBAT_UTILS_FALLBACK;
+    }
+    return COMBAT_UTILS_FALLBACK;
+  }
+
+  const runtimeGlobalScope = resolveRuntimeScope();
   const EMBEDDED_ASSETS = runtimeGlobalScope?.INFINITE_RAILS_EMBEDDED_ASSETS ?? null;
   if (runtimeGlobalScope) {
-    if (!runtimeGlobalScope.ScoreboardUtils) {
-      runtimeGlobalScope.ScoreboardUtils = SCOREBOARD_UTILS_FALLBACK;
-    }
-    if (!runtimeGlobalScope.CombatUtils) {
-      runtimeGlobalScope.CombatUtils = COMBAT_UTILS_FALLBACK;
-    }
+    resolveScoreboardUtils(runtimeGlobalScope);
+    resolveCombatUtils(runtimeGlobalScope);
   }
 
   const KEY_BINDINGS_STORAGE_KEY = 'infinite-rails-keybindings';
@@ -1567,7 +1614,8 @@
 
   function bootstrap() {
     const simpleModePreflight = shouldStartSimpleMode();
-    const THREE = window.THREE_GLOBAL || window.THREE;
+    const scope = resolveRuntimeScope();
+    const THREE = scope?.THREE_GLOBAL || scope?.THREE || null;
 
     if (!THREE && !simpleModePreflight) {
       throw new Error('Three.js failed to load. Ensure the CDN script is available.');
@@ -1580,10 +1628,7 @@
     const runtimeIssueDeduper = new Set();
     let runtimeErrorOverlayVisible = false;
 
-    const scoreboardUtils =
-      (typeof window !== 'undefined' && window.ScoreboardUtils) ||
-      (typeof globalThis !== 'undefined' && globalThis.ScoreboardUtils) ||
-      SCOREBOARD_UTILS_FALLBACK;
+    const scoreboardUtils = resolveScoreboardUtils(scope);
 
     const {
       normalizeScoreEntries,
@@ -4692,10 +4737,7 @@
     let zombieModelPromise = null;
     let ironGolemModelTemplate = null;
     let ironGolemModelPromise = null;
-    const combatUtils =
-      (typeof window !== 'undefined' && window.CombatUtils) ||
-      (typeof globalThis !== 'undefined' && globalThis.CombatUtils) ||
-      COMBAT_UTILS_FALLBACK;
+    const combatUtils = resolveCombatUtils();
     let gridPathfinder = null;
     let zombieIdCounter = 0;
     let ironGolemIdCounter = 0;
