@@ -9,6 +9,16 @@
 
   const assetResolutionWarnings = new Set();
 
+  const scoreState = {
+    score: 0,
+    recipes: new Set(),
+    dimensions: new Set(),
+    points: {
+      recipe: 0,
+      dimension: 0,
+    },
+  };
+
   function logAssetResolutionIssue(message, error, context = {}) {
     const consoleRef = typeof console !== 'undefined' ? console : globalScope.console;
     if (!consoleRef) {
@@ -1821,16 +1831,6 @@
           reason: partial.reason ?? existing.reason ?? null,
         };
       }
-
-      const scoreState = {
-        score: 0,
-        recipes: new Set(),
-        dimensions: new Set(),
-        points: {
-          recipe: 0,
-          dimension: 0,
-        },
-      };
 
       function applySummaryToState(summary) {
         const gameState = getActiveGameState();
