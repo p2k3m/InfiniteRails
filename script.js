@@ -39,10 +39,17 @@
   const assetResolutionWarnings = new Set();
 
   let heartClipIdCounter = 0;
+  const SVG_NS = 'http://www.w3.org/2000/svg';
+  const HEART_ICON_PATH =
+    'M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5C2 5.42 4.42 3 7.5 3' +
+    'c1.74 0 3.41 0.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3C19.58 3 22 5.42 22 8.5' +
+    'c0 3.78-3.4 6.86-8.55 11.54L12 21.35z';
 
   const SUPPORTS_MODEL_ASSETS =
     typeof window === 'undefined' ||
     (typeof window.location !== 'undefined' && window.location.protocol !== 'file:');
+
+  let scoreOverlayInitialized = false;
 
   const scoreState = {
     score: 0,
@@ -3192,7 +3199,6 @@
     };
     let dimensionOverlayState = { info: null, tasks: [] };
     let scoreFlipTimeout = null;
-    let scoreOverlayInitialized = false;
     const reduceMotionQuery =
       typeof window !== 'undefined' && window.matchMedia
         ? window.matchMedia('(prefers-reduced-motion: reduce)')
@@ -17477,10 +17483,6 @@
         state.ui.lastHungerUnits = null;
       }
     }
-
-    const SVG_NS = 'http://www.w3.org/2000/svg';
-    const HEART_ICON_PATH =
-      'M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5C2 5.42 4.42 3 7.5 3c1.74 0 3.41 0.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3C19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z';
 
     function createHeartIcon(fill, index) {
       const clampedFill = clamp(fill, 0, 1);
