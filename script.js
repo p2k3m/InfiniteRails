@@ -5669,6 +5669,56 @@
       joystickState.pointerId = null;
     }
 
+    function updateMobileControlsVisibility(preferredScheme = null) {
+      if (!mobileControls) return;
+      const shouldActivate =
+        preferredScheme === 'touch' ||
+        (preferredScheme !== 'desktop' && prefersTouchControls());
+      mobileControls.dataset.active = shouldActivate ? 'true' : 'false';
+      mobileControls.setAttribute('aria-hidden', shouldActivate ? 'false' : 'true');
+      if (virtualJoystickEl) {
+        virtualJoystickEl.setAttribute('aria-hidden', shouldActivate ? 'false' : 'true');
+      }
+      if (!shouldActivate) {
+        resetJoystickVector();
+      }
+    }
+
+    updateMobileControlsVisibility();
+
+    const handlePointerPreferenceChange = (event) => {
+      if (event?.matches) {
+        updateMobileControlsVisibility('touch');
+      } else {
+        updateMobileControlsVisibility('desktop');
+      }
+    };
+
+    if (coarsePointerQuery) {
+      if (typeof coarsePointerQuery.addEventListener === 'function') {
+        coarsePointerQuery.addEventListener('change', handlePointerPreferenceChange);
+      } else if (typeof coarsePointerQuery.addListener === 'function') {
+        coarsePointerQuery.addListener(handlePointerPreferenceChange);
+      }
+    }
+
+    const handleGlobalPointerDown = (event) => {
+      if (!event) return;
+      const type = event.pointerType || '';
+      if (type === 'touch' || type === 'pen') {
+        updateMobileControlsVisibility('touch');
+      } else if (type === 'mouse') {
+        updateMobileControlsVisibility('desktop');
+      }
+    };
+
+    window.addEventListener('pointerdown', handleGlobalPointerDown, { passive: true });
+    window.addEventListener(
+      'touchstart',
+      () => updateMobileControlsVisibility('touch'),
+      { passive: true },
+    );
+
     function handleVirtualJoystickMove(event) {
       if (!virtualJoystickEl) return;
       const rect = virtualJoystickEl.getBoundingClientRect();

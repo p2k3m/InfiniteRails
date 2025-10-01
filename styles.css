@@ -5489,6 +5489,10 @@ body.colorblind-assist .subtitle-overlay {
   justify-content: center;
 }
 
+.mobile-controls[data-active='true'] {
+  display: flex;
+}
+
 .virtual-joystick {
   position: relative;
   width: 96px;
@@ -5544,12 +5548,6 @@ body.colorblind-assist .subtitle-overlay {
 
 .site-footer p {
   margin: 0;
-}
-
-@media (pointer: coarse) {
-  .mobile-controls {
-    display: flex;
-  }
 }
 
 
