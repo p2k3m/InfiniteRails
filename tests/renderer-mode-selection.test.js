@@ -24,6 +24,24 @@ function instantiateShouldStartSimpleMode(windowStub) {
   return factory(windowStub, URLSearchParams);
 }
 
+const fallbackStart = scriptSource.indexOf('let simpleFallbackAttempted = false;');
+const fallbackEnd = scriptSource.indexOf('function createScoreboardUtilsFallback', fallbackStart);
+if (fallbackStart === -1 || fallbackEnd === -1 || fallbackEnd <= fallbackStart) {
+  throw new Error('Failed to locate simple fallback bootstrap helpers in script.js');
+}
+
+function instantiateSimpleFallback(scope) {
+  const factory = new Function(
+    'scope',
+    "'use strict';" +
+      'const bootstrap = scope.bootstrap;' +
+      'const globalScope = scope;' +
+      scriptSource.slice(fallbackStart, fallbackEnd) +
+      '\nreturn { tryStartSimpleFallback, getAttempted: () => simpleFallbackAttempted };'
+  );
+  return factory(scope);
+}
+
 describe('renderer mode selection', () => {
   it('prefers the advanced renderer when advanced mode is configured', () => {
     const windowStub = {
@@ -65,5 +83,47 @@ describe('renderer mode selection', () => {
     };
     const shouldStartSimpleMode = instantiateShouldStartSimpleMode(windowStub);
     expect(shouldStartSimpleMode()).toBe(true);
+  });
+
+  describe('simple fallback bootstrap', () => {
+    it('forces simple mode and reuses bootstrap when available', () => {
+      const calls = [];
+      const scope = {
+        APP_CONFIG: { enableAdvancedExperience: true, preferAdvanced: true },
+        SimpleExperience: { create: () => ({}) },
+        console: { warn: () => {}, error: () => {} },
+        bootstrap: () => {
+          calls.push('boot');
+        },
+      };
+      const { tryStartSimpleFallback, getAttempted } = instantiateSimpleFallback(scope);
+      const result = tryStartSimpleFallback(new Error('loader failed'), { reason: 'unit-test' });
+      expect(result).toBe(true);
+      expect(scope.APP_CONFIG.forceSimpleMode).toBe(true);
+      expect(scope.APP_CONFIG.enableAdvancedExperience).toBe(false);
+      expect(scope.APP_CONFIG.preferAdvanced).toBe(false);
+      expect(scope.APP_CONFIG.defaultMode).toBe('simple');
+      expect(calls).toHaveLength(1);
+      expect(getAttempted()).toBe(true);
+
+      const secondResult = tryStartSimpleFallback(new Error('loader failed again'), {
+        reason: 'unit-test-repeat',
+      });
+      expect(secondResult).toBe(false);
+      expect(calls).toHaveLength(1);
+    });
+
+    it('returns false when the simple sandbox is unavailable', () => {
+      const scope = {
+        APP_CONFIG: {},
+        console: { warn: () => {}, error: () => {} },
+        bootstrap: () => {
+          throw new Error('should not be called');
+        },
+      };
+      const { tryStartSimpleFallback, getAttempted } = instantiateSimpleFallback(scope);
+      expect(tryStartSimpleFallback(new Error('missing'), { reason: 'no-simple' })).toBe(false);
+      expect(getAttempted()).toBe(false);
+    });
   });
 });
