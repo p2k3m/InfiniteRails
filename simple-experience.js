@@ -5481,7 +5481,7 @@
       }
       this.portalReady = false;
       this.score += 5;
-      this.addScoreBreakdown('dimensions', 5);
+      this.addScoreBreakdown('portal', 5);
       const message = events.length ? events.join(' ') : 'Portal ignited — step through to travel.';
       this.showHint(message);
       this.scheduleScoreSync('portal-primed');
@@ -5626,7 +5626,7 @@
         const progress = required > 0 ? this.portalBlocksPlaced / required : 0;
         if (!this.portalHintShown && progress >= 0.5) {
           this.portalHintShown = true;
-          this.addScoreBreakdown('dimensions', 1);
+          this.addScoreBreakdown('portal', 1);
           this.score += 1;
           this.updateHud();
         }
@@ -5638,7 +5638,7 @@
         this.portalReady = true;
         this.portalHintShown = true;
         this.portalIgnitionLog = [];
-        this.addScoreBreakdown('dimensions', 1);
+        this.addScoreBreakdown('portal', 1);
         this.score += 1;
         this.updateHud();
         this.showHint('Portal frame complete — press F to ignite your torch.');
