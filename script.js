@@ -1671,14 +1671,80 @@
     const mobileControls = document.getElementById('mobileControls');
     const virtualJoystickEl = document.getElementById('virtualJoystick');
     const virtualJoystickThumb = virtualJoystickEl?.querySelector('.virtual-joystick__thumb') ?? null;
-    const heartsEl = document.getElementById('hearts');
-    const bubblesEl = document.getElementById('bubbles');
+    const hudRootEl = document.getElementById('gameHud');
+    const hudStatusCard =
+      hudRootEl?.querySelector('.hud-card--status') ??
+      document.querySelector('.hud-card--status');
+    let hudStatusContainer =
+      hudStatusCard?.querySelector('.hud-status') ??
+      document.querySelector('.hud-status');
+    if (!hudStatusContainer && hudStatusCard) {
+      hudStatusContainer = document.createElement('div');
+      hudStatusContainer.className = 'hud-status';
+      hudStatusContainer.setAttribute('role', 'group');
+      hudStatusContainer.setAttribute('aria-label', 'Player vitals');
+      hudStatusContainer.setAttribute('data-hint', 'Health, oxygen, and time remainers.');
+      hudStatusCard.insertBefore(hudStatusContainer, hudStatusCard.firstChild ?? null);
+    }
+    const ensureStatusElement = (id, className, hint, anchorEl) => {
+      let element = document.getElementById(id);
+      if (!element && hudStatusContainer) {
+        element = document.createElement('div');
+        element.id = id;
+        element.className = className;
+        if (hint) {
+          element.setAttribute('data-hint', hint);
+        }
+        if (anchorEl && anchorEl.parentElement === hudStatusContainer) {
+          hudStatusContainer.insertBefore(element, anchorEl);
+        } else {
+          hudStatusContainer.appendChild(element);
+        }
+      } else if (element) {
+        const classes = className.split(/\s+/).filter(Boolean);
+        if (classes.length) {
+          classes.forEach((cls) => {
+            if (!element.classList.contains(cls)) {
+              element.classList.add(cls);
+            }
+          });
+        }
+        if (hint && !element.getAttribute('data-hint')) {
+          element.setAttribute('data-hint', hint);
+        }
+      }
+      return element;
+    };
+    const timeEl = ensureStatusElement('timeOfDay', 'status-item time', 'Local dimension time.');
+    const heartsEl = ensureStatusElement(
+      'hearts',
+      'status-item hearts',
+      'Current health hearts.',
+      timeEl,
+    );
+    const bubblesEl = ensureStatusElement(
+      'bubbles',
+      'status-item bubbles',
+      'Breath remaining while underwater.',
+      timeEl,
+    );
     let hungerEl = document.getElementById('hunger');
-    const timeEl = document.getElementById('timeOfDay');
+    if (!hungerEl && hudStatusContainer && statusMeters?.hunger?.enabled) {
+      hungerEl = ensureStatusElement(
+        'hunger',
+        'status-item hunger',
+        'Hunger remaining before you tire.',
+        timeEl,
+      );
+    } else if (hungerEl) {
+      hungerEl.classList.add('status-item', 'hunger');
+      if (!hungerEl.getAttribute('data-hint')) {
+        hungerEl.setAttribute('data-hint', 'Hunger remaining before you tire.');
+      }
+    }
     const dimensionInfoEl = document.getElementById('dimensionInfo');
     const portalProgressEl = document.getElementById('portalProgress');
     const portalStatusEl = document.getElementById('portalStatus');
-    const hudRootEl = document.getElementById('gameHud');
     const objectivesPanelEl = document.getElementById('objectivesPanel');
     const victoryBannerEl = document.getElementById('victoryBanner');
     const victoryCelebrationEl = document.getElementById('victoryCelebration');
