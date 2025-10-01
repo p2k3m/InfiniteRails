@@ -250,4 +250,47 @@ describe('simple experience entity lifecycle', () => {
     expect(experience.golems.length).toBeGreaterThan(0);
     expect(experience.golemGroup.children.length).toBeGreaterThan(0);
   });
+
+  it('re-registers entity groups when they are missing', async () => {
+    const { experience } = createExperienceForTest();
+
+    experience.start();
+    await Promise.resolve();
+
+    if (experience.scene && experience.zombieGroup) {
+      experience.scene.remove(experience.zombieGroup);
+    }
+    experience.zombieGroup = null;
+    experience.zombies = [];
+    experience.forceNightCycle();
+    experience.lastZombieSpawn = experience.elapsed - 100;
+    experience.spawnZombie();
+
+    expect(experience.zombieGroup).toBeTruthy();
+    expect(experience.zombieGroup.parent).toBe(experience.scene);
+    expect(experience.zombies.length).toBeGreaterThan(0);
+
+    if (experience.scene && experience.golemGroup) {
+      experience.scene.remove(experience.golemGroup);
+    }
+    experience.golemGroup = null;
+    experience.golems = [];
+    experience.lastGolemSpawn = experience.elapsed - 100;
+    experience.spawnGolem();
+
+    expect(experience.golemGroup).toBeTruthy();
+    expect(experience.golemGroup.parent).toBe(experience.scene);
+    expect(experience.golems.length).toBeGreaterThan(0);
+
+    if (experience.scene && experience.chestGroup) {
+      experience.scene.remove(experience.chestGroup);
+    }
+    experience.chestGroup = null;
+    experience.chests = [];
+    experience.spawnDimensionChests();
+
+    expect(experience.chestGroup).toBeTruthy();
+    expect(experience.chestGroup.parent).toBe(experience.scene);
+    expect(experience.chestGroup.children.length).toBeGreaterThan(0);
+  });
 });

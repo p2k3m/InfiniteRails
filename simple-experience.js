@@ -4752,7 +4752,8 @@
     }
 
     spawnDimensionChests() {
-      if (!this.chestGroup) return;
+      const chestGroup = this.ensureEntityGroup('chest');
+      if (!chestGroup) return;
       this.clearChests();
       const theme = this.dimensionSettings || DIMENSION_THEME[0];
       const chestCount = CHEST_COUNT_PER_DIMENSION;
@@ -4769,7 +4770,7 @@
         const mesh = this.createChestMesh(theme);
         mesh.position.set(x, ground + 0.35, z);
         mesh.name = `LootChest-${theme?.id || 'dimension'}-${i}`;
-        this.chestGroup.add(mesh);
+        chestGroup.add(mesh);
         const loot = this.getChestLootForDimension(theme?.id || 'origin', i);
         const chest = {
           id: `${theme?.id || 'dimension'}-${i}-${Date.now()}`,
@@ -6747,7 +6748,8 @@
     }
 
     updateZombies(delta) {
-      if (!this.zombieGroup) return;
+      const zombieGroup = this.ensureEntityGroup('zombie');
+      if (!zombieGroup) return;
       const THREE = this.THREE;
       if (!this.isNight()) {
         if (this.zombies.length) {
@@ -6787,7 +6789,11 @@
 
     spawnZombie() {
       const THREE = this.THREE;
-      if (!THREE) return;
+      const zombieGroup = this.ensureEntityGroup('zombie');
+      if (!THREE || !zombieGroup) return;
+      if (!Array.isArray(this.zombies)) {
+        this.zombies = [];
+      }
       const id = (this.zombieIdCounter += 1);
       const angle = Math.random() * Math.PI * 2;
       const radius = WORLD_SIZE * 0.45;
@@ -6803,7 +6809,7 @@
       mesh.castShadow = true;
       mesh.receiveShadow = true;
       mesh.position.set(x, ground + 0.9, z);
-      this.zombieGroup.add(mesh);
+      zombieGroup.add(mesh);
       const zombie = { id, mesh, speed: 2.4, lastAttack: this.elapsed, placeholder: true };
       this.zombies.push(zombie);
       this.upgradeZombie(zombie);
@@ -6843,6 +6849,27 @@
       return best;
     }
 
+    ensureEntityGroup(kind) {
+      const THREE = this.THREE;
+      if (!THREE || !kind) {
+        return null;
+      }
+      const property = `${kind}Group`;
+      let group = this[property];
+      if (!group || typeof group.add !== 'function') {
+        group = new THREE.Group();
+        group.name = `${kind.charAt(0).toUpperCase() + kind.slice(1)}Group`;
+        this[property] = group;
+      }
+      if (group.parent && group.parent !== this.scene && typeof group.parent.remove === 'function') {
+        group.parent.remove(group);
+      }
+      if (this.scene && group.parent !== this.scene && typeof this.scene.add === 'function') {
+        this.scene.add(group);
+      }
+      return group;
+    }
+
     createGolemActor() {
       const THREE = this.THREE;
       if (!THREE) return null;
@@ -6875,7 +6902,11 @@
 
     spawnGolem() {
       const THREE = this.THREE;
-      if (!THREE || !this.golemGroup) return;
+      const golemGroup = this.ensureEntityGroup('golem');
+      if (!THREE || !golemGroup) return;
+      if (!Array.isArray(this.golems)) {
+        this.golems = [];
+      }
       if (this.golems.length >= GOLEM_MAX_PER_DIMENSION) return;
       const actor = this.createGolemActor();
       if (!actor) return;
@@ -6886,7 +6917,7 @@
       const z = base.z + Math.sin(angle) * radius;
       const ground = this.sampleGroundHeight(x, z);
       actor.position.set(x, ground + 1, z);
-      this.golemGroup.add(actor);
+      golemGroup.add(actor);
       const golem = {
         id: `golem-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
         mesh: actor,
@@ -6901,7 +6932,8 @@
     }
 
     updateGolems(delta) {
-      if (!this.golemGroup) return;
+      const golemGroup = this.ensureEntityGroup('golem');
+      if (!golemGroup) return;
       const shouldSpawnGuard = this.isNight() || this.zombies.length > 0;
       if (
         shouldSpawnGuard &&
