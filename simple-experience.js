@@ -2805,6 +2805,19 @@
           this.textureLoader.crossOrigin = 'anonymous';
         }
       }
+      const useCachedFallbackTexture = (options = {}) => {
+        const fallbackTexture = this.textureCache.get(key) || null;
+        if (fallbackTexture) {
+          if (!options.silent) {
+            const lastUrl = options.url ? ` after ${options.url}` : '';
+            console.warn(
+              `Falling back to default ${key} texture${lastUrl} because external sources failed.`,
+            );
+          }
+        }
+        return fallbackTexture;
+      };
+
       const attemptLoad = (index) => {
         if (index >= sources.length) {
           return Promise.resolve(null);
@@ -2833,8 +2846,9 @@
       const loadPromise = attemptLoad(0)
         .then((result) => {
           if (!result || !result.texture) {
-            this.completeAssetTimer('textures', key, { success: false, url: result?.url ?? null });
-            return null;
+            const url = result?.url ?? null;
+            this.completeAssetTimer('textures', key, { success: false, url });
+            return useCachedFallbackTexture({ url }) ?? null;
           }
           this.prepareExternalTexture(result.texture);
           console.log(`External texture loaded for ${key} from ${result.url}`);
@@ -2842,9 +2856,9 @@
           return result.texture;
         })
         .catch((error) => {
-          this.completeAssetTimer('textures', key, { success: false });
           console.warn(`Unable to stream external texture for ${key}`, error);
-          return null;
+          this.completeAssetTimer('textures', key, { success: false });
+          return useCachedFallbackTexture({ silent: true });
         })
         .finally(() => {
           this.pendingTextureLoads.delete(key);
