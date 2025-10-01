@@ -1865,6 +1865,15 @@
     const inventorySortButton = document.getElementById('inventorySortButton');
     const inventoryOverflowEl = document.getElementById('inventoryOverflow');
 
+    const bootstrapFallbackNotices = [];
+
+    function queueBootstrapFallbackNotice(key, message) {
+      if (!message) {
+        return;
+      }
+      bootstrapFallbackNotices.push({ key: key || `notice-${bootstrapFallbackNotices.length + 1}`, message });
+    }
+
     function shouldStartSimpleMode() {
       if (typeof window === 'undefined') return false;
       const params = new URLSearchParams(window.location.search ?? '');
@@ -2934,6 +2943,10 @@
       } catch (error) {
         console.error('Failed to initialise simple gameplay sandbox.', error);
         simpleExperience = null;
+        queueBootstrapFallbackNotice(
+          'simple-create-failed',
+          'Immersive sandbox unavailable — continuing with the command deck renderer.',
+        );
       }
 
       if (simpleExperience) {
@@ -2953,6 +2966,10 @@
             if (startButton) {
               startButton.disabled = false;
             }
+            queueBootstrapFallbackNotice(
+              'simple-start-failed',
+              'Immersive sandbox offline — continuing with the command deck renderer.',
+            );
           }
         };
         if (startButton) {
@@ -5654,6 +5671,20 @@
         duration: 10000,
       });
     }
+
+    function flushBootstrapFallbackNotices() {
+      if (!bootstrapFallbackNotices.length) {
+        return;
+      }
+      const pendingNotices = bootstrapFallbackNotices.splice(0);
+      pendingNotices.forEach(({ key, message }) => {
+        if (message) {
+          announceVisualFallback(key, message);
+        }
+      });
+    }
+
+    flushBootstrapFallbackNotices();
 
     if (!MODEL_ASSETS_READY) {
       if (missingModelAssetKeys.length > 0) {
