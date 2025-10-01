@@ -95,6 +95,15 @@ function normaliseSequence(sequence) {
   return sequence.map((item) => String(item).trim().toLowerCase()).join('|');
 }
 
+function buildIngredientCount(sequence = []) {
+  const tally = new Map();
+  sequence.forEach((itemId) => {
+    const key = String(itemId).trim().toLowerCase();
+    tally.set(key, (tally.get(key) || 0) + 1);
+  });
+  return tally;
+}
+
 function createOrderValidationMap(recipes = DEFAULT_RECIPES) {
   const orderMap = new Map();
   recipes.forEach((recipe) => {
@@ -156,18 +165,24 @@ function stackHotbarItem(state, itemId, quantity) {
   return updated;
 }
 
-function hasIngredients(state, recipe) {
-  const required = new Map();
-  recipe.sequence.forEach((itemId) => {
-    required.set(itemId, (required.get(itemId) || 0) + 1);
-  });
+function evaluateIngredientAvailability(state, recipe) {
+  const required = buildIngredientCount(recipe.sequence);
+  const missing = [];
   for (const [itemId, quantity] of required.entries()) {
     const available = state.inventory.get(itemId) || 0;
     if (available < quantity) {
-      return false;
+      missing.push({
+        itemId,
+        required: quantity,
+        available,
+        missing: quantity - available,
+      });
     }
   }
-  return true;
+  return {
+    hasAll: missing.length === 0,
+    missing,
+  };
 }
 
 function consumeIngredients(state, recipe) {
@@ -184,31 +199,84 @@ function addOutputToInventory(state, recipe) {
   stackHotbarItem(state, item, quantity);
 }
 
-function craftSequence(state, sequence) {
+function sequencesShareIngredients(a = [], b = []) {
+  if (a.length !== b.length) return false;
+  const countA = buildIngredientCount(a);
+  const countB = buildIngredientCount(b);
+  if (countA.size !== countB.size) return false;
+  for (const [itemId, quantity] of countA.entries()) {
+    if (countB.get(itemId) !== quantity) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function validateCraftAttempt(state, sequence) {
   if (!state || !Array.isArray(sequence)) {
     throw new TypeError('Crafting requires a valid state and sequence array.');
   }
   if (sequence.length === 0) {
-    state.lastAlert = 'Sequence empty. Add materials to craft.';
-    return { success: false, alert: state.lastAlert };
+    return {
+      valid: false,
+      reason: 'empty-sequence',
+      alert: 'Sequence empty. Add materials to craft.',
+    };
   }
   const key = normaliseSequence(sequence);
   const recipe = state.orderMap.get(key);
   if (!recipe || !state.unlockedDimensions.has(recipe.unlock)) {
-    state.lastAlert = 'Sequence fizzles. No recipe matched.';
-    return { success: false, alert: state.lastAlert };
+    const unlockedRecipes = state.recipes.filter((entry) =>
+      state.unlockedDimensions.has(entry.unlock)
+    );
+    const ingredientMatch = unlockedRecipes.find((entry) =>
+      sequencesShareIngredients(entry.sequence, sequence)
+    );
+    if (ingredientMatch) {
+      return {
+        valid: false,
+        reason: 'order-mismatch',
+        recipe: ingredientMatch,
+        alert: 'Recipe ingredients detected, but the order is incorrect.',
+      };
+    }
+    return {
+      valid: false,
+      reason: 'no-recipe',
+      alert: 'Sequence fizzles. No recipe matched.',
+    };
   }
-  if (!hasIngredients(state, recipe)) {
-    state.lastAlert = 'Missing ingredients for this recipe.';
-    return { success: false, alert: state.lastAlert };
+  const { hasAll, missing } = evaluateIngredientAvailability(state, recipe);
+  if (!hasAll) {
+    return {
+      valid: false,
+      reason: 'missing-ingredients',
+      recipe,
+      missing,
+      alert: 'Missing ingredients for this recipe.',
+    };
   }
+  return {
+    valid: true,
+    recipe,
+    alert: 'Craft success',
+  };
+}
+
+function craftSequence(state, sequence) {
+  const validation = validateCraftAttempt(state, sequence);
+  if (!validation.valid) {
+    state.lastAlert = validation.alert;
+    return { success: false, alert: state.lastAlert, validation };
+  }
+  const recipe = validation.recipe;
   consumeIngredients(state, recipe);
   addOutputToInventory(state, recipe);
   state.unlockedRecipes.add(recipe.id);
   state.knownRecipes.add(recipe.id);
   const pointsAwarded = Number.isFinite(recipe.points) ? recipe.points : 1;
   state.points += pointsAwarded;
-  state.lastAlert = 'Craft success';
+  state.lastAlert = validation.alert;
   return {
     success: true,
     alert: state.lastAlert,
@@ -217,6 +285,11 @@ function craftSequence(state, sequence) {
     inventory: mapToObject(state.inventory),
     hotbar: mapToObject(state.hotbar),
     points: state.points,
+    feedback: {
+      type: 'success',
+      visual: 'craft-confetti',
+      message: state.lastAlert,
+    },
   };
 }
 
@@ -260,5 +333,6 @@ module.exports = {
   createCraftingState,
   stackHotbarItem,
   craftSequence,
+  validateCraftAttempt,
   searchRecipes,
 };
