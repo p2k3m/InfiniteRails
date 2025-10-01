@@ -17849,7 +17849,7 @@
       return quantity === 0;
     }
 
-    function hasItem(itemId, quantity = 1) {
+    function getTotalItemQuantity(itemId) {
       let total = 0;
       for (const slot of state.player.inventory) {
         if (slot?.item === itemId) total += slot.quantity;
@@ -17857,7 +17857,11 @@
       for (const bundle of state.player.satchel) {
         if (bundle.item === itemId) total += bundle.quantity;
       }
-      return total >= quantity;
+      return total;
+    }
+
+    function hasItem(itemId, quantity = 1) {
+      return getTotalItemQuantity(itemId) >= quantity;
     }
 
     function getHotbarSlotIndexFromElement(element) {
@@ -21778,20 +21782,58 @@
       }
     }
 
+    function buildIngredientCount(sequence) {
+      const tally = new Map();
+      sequence.forEach((itemId) => {
+        tally.set(itemId, (tally.get(itemId) || 0) + 1);
+      });
+      return tally;
+    }
+
+    function sequencesMatchExactly(a = [], b = []) {
+      if (a.length !== b.length) return false;
+      for (let i = 0; i < a.length; i++) {
+        if (a[i] !== b[i]) return false;
+      }
+      return true;
+    }
+
+    function sequencesShareIngredients(a = [], b = []) {
+      if (a.length !== b.length) return false;
+      const countA = buildIngredientCount(a);
+      const countB = buildIngredientCount(b);
+      if (countA.size !== countB.size) return false;
+      for (const [itemId, quantity] of countA.entries()) {
+        if (countB.get(itemId) !== quantity) {
+          return false;
+        }
+      }
+      return true;
+    }
+
     function attemptCraft() {
       if (!state.craftSequence.length) return;
-      const recipe = RECIPES.find((r) =>
-        r.sequence.length === state.craftSequence.length &&
-        r.sequence.every((item, idx) => item === state.craftSequence[idx]) &&
-        state.unlockedDimensions.has(r.unlock)
-      );
+      const sequence = [...state.craftSequence];
+      const unlockedRecipes = RECIPES.filter((recipe) => state.unlockedDimensions.has(recipe.unlock));
+      const recipe = unlockedRecipes.find((entry) => sequencesMatchExactly(entry.sequence, sequence));
       if (!recipe) {
-        logEvent('Sequence fizzles. No recipe matched.');
+        const ingredientMatch = unlockedRecipes.find((entry) => sequencesShareIngredients(entry.sequence, sequence));
+        if (ingredientMatch) {
+          logEvent('Recipe ingredients detected, but the order is incorrect.');
+        } else {
+          logEvent('Sequence fizzles. No recipe matched.');
+        }
         triggerCraftSequenceError();
         return;
       }
-      const canCraft = recipe.sequence.every((itemId) => hasItem(itemId));
-      if (!canCraft) {
+      const required = buildIngredientCount(recipe.sequence);
+      const missing = [];
+      for (const [itemId, quantity] of required.entries()) {
+        if (!hasItem(itemId, quantity)) {
+          missing.push(itemId);
+        }
+      }
+      if (missing.length > 0) {
         logEvent('Missing ingredients for this recipe.');
         triggerCraftSequenceError();
         return;
