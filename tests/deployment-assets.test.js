@@ -78,4 +78,26 @@ describe('deployment workflow asset coverage', () => {
 
     expect(missing).toEqual([]);
   });
+
+  it('explicitly syncs core runtime modules needed in production', () => {
+    const includePatterns = extractIncludePatterns(workflowContents);
+    const requiredModules = [
+      'asset-resolver.js',
+      'audio-aliases.js',
+      'combat-utils.js',
+      'crafting.js',
+      'portal-mechanics.js',
+      'scoreboard-utils.js',
+      'simple-experience.js',
+      'script.js',
+      'assets/offline-assets.js',
+      'vendor/three.min.js',
+    ];
+
+    const missing = requiredModules.filter((asset) =>
+      !includePatterns.some((pattern) => patternMatchesAsset(pattern, asset)),
+    );
+
+    expect(missing).toEqual([]);
+  });
 });
