@@ -106,7 +106,7 @@ These steps restore the intended first-person experience when a deployment or ca
 
 | Platform | Input |
 | --- | --- |
-| Desktop | `WASD` / arrow keys to move, `Space` to jump, `F` interact/use, `Q` place blocks, `R` ignite portal, `E` crafting, `I` inventory, `T` reset position, `V` toggle view, `1–0` hotbar slots |
+| Desktop | `WASD` / arrow keys to move, `Space` to jump, `F` interact/use, `Q` place blocks, `R` ignite portal, `E` crafting, `I` inventory, `T` reset position, `V` toggle view, `F1` guide, `F2` settings, `F3` leaderboard, `1–0` hotbar slots |
 | Mobile | Swipe to move between rails, tap/hold to mine or place, tap the action buttons for crafting and portals |
 
 Desktop key bindings now live in a centralised map with sensible defaults (WASD and the arrow keys for movement). Players can remap every control from the in-game **Settings → Key bindings** panel, or you can provide overrides via configuration or at runtime:
