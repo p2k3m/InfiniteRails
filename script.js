@@ -1491,16 +1491,16 @@
       formatLocationLabel,
     } = scoreboardUtils;
 
-    const appConfig =
+    const globalAppConfig =
       (typeof window !== 'undefined' && window.APP_CONFIG) ||
       (typeof globalThis !== 'undefined' && globalThis.APP_CONFIG) ||
       globalScope?.APP_CONFIG ||
       {};
     const statusMeters = normaliseStatusMeters([
-      appConfig.statusMeters,
-      appConfig.statusBars,
-      appConfig.hud?.statusMeters,
-      appConfig.hud?.statusBars,
+      globalAppConfig.statusMeters,
+      globalAppConfig.statusBars,
+      globalAppConfig.hud?.statusMeters,
+      globalAppConfig.hud?.statusBars,
     ]);
 
     const canvas = document.getElementById('gameCanvas');
@@ -1778,6 +1778,16 @@
           reason: partial.reason ?? existing.reason ?? null,
         };
       }
+
+      const scoreState = {
+        score: 0,
+        recipes: new Set(),
+        dimensions: new Set(),
+        points: {
+          recipe: 0,
+          dimension: 0,
+        },
+      };
 
       function applySummaryToState(summary) {
         const gameState = getActiveGameState();
@@ -2758,15 +2768,6 @@
     const leaderboardTableContainer = document.getElementById('leaderboardTable');
     const leaderboardEmptyMessage = document.getElementById('leaderboardEmptyMessage');
     const leaderboardSortHeaders = Array.from(document.querySelectorAll('.leaderboard-sortable'));
-    const scoreState = {
-      score: 0,
-      recipes: new Set(),
-      dimensions: new Set(),
-      points: {
-        recipe: 0,
-        dimension: 0,
-      },
-    };
     const objectives = [
       { id: 'gather-wood', label: 'Gather wood' },
       { id: 'craft-pickaxe', label: 'Craft pickaxe' },
@@ -3209,8 +3210,8 @@
     };
 
     const appConfig = {
-      apiBaseUrl: window.APP_CONFIG?.apiBaseUrl ?? null,
-      googleClientId: window.APP_CONFIG?.googleClientId ?? null,
+      apiBaseUrl: globalAppConfig?.apiBaseUrl ?? null,
+      googleClientId: globalAppConfig?.googleClientId ?? null,
     };
 
     const TILE_UNIT = 1;
