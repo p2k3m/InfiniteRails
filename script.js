@@ -776,14 +776,14 @@
   const SCOREBOARD_UTILS_FALLBACK = createScoreboardUtilsFallback();
   const COMBAT_UTILS_FALLBACK = createCombatUtilsFallback();
 
-  const globalScope = getGlobalScope();
-  const EMBEDDED_ASSETS = globalScope?.INFINITE_RAILS_EMBEDDED_ASSETS ?? null;
-  if (globalScope) {
-    if (!globalScope.ScoreboardUtils) {
-      globalScope.ScoreboardUtils = SCOREBOARD_UTILS_FALLBACK;
+  const runtimeGlobalScope = getGlobalScope();
+  const EMBEDDED_ASSETS = runtimeGlobalScope?.INFINITE_RAILS_EMBEDDED_ASSETS ?? null;
+  if (runtimeGlobalScope) {
+    if (!runtimeGlobalScope.ScoreboardUtils) {
+      runtimeGlobalScope.ScoreboardUtils = SCOREBOARD_UTILS_FALLBACK;
     }
-    if (!globalScope.CombatUtils) {
-      globalScope.CombatUtils = COMBAT_UTILS_FALLBACK;
+    if (!runtimeGlobalScope.CombatUtils) {
+      runtimeGlobalScope.CombatUtils = COMBAT_UTILS_FALLBACK;
     }
   }
 
