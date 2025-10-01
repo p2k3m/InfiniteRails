@@ -2436,6 +2436,7 @@
         const reason = summary.reason ?? event?.detail?.summary?.reason ?? null;
         const flash = reason !== 'start' && reason !== 'identity-update' && reason !== 'location-update';
         updateScoreFromSummary(summary, { flash });
+        recordScore(summary, { reason, immediate: false, syncMetadata: false }).catch(() => {});
         queueMetadataSync(reason || 'score-update', { includeProgress: true, summary });
       });
 
@@ -2443,6 +2444,7 @@
         const summary = mergeSimpleSummary(normaliseSimpleSummary(event?.detail ?? {}));
         if (!summary) return;
         updateScoreFromSummary(summary, { flash: true, triggerFlip: true });
+        recordScore(summary, { reason: 'dimension-advanced', immediate: false, syncMetadata: false }).catch(() => {});
         queueMetadataSync('dimension-advanced', { includeProgress: true, summary });
       });
 
@@ -2450,6 +2452,7 @@
         const summary = mergeSimpleSummary(normaliseSimpleSummary(event?.detail ?? {}));
         if (!summary) return;
         updateScoreFromSummary(summary, { flash: true });
+        recordScore(summary, { reason: 'portal-activated', immediate: false, syncMetadata: false }).catch(() => {});
         queueMetadataSync('portal-activated', { includeProgress: true, summary });
       });
 
@@ -2465,6 +2468,7 @@
         } else {
           pendingVictorySummary = summary;
         }
+        recordScore(summary, { reason: 'victory', immediate: true, syncMetadata: false }).catch(() => {});
         queueMetadataSync('victory', { includeProgress: true, summary, immediate: true });
       });
 
@@ -5666,6 +5670,7 @@
       displayName: null,
       location: null,
       device: null,
+      localProfileId: null,
       scoreboard: [],
       scoreboardSource: 'remote',
       scoreboardTotal: 0,
@@ -23921,6 +23926,100 @@
       }
     }
 
+    const SCORE_POST_DEBOUNCE_MS = 4000;
+    let scorePostTimer = null;
+    let pendingScorePost = null;
+    let lastScorePostAt = 0;
+
+    function getScoreboardPlayerIdentifier() {
+      if (identityState.googleProfile?.sub) {
+        return identityState.googleProfile.sub;
+      }
+      if (identityState.localProfileId) {
+        return identityState.localProfileId;
+      }
+      if (typeof ensureLocalProfileId === 'function') {
+        const identifier = ensureLocalProfileId();
+        if (identifier) {
+          identityState.localProfileId = identifier;
+          return identifier;
+        }
+      }
+      return null;
+    }
+
+    function buildDimensionLabelsFromSnapshot(snapshot) {
+      const labels = [];
+      const seen = new Set();
+      ensureArrayOfStrings(snapshot?.dimensions ?? [], { unique: false }).forEach((value) => {
+        const formatted = formatDimensionLabel(value);
+        if (formatted && !seen.has(formatted)) {
+          seen.add(formatted);
+          labels.push(formatted);
+        }
+      });
+      return labels;
+    }
+
+    function buildScoreboardEntryFromSnapshot(snapshot, reason) {
+      if (!snapshot || typeof snapshot !== 'object') {
+        return null;
+      }
+      const playerId = getScoreboardPlayerIdentifier();
+      if (!playerId) {
+        return null;
+      }
+      const dimensionLabels = buildDimensionLabelsFromSnapshot(snapshot);
+      const scoreValue = Number.isFinite(snapshot.score) ? Math.max(0, Math.round(snapshot.score)) : 0;
+      const dimensionCount = Number.isFinite(snapshot.dimensionCount)
+        ? Math.max(0, Math.round(snapshot.dimensionCount))
+        : dimensionLabels.length;
+      const runTimeSeconds = Number.isFinite(snapshot.runTimeSeconds)
+        ? Math.max(0, Math.round(snapshot.runTimeSeconds))
+        : 0;
+      const inventoryCount = Number.isFinite(snapshot.inventoryCount)
+        ? Math.max(0, Math.round(snapshot.inventoryCount))
+        : 0;
+      const location = identityState.location && !identityState.location.error ? identityState.location : null;
+      const locationLabel = identityState.locationLabel ?? location?.label ?? null;
+      return {
+        id: playerId,
+        playerId,
+        googleId: identityState.googleProfile?.sub ?? null,
+        name: identityState.displayName ?? 'Explorer',
+        score: scoreValue,
+        dimensionCount,
+        runTimeSeconds,
+        inventoryCount,
+        location,
+        locationLabel,
+        updatedAt: new Date().toISOString(),
+        dimensionLabels,
+        reason: reason ?? null,
+      };
+    }
+
+    function applyScoreboardEntry(entry) {
+      if (!entry) {
+        return null;
+      }
+      const updatedEntries = upsertScoreEntry(identityState.scoreboard, entry);
+      const preferLocal =
+        !appConfig.apiBaseUrl ||
+        identityState.scoreboardSource === 'sample' ||
+        identityState.scoreboardSource === 'local';
+      const source = preferLocal ? 'local' : identityState.scoreboardSource;
+      const { normalized } = storeScoreboardEntries(updatedEntries, source);
+      if (preferLocal) {
+        identityState.scoreboardSource = 'local';
+      }
+      identityState.scoreboardError = null;
+      identityState.scoreboardMessage = '';
+      saveLocalScores(normalized);
+      updateIdentityUI();
+      return { normalized };
+    }
+
     function getScoreEntryId(entry) {
       if (!entry || typeof entry !== 'object') {
         return null;
@@ -24117,45 +24216,82 @@
       }
     }
 
-    async function recordScore(snapshot) {
-      if (!identityState.googleProfile) return;
-      const entry = {
-        id: identityState.googleProfile.sub,
-        name: identityState.displayName ?? 'Explorer',
-        score: snapshot.score,
-        dimensionCount: snapshot.dimensionCount,
-        runTimeSeconds: snapshot.runTimeSeconds,
-        inventoryCount: snapshot.inventoryCount,
-        location: identityState.location && !identityState.location.error ? identityState.location : null,
-        locationLabel: identityState.location?.label ?? null,
-        updatedAt: new Date().toISOString(),
-        dimensionLabels: Array.isArray(snapshot.dimensions) ? snapshot.dimensions : [],
-      };
-      const updatedEntries = upsertScoreEntry(identityState.scoreboard, entry);
-      const source = appConfig.apiBaseUrl ? identityState.scoreboardSource : 'local';
-      const { normalized } = storeScoreboardEntries(updatedEntries, source);
-      if (!appConfig.apiBaseUrl) {
-        identityState.scoreboardSource = 'local';
+    async function recordScore(snapshot, options = {}) {
+      const summary = snapshot && typeof snapshot === 'object' ? snapshot : computeScoreSnapshot();
+      if (!summary) {
+        return;
       }
-      saveLocalScores(normalized);
-      updateIdentityUI();
-      if (appConfig.apiBaseUrl) {
-        try {
-          await fetch(`${appConfig.apiBaseUrl.replace(/\/$/, '')}/scores`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              ...entry,
-              googleId: identityState.googleProfile.sub,
-              email: identityState.googleProfile.email,
-              dimensions: Array.isArray(snapshot.dimensions) ? snapshot.dimensions : undefined,
-            }),
-          });
-        } catch (error) {
-          console.warn('Failed to sync score with API.', error);
+      const reason = options.reason ?? summary.reason ?? null;
+      const entry = buildScoreboardEntryFromSnapshot(summary, reason);
+      if (!entry) {
+        return;
+      }
+      applyScoreboardEntry(entry);
+
+      const shouldPostRemote = Boolean(appConfig.apiBaseUrl && identityState.googleProfile);
+      const shouldSyncMetadata = options.syncMetadata === true;
+
+      if (shouldPostRemote) {
+        const now = Date.now();
+        const scope = typeof window !== 'undefined' ? window : typeof globalThis !== 'undefined' ? globalThis : null;
+        const minInterval = options.immediate ? 0 : SCORE_POST_DEBOUNCE_MS;
+        const elapsed = now - lastScorePostAt;
+
+        const payload = {
+          ...entry,
+          googleId: identityState.googleProfile.sub,
+          email: identityState.googleProfile.email,
+          dimensions: Array.isArray(summary.dimensions) ? summary.dimensions : undefined,
+        };
+
+        const executePost = async () => {
+          try {
+            await fetch(`${appConfig.apiBaseUrl.replace(/\/$/, '')}/scores`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload),
+            });
+          } catch (error) {
+            console.warn('Failed to sync score with API.', error);
+          } finally {
+            lastScorePostAt = Date.now();
+          }
+        };
+
+        if (elapsed >= minInterval || !scope) {
+          if (scorePostTimer && scope) {
+            scope.clearTimeout(scorePostTimer);
+            scorePostTimer = null;
+          }
+          pendingScorePost = null;
+          await executePost();
+        } else {
+          pendingScorePost = { snapshot: summary, reason, options: { ...options, immediate: true } };
+          if (scorePostTimer && scope) {
+            scope.clearTimeout(scorePostTimer);
+          }
+          const delay = Math.max(0, minInterval - elapsed);
+          scorePostTimer = scope.setTimeout(() => {
+            scorePostTimer = null;
+            const pending = pendingScorePost;
+            pendingScorePost = null;
+            if (pending) {
+              recordScore(pending.snapshot, { ...pending.options, reason: pending.reason }).catch(() => {});
+            }
+          }, delay);
         }
+      } else {
+        const scope = typeof window !== 'undefined' ? window : typeof globalThis !== 'undefined' ? globalThis : null;
+        if (scorePostTimer && scope) {
+          scope.clearTimeout(scorePostTimer);
+          scorePostTimer = null;
+        }
+        pendingScorePost = null;
       }
-      await syncUserMetadata({ includeProgress: true });
+
+      if (shouldSyncMetadata && identityState.googleProfile) {
+        await syncUserMetadata({ includeProgress: true });
+      }
     }
 
     function computeScoreSnapshot() {
@@ -24227,12 +24363,11 @@
     function handleVictoryAchieved() {
       if (state.scoreSubmitted) return;
       state.scoreSubmitted = true;
+      const snapshot = computeScoreSnapshot();
       if (!identityState.googleProfile) {
         logEvent('Sign in with Google to publish your victory on the multiverse scoreboard.');
-        return;
       }
-      const snapshot = computeScoreSnapshot();
-      recordScore(snapshot);
+      recordScore(snapshot, { reason: 'victory', immediate: true, syncMetadata: true }).catch(() => {});
     }
 
     async function captureLocation() {
