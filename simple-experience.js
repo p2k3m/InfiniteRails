@@ -5890,7 +5890,7 @@
     }
 
     handleMouseDown(event) {
-      if (!this.camera) return;
+      if (!this.canvas) return;
       this.markInteraction();
       const isPrimary = event.button === 0;
       const isSecondary = event.button === 2;
