@@ -10357,13 +10357,15 @@
     }
 
     function createPortalFallbackMaterial(accentColor, active = false) {
-      const accent = new THREE.Color(accentColor ?? '#7b6bff');
-      const baseColor = new THREE.Color('#060b16').lerp(accent, active ? 0.45 : 0.35);
+      const accentHex = accentColor ?? '#7b6bff';
+      const accent = new THREE.Color(accentHex);
+      const baseHex = '#060b16';
+      const baseColor = new THREE.Color(baseHex).lerp(accent, active ? 0.45 : 0.35);
       // The fallback needs to stay visible on very low-end GPUs without overwhelming
       // the scene with a solid white glow. A darker base colour combined with a dimmed
       // emissive term keeps the gate readable while allowing Steve and the terrain to
       // remain visible behind the transparent surface.
-      return new THREE.MeshStandardMaterial({
+      const material = new THREE.MeshStandardMaterial({
         color: baseColor,
         emissive: accent.clone().multiplyScalar(active ? 0.4 : 0.25),
         emissiveIntensity: 1,
@@ -10374,6 +10376,66 @@
         side: THREE.DoubleSide,
         depthWrite: false,
       });
+      material.userData = material.userData || {};
+      material.userData.portalSurface = {
+        accentColor: accentHex,
+        isActive: Boolean(active),
+        fallback: true,
+        baseColor: baseHex,
+      };
+      return material;
+    }
+
+    function updatePortalFallbackMaterialState(material, options = {}) {
+      if (!material || typeof material !== 'object') {
+        return;
+      }
+
+      const metadata = material.userData?.portalSurface ?? {};
+      const accentHex = options.accentColor ?? metadata.accentColor ?? '#7b6bff';
+      const accent = new THREE.Color(accentHex);
+      const baseHex = metadata.baseColor ?? '#060b16';
+      const baseColor = new THREE.Color(baseHex);
+      const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+      const activation = clamp(options.activation ?? 0, 0, 1);
+      const surge = clamp(options.surge ?? 0, 0, 1);
+      const isActive = options.active ?? metadata.isActive ?? false;
+      const elapsed = options.elapsed ?? 0;
+      const energy = isActive
+        ? 0.35 + activation * 0.5 + surge * 0.3
+        : 0.18 + activation * 0.4 + surge * 0.2;
+      const accentMix = clamp(isActive ? 0.38 + energy * 0.42 : 0.25 + energy * 0.3, 0.1, 0.85);
+      const targetColor = baseColor.clone().lerp(accent, accentMix);
+      if (material.color && !material.color.equals(targetColor)) {
+        material.color.copy(targetColor);
+        material.needsUpdate = true;
+      }
+      const pulse = Math.sin(elapsed * 2.1) * 0.08;
+      const emissiveStrength = clamp(0.35 + energy * 0.6 + pulse * 0.3, 0.18, 1.4);
+      if (material.emissive && !material.emissive.equals(accent)) {
+        material.emissive.copy(accent);
+        material.needsUpdate = true;
+      }
+      if (typeof material.emissiveIntensity === 'number') {
+        const intensity = clamp(emissiveStrength, 0.18, 1.4);
+        if (Math.abs(material.emissiveIntensity - intensity) > 0.005) {
+          material.emissiveIntensity = intensity;
+          material.needsUpdate = true;
+        }
+      }
+      const targetOpacity = clamp(isActive ? 0.38 + energy * 0.28 : 0.22 + energy * 0.2, 0.12, 0.85);
+      if (typeof material.opacity === 'number' && Math.abs(material.opacity - targetOpacity) > 0.005) {
+        material.opacity = targetOpacity;
+        material.transparent = true;
+        material.depthWrite = false;
+        material.needsUpdate = true;
+      }
+      metadata.accentColor = accentHex;
+      metadata.isActive = Boolean(isActive);
+      metadata.fallback = true;
+      metadata.baseColor = baseHex;
+      material.userData = material.userData || {};
+      material.userData.portalSurface = metadata;
     }
 
     function addPortalSurface(group, renderInfo, accentColor, height, active) {
@@ -10389,6 +10451,29 @@
         sidePlane.rotation.y = Math.PI / 2;
         sidePlane.renderOrder = 2;
         group.add(sidePlane);
+        updatePortalFallbackMaterialState(frontMaterial, {
+          accentColor,
+          active,
+          activation: active ? 1 : 0,
+          surge: 0,
+          elapsed: 0,
+        });
+        updatePortalFallbackMaterialState(sideMaterial, {
+          accentColor,
+          active,
+          activation: active ? 1 : 0,
+          surge: 0,
+          elapsed: 0,
+        });
+        renderInfo.animations.portalSurface = {
+          uniforms: null,
+          uniformSets: [],
+          materials: [frontPlane.material, sidePlane.material],
+          accentColor,
+          isActive: active,
+          meshes: [frontPlane, sidePlane],
+          fallback: true,
+        };
         return;
       }
       try {
@@ -10417,6 +10502,7 @@
           materials: [frontPlane.material, sidePlane.material],
           accentColor,
           isActive: active,
+          meshes: [frontPlane, sidePlane],
         };
       } catch (error) {
         console.warn('Portal shader initialisation failed; switching to emissive fallback material.', error);
@@ -10737,9 +10823,14 @@
           });
         }
 
-        if (materials.length > 0 && !materials.every(isValidPortalShaderMaterial)) {
+        let shaderMaterials = materials.filter(
+          (material) => material?.isShaderMaterial === true || material?.type === 'ShaderMaterial'
+        );
+        let shaderMaterialSet = new Set(shaderMaterials);
+
+        if (shaderMaterials.length > 0 && !shaderMaterials.every(isValidPortalShaderMaterial)) {
           let repaired = false;
-          materials.forEach((material) => {
+          shaderMaterials.forEach((material) => {
             if (!material || isValidPortalShaderMaterial(material)) {
               return;
             }
@@ -10753,20 +10844,13 @@
             }
           });
           if (repaired) {
-            const repairedMaterials = materials.filter(isValidPortalShaderMaterial);
-            if (repairedMaterials.length) {
-              materials = repairedMaterials;
-              portalSurface.materials = materials;
-              ensurePortalShaderMaterialsHaveUniformValues(portalSurface.materials, {
-                accentColor,
-                isActive: portalIsActive,
-              });
-            }
+            shaderMaterials = shaderMaterials.filter(isValidPortalShaderMaterial);
+            shaderMaterialSet = new Set(shaderMaterials);
           }
         }
 
         const materialsInvalid =
-          materials.length > 0 && !materials.every(isValidPortalShaderMaterial);
+          shaderMaterials.length > 0 && !shaderMaterials.every(isValidPortalShaderMaterial);
         if (materialsInvalid) {
           if (portalShaderSupport) {
             disablePortalSurfaceShaders(new Error('Portal shader materials lost required uniforms.'));
@@ -10776,7 +10860,7 @@
           return;
         }
 
-        const derivedUniformSets = materials
+        let derivedUniformSets = shaderMaterials
           .map((material) => {
             if (!material || !material.uniforms) {
               return null;
@@ -10813,169 +10897,231 @@
           uniformSets = derivedUniformSets;
         }
 
-        if (portalSurface.uniformSets !== uniformSets) {
-          portalSurface.uniformSets = uniformSets;
-        }
+        let shaderUniformsAvailable = uniformSets.length > 0;
 
-        if (!uniformSets.length) {
-          if (portalShaderSupport) {
-            disablePortalSurfaceShaders(new Error('Portal shader uniforms missing expected values.'));
-          } else {
-            delete renderInfo.animations.portalSurface;
-          }
-          return;
-        }
-
-        if (!hasValidPortalUniformStructure(portalSurface.uniforms)) {
-          const primaryUniforms = guardUniformContainer(uniformSets[0] ?? null);
-          portalSurface.uniforms = primaryUniforms ?? uniformSets[0] ?? null;
-        } else {
-          const guardedPortalUniforms = guardUniformContainer(portalSurface.uniforms);
-          if (guardedPortalUniforms && guardedPortalUniforms !== portalSurface.uniforms) {
-            portalSurface.uniforms = guardedPortalUniforms;
-          }
-        }
-
-        const applyPortalUniforms = (uniforms) => {
-          if (!uniforms || typeof uniforms !== 'object') return;
-          const accentColor = portalSurface.accentColor ?? '#7b6bff';
-          const portalIsActive = tile.type === 'portal';
-          let uniformsUpdated = false;
-          Object.entries(uniforms).forEach(([key, uniform]) => {
-            if (!uniform || typeof uniform !== 'object') {
-              uniforms[key] = { value: null };
-              uniformsUpdated = true;
-              return;
-            }
-            if (!Object.prototype.hasOwnProperty.call(uniform, 'value')) {
-              if (typeof uniform.setValue === 'function') {
-                try {
-                  uniform.setValue(null);
-                  uniformsUpdated = true;
-                } catch (setError) {
-                  uniformsUpdated = assignPortalUniformValue(uniform, null) || uniformsUpdated;
+        if (!shaderUniformsAvailable && shaderMaterials.length > 0) {
+          const meshes = Array.isArray(portalSurface.meshes) ? portalSurface.meshes : [];
+          let replaced = false;
+          const remapped = portalSurface.materials
+            .map((material, index) => {
+              if (!material || !shaderMaterialSet.has(material)) {
+                return material;
+              }
+              const metadata = material.userData?.portalSurface ?? {
+                accentColor,
+                isActive: portalIsActive,
+              };
+              const fallbackResult = recreatePortalSurfaceMaterialFromMetadata(metadata, {
+                forceFallback: true,
+              });
+              if (fallbackResult?.material) {
+                const mesh = meshes[index] ?? null;
+                if (mesh) {
+                  mesh.material = fallbackResult.material;
                 }
+                replaced = true;
+                return fallbackResult.material;
+              }
+              return material;
+            })
+            .filter(Boolean);
+
+          if (replaced) {
+            portalSurface.materials = remapped;
+            materials = remapped;
+            shaderMaterials = materials.filter(
+              (material) => material?.isShaderMaterial === true || material?.type === 'ShaderMaterial'
+            );
+            shaderMaterialSet = new Set(shaderMaterials);
+            derivedUniformSets = [];
+            uniformSets = [];
+            shaderUniformsAvailable = false;
+          } else {
+            if (portalShaderSupport) {
+              disablePortalSurfaceShaders(new Error('Portal shader uniforms missing expected values.'));
+            } else {
+              delete renderInfo.animations.portalSurface;
+            }
+            return;
+          }
+        }
+
+        if (shaderUniformsAvailable) {
+          if (portalSurface.uniformSets !== uniformSets) {
+            portalSurface.uniformSets = uniformSets;
+          }
+
+          if (!hasValidPortalUniformStructure(portalSurface.uniforms)) {
+            const primaryUniforms = guardUniformContainer(uniformSets[0] ?? null);
+            portalSurface.uniforms = primaryUniforms ?? uniformSets[0] ?? null;
+          } else {
+            const guardedPortalUniforms = guardUniformContainer(portalSurface.uniforms);
+            if (guardedPortalUniforms && guardedPortalUniforms !== portalSurface.uniforms) {
+              portalSurface.uniforms = guardedPortalUniforms;
+            }
+          }
+
+          const applyPortalUniforms = (uniforms) => {
+            if (!uniforms || typeof uniforms !== 'object') return;
+            const accentColor = portalSurface.accentColor ?? '#7b6bff';
+            const portalIsActive = tile.type === 'portal';
+            let uniformsUpdated = false;
+            Object.entries(uniforms).forEach(([key, uniform]) => {
+              if (!uniform || typeof uniform !== 'object') {
+                uniforms[key] = { value: null };
+                uniformsUpdated = true;
                 return;
               }
-              let preserved = null;
-              if (typeof uniform.clone === 'function') {
-                try {
-                  preserved = uniform.clone();
-                } catch (cloneError) {
-                  preserved = null;
+              if (!Object.prototype.hasOwnProperty.call(uniform, 'value')) {
+                if (typeof uniform.setValue === 'function') {
+                  try {
+                    uniform.setValue(null);
+                    uniformsUpdated = true;
+                  } catch (setError) {
+                    uniformsUpdated = assignPortalUniformValue(uniform, null) || uniformsUpdated;
+                  }
+                  return;
                 }
-              } else if (typeof uniform.value !== 'undefined') {
-                preserved = uniform.value;
+                let preserved = null;
+                if (typeof uniform.clone === 'function') {
+                  try {
+                    preserved = uniform.clone();
+                  } catch (cloneError) {
+                    preserved = null;
+                  }
+                } else if (typeof uniform.value !== 'undefined') {
+                  preserved = uniform.value;
+                }
+                const nextValue = preserved ?? null;
+                uniformsUpdated = assignPortalUniformValue(uniform, nextValue) || uniformsUpdated;
+                return;
               }
-              const nextValue = preserved ?? null;
-              uniformsUpdated = assignPortalUniformValue(uniform, nextValue) || uniformsUpdated;
-              return;
-            }
-            if (typeof uniform.value === 'undefined') {
-              uniformsUpdated = assignPortalUniformValue(uniform, null) || uniformsUpdated;
-            }
-          });
-          const ensureUniform = (key, createValue) => {
-            const resolveDefault = () =>
-              typeof createValue === 'function' ? createValue() : createValue;
-            let uniform = uniforms[key];
-            if (!uniform || typeof uniform !== 'object') {
-              const defaultValue = resolveDefault();
-              uniforms[key] = { value: defaultValue };
-              uniformsUpdated = true;
-              return uniforms[key];
-            }
-            if (!Object.prototype.hasOwnProperty.call(uniform, 'value')) {
-              if (typeof uniform.setValue === 'function') {
+              if (typeof uniform.value === 'undefined') {
+                uniformsUpdated = assignPortalUniformValue(uniform, null) || uniformsUpdated;
+              }
+            });
+            const ensureUniform = (key, createValue) => {
+              const resolveDefault = () =>
+                typeof createValue === 'function' ? createValue() : createValue;
+              let uniform = uniforms[key];
+              if (!uniform || typeof uniform !== 'object') {
                 const defaultValue = resolveDefault();
-                try {
-                  uniform.setValue(defaultValue);
-                  uniformsUpdated = true;
-                } catch (setError) {
-                  // Ignore failures and fall back to assignPortalUniformValue.
-                  uniformsUpdated = assignPortalUniformValue(uniform, defaultValue) || uniformsUpdated;
+                uniforms[key] = { value: defaultValue };
+                uniformsUpdated = true;
+                return uniforms[key];
+              }
+              if (!Object.prototype.hasOwnProperty.call(uniform, 'value')) {
+                if (typeof uniform.setValue === 'function') {
+                  const defaultValue = resolveDefault();
+                  try {
+                    uniform.setValue(defaultValue);
+                    uniformsUpdated = true;
+                  } catch (setError) {
+                    // Ignore failures and fall back to assignPortalUniformValue.
+                    uniformsUpdated = assignPortalUniformValue(uniform, defaultValue) || uniformsUpdated;
+                  }
+                  return uniform;
                 }
+                let preserved = null;
+                if (typeof uniform.clone === 'function') {
+                  try {
+                    preserved = uniform.clone();
+                  } catch (cloneError) {
+                    preserved = null;
+                  }
+                } else if (typeof uniform.value !== 'undefined') {
+                  preserved = uniform.value;
+                }
+                const defaultValue = preserved ?? resolveDefault();
+                uniformsUpdated = assignPortalUniformValue(uniform, defaultValue) || uniformsUpdated;
                 return uniform;
               }
-              let preserved = null;
-              if (typeof uniform.clone === 'function') {
-                try {
-                  preserved = uniform.clone();
-                } catch (cloneError) {
-                  preserved = null;
-                }
-              } else if (typeof uniform.value !== 'undefined') {
-                preserved = uniform.value;
+              if (typeof uniform.value === 'undefined') {
+                const nextValue = resolveDefault();
+                uniformsUpdated = assignPortalUniformValue(uniform, nextValue) || uniformsUpdated;
               }
-              const defaultValue = preserved ?? resolveDefault();
-              uniformsUpdated = assignPortalUniformValue(uniform, defaultValue) || uniformsUpdated;
               return uniform;
+            };
+            const uTime = ensureUniform('uTime', 0);
+            const uActivation = ensureUniform('uActivation', portalIsActive ? 1 : 0.18);
+            const uOpacity = ensureUniform('uOpacity', portalIsActive ? 0.85 : 0.55);
+            const uColor = ensureUniform('uColor', () => new THREE.Color(accentColor));
+
+            if (uniformsUpdated && Array.isArray(portalSurface.materials)) {
+              portalSurface.materials.forEach((material) => {
+                if (!material || typeof material !== 'object') {
+                  return;
+                }
+                if ('needsUpdate' in material) {
+                  material.needsUpdate = true;
+                }
+                if ('uniformsNeedUpdate' in material) {
+                  material.uniformsNeedUpdate = true;
+                }
+              });
             }
-            if (typeof uniform.value === 'undefined') {
-              const nextValue = resolveDefault();
-              uniformsUpdated = assignPortalUniformValue(uniform, nextValue) || uniformsUpdated;
+
+            if (Array.isArray(portalSurface.materials)) {
+              portalSurface.materials.forEach((material) => {
+                const metadata = material?.userData?.portalSurface;
+                if (metadata) {
+                  metadata.accentColor = accentColor;
+                  metadata.isActive = portalIsActive;
+                }
+              });
             }
-            return uniform;
+            portalSurface.accentColor = accentColor;
+            portalSurface.isActive = portalIsActive;
+
+            if (uColor?.value?.set) {
+              uColor.value.set(accentColor);
+            }
+            if (uTime && 'value' in uTime) {
+              uTime.value = state.elapsed;
+            }
+            if (tile.type === 'portal') {
+              const portalState = tile.portalState;
+              const activation = portalState?.activation ?? 0.6;
+              const surge = portalState?.transition ?? 0;
+              const energy = Math.min(1.6, 0.25 + activation * 0.9 + surge * 0.8);
+              if (uActivation && 'value' in uActivation) {
+                uActivation.value = energy;
+              }
+              if (uOpacity && 'value' in uOpacity) {
+                uOpacity.value = Math.min(1, 0.65 + activation * 0.25 + surge * 0.2);
+              }
+            } else {
+              const dormant = tile.portalState?.activation ?? 0;
+              if (uActivation && 'value' in uActivation) {
+                uActivation.value = 0.12 + dormant * 0.4;
+              }
+              if (uOpacity && 'value' in uOpacity) {
+                uOpacity.value = 0.45;
+              }
+            }
           };
-          const uTime = ensureUniform('uTime', 0);
-          const uActivation = ensureUniform('uActivation', portalIsActive ? 1 : 0.18);
-          const uOpacity = ensureUniform('uOpacity', portalIsActive ? 0.85 : 0.55);
-          const uColor = ensureUniform('uColor', () => new THREE.Color(accentColor));
+          uniformSets.forEach(applyPortalUniforms);
+        } else {
+          portalSurface.uniformSets = [];
+          portalSurface.uniforms = null;
+        }
 
-          if (uniformsUpdated && Array.isArray(portalSurface.materials)) {
-            portalSurface.materials.forEach((material) => {
-              if (!material || typeof material !== 'object') {
-                return;
-              }
-              if ('needsUpdate' in material) {
-                material.needsUpdate = true;
-              }
-              if ('uniformsNeedUpdate' in material) {
-                material.uniformsNeedUpdate = true;
-              }
+        const fallbackMaterials = materials.filter((material) => !shaderMaterialSet.has(material));
+        if (fallbackMaterials.length) {
+          const portalState = tile.portalState ?? {};
+          const activationLevel = portalState.activation ?? 0;
+          const surgeLevel = portalState.transition ?? 0;
+          const portalIsActive = tile.type === 'portal';
+          fallbackMaterials.forEach((material) => {
+            updatePortalFallbackMaterialState(material, {
+              accentColor,
+              active: portalIsActive,
+              activation: activationLevel,
+              surge: surgeLevel,
+              elapsed: state.elapsed,
             });
-          }
-
-          if (Array.isArray(portalSurface.materials)) {
-            portalSurface.materials.forEach((material) => {
-              const metadata = material?.userData?.portalSurface;
-              if (metadata) {
-                metadata.accentColor = accentColor;
-                metadata.isActive = portalIsActive;
-              }
-            });
-          }
-          portalSurface.accentColor = accentColor;
-          portalSurface.isActive = portalIsActive;
-
-          if (uColor?.value?.set) {
-            uColor.value.set(accentColor);
-          }
-          if (uTime && 'value' in uTime) {
-            uTime.value = state.elapsed;
-          }
-          if (tile.type === 'portal') {
-            const portalState = tile.portalState;
-            const activation = portalState?.activation ?? 0.6;
-            const surge = portalState?.transition ?? 0;
-            const energy = Math.min(1.6, 0.25 + activation * 0.9 + surge * 0.8);
-            if (uActivation && 'value' in uActivation) {
-              uActivation.value = energy;
-            }
-            if (uOpacity && 'value' in uOpacity) {
-              uOpacity.value = Math.min(1, 0.65 + activation * 0.25 + surge * 0.2);
-            }
-          } else {
-            const dormant = tile.portalState?.activation ?? 0;
-            if (uActivation && 'value' in uActivation) {
-              uActivation.value = 0.12 + dormant * 0.4;
-            }
-            if (uOpacity && 'value' in uOpacity) {
-              uOpacity.value = 0.45;
-            }
-          }
-        };
-        uniformSets.forEach(applyPortalUniforms);
+          });
+        }
       }
       if (renderInfo.animations.railGlow) {
         const active = state.railPhase === (tile.data?.phase ?? 0);
@@ -21174,6 +21320,13 @@
           const duration = portal.activation.duration ?? PORTAL_ACTIVATION_DURATION;
           const progress = duration > 0 ? THREE.MathUtils.clamp((now - portal.activation.start) / duration, 0, 1) : 1;
           portal.activation.progress = progress;
+          if (!portal.activation.shaderPrimed) {
+            const shouldPrimeByFallback = portalShaderSupport === false;
+            const shouldPrimeByProgress = progress >= 0.25;
+            if (shouldPrimeByFallback || shouldPrimeByProgress) {
+              portal.activation.shaderPrimed = true;
+            }
+          }
           const shaderPrimed = Boolean(portal.activation.shaderPrimed);
           portal.tiles.forEach(({ x, y }) => {
             const tile = getTile(x, y);
