@@ -59,6 +59,13 @@ When every request to `d3gj6x3ityfh5o.cloudfront.net/*.js` (or other static asse
   ```
 - Only the bucket owner (and optional replication services) should appear. Remove `AllUsers` or `AuthenticatedUsers` grants—they conflict with public access blocks.
 
+### 2.5 Verify static asset readability
+
+- Choose a few asset types (for example `script.js`, `assets/steve.gltf`, and `assets/audio-samples.json`).
+- If the bucket relies on an OAI/OAC, fetch the files through CloudFront: `curl -I https://d3gj6x3ityfh5o.cloudfront.net/assets/steve.gltf`.
+- If the bucket is intentionally public, fetch directly from S3 with anonymous credentials: `curl -I https://infinite-rails-prod-assets.s3.${AWS_REGION}.amazonaws.com/assets/steve.gltf`.
+- All requests must return `200` responses. A `403` or `404` indicates the bucket policy is missing a wildcard grant (`arn:aws:s3:::<bucket>/*`) or that the object ACL blocked access. Update the policy or re-upload the object until every asset path responds successfully.
+
 ## 3. Validate the CloudFront Origin Access Identity / Control
 
 ### 3.1 Origin Access Identity (legacy)
