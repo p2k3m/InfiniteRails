@@ -405,9 +405,51 @@
   let gltfLoaderPromise = null;
   let threeLoaderPromise = null;
   let gltfLoaderInstancePromise = null;
+  let simpleFallbackAttempted = false;
 
   function getGlobalScope() {
     return globalScope;
+  }
+
+  function tryStartSimpleFallback(error, options = {}) {
+    if (simpleFallbackAttempted) {
+      return false;
+    }
+    const scope = getGlobalScope();
+    const simpleFactory = scope?.SimpleExperience?.create;
+    if (typeof simpleFactory !== 'function') {
+      return false;
+    }
+
+    simpleFallbackAttempted = true;
+
+    const appConfig = scope.APP_CONFIG || (scope.APP_CONFIG = {});
+    appConfig.enableAdvancedExperience = false;
+    appConfig.forceSimpleMode = true;
+    if (appConfig.preferAdvanced === undefined || appConfig.preferAdvanced === true) {
+      appConfig.preferAdvanced = false;
+    }
+    if (!appConfig.defaultMode) {
+      appConfig.defaultMode = 'simple';
+    }
+
+    if (scope.console?.warn) {
+      const reason = options.reason ? ` (${options.reason})` : '';
+      scope.console.warn(
+        `Advanced renderer unavailable${reason}; starting simplified sandbox instead.`,
+        error || null,
+      );
+    }
+
+    try {
+      bootstrap();
+      return true;
+    } catch (fallbackError) {
+      if (scope.console?.error) {
+        scope.console.error('Failed to start simplified fallback experience.', fallbackError);
+      }
+      return false;
+    }
   }
 
   function createScoreboardUtilsFallback() {
@@ -1467,9 +1509,10 @@
   }
 
   function bootstrap() {
+    const simpleModePreflight = shouldStartSimpleMode();
     const THREE = window.THREE_GLOBAL || window.THREE;
 
-    if (!THREE) {
+    if (!THREE && !simpleModePreflight) {
       throw new Error('Three.js failed to load. Ensure the CDN script is available.');
     }
 
@@ -2634,7 +2677,7 @@
       }
     }
 
-    const simpleModeEnabled = shouldStartSimpleMode();
+    const simpleModeEnabled = simpleModePreflight;
     updateRendererModeMetadata('advanced');
     let simpleExperience = null;
     if (simpleModeEnabled && window.SimpleExperience?.create) {
@@ -25122,9 +25165,15 @@
       bootstrap();
     })
     .catch((error) => {
-      showDependencyError(
-        'We could not initialise the 3D renderer. Please refresh the page after checking your connection.',
-        error
-      );
+      const reason =
+        (typeof error?.code === 'string' && error.code.trim()) ||
+        (typeof error?.message === 'string' && error.message.trim()) ||
+        'renderer-error';
+      if (!tryStartSimpleFallback(error, { reason })) {
+        showDependencyError(
+          'We could not initialise the 3D renderer. Please refresh the page after checking your connection.',
+          error
+        );
+      }
     });
 })();
