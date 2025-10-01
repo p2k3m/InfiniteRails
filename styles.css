@@ -4560,6 +4560,21 @@ input[type='search'] {
   margin: 0;
 }
 
+.keybinding-warning {
+  border-radius: 12px;
+  border: 1px solid rgba(255, 196, 0, 0.45);
+  background: linear-gradient(135deg, rgba(255, 196, 0, 0.12), rgba(255, 153, 0, 0.08));
+  color: #f9d87e;
+  padding: 0.85rem 1rem;
+  font-size: 0.92rem;
+  line-height: 1.5;
+  display: block;
+}
+
+.keybinding-warning[hidden] {
+  display: none;
+}
+
 .keybinding-groups {
   display: grid;
   gap: 1rem;

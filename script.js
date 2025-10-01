@@ -823,6 +823,9 @@
     return Object.freeze(map);
   })();
 
+  const KEY_BINDING_ACTION_IDS = Object.freeze(Object.keys(DEFAULT_KEY_BINDINGS));
+  const KEY_BINDING_ACTION_SET = new Set(KEY_BINDING_ACTION_IDS);
+
   const KEY_BINDING_ACTION_GROUPS = Object.freeze([
     {
       id: 'movement',
@@ -991,14 +994,76 @@
     }
   }
 
+  function analyseKeyBindingHealth(candidate = {}, options = {}) {
+    const { base = {}, defaults = DEFAULT_KEY_BINDINGS, configOverrides = null, storedOverrides = null } = options ?? {};
+    const sanitized = {};
+    const missing = [];
+    KEY_BINDING_ACTION_IDS.forEach((action) => {
+      const candidateKeys = normaliseKeyBindingValue(candidate?.[action]);
+      if (candidateKeys.length) {
+        sanitized[action] = [...candidateKeys];
+        return;
+      }
+      let fallbackSource = Array.isArray(base?.[action]) && base[action].length ? base[action] : null;
+      if (!fallbackSource || !fallbackSource.length) {
+        fallbackSource = Array.isArray(defaults?.[action]) && defaults[action].length ? defaults[action] : null;
+      }
+      if (!fallbackSource || !fallbackSource.length) {
+        fallbackSource = Array.isArray(DEFAULT_KEY_BINDINGS?.[action]) ? DEFAULT_KEY_BINDINGS[action] : [];
+      }
+      const fallback = Array.isArray(fallbackSource) ? [...fallbackSource] : [];
+      sanitized[action] = fallback;
+      missing.push(action);
+    });
+
+    const unknownCandidate = [];
+    if (candidate && typeof candidate === 'object') {
+      Object.keys(candidate).forEach((action) => {
+        if (!KEY_BINDING_ACTION_SET.has(action)) {
+          unknownCandidate.push(action);
+        }
+      });
+    }
+
+    const unknownConfig = configOverrides
+      ? Object.keys(configOverrides).filter((action) => !KEY_BINDING_ACTION_SET.has(action))
+      : [];
+    const unknownStored = storedOverrides
+      ? Object.keys(storedOverrides).filter((action) => !KEY_BINDING_ACTION_SET.has(action))
+      : [];
+
+    const issues = {};
+    if (missing.length) {
+      issues.missing = missing;
+    }
+    const combinedUnknown = [...new Set([...(unknownCandidate ?? []), ...unknownConfig, ...unknownStored])];
+    if (combinedUnknown.length) {
+      issues.unknown = combinedUnknown;
+    }
+    if (unknownConfig.length) {
+      issues.unknownConfig = unknownConfig;
+    }
+    if (unknownStored.length) {
+      issues.unknownStored = unknownStored;
+    }
+
+    return { sanitized, issues };
+  }
+
   function buildKeyBindings({ includeStored = true } = {}) {
     const config = typeof window !== 'undefined' ? window.APP_CONFIG : globalScope?.APP_CONFIG;
     const configOverrides = normaliseKeyBindingMap(config?.keyBindings);
     const defaults = cloneKeyBindingMap(DEFAULT_KEY_BINDINGS);
     const base = mergeKeyBindingMaps(defaults, configOverrides);
     const stored = includeStored ? loadStoredKeyBindingOverrides() : null;
-    const keyBindings = mergeKeyBindingMaps(base, stored);
-    return { defaults, base, keyBindings };
+    const merged = mergeKeyBindingMaps(base, stored);
+    const { sanitized, issues } = analyseKeyBindingHealth(merged, {
+      base,
+      defaults,
+      configOverrides,
+      storedOverrides: stored,
+    });
+    return { defaults, base, keyBindings: sanitized, issues };
   }
 
   function normaliseEventCode(code, keyFallback = '') {
@@ -1538,6 +1603,7 @@
       effects: document.querySelector('[data-volume-label="effects"]'),
     };
     const settingsKeyBindingsList = document.getElementById('settingsKeyBindingsList');
+    const keyBindingWarningEl = document.getElementById('keyBindingWarning');
     const resetKeyBindingsButton = document.getElementById('resetKeyBindingsButton');
     let lastFocusedBeforeGuide = null;
     const keyBindingButtonMap = new Map();
@@ -20318,10 +20384,12 @@
 
     function initializeKeyBindings(options = {}) {
       const { includeStored = true } = options ?? {};
-      const { defaults, base, keyBindings } = buildKeyBindings({ includeStored });
+      const { defaults, base, keyBindings, issues } = buildKeyBindings({ includeStored });
       state.defaultKeyBindings = defaults;
       state.baseKeyBindings = base;
       state.keyBindings = keyBindings;
+      state.keyBindingIssues = issues ?? {};
+      renderKeyBindingWarning();
     }
 
     function applyKeyBinding(action, keys) {
@@ -20379,6 +20447,7 @@
           persistKeyBindings();
         }
         refreshKeyBindingDependentCopy();
+        recomputeKeyBindingWarnings();
       }
       return changed;
     }
@@ -20400,6 +20469,7 @@
           persistKeyBindings();
         }
         refreshKeyBindingDependentCopy();
+        recomputeKeyBindingWarnings();
       }
       return changed;
     }
@@ -20411,6 +20481,7 @@
         persistKeyBindings();
       }
       refreshKeyBindingDependentCopy();
+      recomputeKeyBindingWarnings();
       return cloneKeyBindingMap(state.keyBindings);
     }
 
@@ -23022,6 +23093,7 @@
       updateVolumeLabels();
       applyAccessibilitySettingsToInputs();
       updateAllKeyBindingButtons();
+      renderKeyBindingWarning();
       settingsModal.hidden = false;
       settingsModal.setAttribute('aria-hidden', 'false');
       openSettingsButton?.setAttribute('aria-expanded', 'true');
@@ -23112,6 +23184,82 @@
       keyBindingButtonMap.forEach((_, action) => {
         updateKeyBindingButton(action);
       });
+    }
+
+    function renderKeyBindingWarning() {
+      if (!keyBindingWarningEl) {
+        return;
+      }
+      const issues = state.keyBindingIssues ?? {};
+      const summariseList = (items, { fallback = 'items', max = 4 } = {}) => {
+        const filtered = Array.isArray(items)
+          ? items
+              .map((item) => (typeof item === 'string' ? item.trim() : ''))
+              .filter((item) => item)
+          : [];
+        if (!filtered.length) {
+          return fallback;
+        }
+        if (filtered.length <= max) {
+          return formatKeyListForSentence(filtered, { fallback });
+        }
+        const visibleCount = Math.max(1, max - 1);
+        const visible = filtered.slice(0, visibleCount);
+        const remainder = filtered.length - visible.length;
+        const base = formatKeyListForSentence(visible, { fallback });
+        if (remainder === 1) {
+          return `${base}, and 1 more`;
+        }
+        return `${base}, and ${remainder} more`;
+      };
+      const messages = [];
+      if (Array.isArray(issues.missing) && issues.missing.length) {
+        const labels = issues.missing
+          .map((action) => getActionLabel(action))
+          .filter((label) => typeof label === 'string' && label.trim());
+        const summary = summariseList(labels, { fallback: 'key actions' });
+        messages.push(`We restored default bindings for ${summary} because their saved keys were unavailable.`);
+      }
+      if (Array.isArray(issues.unknownConfig) && issues.unknownConfig.length) {
+        const summary = summariseList(issues.unknownConfig.map((action) => `“${action}”`), {
+          fallback: 'unknown controls',
+        });
+        messages.push(`Configuration overrides referenced unrecognised actions ${summary}, so they were ignored.`);
+      }
+      if (Array.isArray(issues.unknownStored) && issues.unknownStored.length) {
+        const summary = summariseList(issues.unknownStored.map((action) => `“${action}”`), {
+          fallback: 'unknown controls',
+        });
+        messages.push(`Saved key bindings included unrecognised actions ${summary}; defaults remain in use instead.`);
+      }
+      if (
+        Array.isArray(issues.unknown) &&
+        issues.unknown.length &&
+        (!Array.isArray(issues.unknownConfig) || !issues.unknownConfig.length) &&
+        (!Array.isArray(issues.unknownStored) || !issues.unknownStored.length)
+      ) {
+        const summary = summariseList(issues.unknown.map((action) => `“${action}”`), {
+          fallback: 'unknown controls',
+        });
+        messages.push(`Some binding data referenced unrecognised actions ${summary}. They were ignored.`);
+      }
+      if (!messages.length) {
+        keyBindingWarningEl.hidden = true;
+        keyBindingWarningEl.textContent = '';
+        return;
+      }
+      keyBindingWarningEl.hidden = false;
+      keyBindingWarningEl.textContent = messages.join(' ');
+    }
+
+    function recomputeKeyBindingWarnings() {
+      const { sanitized, issues } = analyseKeyBindingHealth(state.keyBindings ?? {}, {
+        base: state.baseKeyBindings ?? {},
+        defaults: state.defaultKeyBindings ?? DEFAULT_KEY_BINDINGS,
+      });
+      state.keyBindings = sanitized;
+      state.keyBindingIssues = issues ?? {};
+      renderKeyBindingWarning();
     }
 
     function stopKeyBindingCapture(options = {}) {
@@ -23244,6 +23392,7 @@
         settingsKeyBindingsList.appendChild(buildKeyBindingGroup(group));
       });
       updateAllKeyBindingButtons();
+      renderKeyBindingWarning();
       resetKeyBindingsButton?.addEventListener('click', () => {
         stopKeyBindingCapture({ shouldRender: false });
         resetKeyBindings();
