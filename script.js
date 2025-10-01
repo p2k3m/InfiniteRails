@@ -13959,14 +13959,22 @@
     }
 
     function handlePlayerGltfLoad(gltf, sessionId) {
-      const steveScene = gltf.scene || gltf.scenes?.[0];
-      if (!steveScene) {
-        console.error('Steve model did not include a scene.');
+      const steveScene = gltf?.scene || gltf?.scenes?.[0] || null;
+      if (sessionId !== activePlayerSessionId) {
+        if (steveScene) {
+          disposeMeshTree(steveScene);
+        } else if (Array.isArray(gltf?.scenes)) {
+          gltf.scenes.forEach((scene) => disposeMeshTree(scene));
+        }
         return;
       }
 
-      if (sessionId !== activePlayerSessionId) {
-        disposeMeshTree(steveScene);
+      if (!steveScene) {
+        console.error('Steve model did not include a scene; using fallback cube.');
+        if (Array.isArray(gltf?.scenes)) {
+          gltf.scenes.forEach((scene) => disposeMeshTree(scene));
+        }
+        useFallbackPlayerMesh(sessionId);
         return;
       }
 
@@ -14123,17 +14131,22 @@
 
       getGltfLoaderInstance()
         .then((loader) => {
-          loader.load(
-            MODEL_ASSET_URLS.steve,
-            (gltf) => {
-              handlePlayerGltfLoad(gltf, loadSessionId);
-            },
-            undefined,
-            (error) => {
-              console.error('Failed to load Steve model.', error);
-              loadEmbeddedSteve();
-            }
-          );
+          try {
+            loader.load(
+              MODEL_ASSET_URLS.steve,
+              (gltf) => {
+                handlePlayerGltfLoad(gltf, loadSessionId);
+              },
+              undefined,
+              (error) => {
+                console.error('Failed to load Steve model.', error);
+                loadEmbeddedSteve();
+              }
+            );
+          } catch (loaderError) {
+            console.error('GLTFLoader threw while loading the Steve model.', loaderError);
+            loadEmbeddedSteve();
+          }
         })
         .catch((error) => {
           console.error('GLTFLoader is unavailable; cannot create the Steve model.', error);
