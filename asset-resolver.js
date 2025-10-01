@@ -12,6 +12,30 @@
     return;
   }
 
+  const assetWarningDeduper = new Set();
+
+  function logAssetIssue(message, error, context = {}) {
+    const consoleRef = scope.console || (typeof console !== 'undefined' ? console : null);
+    if (!consoleRef) {
+      return;
+    }
+    const sortedKeys = Object.keys(context).sort();
+    const dedupeKey = `${message}|${sortedKeys.map((key) => `${key}:${context[key]}`).join(',')}`;
+    if (assetWarningDeduper.has(dedupeKey)) {
+      return;
+    }
+    assetWarningDeduper.add(dedupeKey);
+    const details = { ...context };
+    if (error) {
+      details.error = error;
+    }
+    if (typeof consoleRef.warn === 'function') {
+      consoleRef.warn(message, details);
+    } else if (typeof consoleRef.error === 'function') {
+      consoleRef.error(message, details);
+    }
+  }
+
   function normaliseAssetBase(base) {
     if (!base || typeof base !== 'string') {
       return null;
@@ -25,6 +49,7 @@
       }
       return href;
     } catch (error) {
+      logAssetIssue('Invalid asset base URL encountered; ignoring configuration value.', error, { base });
       return null;
     }
   }
@@ -49,7 +74,11 @@
       try {
         pushCandidate(candidates, seen, new URL(relativePath, configBase).href);
       } catch (error) {
-        // Ignore invalid configuration bases.
+        logAssetIssue(
+          'Failed to resolve asset URL using configured base; falling back to defaults.',
+          error,
+          { base: scope.APP_CONFIG?.assetBaseUrl ?? null, relativePath }
+        );
       }
     }
 
@@ -75,7 +104,11 @@
           pushCandidate(candidates, seen, new URL(relativePath, scriptDir).href);
           pushCandidate(candidates, seen, new URL(relativePath, `${scriptUrl.origin}/`).href);
         } catch (error) {
-          // Continue gathering other fallbacks.
+          logAssetIssue(
+            'Unable to derive asset URL from current script location; trying alternative fallbacks.',
+            error,
+            { scriptSrc: currentScript?.src ?? null, relativePath }
+          );
         }
       }
 
@@ -83,7 +116,11 @@
         try {
           pushCandidate(candidates, seen, new URL(relativePath, documentRef.baseURI).href);
         } catch (error) {
-          // Ignore invalid base URIs.
+          logAssetIssue(
+            'Document base URI produced an invalid asset URL; continuing with other fallbacks.',
+            error,
+            { baseURI: documentRef.baseURI, relativePath }
+          );
         }
       }
     }
@@ -92,7 +129,11 @@
       try {
         pushCandidate(candidates, seen, new URL(relativePath, `${windowRef.location.origin}/`).href);
       } catch (error) {
-        // Fallback to relative resolution.
+        logAssetIssue(
+          'Window origin fallback failed while resolving asset URL; relying on relative paths.',
+          error,
+          { origin: windowRef?.location?.origin ?? null, relativePath }
+        );
       }
     }
 
