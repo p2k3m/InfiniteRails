@@ -1571,6 +1571,7 @@
         displayName: experience.playerDisplayName,
         googleId: null,
         googleAvatar: null,
+        email: null,
         location: null,
         locationLabel: 'Location unavailable',
         deviceLabel:
@@ -1587,6 +1588,9 @@
       const simpleEventCleanup = [];
       let pendingSummary = null;
       let pendingVictorySummary = null;
+      let metadataSyncTimer = null;
+      let pendingMetadataSync = null;
+      const METADATA_SYNC_DELAY_MS = 900;
 
       function getGlobalInteractionScope() {
         if (typeof window !== 'undefined') return window;
@@ -1739,18 +1743,21 @@
         const reason = summary.reason ?? event?.detail?.summary?.reason ?? null;
         const flash = reason !== 'start' && reason !== 'identity-update' && reason !== 'location-update';
         updateScoreFromSummary(summary, { flash });
+        queueMetadataSync(reason || 'score-update', { includeProgress: true, summary });
       });
 
       registerSimpleEvent('infinite-rails:dimension-advanced', (event) => {
         const summary = mergeSimpleSummary(normaliseSimpleSummary(event?.detail ?? {}));
         if (!summary) return;
         updateScoreFromSummary(summary, { flash: true, triggerFlip: true });
+        queueMetadataSync('dimension-advanced', { includeProgress: true, summary });
       });
 
       registerSimpleEvent('infinite-rails:portal-activated', (event) => {
         const summary = mergeSimpleSummary(normaliseSimpleSummary(event?.detail ?? {}));
         if (!summary) return;
         updateScoreFromSummary(summary, { flash: true });
+        queueMetadataSync('portal-activated', { includeProgress: true, summary });
       });
 
       registerSimpleEvent('infinite-rails:victory', (event) => {
@@ -1765,6 +1772,7 @@
         } else {
           pendingVictorySummary = summary;
         }
+        queueMetadataSync('victory', { includeProgress: true, summary, immediate: true });
       });
 
       if (typeof experience?.createRunSummary === 'function') {
@@ -1785,15 +1793,19 @@
             console.debug('Failed to remove simple integration listener', error);
           }
         }
+        cancelMetadataSync();
       });
 
+      simpleEventCleanup.push(() => cancelMetadataSync());
+
       function persistIdentity() {
-      if (hydratingIdentity) return;
-      if (typeof localStorage === 'undefined') return;
-      try {
+        if (hydratingIdentity) return;
+        if (typeof localStorage === 'undefined') return;
+        try {
           const payload = {
             displayName: identityState.displayName,
             googleId: identityState.googleId,
+            email: identityState.email,
             locationLabel: identityState.locationLabel,
             location: identityState.location,
           };
@@ -1801,6 +1813,206 @@
         } catch (error) {
           console.warn('Unable to persist identity profile.', error);
         }
+      }
+
+      function cancelMetadataSync() {
+        if (metadataSyncTimer) {
+          window.clearTimeout(metadataSyncTimer);
+          metadataSyncTimer = null;
+        }
+        pendingMetadataSync = null;
+      }
+
+      function sanitizeStringList(source, limit = 16) {
+        if (!Array.isArray(source)) {
+          return [];
+        }
+        const seen = new Set();
+        const values = [];
+        for (const entry of source) {
+          if (typeof entry !== 'string') continue;
+          const trimmed = entry.trim();
+          if (!trimmed || seen.has(trimmed)) continue;
+          seen.add(trimmed);
+          values.push(trimmed);
+          if (values.length >= limit) {
+            break;
+          }
+        }
+        return values;
+      }
+
+      function normaliseProgressSnapshotForMetadata(summary, reason) {
+        if (!summary || typeof summary !== 'object') {
+          return null;
+        }
+        const normalized = {};
+        const nowIso = new Date().toISOString();
+        const score = Number(summary.score);
+        if (Number.isFinite(score)) {
+          normalized.score = Math.round(score);
+        }
+        const runTime = Number(summary.runTimeSeconds);
+        if (Number.isFinite(runTime)) {
+          normalized.runTimeSeconds = Math.max(0, Math.round(runTime));
+        }
+        const inventory = Number(summary.inventoryCount);
+        if (Number.isFinite(inventory)) {
+          normalized.inventoryCount = Math.max(0, Math.round(inventory));
+        }
+        let dimensionCount = null;
+        if (Number.isFinite(summary.dimensionCount)) {
+          dimensionCount = Math.max(0, Math.round(summary.dimensionCount));
+        } else if (Array.isArray(summary.dimensions)) {
+          dimensionCount = summary.dimensions.length;
+        }
+        if (Number.isFinite(dimensionCount)) {
+          normalized.dimensionCount = dimensionCount;
+        }
+        const dimensions = sanitizeStringList(summary.dimensions);
+        if (dimensions.length) {
+          normalized.dimensions = dimensions;
+        }
+        const recipes = sanitizeStringList(summary.recipes);
+        if (recipes.length) {
+          normalized.recipes = recipes;
+        }
+        if (summary.reason || reason) {
+          normalized.reason = summary.reason ?? reason;
+        }
+        normalized.updatedAt =
+          typeof summary.updatedAt === 'string' && summary.updatedAt.trim()
+            ? summary.updatedAt
+            : nowIso;
+        return normalized;
+      }
+
+      function createMetadataPayload(reason, options = {}) {
+        if (!identityState.googleId) {
+          return null;
+        }
+        const payload = {
+          googleId: identityState.googleId,
+          name: identityState.displayName || 'Explorer',
+          email: identityState.email || null,
+          avatar: identityState.googleAvatar || null,
+          location: identityState.location ? { ...identityState.location } : null,
+          locationLabel: identityState.locationLabel || null,
+          device:
+            identityState.deviceLabel ||
+            (typeof experience.getDeviceLabel === 'function'
+              ? experience.getDeviceLabel()
+              : experience.deviceLabel) ||
+            null,
+          lastSeenAt: new Date().toISOString(),
+          reason: reason || 'update',
+        };
+        if (options.includeProgress) {
+          const normalized = normaliseProgressSnapshotForMetadata(options.summary, reason);
+          if (normalized) {
+            payload.progress = normalized;
+            if (normalized.score !== undefined) {
+              payload.score = normalized.score;
+            }
+            if (normalized.dimensionCount !== undefined) {
+              payload.dimensionCount = normalized.dimensionCount;
+            }
+            if (normalized.runTimeSeconds !== undefined) {
+              payload.runTimeSeconds = normalized.runTimeSeconds;
+            }
+            if (normalized.inventoryCount !== undefined) {
+              payload.inventoryCount = normalized.inventoryCount;
+            }
+          }
+        }
+        return payload;
+      }
+
+      async function postUserMetadata(reason, options = {}) {
+        if (!appConfig.apiBaseUrl) {
+          return;
+        }
+        if (!identityState.signedIn || !identityState.googleId) {
+          return;
+        }
+        const payload = createMetadataPayload(reason, options);
+        if (!payload) {
+          return;
+        }
+        const endpoint = `${appConfig.apiBaseUrl.replace(/\/$/, '')}/users`;
+        let abortController = null;
+        let timeoutId = null;
+        try {
+          if (typeof AbortController !== 'undefined') {
+            abortController = new AbortController();
+            timeoutId = window.setTimeout(() => abortController?.abort(), 2500);
+          }
+          const response = await fetch(endpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+            signal: abortController?.signal,
+          });
+          if (!response.ok) {
+            throw new Error(`User metadata sync failed with status ${response.status}`);
+          }
+        } finally {
+          if (timeoutId) {
+            window.clearTimeout(timeoutId);
+          }
+        }
+      }
+
+      async function flushMetadataSync() {
+        const pending = pendingMetadataSync;
+        pendingMetadataSync = null;
+        if (!pending) {
+          return;
+        }
+        try {
+          await postUserMetadata(pending.reason, pending);
+        } catch (error) {
+          console.warn('Failed to sync Google identity metadata.', error);
+        }
+      }
+
+      function queueMetadataSync(reason, options = {}) {
+        if (!appConfig.apiBaseUrl) {
+          return;
+        }
+        if (!identityState.signedIn || !identityState.googleId) {
+          return;
+        }
+        let summaryCopy = null;
+        if (options.summary && typeof options.summary === 'object') {
+          summaryCopy = { ...options.summary };
+          if (Array.isArray(options.summary.dimensions)) {
+            summaryCopy.dimensions = [...options.summary.dimensions];
+          }
+          if (Array.isArray(options.summary.recipes)) {
+            summaryCopy.recipes = [...options.summary.recipes];
+          }
+        } else if (options.summary !== undefined) {
+          summaryCopy = options.summary;
+        }
+        const payload = {
+          reason: reason || 'update',
+          includeProgress: options.includeProgress === true,
+          summary: summaryCopy,
+        };
+        pendingMetadataSync = payload;
+        if (metadataSyncTimer) {
+          window.clearTimeout(metadataSyncTimer);
+          metadataSyncTimer = null;
+        }
+        if (options.immediate) {
+          flushMetadataSync();
+          return;
+        }
+        metadataSyncTimer = window.setTimeout(() => {
+          metadataSyncTimer = null;
+          flushMetadataSync();
+        }, METADATA_SYNC_DELAY_MS);
       }
 
       function updateIdentityUI() {
@@ -1891,6 +2103,9 @@
         }
         updateIdentityUI();
         persistIdentity();
+        if (location && !location.error) {
+          queueMetadataSync('location-update', { includeProgress: false });
+        }
       }
 
       function captureLocation(forcePrompt = false) {
@@ -2011,6 +2226,7 @@
         identityState.displayName = profile.name?.trim() || identityState.displayName || 'Explorer';
         identityState.googleId = profile.sub || profile.user_id || profile.id || null;
         identityState.googleAvatar = profile.picture || null;
+        identityState.email = profile.email ?? null;
         experience.setIdentity({
           name: identityState.displayName,
           googleId: identityState.googleId,
@@ -2028,6 +2244,11 @@
           const resolved = await captureLocation(true);
           setLocation(resolved);
         }
+        const summaryForSync =
+          typeof experience.createRunSummary === 'function'
+            ? experience.createRunSummary('identity-update')
+            : null;
+        queueMetadataSync('sign-in', { includeProgress: true, immediate: true, summary: summaryForSync });
       }
 
       async function handleFallbackSignIn(event) {
@@ -2119,9 +2340,11 @@
         } catch (error) {
           console.warn('Unable to sign out of Google.', error);
         }
+        cancelMetadataSync();
         identityState.signedIn = false;
         identityState.googleId = null;
         identityState.googleAvatar = null;
+        identityState.email = null;
         identityState.displayName = experience.defaultPlayerName || 'Explorer';
         experience.clearIdentity?.();
         identityState.location = null;
@@ -2207,14 +2430,29 @@
           updateIdentityUI();
           return;
         }
+        const identityPayload = {};
         if (payload.displayName) {
           identityState.displayName = payload.displayName;
-          experience.setIdentity({ name: payload.displayName, locationLabel: identityState.locationLabel });
+          identityPayload.name = payload.displayName;
+        }
+        if (payload.googleId) {
+          identityState.googleId = payload.googleId;
+          identityPayload.googleId = payload.googleId;
+        }
+        if (payload.email) {
+          identityState.email = payload.email;
+          identityPayload.email = payload.email;
         }
         if (payload.location) {
           setLocation(payload.location);
         } else if (payload.locationLabel) {
           identityState.locationLabel = payload.locationLabel;
+        }
+        if (Object.keys(identityPayload).length) {
+          identityPayload.locationLabel = identityState.locationLabel;
+          experience.setIdentity(identityPayload);
+        } else if (payload.displayName) {
+          experience.setIdentity({ name: payload.displayName, locationLabel: identityState.locationLabel });
         }
         hydratingIdentity = false;
         updateIdentityUI();
