@@ -48,6 +48,40 @@ describe('Combat utilities', () => {
     expect(state.player.selectedSlot).toBe(snapshot.selectedSlot);
   });
 
+  it('resets the effective zombie hit counter as hearts regenerate', () => {
+    const logs = [];
+    const state = {
+      player: {
+        maxHearts: 10,
+        hearts: 10,
+        maxAir: 10,
+        air: 10,
+        zombieHits: 0,
+      },
+    };
+
+    let outcome = CombatUtils.applyZombieStrike(state, {
+      onStrike: (message) => logs.push(message),
+    });
+
+    expect(outcome.defeated).toBe(false);
+    expect(outcome.hits).toBe(1);
+    expect(outcome.remainingHearts).toBeCloseTo(8);
+    expect(state.player.zombieHits).toBe(1);
+
+    state.player.hearts = 9.5;
+
+    outcome = CombatUtils.applyZombieStrike(state, {
+      onStrike: (message) => logs.push(message),
+    });
+
+    expect(outcome.defeated).toBe(false);
+    expect(outcome.hits).toBe(1);
+    expect(outcome.remainingHearts).toBeCloseTo(7.5);
+    expect(state.player.zombieHits).toBe(1);
+    expect(logs.length).toBe(2);
+  });
+
   it('guides golems to intercept zombies in more than 70% of chase simulations', () => {
     const gridSize = 16;
     const pathfinder = CombatUtils.createGridPathfinder({
