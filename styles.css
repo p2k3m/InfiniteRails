@@ -48,6 +48,9 @@
   --hud-bubble-color: #7ad4ff;
   --hud-bubble-color-rgb: 122, 212, 255;
   --hud-bubble-highlight: rgba(255, 255, 255, 0.88);
+  --hud-hunger-color: #ffb27d;
+  --hud-hunger-color-rgb: 255, 178, 125;
+  --hud-hunger-highlight: rgba(255, 239, 220, 0.9);
   --hud-score-gradient: linear-gradient(180deg, rgba(40, 66, 32, 0.95), rgba(28, 44, 26, 0.95));
   --hud-score-text: #f6fbe9;
   --hud-progress-track: rgba(116, 195, 101, 0.28);
@@ -152,6 +155,8 @@ body.theme-grassland {
   --hud-panel-bg-alt: rgba(32, 54, 30, 0.94);
   --hud-bubble-color: #7ad4ff;
   --hud-bubble-color-rgb: 122, 212, 255;
+  --hud-hunger-color: #ffb27d;
+  --hud-hunger-color-rgb: 255, 178, 125;
   --hud-progress-track: rgba(116, 195, 101, 0.3);
   --hud-progress-glow: rgba(210, 255, 168, 0.55);
 }
@@ -169,6 +174,9 @@ body.theme-netherite {
   --hud-bubble-color: #ffb27d;
   --hud-bubble-color-rgb: 255, 178, 125;
   --hud-bubble-highlight: rgba(255, 239, 220, 0.9);
+  --hud-hunger-color: #ffb27d;
+  --hud-hunger-color-rgb: 255, 178, 125;
+  --hud-hunger-highlight: rgba(255, 239, 220, 0.9);
   --hud-score-gradient: linear-gradient(180deg, rgba(68, 32, 22, 0.95), rgba(48, 22, 16, 0.95));
   --hud-progress-track: rgba(255, 178, 125, 0.32);
   --hud-progress-glow: rgba(255, 214, 168, 0.55);
@@ -1113,6 +1121,69 @@ body::after {
   animation: bubble-alert 0.8s ease-in-out infinite alternate;
 }
 
+.hud-hunger {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.hud-hunger__frame {
+  display: inline-flex;
+  padding: 0.55rem 0.65rem;
+  border-radius: 6px;
+  background: linear-gradient(180deg, rgba(48, 26, 12, 0.55), rgba(32, 18, 8, 0.6));
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06), 0 0 16px rgba(255, 178, 125, 0.16);
+}
+
+.hud-hunger__stack {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  align-items: center;
+}
+
+.hunger-indicator {
+  width: 18px;
+  height: 18px;
+  border-radius: 6px;
+  background: linear-gradient(135deg, var(--hud-hunger-highlight, rgba(255, 239, 220, 0.9)), rgba(var(--hud-hunger-color-rgb, 255, 178, 125), 0.38));
+  box-shadow: 0 0 12px rgba(var(--hud-hunger-color-rgb, 255, 178, 125), 0.4);
+  opacity: var(--opacity-level, 1);
+  transition: opacity 0.3s ease, transform 0.3s ease, box-shadow 0.3s ease;
+  will-change: transform, opacity;
+}
+
+.hunger-indicator.is-empty {
+  opacity: 0.2;
+  box-shadow: none;
+  filter: saturate(0.45);
+}
+
+.hunger-indicator.is-partial {
+  opacity: 0.5;
+}
+
+.hud-hunger.is-draining .hunger-indicator:not(.is-empty) {
+  animation: bubble-pop 0.45s ease;
+  animation-delay: calc(var(--hunger-index, 0) * 40ms);
+}
+
+.hud-hunger.is-refilling .hunger-indicator:not(.is-empty) {
+  animation: bubble-rise 0.6s ease;
+  animation-delay: calc(var(--hunger-index, 0) * 40ms);
+}
+
+.hud-hunger.is-low .hunger-indicator:not(.is-empty) {
+  box-shadow: 0 0 14px rgba(var(--hud-hunger-color-rgb, 255, 178, 125), 0.5);
+  filter: saturate(1.05);
+}
+
+.hud-hunger.is-empty .hunger-indicator {
+  opacity: 0.18;
+  box-shadow: none;
+}
+
 @keyframes bubble-pop {
   0% {
     transform: scale(1);
@@ -1200,6 +1271,10 @@ body::after {
 
 .status-item.bubbles::before {
   background: radial-gradient(circle at 50% 40%, var(--accent), rgba(73, 242, 255, 0.3));
+}
+
+.status-item.hunger::before {
+  background: radial-gradient(circle at 50% 40%, var(--hud-hunger-color, #ffb27d), rgba(255, 189, 125, 0.28));
 }
 
 .status-item.time::before {
