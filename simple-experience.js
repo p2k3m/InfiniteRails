@@ -2321,7 +2321,9 @@
         }
       } else if (!details.silent) {
         const attemptLabel = details.url ? ` (last attempted ${details.url})` : '';
-        console.warn(`[AssetBudget] ${kind}:${key} failed after ${formattedDuration}ms${attemptLabel}.`);
+        const scheme = typeof window !== 'undefined' ? window.location?.protocol : null;
+        const logFn = scheme === 'file:' ? console.info : console.warn;
+        logFn(`[AssetBudget] ${kind}:${key} failed after ${formattedDuration}ms${attemptLabel}.`);
       }
     }
 
@@ -6711,10 +6713,8 @@
       if (this.ui?.timeEl) {
         const daylight = Math.round(dayStrength * 100);
         let label = 'Daylight';
-        if (dayStrength < 0.16) {
-          label = 'Midnight';
-        } else if (dayStrength < 0.32) {
-          label = 'Nightfall';
+        if (dayStrength < 0.32) {
+          label = dayStrength < 0.16 ? 'Nightfall (Midnight)' : 'Nightfall';
         } else if (dayStrength < 0.52) {
           label = 'Dawn';
         } else if (dayStrength > 0.82) {
