@@ -41,18 +41,22 @@ describe('portal mechanics', () => {
     expect(result.events).toContain('Portal active');
   });
 
-  it('logs the dimension name and applies physics when entering a portal', () => {
-    const portal = { active: true };
+  it('logs the dimension name, applies physics, and returns spawn regeneration data', () => {
+    const portal = { active: true, currentDimensionId: 'origin' };
     const dimension = {
       id: 'rock',
       name: 'Rock Dimension',
       physics: { gravity: 1.5, shaderProfile: 'rock-grit' },
       unlockPoints: 5,
       description: 'Heavier world with dense ore clusters.',
+      spawn: {
+        player: { x: 8, y: 3, z: -2 },
+        world: { x: 12, y: -4 },
+      },
     };
     const result = enterPortal(portal, dimension);
     expect(result.fade).toBe(true);
-    expect(result.resetPosition).toEqual({ x: 0, y: 0 });
+    expect(result.resetPosition).toEqual({ x: 8, y: 3 });
     expect(result.log).toBe(
       'Entering Rock Dimension — Gravity ×1.50 — Heavier world with dense ore clusters.',
     );
@@ -61,6 +65,41 @@ describe('portal mechanics', () => {
     expect(result.pointsAwarded).toBe(5);
     expect(result.dimensionRules).toContain('Gravity ×1.50');
     expect(result.dimensionRules).toContain('dense ore clusters');
+    expect(result.dimensionChanged).toBe(true);
+    expect(result.spawn.player).toEqual({ x: 8, y: 3, z: -2 });
+    expect(result.spawn.world).toEqual({ x: 12, y: -4, z: 0 });
+    expect(result.regeneration.player).toMatchObject({ required: true, spawn: { x: 8, y: 3, z: -2 } });
+    expect(result.regeneration.world).toMatchObject({ required: true, spawn: { x: 12, y: -4, z: 0 } });
+  });
+
+  it('throws when attempting to enter a portal that is inactive or misaligned', () => {
+    expect(() => enterPortal({ active: false }, { id: 'rock' })).toThrow(
+      /Portal must be active/i,
+    );
+    const activePortal = { active: true, currentDimensionId: 'rock' };
+    expect(() => enterPortal(activePortal, { id: 'rock' })).toThrow(
+      /already aligned/i,
+    );
+  });
+
+  it('normalises spawn coordinates and validates dimension metadata', () => {
+    const portal = { active: true };
+    const dimension = {
+      name: 'Mystery',
+      physics: { gravity: 0.9 },
+      unlockPoints: 2,
+      description: 'Unknown territory.',
+      spawn: {
+        player: { x: 'NaN', y: null },
+        world: {},
+      },
+    };
+    const result = enterPortal(portal, dimension);
+    expect(result.resetPosition).toEqual({ x: 0, y: 0 });
+    expect(result.spawn.player).toEqual({ x: 0, y: 0, z: 0 });
+    expect(result.spawn.world).toEqual({ x: 0, y: 0, z: 0 });
+    expect(result.dimensionName).toBe('Mystery');
+    expect(result.dimensionChanged).toBe(true);
   });
 
   it('summarises the core portal mechanics for documentation output', () => {
