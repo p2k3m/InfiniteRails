@@ -2732,10 +2732,18 @@
                       window.gapi.auth2.init({
                         client_id: appConfig.googleClientId,
                       });
-                    instance
-                      .then(() => {
-                        googleAuthInstance = instance;
-                        resolve(instance);
+                    const whenReady =
+                      typeof instance?.then === 'function'
+                        ? new Promise((resolveInstance, rejectInstance) => {
+                            instance
+                              .then(() => resolveInstance(instance))
+                              .catch(rejectInstance);
+                          })
+                        : Promise.resolve(instance);
+                    whenReady
+                      .then((resolvedInstance) => {
+                        googleAuthInstance = resolvedInstance;
+                        resolve(resolvedInstance);
                       })
                       .catch(reject);
                   } catch (error) {
@@ -23104,12 +23112,20 @@
                     window.gapi.auth2.init({
                       client_id: appConfig.googleClientId,
                     });
-                  instance
-                    .then(() => {
-                      googleAuthInstance = instance;
+                  const whenReady =
+                    typeof instance?.then === 'function'
+                      ? new Promise((resolveInstance, rejectInstance) => {
+                          instance
+                            .then(() => resolveInstance(instance))
+                            .catch(rejectInstance);
+                        })
+                      : Promise.resolve(instance);
+                  whenReady
+                    .then((resolvedInstance) => {
+                      googleAuthInstance = resolvedInstance;
                       identityState.googleInitialized = true;
                       updateIdentityUI();
-                      resolve(instance);
+                      resolve(resolvedInstance);
                     })
                     .catch((error) => {
                       identityState.googleInitialized = false;
