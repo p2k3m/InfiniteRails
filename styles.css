@@ -677,6 +677,10 @@ body::after {
   color: #ffe28f;
 }
 
+.objectives-panel__header--alert h2 {
+  color: #ffcda8;
+}
+
 .objectives-panel__card {
   background: linear-gradient(180deg, rgba(42, 68, 36, 0.96), rgba(30, 50, 28, 0.96));
   border-radius: 10px;
@@ -694,6 +698,33 @@ body::after {
   background: linear-gradient(180deg, rgba(58, 97, 42, 0.96), rgba(40, 67, 32, 0.96));
   border: 2px solid rgba(112, 168, 79, 0.75);
   gap: 1.1rem;
+}
+
+.objectives-panel__card--alert {
+  background: linear-gradient(180deg, rgba(78, 48, 28, 0.96), rgba(56, 34, 20, 0.96));
+  border: 2px solid rgba(255, 180, 127, 0.75);
+  box-shadow: 0 10px 0 rgba(37, 21, 12, 0.6);
+  gap: 0.85rem;
+  color: rgba(255, 240, 226, 0.88);
+}
+
+.notice-card__title {
+  margin: 0;
+  font-size: 0.95rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #ffe9cc;
+}
+
+.objectives-panel__card--alert p {
+  margin: 0;
+  line-height: 1.6;
+  color: rgba(255, 232, 216, 0.82);
+}
+
+.notice-card__tip {
+  font-size: 0.85rem;
+  color: rgba(255, 226, 205, 0.72);
 }
 
 .primer-list {
