@@ -105,6 +105,8 @@ jobs:
             --include "styles.css" \
             --include "asset-resolver.js" \
             --include "audio-aliases.js" \
+            --include "combat-utils.js" \
+            --include "crafting.js" \
             --include "script.js" \
             --include "simple-experience.js" \
             --include "portal-mechanics.js" \
