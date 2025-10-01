@@ -5655,6 +5655,25 @@
       });
     }
 
+    if (!MODEL_ASSETS_READY) {
+      if (missingModelAssetKeys.length > 0) {
+        announceVisualFallback(
+          'model-assets-missing',
+          'Character models are missing from the build, so embedded fallbacks are active while the world loads.'
+        );
+      } else if (!SUPPORTS_MODEL_ASSETS) {
+        announceVisualFallback(
+          'model-assets-protocol',
+          'Running from local files disables remote character models, so embedded fallbacks are active for this session.'
+        );
+      } else {
+        announceVisualFallback(
+          'model-assets-offline',
+          'We could not reach the character model CDN. Embedded fallbacks will be used until connectivity returns.'
+        );
+      }
+    }
+
     function getDefaultBriefingSteps() {
       const harvestLabels = collectActionLabels(['jump', 'interact'], { limitPerAction: 2 });
       const harvestText = formatKeyListForSentence(harvestLabels, { fallback: 'Space or F' });
@@ -8046,6 +8065,10 @@
         return Promise.resolve(previewHandTemplate);
       }
       if (!MODEL_ASSETS_READY) {
+        announceVisualFallback(
+          'hand-model',
+          'First-person hands simplified while external models are offline.'
+        );
         previewHandTemplate = createFallbackHand();
         return Promise.resolve(previewHandTemplate);
       }
@@ -8057,25 +8080,37 @@
                 MODEL_ASSET_URLS.arm,
                   (gltf) => {
                     const template = gltf.scene || gltf.scenes?.[0] || null;
-                    if (!template) {
-                      console.error('Arm model did not include a scene.');
-                      const fallback = createFallbackHand();
-                      previewHandTemplate = fallback;
-                      resolve(fallback);
-                      return;
-                    }
+                if (!template) {
+                  console.error('Arm model did not include a scene.');
+                  announceVisualFallback(
+                    'hand-model',
+                    'First-person hands fell back to simplified meshes after the GLTF failed validation.'
+                  );
+                  const fallback = createFallbackHand();
+                  previewHandTemplate = fallback;
+                  resolve(fallback);
+                  return;
+                }
                     previewHandTemplate = template;
                     resolve(template);
                   },
                 undefined,
                 (error) => {
                   console.error('Failed to load first-person hand model.', error);
+                  announceVisualFallback(
+                    'hand-model',
+                    'External first-person hand models failed to load — using simplified gloves instead.'
+                  );
                   parseEmbeddedModel(
                     'arm',
                     (embeddedGltf) => {
                       const template = embeddedGltf.scene || embeddedGltf.scenes?.[0] || null;
                       if (!template) {
                         console.error('Embedded arm model did not include a scene.');
+                        announceVisualFallback(
+                          'hand-model',
+                          'Embedded hand model missing — continuing with simplified gloves.'
+                        );
                         const fallback = createFallbackHand();
                         previewHandTemplate = fallback;
                         resolve(fallback);
@@ -14004,6 +14039,10 @@
     function ensureZombieModelTemplate() {
       if (zombieModelTemplate || zombieModelPromise) return zombieModelPromise;
       if (!MODEL_ASSETS_READY) {
+        announceVisualFallback(
+          'zombie-model',
+          'Zombie avatars are using simplified husks until detailed models are available.'
+        );
         zombieModelTemplate = createFallbackZombieTemplate();
         zombieModelPromise = Promise.resolve(zombieModelTemplate);
         return zombieModelPromise;
@@ -14021,6 +14060,10 @@
                 const zombieScene = gltf.scene || gltf.scenes?.[0];
                 if (!zombieScene) {
                   console.error('Zombie model did not include a scene.');
+                  announceVisualFallback(
+                    'zombie-model',
+                    'Zombie model payload was incomplete — using simplified husks instead.'
+                  );
                   resolveWithTemplate(createFallbackZombieTemplate());
                   return;
                 }
@@ -14038,12 +14081,20 @@
               undefined,
               (error) => {
                 console.error('Failed to load the zombie model.', error);
+                announceVisualFallback(
+                  'zombie-model',
+                  'Zombie models failed to download — hostiles will appear as simplified husks.'
+                );
                 parseEmbeddedModel(
                   'zombie',
                   (embeddedGltf) => {
                     const zombieScene = embeddedGltf.scene || embeddedGltf.scenes?.[0];
                     if (!zombieScene) {
                       console.error('Embedded zombie model did not include a scene.');
+                      announceVisualFallback(
+                        'zombie-model',
+                        'Embedded zombie model missing — using simplified husks for hostiles.'
+                      );
                       resolveWithTemplate(createFallbackZombieTemplate());
                       return;
                     }
@@ -14068,6 +14119,10 @@
         )
         .catch((error) => {
           console.error('GLTFLoader is unavailable; cannot create the zombie model.', error);
+          announceVisualFallback(
+            'zombie-model',
+            'Zombie models unavailable — using simplified husks until GLTF support returns.'
+          );
           const fallback = createFallbackZombieTemplate();
           zombieModelTemplate = fallback;
           return fallback;
@@ -14273,6 +14328,10 @@
     function ensureIronGolemModelTemplate() {
       if (ironGolemModelTemplate || ironGolemModelPromise) return ironGolemModelPromise;
       if (!MODEL_ASSETS_READY) {
+        announceVisualFallback(
+          'golem-model',
+          'Iron golems are using simplified armor until the detailed models return.'
+        );
         ironGolemModelTemplate = createFallbackGolemTemplate();
         ironGolemModelPromise = Promise.resolve(ironGolemModelTemplate);
         return ironGolemModelPromise;
@@ -14290,6 +14349,10 @@
                 const golemScene = gltf.scene || gltf.scenes?.[0];
                 if (!golemScene) {
                   console.error('Iron golem model did not include a scene.');
+                  announceVisualFallback(
+                    'golem-model',
+                    'Iron golem model payload was incomplete — using simplified sentinels.'
+                  );
                   resolveWithTemplate(createFallbackGolemTemplate());
                   return;
                 }
@@ -14307,12 +14370,20 @@
               undefined,
               (error) => {
                 console.error('Failed to load the iron golem model.', error);
+                announceVisualFallback(
+                  'golem-model',
+                  'Iron golem models failed to download — using simplified sentinels.'
+                );
                 parseEmbeddedModel(
                   'ironGolem',
                   (embeddedGltf) => {
                     const golemScene = embeddedGltf.scene || embeddedGltf.scenes?.[0];
                     if (!golemScene) {
                       console.error('Embedded iron golem model did not include a scene.');
+                      announceVisualFallback(
+                        'golem-model',
+                        'Embedded iron golem model missing — simplified sentinels will guard the realm.'
+                      );
                       resolveWithTemplate(createFallbackGolemTemplate());
                       return;
                     }
@@ -14337,6 +14408,10 @@
         )
         .catch((error) => {
           console.error('GLTFLoader is unavailable; cannot create the iron golem model.', error);
+          announceVisualFallback(
+            'golem-model',
+            'Iron golem models unavailable — using simplified sentinels until GLTF support returns.'
+          );
           const fallback = createFallbackGolemTemplate();
           ironGolemModelTemplate = fallback;
           return fallback;
@@ -16174,10 +16249,25 @@
     updateInventoryUI();
     updateDimensionOverlay();
 
+    function ensureBootstrapHudVisibility() {
+      if (!featureFlags?.hudVisibleOnBootstrap) {
+        return;
+      }
+      if (hudRootEl) {
+        hudRootEl.hidden = false;
+        hudRootEl.setAttribute('aria-hidden', 'false');
+      }
+      if (objectivesPanelEl) {
+        objectivesPanelEl.hidden = false;
+        objectivesPanelEl.setAttribute('aria-hidden', 'false');
+      }
+    }
+
     function prewarmInitialPresentation() {
       if (!featureFlags?.entityPrewarm) {
         return;
       }
+      ensureBootstrapHudVisibility();
       safelyExecute(
         () => {
           if (!Array.isArray(state.world) || !state.world.length) {
@@ -16203,6 +16293,9 @@
       );
     }
 
+    if (featureFlags?.hudVisibleOnBootstrap) {
+      ensureBootstrapHudVisibility();
+    }
     prewarmInitialPresentation();
 
     function generateOriginIsland(state) {

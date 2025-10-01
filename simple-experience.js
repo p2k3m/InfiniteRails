@@ -771,6 +771,11 @@
       this.pointerFallbackDragging = false;
       this.pointerFallbackLast = null;
       this.pointerFallbackButton = null;
+      this.assetFailureNotices = new Set();
+      this.eventFailureNotices = new Set();
+      this.boundEventDisposers = [];
+      this.onOpenCraftingSearchClick = () => this.toggleCraftingSearch(true);
+      this.onCloseCraftingSearchClick = () => this.toggleCraftingSearch(false);
       this.lastHintMessage = '';
       this.craftingModal = this.ui.craftingModal || null;
       this.craftSequenceEl = this.ui.craftSequenceEl || null;
@@ -1431,7 +1436,11 @@
     initializeScoreboardUi() {
       if (this.refreshScoresButton) {
         this.refreshScoresButton.addEventListener('click', () => {
-          this.loadScoreboard({ force: true });
+          try {
+            this.loadScoreboard({ force: true });
+          } catch (error) {
+            this.handleEventDispatchError('refreshing the leaderboard', error);
+          }
         });
       }
       if (this.scoreboardStatusEl) {
@@ -3687,7 +3696,9 @@
         if (this.loadedModels.has(key) || this.modelPromises.has(key)) {
           return;
         }
-        this.loadModel(key).catch(() => {});
+        this.loadModel(key).catch((error) => {
+          this.handleAssetLoadFailure(key, error);
+        });
       });
       if (this.lazyAssetLoading) {
         this.enqueueLazyModelWarmup(['steve', 'arm', 'zombie', 'golem']);
@@ -3751,7 +3762,9 @@
         return;
       }
       this.loadModel(nextKey)
-        .catch(() => {})
+        .catch((error) => {
+          this.handleAssetLoadFailure(nextKey, error);
+        })
         .finally(() => {
           this.scheduleLazyModelWarmup();
         });
@@ -3805,6 +3818,7 @@
         .catch((error) => {
           this.completeAssetTimer('models', key, { success: false, url });
           console.warn(`Failed to load model "${key}" from ${url}`, error);
+          this.handleAssetLoadFailure(key, error);
           this.modelPromises.delete(key);
           throw error;
         });
@@ -3832,6 +3846,7 @@
         });
         return { scene: clone, animations: payload.animations };
       } catch (error) {
+        this.handleAssetLoadFailure(key, error);
         return null;
       }
     }
@@ -3844,6 +3859,7 @@
         asset = await this.cloneModelScene('arm');
       } catch (error) {
         asset = null;
+        this.handleAssetLoadFailure('arm', error);
       }
       if (currentSessionId !== this.activeSessionId || !this.handGroup) {
         if (asset?.scene) {
@@ -3853,6 +3869,9 @@
       }
       if (!asset?.scene) {
         this.ensurePlayerArmsVisible();
+        this.handleAssetLoadFailure('arm', null, {
+          fallbackMessage: 'First-person hands unavailable — showing simplified explorer overlay.',
+        });
         return;
       }
       if (typeof this.handGroup.clear === 'function') {
@@ -3866,6 +3885,7 @@
         rightAsset = await this.cloneModelScene('arm');
       } catch (error) {
         rightAsset = null;
+        this.handleAssetLoadFailure('arm', error);
       }
       if (currentSessionId !== this.activeSessionId || !this.handGroup) {
         disposeObject3D(leftArm);
@@ -3889,6 +3909,9 @@
         this.handMaterialsDynamic = false;
         this.handModelLoaded = true;
         this.ensurePlayerArmsVisible();
+        this.handleAssetLoadFailure('arm', null, {
+          fallbackMessage: 'First-person hands partially loaded — rendering single arm fallback.',
+        });
         return;
       }
       const rightArm = rightAsset.scene;
@@ -5649,73 +5672,81 @@
       if (this.eventsBound) {
         return;
       }
+      this.boundEventDisposers = [];
+      const add = (target, eventName, handler, context, eventOptions) => {
+        this.addSafeEventListener(target, eventName, handler, { context, eventOptions });
+      };
       POINTER_LOCK_CHANGE_EVENTS.forEach((eventName) => {
-        document.addEventListener(eventName, this.onPointerLockChange);
+        add(document, eventName, this.onPointerLockChange, 'tracking pointer lock state');
       });
       POINTER_LOCK_ERROR_EVENTS.forEach((eventName) => {
-        document.addEventListener(eventName, this.onPointerLockError);
+        add(document, eventName, this.onPointerLockError, 'handling pointer lock errors');
       });
-      document.addEventListener('visibilitychange', this.onVisibilityChange);
-      document.addEventListener('keydown', this.onKeyDown);
-      document.addEventListener('keyup', this.onKeyUp);
-      document.addEventListener('mousemove', this.onMouseMove);
-      document.addEventListener('mousedown', this.onMouseDown);
-      document.addEventListener('mouseup', this.onMouseUp);
-      window.addEventListener('resize', this.onResize);
-      window.addEventListener('beforeunload', this.onBeforeUnload);
-      this.canvas.addEventListener('wheel', this.onCanvasWheel, { passive: false });
-      this.canvas.addEventListener('pointerdown', this.onTouchLookPointerDown, { passive: false });
-      window.addEventListener('pointermove', this.onTouchLookPointerMove, { passive: false });
-      window.addEventListener('pointerup', this.onTouchLookPointerUp);
-      window.addEventListener('pointercancel', this.onTouchLookPointerUp);
-      window.addEventListener('pointerdown', this.onGlobalPointerDown, { passive: true });
-      window.addEventListener('touchstart', this.onGlobalTouchStart, { passive: true });
-      this.canvas.addEventListener('click', this.onCanvasPointerLock);
-      this.canvas.addEventListener('contextmenu', this.preventContextMenu);
-      if (this.hotbarEl) {
-        this.hotbarEl.addEventListener('click', this.onHotbarClick);
-      }
-      this.craftLauncherButton?.addEventListener('click', this.onOpenCrafting);
-      this.closeCraftingButton?.addEventListener('click', this.onCloseCrafting);
-      this.craftingModal?.addEventListener('click', this.onCraftingModalBackdrop);
-      this.craftButton?.addEventListener('click', this.onCraftButton);
-      this.clearCraftButton?.addEventListener('click', this.onClearCraft);
-      this.craftSequenceEl?.addEventListener('click', this.onCraftSequenceClick);
-      this.craftSuggestionsEl?.addEventListener('click', this.onCraftSuggestionClick);
-      this.craftingSearchResultsEl?.addEventListener('click', this.onCraftSuggestionClick);
-      this.craftingInventoryEl?.addEventListener('click', this.onCraftingInventoryClick);
-      this.craftingInventoryEl?.addEventListener('pointerover', this.onCraftingInventoryFocus);
-      this.craftingInventoryEl?.addEventListener('focusin', this.onCraftingInventoryFocus);
-      this.craftingInventoryEl?.addEventListener('pointerout', this.onCraftingInventoryBlur);
-      this.craftingInventoryEl?.addEventListener('focusout', this.onCraftingInventoryBlur);
-      this.extendedInventoryEl?.addEventListener('pointerover', this.onCraftingInventoryFocus);
-      this.extendedInventoryEl?.addEventListener('focusin', this.onCraftingInventoryFocus);
-      this.extendedInventoryEl?.addEventListener('pointerout', this.onCraftingInventoryBlur);
-      this.extendedInventoryEl?.addEventListener('focusout', this.onCraftingInventoryBlur);
-      this.craftSuggestionsEl?.addEventListener('pointerover', this.onCraftSuggestionFocus);
-      this.craftSuggestionsEl?.addEventListener('focusin', this.onCraftSuggestionFocus);
-      this.craftSuggestionsEl?.addEventListener('pointerout', this.onCraftSuggestionBlur);
-      this.craftSuggestionsEl?.addEventListener('focusout', this.onCraftSuggestionBlur);
-      this.craftingSearchResultsEl?.addEventListener('pointerover', this.onCraftSuggestionFocus);
-      this.craftingSearchResultsEl?.addEventListener('focusin', this.onCraftSuggestionFocus);
-      this.craftingSearchResultsEl?.addEventListener('pointerout', this.onCraftSuggestionBlur);
-      this.craftingSearchResultsEl?.addEventListener('focusout', this.onCraftSuggestionBlur);
-      this.craftSequenceEl?.addEventListener('pointerover', this.onCraftSequenceFocus);
-      this.craftSequenceEl?.addEventListener('focusin', this.onCraftSequenceFocus);
-      this.craftSequenceEl?.addEventListener('pointerout', this.onCraftSequenceBlur);
-      this.craftSequenceEl?.addEventListener('focusout', this.onCraftSequenceBlur);
-      this.extendedInventoryEl?.addEventListener('click', this.onExtendedInventoryClick);
-      this.openCraftingSearchButton?.addEventListener('click', () => this.toggleCraftingSearch(true));
-      this.closeCraftingSearchButton?.addEventListener('click', () => this.toggleCraftingSearch(false));
-      this.craftingSearchInput?.addEventListener('input', this.onCraftSearchInput);
-      this.inventorySortButton?.addEventListener('click', this.onInventorySort);
-      this.closeInventoryButton?.addEventListener('click', this.onInventoryToggle);
+      add(document, 'visibilitychange', this.onVisibilityChange, 'monitoring tab visibility');
+      add(document, 'keydown', this.onKeyDown, 'processing keyboard input');
+      add(document, 'keyup', this.onKeyUp, 'releasing keyboard input');
+      add(document, 'mousemove', this.onMouseMove, 'tracking pointer movement');
+      add(document, 'mousedown', this.onMouseDown, 'handling pointer presses');
+      add(document, 'mouseup', this.onMouseUp, 'handling pointer releases');
+      add(window, 'resize', this.onResize, 'resizing the renderer');
+      add(window, 'beforeunload', this.onBeforeUnload, 'saving session state before unload');
+      add(this.canvas, 'wheel', this.onCanvasWheel, 'scrolling the viewport', { passive: false });
+      add(this.canvas, 'pointerdown', this.onTouchLookPointerDown, 'starting touch look drag', {
+        passive: false,
+      });
+      add(window, 'pointermove', this.onTouchLookPointerMove, 'tracking touch look drag', {
+        passive: false,
+      });
+      add(window, 'pointerup', this.onTouchLookPointerUp, 'ending touch look drag');
+      add(window, 'pointercancel', this.onTouchLookPointerUp, 'cancelling touch look drag');
+      add(window, 'pointerdown', this.onGlobalPointerDown, 'tracking global pointer activity', {
+        passive: true,
+      });
+      add(window, 'touchstart', this.onGlobalTouchStart, 'tracking touch activity', { passive: true });
+      add(this.canvas, 'click', this.onCanvasPointerLock, 'engaging pointer lock');
+      add(this.canvas, 'contextmenu', this.preventContextMenu, 'preventing context menu');
+      add(this.hotbarEl, 'click', this.onHotbarClick, 'selecting hotbar slots');
+      add(this.craftLauncherButton, 'click', this.onOpenCrafting, 'opening crafting');
+      add(this.closeCraftingButton, 'click', this.onCloseCrafting, 'closing crafting');
+      add(this.craftingModal, 'click', this.onCraftingModalBackdrop, 'handling crafting modal backdrop');
+      add(this.craftButton, 'click', this.onCraftButton, 'crafting items');
+      add(this.clearCraftButton, 'click', this.onClearCraft, 'clearing craft sequence');
+      add(this.craftSequenceEl, 'click', this.onCraftSequenceClick, 'managing craft sequence');
+      add(this.craftSuggestionsEl, 'click', this.onCraftSuggestionClick, 'choosing craft suggestion');
+      add(this.craftingSearchResultsEl, 'click', this.onCraftSuggestionClick, 'choosing search suggestion');
+      add(this.craftingInventoryEl, 'click', this.onCraftingInventoryClick, 'selecting crafting resources');
+      add(this.craftingInventoryEl, 'pointerover', this.onCraftingInventoryFocus, 'highlighting crafting inventory');
+      add(this.craftingInventoryEl, 'focusin', this.onCraftingInventoryFocus, 'focusing crafting inventory');
+      add(this.craftingInventoryEl, 'pointerout', this.onCraftingInventoryBlur, 'clearing crafting hover');
+      add(this.craftingInventoryEl, 'focusout', this.onCraftingInventoryBlur, 'blurring crafting inventory');
+      add(this.extendedInventoryEl, 'pointerover', this.onCraftingInventoryFocus, 'highlighting extended inventory');
+      add(this.extendedInventoryEl, 'focusin', this.onCraftingInventoryFocus, 'focusing extended inventory');
+      add(this.extendedInventoryEl, 'pointerout', this.onCraftingInventoryBlur, 'clearing extended inventory hover');
+      add(this.extendedInventoryEl, 'focusout', this.onCraftingInventoryBlur, 'blurring extended inventory');
+      add(this.craftSuggestionsEl, 'pointerover', this.onCraftSuggestionFocus, 'highlighting craft suggestion');
+      add(this.craftSuggestionsEl, 'focusin', this.onCraftSuggestionFocus, 'focusing craft suggestion');
+      add(this.craftSuggestionsEl, 'pointerout', this.onCraftSuggestionBlur, 'clearing craft suggestion hover');
+      add(this.craftSuggestionsEl, 'focusout', this.onCraftSuggestionBlur, 'blurring craft suggestion');
+      add(this.craftingSearchResultsEl, 'pointerover', this.onCraftSuggestionFocus, 'highlighting search suggestion');
+      add(this.craftingSearchResultsEl, 'focusin', this.onCraftSuggestionFocus, 'focusing search suggestion');
+      add(this.craftingSearchResultsEl, 'pointerout', this.onCraftSuggestionBlur, 'clearing search suggestion hover');
+      add(this.craftingSearchResultsEl, 'focusout', this.onCraftSuggestionBlur, 'blurring search suggestion');
+      add(this.craftSequenceEl, 'pointerover', this.onCraftSequenceFocus, 'highlighting craft sequence');
+      add(this.craftSequenceEl, 'focusin', this.onCraftSequenceFocus, 'focusing craft sequence');
+      add(this.craftSequenceEl, 'pointerout', this.onCraftSequenceBlur, 'clearing craft sequence hover');
+      add(this.craftSequenceEl, 'focusout', this.onCraftSequenceBlur, 'blurring craft sequence');
+      add(this.extendedInventoryEl, 'click', this.onExtendedInventoryClick, 'managing extended inventory');
+      add(this.openCraftingSearchButton, 'click', this.onOpenCraftingSearchClick, 'opening crafting search');
+      add(this.closeCraftingSearchButton, 'click', this.onCloseCraftingSearchClick, 'closing crafting search');
+      add(this.craftingSearchInput, 'input', this.onCraftSearchInput, 'filtering crafting search');
+      add(this.inventorySortButton, 'click', this.onInventorySort, 'sorting inventory');
+      add(this.closeInventoryButton, 'click', this.onInventoryToggle, 'closing inventory');
       this.openInventoryButtons.forEach((el) => {
-        el.addEventListener('click', this.onInventoryToggle);
+        add(el, 'click', this.onInventoryToggle, 'toggling inventory');
       });
-      this.ui?.dimensionInfoEl?.addEventListener('click', this.onVictoryReplay);
-      this.victoryCloseButton?.addEventListener('click', this.onVictoryClose);
-      this.victoryShareButton?.addEventListener('click', this.onVictoryShare);
+      add(this.ui?.dimensionInfoEl || null, 'click', this.onVictoryReplay, 'triggering victory replay');
+      add(this.victoryCloseButton, 'click', this.onVictoryClose, 'closing victory overlay');
+      add(this.victoryShareButton, 'click', this.onVictoryShare, 'sharing victory summary');
       this.attachPointerPreferenceObserver();
       this.eventsBound = true;
     }
@@ -5724,71 +5755,16 @@
       if (!this.eventsBound) {
         return;
       }
-      POINTER_LOCK_CHANGE_EVENTS.forEach((eventName) => {
-        document.removeEventListener(eventName, this.onPointerLockChange);
+      this.boundEventDisposers.forEach((dispose) => {
+        try {
+          dispose();
+        } catch (error) {
+          if (typeof console !== 'undefined') {
+            console.debug('Failed to dispose event listener cleanly.', error);
+          }
+        }
       });
-      POINTER_LOCK_ERROR_EVENTS.forEach((eventName) => {
-        document.removeEventListener(eventName, this.onPointerLockError);
-      });
-      document.removeEventListener('visibilitychange', this.onVisibilityChange);
-      document.removeEventListener('keydown', this.onKeyDown);
-      document.removeEventListener('keyup', this.onKeyUp);
-      document.removeEventListener('mousemove', this.onMouseMove);
-      document.removeEventListener('mousedown', this.onMouseDown);
-      document.removeEventListener('mouseup', this.onMouseUp);
-      window.removeEventListener('resize', this.onResize);
-      window.removeEventListener('beforeunload', this.onBeforeUnload);
-      this.canvas.removeEventListener('wheel', this.onCanvasWheel);
-      this.canvas.removeEventListener('pointerdown', this.onTouchLookPointerDown);
-      window.removeEventListener('pointermove', this.onTouchLookPointerMove);
-      window.removeEventListener('pointerup', this.onTouchLookPointerUp);
-      window.removeEventListener('pointercancel', this.onTouchLookPointerUp);
-      window.removeEventListener('pointerdown', this.onGlobalPointerDown);
-      window.removeEventListener('touchstart', this.onGlobalTouchStart);
-      this.canvas.removeEventListener('click', this.onCanvasPointerLock);
-      this.canvas.removeEventListener('contextmenu', this.preventContextMenu);
-      if (this.hotbarEl) {
-        this.hotbarEl.removeEventListener('click', this.onHotbarClick);
-      }
-      this.craftLauncherButton?.removeEventListener('click', this.onOpenCrafting);
-      this.closeCraftingButton?.removeEventListener('click', this.onCloseCrafting);
-      this.craftingModal?.removeEventListener('click', this.onCraftingModalBackdrop);
-      this.craftButton?.removeEventListener('click', this.onCraftButton);
-      this.clearCraftButton?.removeEventListener('click', this.onClearCraft);
-      this.craftSequenceEl?.removeEventListener('click', this.onCraftSequenceClick);
-      this.craftSuggestionsEl?.removeEventListener('click', this.onCraftSuggestionClick);
-      this.craftingSearchResultsEl?.removeEventListener('click', this.onCraftSuggestionClick);
-      this.craftingInventoryEl?.removeEventListener('click', this.onCraftingInventoryClick);
-      this.craftingInventoryEl?.removeEventListener('pointerover', this.onCraftingInventoryFocus);
-      this.craftingInventoryEl?.removeEventListener('focusin', this.onCraftingInventoryFocus);
-      this.craftingInventoryEl?.removeEventListener('pointerout', this.onCraftingInventoryBlur);
-      this.craftingInventoryEl?.removeEventListener('focusout', this.onCraftingInventoryBlur);
-      this.extendedInventoryEl?.removeEventListener('pointerover', this.onCraftingInventoryFocus);
-      this.extendedInventoryEl?.removeEventListener('focusin', this.onCraftingInventoryFocus);
-      this.extendedInventoryEl?.removeEventListener('pointerout', this.onCraftingInventoryBlur);
-      this.extendedInventoryEl?.removeEventListener('focusout', this.onCraftingInventoryBlur);
-      this.craftSuggestionsEl?.removeEventListener('pointerover', this.onCraftSuggestionFocus);
-      this.craftSuggestionsEl?.removeEventListener('focusin', this.onCraftSuggestionFocus);
-      this.craftSuggestionsEl?.removeEventListener('pointerout', this.onCraftSuggestionBlur);
-      this.craftSuggestionsEl?.removeEventListener('focusout', this.onCraftSuggestionBlur);
-      this.craftingSearchResultsEl?.removeEventListener('pointerover', this.onCraftSuggestionFocus);
-      this.craftingSearchResultsEl?.removeEventListener('focusin', this.onCraftSuggestionFocus);
-      this.craftingSearchResultsEl?.removeEventListener('pointerout', this.onCraftSuggestionBlur);
-      this.craftingSearchResultsEl?.removeEventListener('focusout', this.onCraftSuggestionBlur);
-      this.craftSequenceEl?.removeEventListener('pointerover', this.onCraftSequenceFocus);
-      this.craftSequenceEl?.removeEventListener('focusin', this.onCraftSequenceFocus);
-      this.craftSequenceEl?.removeEventListener('pointerout', this.onCraftSequenceBlur);
-      this.craftSequenceEl?.removeEventListener('focusout', this.onCraftSequenceBlur);
-      this.extendedInventoryEl?.removeEventListener('click', this.onExtendedInventoryClick);
-      this.craftingSearchInput?.removeEventListener('input', this.onCraftSearchInput);
-      this.inventorySortButton?.removeEventListener('click', this.onInventorySort);
-      this.closeInventoryButton?.removeEventListener('click', this.onInventoryToggle);
-      this.openInventoryButtons.forEach((el) => {
-        el.removeEventListener('click', this.onInventoryToggle);
-      });
-      this.ui?.dimensionInfoEl?.removeEventListener('click', this.onVictoryReplay);
-      this.victoryCloseButton?.removeEventListener('click', this.onVictoryClose);
-      this.victoryShareButton?.removeEventListener('click', this.onVictoryShare);
+      this.boundEventDisposers = [];
       if (this.detachPointerPreferenceObserver) {
         try {
           this.detachPointerPreferenceObserver();
@@ -7605,6 +7581,88 @@
       this.pointerLockFallbackMessageActive = false;
       this.pointerLockFallbackNoticeShown = false;
       this.updateFooterSummary();
+    }
+
+    handleEventDispatchError(context, error) {
+      const label = context || 'processing the last input';
+      const dedupeKey = `${label}|${error?.message ?? 'unknown'}`;
+      if (this.eventFailureNotices.has(dedupeKey)) {
+        return;
+      }
+      this.eventFailureNotices.add(dedupeKey);
+      if (typeof console !== 'undefined') {
+        console.error(`Event handler failed while ${label}.`, error);
+      }
+      this.presentRendererFailure(
+        `Critical input error detected while ${label}. Reload the page to continue exploring.`,
+        { error, stage: `event:${label}` }
+      );
+    }
+
+    addSafeEventListener(target, eventName, handler, options = {}) {
+      if (!target || typeof target.addEventListener !== 'function' || typeof handler !== 'function') {
+        return;
+      }
+      const { context = null, eventOptions = undefined } = options;
+      const label = context || `handling ${eventName}`;
+      const safeHandler = (...args) => {
+        try {
+          handler(...args);
+        } catch (error) {
+          this.handleEventDispatchError(label, error);
+        }
+      };
+      target.addEventListener(eventName, safeHandler, eventOptions);
+      this.boundEventDisposers.push(() => {
+        if (typeof target.removeEventListener === 'function') {
+          try {
+            target.removeEventListener(eventName, safeHandler, eventOptions);
+          } catch (removeError) {
+            if (typeof console !== 'undefined') {
+              console.debug('Failed to remove event listener cleanly.', {
+                event: eventName,
+                removeError,
+              });
+            }
+          }
+        }
+      });
+    }
+
+    handleAssetLoadFailure(key, error, options = {}) {
+      if (error && typeof console !== 'undefined') {
+        console.warn(`Asset load failure for ${key || 'unknown asset'}.`, error);
+      }
+      const messageMap = {
+        arm: 'First-person hands offline — showing simplified explorer arms.',
+        steve: 'Explorer avatar unavailable — using the fallback rig until models return.',
+        zombie: 'Hostile models offline — zombies now appear as simplified husks.',
+        golem: 'Iron golems using simplified armour while detailed models load.',
+      };
+      const fallbackMessage = (options.fallbackMessage || messageMap[key] || '').trim();
+      if (!fallbackMessage) {
+        return;
+      }
+      const dedupeKey = `${key || 'asset'}|${fallbackMessage}`;
+      if (this.assetFailureNotices.has(dedupeKey)) {
+        return;
+      }
+      this.assetFailureNotices.add(dedupeKey);
+      if (this.playerHintEl) {
+        this.playerHintEl.textContent = fallbackMessage;
+        this.playerHintEl.classList.add('visible');
+        this.playerHintEl.setAttribute('data-variant', 'warning');
+      }
+      this.lastHintMessage = fallbackMessage;
+      if (this.footerStatusEl) {
+        this.footerStatusEl.textContent = fallbackMessage;
+      }
+      if (this.footerEl) {
+        this.footerEl.dataset.state = 'warning';
+      }
+      if (typeof this.emitGameEvent === 'function') {
+        this.emitGameEvent('asset-fallback', { key, message: fallbackMessage });
+      }
     }
 
     handleHotbarClick(event) {
