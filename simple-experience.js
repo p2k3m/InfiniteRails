@@ -7586,6 +7586,7 @@
         return;
       }
       const key = this.craftingState.sequence.join(',');
+      const craftedSequence = this.craftingState.sequence.slice();
       const recipe = this.craftingRecipes.get(key);
       if (!recipe) {
         this.showHint('Sequence unstable. Try a different item order.');
@@ -7616,6 +7617,14 @@
       this.updateHud();
       this.scheduleScoreSync('recipe-crafted');
       this.audio.play('craftChime', { volume: 0.6 });
+      this.emitGameEvent('recipe-crafted', {
+        recipeId: recipe.id,
+        recipeKey: key,
+        recipeLabel: recipe.label,
+        scoreAwarded: recipe.score,
+        sequence: craftedSequence,
+        inventoryCount: this.getTotalInventoryCount(),
+      });
     }
 
     handleCraftSuggestionClick(event) {
