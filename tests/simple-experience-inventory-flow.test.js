@@ -64,23 +64,74 @@ function ensureSimpleExperienceLoaded() {
       if (String(tag).toLowerCase() === 'canvas') {
         return createCanvasStub();
       }
-      return {
+      const element = {
         tagName: String(tag).toUpperCase(),
         style: {},
+        className: '',
         children: [],
+        attributes: {},
+        dataset: {},
         classList: { add: () => {}, remove: () => {}, contains: () => false },
-        setAttribute: () => {},
-        appendChild(child) {
-          this.children.push(child);
+        setAttribute(name, value) {
+          this.attributes[name] = value;
         },
-        removeChild: () => {},
-        innerHTML: '',
-        textContent: '',
+        getAttribute(name) {
+          return this.attributes[name];
+        },
+        removeAttribute(name) {
+          delete this.attributes[name];
+        },
+        appendChild(child) {
+          if (child && child.isFragment && Array.isArray(child.children)) {
+            child.children.forEach((node) => {
+              this.children.push(node);
+            });
+            return child;
+          }
+          this.children.push(child);
+          return child;
+        },
+        removeChild(child) {
+          this.children = this.children.filter((node) => node !== child);
+        },
         addEventListener: () => {},
         removeEventListener: () => {},
+        focus: () => {},
+        closest: () => null,
       };
+      Object.defineProperty(element, 'innerHTML', {
+        get() {
+          return this._innerHTML || '';
+        },
+        set(value) {
+          this._innerHTML = value;
+          if (value === '') {
+            this.children = [];
+          }
+        },
+      });
+      Object.defineProperty(element, 'textContent', {
+        get() {
+          return this._textContent || '';
+        },
+        set(value) {
+          this._textContent = value;
+        },
+      });
+      return element;
     },
-    body: { classList: { contains: () => false, add: () => {}, remove: () => {} } },
+    createDocumentFragment: () => ({
+      isFragment: true,
+      children: [],
+      appendChild(child) {
+        this.children.push(child);
+        return child;
+      },
+    }),
+    body: {
+      classList: { contains: () => false, add: () => {}, remove: () => {} },
+      appendChild: () => {},
+    },
     getElementById: () => null,
     querySelector: () => null,
   };
@@ -132,6 +183,18 @@ function createExperience(options = {}) {
   experience.attemptPointerLock = vi.fn();
   vi.spyOn(experience, 'renderFrame').mockImplementation(() => {});
   return experience;
+}
+
+function createTrackedElement(tag = 'div') {
+  ensureSimpleExperienceLoaded();
+  const element = document.createElement(tag);
+  const originalSetAttribute = element.setAttribute?.bind(element);
+  if (originalSetAttribute) {
+    element.setAttribute = vi.fn((name, value) => {
+      originalSetAttribute(name, value);
+    });
+  }
+  return element;
 }
 
 beforeAll(() => {
@@ -190,6 +253,84 @@ describe('simple experience inventory and crafting flows', () => {
     expect(placed).toBe('stone');
     expect(experience.hotbar[0].quantity).toBe(1);
     expect(updateSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('opens the crafting modal when the toggle key is pressed', () => {
+    const craftingModal = createTrackedElement('div');
+    craftingModal.hidden = true;
+
+    const craftLauncherButton = { setAttribute: vi.fn() };
+
+    const experience = createExperience({
+      ui: {
+        craftingModal,
+        craftLauncherButton,
+      },
+    });
+
+    document.exitPointerLock = vi.fn();
+    const refreshSpy = vi.spyOn(experience, 'refreshCraftingUi').mockImplementation(() => {});
+    const preventDefault = vi.fn();
+
+    experience.handleKeyDown({ code: 'KeyE', preventDefault, repeat: false });
+
+    expect(preventDefault).toHaveBeenCalled();
+    expect(craftingModal.hidden).toBe(false);
+    expect(craftingModal.setAttribute).toHaveBeenCalledWith('aria-hidden', 'false');
+    expect(refreshSpy).toHaveBeenCalledTimes(1);
+    expect(craftLauncherButton.setAttribute).toHaveBeenCalledWith('aria-expanded', 'true');
+    expect(document.exitPointerLock).toHaveBeenCalledTimes(1);
+  });
+
+  it('displays unlocked crafting recipes and tooltips inside the helper overlay', () => {
+    const craftingModal = createTrackedElement('div');
+    const craftSequenceEl = document.createElement('div');
+    craftSequenceEl.dataset.slotCount = '3';
+    const craftingInventoryEl = document.createElement('div');
+    const craftSuggestionsEl = document.createElement('div');
+    const craftButton = document.createElement('button');
+    const craftingHelperEl = document.createElement('section');
+    const craftingHelperTitleEl = document.createElement('h3');
+    const craftingHelperDescriptionEl = document.createElement('p');
+    const craftingHelperMatchesEl = document.createElement('ul');
+
+    const experience = createExperience({
+      ui: {
+        craftingModal,
+        craftSequenceEl,
+        craftingInventoryEl,
+        craftSuggestionsEl,
+        craftButton,
+        craftingHelperEl,
+        craftingHelperTitleEl,
+        craftingHelperDescriptionEl,
+        craftingHelperMatchesEl,
+      },
+    });
+
+    experience.craftingState.sequence = [];
+    experience.craftingState.unlocked.clear();
+    experience.craftingRecipes.forEach((recipe, key) => {
+      experience.craftingState.unlocked.set(key, recipe);
+    });
+
+    experience.updateCraftingSequenceUi();
+    experience.updateCraftingHelperOverlay();
+
+    expect(craftSequenceEl.children.length).toBe(3);
+    expect(craftSequenceEl.children[0].getAttribute('data-hint')).toBe('Empty slot — drop an ingredient here.');
+    expect(craftingHelperTitleEl.textContent).toBe('Recipe Helper');
+    expect(craftingHelperDescriptionEl.textContent).toBe(
+      'Select an unlocked recipe to auto-fill the crafting circle.',
+    );
+    expect(craftingHelperMatchesEl.children.length).toBe(2);
+    const matchSummaries = craftingHelperMatchesEl.children.map((child) => child.textContent);
+    expect(matchSummaries).toEqual([
+      'Stone Pickaxe — Stick → Stick → Stone Brick • +2 pts',
+      'Portal Charge — Stone Brick → Stone Brick → Grass Block • +4 pts',
+    ]);
+    expect(craftingHelperEl.dataset.state).toBe('idle');
+    expect(craftingHelperMatchesEl.getAttribute('data-empty')).toBe('false');
   });
 
   it('dispatches a recipe-crafted event when crafting succeeds', () => {
