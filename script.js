@@ -415,23 +415,29 @@
         throw new Error('applyZombieStrike requires a state with a player.');
       }
       const player = state.player;
-      const maxHearts = Number.isFinite(player.maxHearts) ? player.maxHearts : 10;
+      const maxHearts = Number.isFinite(player.maxHearts) && player.maxHearts > 0 ? player.maxHearts : 10;
+      const currentHearts = Number.isFinite(player.hearts)
+        ? Math.min(Math.max(player.hearts, 0), maxHearts)
+        : maxHearts;
       const heartsPerHit = maxHearts / 5;
-      const hits = (player.zombieHits ?? 0) + 1;
+      const epsilon = 1e-6;
+      const previousHits = Math.max(0, Math.floor(((maxHearts - currentHearts) / heartsPerHit) + epsilon));
+      const nextHearts = Math.max(0, Math.min(maxHearts, currentHearts - heartsPerHit));
+      const hits = Math.min(5, previousHits + 1);
+      player.hearts = nextHearts;
       player.zombieHits = hits;
-      const remainingHearts = Math.max(0, maxHearts - heartsPerHit * hits);
-      player.hearts = remainingHearts;
+      const defeated = nextHearts <= 0 || hits >= 5;
       const result = {
         hits,
-        remainingHearts,
-        defeated: hits >= 5,
+        remainingHearts: nextHearts,
+        defeated,
       };
-      if (result.defeated) {
+      if (defeated) {
         if (typeof onDeath === 'function') {
           onDeath('Death');
         }
       } else {
-        const remainingHits = 5 - hits;
+        const remainingHits = Math.max(0, 5 - hits);
         if (typeof onStrike === 'function') {
           onStrike(
             `Minecraft zombie strike! ${remainingHits} more hit${remainingHits === 1 ? '' : 's'} before defeat.`
@@ -17721,16 +17727,26 @@
         });
       }
       if (!outcome) {
-        state.player.zombieHits = (state.player.zombieHits ?? 0) + 1;
-        const hits = state.player.zombieHits;
-        const heartsPerHit = state.player.maxHearts / 5;
-        const remainingHearts = state.player.maxHearts - heartsPerHit * hits;
-        state.player.hearts = clamp(remainingHearts, 0, state.player.maxHearts);
-        if (hits >= 5) {
+        const maxHearts =
+          Number.isFinite(state.player.maxHearts) && state.player.maxHearts > 0 ? state.player.maxHearts : 10;
+        const currentHearts = Number.isFinite(state.player.hearts)
+          ? clamp(state.player.hearts, 0, maxHearts)
+          : maxHearts;
+        const heartsPerHit = maxHearts / 5;
+        const epsilon = 1e-6;
+        const previousHits = Math.max(
+          0,
+          Math.floor(((maxHearts - currentHearts) / heartsPerHit) + epsilon)
+        );
+        const nextHearts = clamp(currentHearts - heartsPerHit, 0, maxHearts);
+        const hits = Math.min(5, previousHits + 1);
+        state.player.hearts = nextHearts;
+        state.player.zombieHits = hits;
+        if (nextHearts <= 0 || hits >= 5) {
           logEvent('Death');
           outcome = { hits, remainingHearts: state.player.hearts, defeated: true };
         } else {
-          const remainingHits = 5 - hits;
+          const remainingHits = Math.max(0, 5 - hits);
           logEvent(
             `Minecraft zombie strike! ${remainingHits} more hit${remainingHits === 1 ? '' : 's'} before defeat.`
           );
