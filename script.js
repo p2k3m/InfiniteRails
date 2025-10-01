@@ -38,6 +38,8 @@
 
   const assetResolutionWarnings = new Set();
 
+  let heartClipIdCounter = 0;
+
   const SUPPORTS_MODEL_ASSETS =
     typeof window === 'undefined' ||
     (typeof window.location !== 'undefined' && window.location.protocol !== 'file:');
@@ -1678,7 +1680,7 @@
     const pointerHintEl = document.getElementById('pointerHint');
     const handOverlayEl = document.getElementById('handOverlay');
     const handOverlayLabel = document.getElementById('handOverlayLabel');
-    let heartClipIdCounter = 0;
+    heartClipIdCounter = 0;
     const handOverlayIcon = document.getElementById('handOverlayIcon');
     const colorBlindToggle = document.getElementById('colorBlindMode');
     const subtitleToggle = document.getElementById('subtitleToggle');
