@@ -38,6 +38,10 @@
 
   const assetResolutionWarnings = new Set();
 
+  const SUPPORTS_MODEL_ASSETS =
+    typeof window === 'undefined' ||
+    (typeof window.location !== 'undefined' && window.location.protocol !== 'file:');
+
   const scoreState = {
     score: 0,
     recipes: new Set(),
@@ -1234,9 +1238,6 @@
         return code;
     }
   }
-
-  const SUPPORTS_MODEL_ASSETS =
-    typeof window === 'undefined' || (typeof window.location !== 'undefined' && window.location.protocol !== 'file:');
 
   const originalConsoleWarn = console.warn?.bind(console);
   if (originalConsoleWarn) {
