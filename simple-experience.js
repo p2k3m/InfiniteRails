@@ -2102,6 +2102,9 @@
         renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: true });
       } catch (error) {
         console.error('Failed to initialise Three.js renderer.', error);
+        if (error && error.stack) {
+          console.error('Renderer initialisation stack trace:', error.stack);
+        }
         this.renderer = null;
         throw error;
       }
