@@ -766,6 +766,8 @@
       this.pointerHintLastMessage = '';
       this.pointerLockFallbackActive = false;
       this.pointerLockWarningShown = false;
+      this.pointerLockFallbackNoticeShown = false;
+      this.pointerLockFallbackMessageActive = false;
       this.pointerFallbackDragging = false;
       this.pointerFallbackLast = null;
       this.pointerFallbackButton = null;
@@ -1374,8 +1376,12 @@
             }
           }
         }
-        this.updatePointerHintForInputMode(this.getPointerLockFallbackMessage());
-        this.schedulePointerHintAutoHide(8);
+        if (!this.pointerLockFallbackMessageActive) {
+          this.showPointerLockFallbackNotice();
+        } else {
+          this.updatePointerHintForInputMode(this.getPointerLockFallbackMessage());
+          this.schedulePointerHintAutoHide(8);
+        }
         return;
       }
       this.pointerLockFallbackActive = true;
@@ -1395,8 +1401,13 @@
         this.pointerLockWarningShown = true;
       }
       this.emitGameEvent('pointer-lock-fallback', { reason });
-      this.updatePointerHintForInputMode(this.getPointerLockFallbackMessage());
-      this.schedulePointerHintAutoHide(8);
+      if (!this.pointerLockFallbackNoticeShown) {
+        this.pointerLockFallbackNoticeShown = true;
+        this.showPointerLockFallbackNotice();
+      } else {
+        this.updatePointerHintForInputMode(this.getPointerLockFallbackMessage());
+        this.schedulePointerHintAutoHide(8);
+      }
     }
 
     beginPointerFallbackDrag(event) {
@@ -5519,6 +5530,20 @@
       return POINTER_LOCK_FALLBACK_MESSAGE;
     }
 
+    showPointerLockFallbackNotice(message) {
+      const text = typeof message === 'string' && message.trim() ? message.trim() : this.getPointerLockFallbackMessage();
+      if (this.playerHintEl) {
+        this.playerHintEl.textContent = text;
+        this.playerHintEl.setAttribute('data-variant', 'warning');
+        this.playerHintEl.classList.add('visible');
+      }
+      this.pointerLockFallbackNoticeShown = true;
+      this.pointerLockFallbackMessageActive = true;
+      this.lastHintMessage = text;
+      this.updatePointerHintForInputMode(text);
+      this.schedulePointerHintAutoHide(8);
+    }
+
     applyKeyBinding(action, keys) {
       if (typeof action !== 'string' || !Array.isArray(keys)) {
         return false;
@@ -5778,6 +5803,12 @@
       if (this.pointerLocked) {
         this.pointerLockFallbackActive = false;
         this.pointerLockWarningShown = false;
+        this.pointerLockFallbackNoticeShown = false;
+        if (this.pointerLockFallbackMessageActive && this.playerHintEl) {
+          this.playerHintEl.classList.remove('visible');
+          this.playerHintEl.removeAttribute('data-variant');
+        }
+        this.pointerLockFallbackMessageActive = false;
         this.endPointerFallbackDrag();
         this.markInteraction();
         this.cancelPointerHintAutoHide();
@@ -7554,7 +7585,11 @@
     showHint(message) {
       if (!this.playerHintEl || !message) return;
       this.playerHintEl.textContent = message;
+      this.playerHintEl.classList.add('visible');
+      this.playerHintEl.removeAttribute('data-variant');
       this.lastHintMessage = message;
+      this.pointerLockFallbackMessageActive = false;
+      this.pointerLockFallbackNoticeShown = false;
       this.updateFooterSummary();
     }
 
