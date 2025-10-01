@@ -5566,13 +5566,17 @@
     }
 
     function dismissMovementHint() {
-      if (typeof state === 'undefined' || !state || !state.ui) {
+      const runtimeState =
+        (globalScope && globalScope.__INFINITE_RAILS_STATE__) ||
+        (typeof window !== 'undefined' ? window.__INFINITE_RAILS_STATE__ : null) ||
+        null;
+      if (!runtimeState?.ui) {
         return;
       }
-      if (state.ui.movementHintDismissed) {
+      if (runtimeState.ui.movementHintDismissed) {
         return;
       }
-      state.ui.movementHintDismissed = true;
+      runtimeState.ui.movementHintDismissed = true;
       hidePlayerHint();
       hideGameBriefing();
     }
@@ -5812,9 +5816,13 @@
       }
       joystickState.vector.x = x;
       joystickState.vector.forward = forward;
-      if (state.joystickInput) {
-        state.joystickInput.strafe = x;
-        state.joystickInput.forward = forward;
+      const runtimeState =
+        (globalScope && globalScope.__INFINITE_RAILS_STATE__) ||
+        (typeof window !== 'undefined' ? window.__INFINITE_RAILS_STATE__ : null) ||
+        null;
+      if (runtimeState?.joystickInput) {
+        runtimeState.joystickInput.strafe = x;
+        runtimeState.joystickInput.forward = forward;
       }
       updateJoystickThumb();
     }
@@ -15911,6 +15919,10 @@
           console.debug('Failed to announce state readiness', error);
         }
       }
+    }
+
+    if (globalScope && typeof globalScope === 'object') {
+      globalScope.__INFINITE_RAILS_STATE__ = state;
     }
 
     initializeKeyBindings();
