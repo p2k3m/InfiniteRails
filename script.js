@@ -1762,7 +1762,164 @@
     const victoryShareStatusEl = document.getElementById('victoryShareStatus');
     const victoryStatsEl = document.getElementById('victoryStats');
     const victoryMessageEl = document.getElementById('victoryMessage');
-    const hotbarEl = document.getElementById('hotbar');
+    const ensureHotbarElement = () => {
+      let element = document.getElementById('hotbar');
+      if (element) {
+        element.classList.add('hotbar');
+        return element;
+      }
+      const inventoryPanel = document.querySelector('.inventory-panel');
+      element = document.createElement('div');
+      element.id = 'hotbar';
+      element.className = 'hotbar';
+      if (inventoryPanel) {
+        inventoryPanel.insertBefore(element, inventoryPanel.firstChild ?? null);
+      } else if (hudRootEl) {
+        const fallbackContainer =
+          hudRootEl.querySelector('.hud-layer__corner--top-right') ??
+          hudRootEl.querySelector('.hud-layer__bottom') ??
+          hudRootEl;
+        fallbackContainer.appendChild(element);
+      } else {
+        document.body.appendChild(element);
+      }
+      return element;
+    };
+    const ensureScoreOverlay = () => {
+      const scoreHint = 'Real-time summary of your score and bonuses.';
+      const cornerContainer =
+        hudRootEl?.querySelector('.hud-layer__corner--top-right') ??
+        hudRootEl ??
+        document.body;
+      let scorePanel = document.getElementById('scorePanel');
+      if (!scorePanel) {
+        scorePanel = document.createElement('div');
+        scorePanel.id = 'scorePanel';
+        scorePanel.className = 'score-overlay';
+        scorePanel.setAttribute('role', 'status');
+        scorePanel.setAttribute('aria-live', 'polite');
+        scorePanel.setAttribute('data-hint', scoreHint);
+        const label = document.createElement('span');
+        label.className = 'score-overlay__label';
+        label.textContent = 'Score';
+        scorePanel.appendChild(label);
+        const total = document.createElement('span');
+        total.id = 'scoreTotal';
+        total.className = 'score-overlay__value';
+        total.textContent = '0';
+        scorePanel.appendChild(total);
+        const breakdown = document.createElement('ul');
+        breakdown.className = 'score-overlay__breakdown';
+        scorePanel.appendChild(breakdown);
+        const createMetric = (id, labelText) => {
+          const item = document.createElement('li');
+          const metricLabel = document.createElement('span');
+          metricLabel.className = 'score-overlay__metric-label';
+          metricLabel.textContent = labelText;
+          item.appendChild(metricLabel);
+          const metricValue = document.createElement('span');
+          metricValue.id = id;
+          metricValue.className = 'score-overlay__metric-value';
+          metricValue.textContent = '0 (+0 pts)';
+          item.appendChild(metricValue);
+          breakdown.appendChild(item);
+        };
+        createMetric('scoreRecipes', 'Recipes');
+        createMetric('scoreDimensions', 'Dimensions');
+        cornerContainer.insertBefore(scorePanel, cornerContainer.firstChild ?? null);
+      } else {
+        scorePanel.classList.add('score-overlay');
+        if (!scorePanel.getAttribute('role')) {
+          scorePanel.setAttribute('role', 'status');
+        }
+        if (!scorePanel.getAttribute('aria-live')) {
+          scorePanel.setAttribute('aria-live', 'polite');
+        }
+        if (!scorePanel.getAttribute('data-hint')) {
+          scorePanel.setAttribute('data-hint', scoreHint);
+        }
+        let label = scorePanel.querySelector('.score-overlay__label');
+        if (!label) {
+          label = document.createElement('span');
+          label.className = 'score-overlay__label';
+          label.textContent = 'Score';
+          scorePanel.insertBefore(label, scorePanel.firstChild ?? null);
+        } else if (!label.textContent?.trim()) {
+          label.textContent = 'Score';
+        }
+        let total = document.getElementById('scoreTotal');
+        if (!total) {
+          total = document.createElement('span');
+          total.id = 'scoreTotal';
+          total.className = 'score-overlay__value';
+          total.textContent = '0';
+          const breakdownAnchor = scorePanel.querySelector('.score-overlay__breakdown');
+          if (breakdownAnchor) {
+            scorePanel.insertBefore(total, breakdownAnchor);
+          } else {
+            scorePanel.appendChild(total);
+          }
+        } else {
+          total.classList.add('score-overlay__value');
+          if (!total.textContent?.trim()) {
+            total.textContent = '0';
+          }
+        }
+        let breakdown = scorePanel.querySelector('.score-overlay__breakdown');
+        if (!breakdown) {
+          breakdown = document.createElement('ul');
+          breakdown.className = 'score-overlay__breakdown';
+          scorePanel.appendChild(breakdown);
+        } else {
+          breakdown.classList.add('score-overlay__breakdown');
+        }
+        const ensureMetric = (id, labelText) => {
+          let valueEl = document.getElementById(id);
+          if (!valueEl) {
+            const item = document.createElement('li');
+            const metricLabel = document.createElement('span');
+            metricLabel.className = 'score-overlay__metric-label';
+            metricLabel.textContent = labelText;
+            item.appendChild(metricLabel);
+            valueEl = document.createElement('span');
+            valueEl.id = id;
+            valueEl.className = 'score-overlay__metric-value';
+            valueEl.textContent = '0 (+0 pts)';
+            item.appendChild(valueEl);
+            breakdown.appendChild(item);
+            return valueEl;
+          }
+          valueEl.classList.add('score-overlay__metric-value');
+          if (!valueEl.textContent?.trim()) {
+            valueEl.textContent = '0 (+0 pts)';
+          }
+          let container = valueEl.closest('li');
+          if (!container) {
+            container = document.createElement('li');
+            breakdown.appendChild(container);
+            container.appendChild(valueEl);
+          }
+          let labelEl = container.querySelector('.score-overlay__metric-label');
+          if (!labelEl) {
+            labelEl = document.createElement('span');
+            labelEl.className = 'score-overlay__metric-label';
+            labelEl.textContent = labelText;
+            container.insertBefore(labelEl, container.firstChild ?? null);
+          } else if (!labelEl.textContent?.trim()) {
+            labelEl.textContent = labelText;
+          }
+          if (!breakdown.contains(container)) {
+            breakdown.appendChild(container);
+          }
+          return valueEl;
+        };
+        ensureMetric('scoreRecipes', 'Recipes');
+        ensureMetric('scoreDimensions', 'Dimensions');
+      }
+      return scorePanel;
+    };
+    const hotbarEl = ensureHotbarElement();
+    ensureScoreOverlay();
     const extendedInventoryEl = document.getElementById('extendedInventory');
     const toggleExtendedBtn = document.getElementById('toggleExtended');
     const craftButton = document.getElementById('craftButton');
