@@ -61,27 +61,33 @@
     },
   };
 
-  function logAssetResolutionIssue(message, error, context = {}) {
+  function logAssetResolutionIssue(message, error, context = {}, level = 'warn') {
     const consoleRef = typeof console !== 'undefined' ? console : globalScope.console;
     if (!consoleRef) {
       return;
     }
     const sortedContextKeys = Object.keys(context).sort();
-    const dedupeKey = `${message}|${sortedContextKeys
+    const dedupeKey = `${message}|${level}|${sortedContextKeys
       .map((key) => `${key}:${context[key]}`)
       .join(',')}`;
     if (assetResolutionWarnings.has(dedupeKey)) {
       return;
     }
     assetResolutionWarnings.add(dedupeKey);
-    const details = { ...context };
+    const details = { ...context, severity: level };
     if (error) {
       details.error = error;
+    }
+    if (level === 'error' && typeof consoleRef.error === 'function') {
+      consoleRef.error(message, details);
+      return;
     }
     if (typeof consoleRef.warn === 'function') {
       consoleRef.warn(message, details);
     } else if (typeof consoleRef.error === 'function') {
       consoleRef.error(message, details);
+    } else if (typeof consoleRef.log === 'function') {
+      consoleRef.log(message, details);
     }
   }
 
@@ -464,6 +470,7 @@
       'Model asset URLs were unavailable; embedded fallbacks will be used instead.',
       null,
       { missingModels: missingModelAssetKeys.join(', ') },
+      'error',
     );
   }
 
@@ -5804,6 +5811,52 @@
       };
     })();
 
+    const missingTexturePlaceholderCanvasCache = new Map();
+
+    function getMissingTexturePlaceholderCanvas(options = {}) {
+      if (typeof document === 'undefined' || typeof document.createElement !== 'function') {
+        return null;
+      }
+      const size = Math.max(16, Math.min(512, Math.floor(options.size ?? 64)));
+      const baseColor = options.baseColor ?? '#3f3f3f';
+      const accentColor = options.accentColor ?? '#1f1f1f';
+      const strokeColor = options.strokeColor ?? 'rgba(255, 255, 255, 0.18)';
+      const key = `${size}:${baseColor}:${accentColor}:${strokeColor}`;
+      if (missingTexturePlaceholderCanvasCache.has(key)) {
+        return missingTexturePlaceholderCanvasCache.get(key);
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = size;
+      canvas.height = size;
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = baseColor;
+      ctx.fillRect(0, 0, size, size);
+      const cells = 4;
+      const cellSize = size / cells;
+      ctx.fillStyle = accentColor;
+      for (let y = 0; y < cells; y += 1) {
+        for (let x = 0; x < cells; x += 1) {
+          if ((x + y) % 2 === 0) {
+            const drawX = Math.floor(x * cellSize);
+            const drawY = Math.floor(y * cellSize);
+            const width = Math.ceil(cellSize);
+            const height = Math.ceil(cellSize);
+            ctx.fillRect(drawX, drawY, width, height);
+          }
+        }
+      }
+      ctx.strokeStyle = strokeColor;
+      ctx.lineWidth = Math.max(1, Math.floor(size * 0.05));
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.lineTo(size, size);
+      ctx.moveTo(size, 0);
+      ctx.lineTo(0, size);
+      ctx.stroke();
+      missingTexturePlaceholderCanvasCache.set(key, canvas);
+      return canvas;
+    }
+
     function applyTextureSettings(texture, options = {}) {
       const repeat = options.repeat ?? { x: 2, y: 2 };
       const anisotropy = renderer?.capabilities?.getMaxAnisotropy?.() ?? 4;
@@ -5823,24 +5876,105 @@
       texture.needsUpdate = true;
     }
 
-    function createTexture(url, options) {
-      if (!url) {
-        return null;
+    function createTexture(url, options = {}) {
+      const placeholderOptions = (() => {
+        const base = { ...(options?.placeholder ?? {}) };
+        base.size = Math.max(16, Math.min(512, Math.floor(base.size ?? 64)));
+        const usingNormalColorSpace = options?.colorSpace === THREE.NoColorSpace;
+        const defaultBase = usingNormalColorSpace ? '#7f7fff' : '#3f3f3f';
+        const defaultAccent = usingNormalColorSpace ? '#5050b6' : '#1f1f1f';
+        const defaultStroke = usingNormalColorSpace
+          ? 'rgba(255, 255, 255, 0.35)'
+          : 'rgba(255, 255, 255, 0.18)';
+        base.baseColor = base.baseColor ?? defaultBase;
+        base.accentColor = base.accentColor ?? defaultAccent;
+        base.strokeColor = base.strokeColor ?? defaultStroke;
+        return base;
+      })();
+
+      const applyPlaceholderTexture = (existingTexture, reason, error = null) => {
+        const context = { url: url ?? null, placeholderBase: placeholderOptions.baseColor };
+        logAssetResolutionIssue(reason, error, context, 'error');
+        if (!THREE || typeof THREE.CanvasTexture !== 'function') {
+          return existingTexture;
+        }
+        const canvas = getMissingTexturePlaceholderCanvas(placeholderOptions);
+        if (!canvas) {
+          return existingTexture;
+        }
+        let target = existingTexture;
+        if (!target) {
+          target = new THREE.CanvasTexture(canvas);
+          target.name = 'missing-texture-placeholder';
+        } else {
+          target.image = canvas;
+          if (!target.name) {
+            target.name = 'missing-texture-placeholder';
+          }
+        }
+        const baseUserData =
+          target.userData && typeof target.userData === 'object' ? target.userData : {};
+        target.userData = {
+          ...baseUserData,
+          placeholderTexture: true,
+          placeholderReason: reason,
+        };
+        applyTextureSettings(target, options);
+        target.needsUpdate = true;
+        return target;
+      };
+
+      if (!url || typeof url !== 'string' || !url.trim()) {
+        return applyPlaceholderTexture(null, 'Texture URL missing; using placeholder texture instead.');
       }
+
       if (isCrossOriginTextureUrl(url)) {
-        console.warn(`Skipping cross-origin texture due to CORS restrictions: ${url}`);
-        return null;
+        return applyPlaceholderTexture(
+          null,
+          'Texture blocked by cross-origin restrictions; substituting placeholder texture.',
+        );
       }
+
       let texture = null;
+      let placeholderApplied = false;
+
       try {
-        texture = textureLoader.load(url, (loaded) => applyTextureSettings(loaded, options));
+        texture = textureLoader.load(
+          url,
+          (loaded) => {
+            if (!placeholderApplied) {
+              applyTextureSettings(loaded, options);
+            }
+          },
+          undefined,
+          (error) => {
+            placeholderApplied = true;
+            texture = applyPlaceholderTexture(
+              texture,
+              'Texture asset failed to load; placeholder applied.',
+              error,
+            );
+          },
+        );
       } catch (error) {
-        console.warn(`Failed to load texture: ${url}`, error);
-        texture = null;
+        placeholderApplied = true;
+        texture = applyPlaceholderTexture(
+          texture,
+          'Texture loader threw while creating asset; placeholder applied.',
+          error,
+        );
       }
-      if (texture) {
+
+      if (!texture) {
+        placeholderApplied = true;
+        texture = applyPlaceholderTexture(
+          texture,
+          'Texture loader returned no texture; placeholder applied.',
+        );
+      } else if (!placeholderApplied) {
         applyTextureSettings(texture, options);
       }
+
       return texture;
     }
 
