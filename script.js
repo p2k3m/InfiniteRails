@@ -4802,6 +4802,8 @@
     let activePlayerSessionId = 0;
     let playerMeshSessionId = 0;
     let playerModelLoading = false;
+    let playerAvatarReadyPromise = null;
+    let resolvePlayerAvatarReady = null;
     let playerActionAnimation = null;
     let gltfLoader;
     let playerMixer = null;
@@ -7216,7 +7218,7 @@
       initPointerControls();
       window.addEventListener('resize', handleResize);
       handleResize();
-      createPlayerMesh(beginNewPlayerSession());
+      ensurePlayerAvatarReady({ forceReload: true, resetAnimations: true });
       createPlayerLocator();
       syncCameraToPlayer({ idleBob: 0, walkBob: 0, movementStrength: 0 });
       updateLighting(0);
@@ -13486,7 +13488,33 @@
       activePlayerSessionId = playerSessionToken;
       playerMeshSessionId = 0;
       playerModelLoading = false;
+      playerAvatarReadyPromise = null;
+      resolvePlayerAvatarReady = null;
       return activePlayerSessionId;
+    }
+
+    function beginPlayerAvatarReadyWait() {
+      playerAvatarReadyPromise = new Promise((resolve) => {
+        resolvePlayerAvatarReady = resolve;
+      });
+      return playerAvatarReadyPromise;
+    }
+
+    function markPlayerAvatarReady(payload = null) {
+      const mesh = payload?.mesh ?? playerMesh ?? null;
+      const sessionId = payload?.sessionId ?? playerMeshSessionId ?? 0;
+      const fallback = payload?.fallback ?? Boolean(mesh?.userData?.isFallbackPlayerAvatar);
+      const resolution = { mesh, sessionId, fallback };
+      if (resolvePlayerAvatarReady) {
+        try {
+          resolvePlayerAvatarReady(resolution);
+        } catch (error) {
+          console.warn('Failed to resolve player avatar readiness promise.', error);
+        }
+        resolvePlayerAvatarReady = null;
+      }
+      playerAvatarReadyPromise = Promise.resolve(resolution);
+      return playerAvatarReadyPromise;
     }
 
     function srgbColor(hex) {
@@ -13745,6 +13773,10 @@
       const placeholder = fallback.group;
       placeholder.position.y = 0.05;
       placeholder.scale.setScalar(1.18);
+      placeholder.userData = {
+        ...(placeholder.userData || {}),
+        isFallbackPlayerAvatar: true,
+      };
       entityGroup.add(placeholder);
       playerMesh = placeholder;
       playerMeshParts = fallback.parts;
@@ -13752,6 +13784,7 @@
       attachPlayerKeyLight(playerMesh);
       resetPlayerAnimationState();
       ensurePlayerMeshVisibility();
+      markPlayerAvatarReady({ mesh: playerMesh, sessionId, fallback: true });
       const fallbackScenePosition = {
         x: placeholder.position.x,
         y: placeholder.position.y,
@@ -13899,7 +13932,9 @@
     }
 
     function ensurePlayerAvatarReady({ forceReload = false, resetAnimations = false } = {}) {
-      if (!entityGroup) return;
+      if (!entityGroup) {
+        return Promise.resolve(null);
+      }
       const needsReload =
         forceReload ||
         !playerMesh ||
@@ -13907,17 +13942,20 @@
         playerMeshSessionId !== activePlayerSessionId;
       if (needsReload) {
         const sessionId = beginNewPlayerSession();
+        const readyPromise = beginPlayerAvatarReadyWait();
         createPlayerMesh(sessionId);
-        return;
+        return readyPromise;
       }
       ensurePlayerMeshVisibility();
+      const readyPromise = markPlayerAvatarReady();
       if (!playerMixer || !playerAnimationActions.idle || !playerAnimationActions.walk) {
         restartPlayerAnimationActions({ allowInitialization: true });
-        return;
+        return readyPromise;
       }
       if (resetAnimations) {
         restartPlayerAnimationActions({ allowInitialization: true });
       }
+      return readyPromise;
     }
 
     function handlePlayerGltfLoad(gltf, sessionId) {
@@ -13934,6 +13972,10 @@
 
       playerMesh = steveScene;
       playerMesh.name = 'player-steve';
+      playerMesh.userData = {
+        ...(playerMesh.userData || {}),
+        isFallbackPlayerAvatar: false,
+      };
       playerMesh.position.set(0, 0.05, 0);
       playerMesh.rotation.set(0, 0, 0);
       playerMesh.scale.setScalar(1.18);
@@ -14034,6 +14076,7 @@
       }
       restartPlayerAnimationActions();
       ensurePlayerMeshVisibility();
+      markPlayerAvatarReady({ mesh: playerMesh, sessionId, fallback: false });
       playerModelLoading = false;
     }
 
@@ -18391,7 +18434,7 @@
     }
 
     function startGame() {
-      return safelyExecute(() => {
+      return safelyExecute(async () => {
         if (state.isRunning) return;
         const pendingProgress = consumePendingProgressSnapshot();
         const progressSnapshot = pendingProgress?.snapshot ?? null;
@@ -18465,7 +18508,7 @@
         state.player.satchel = [];
         state.player.selectedSlot = 0;
         state.craftSequence = [];
-        ensurePlayerAvatarReady({ forceReload: true, resetAnimations: true });
+        const playerReadyPromise = ensurePlayerAvatarReady({ forceReload: true, resetAnimations: true });
         renderVictoryBanner();
         loadDimension(startDimensionId);
         if (!startingWithRestoredProgress && state.dayCycle) {
@@ -18497,6 +18540,7 @@
         } catch (initializationError) {
           console.warn('Unable to pre-sanitise world uniforms before starting the run.', initializationError);
         }
+        await playerReadyPromise;
         requestAnimationFrame(loop);
         if (!progressSnapshot) {
           logEvent('You awaken on a floating island.');
