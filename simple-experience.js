@@ -43,6 +43,9 @@
       toggleCameraPerspective: ['KeyV'],
       toggleCrafting: ['KeyE'],
       toggleInventory: ['KeyI'],
+      openGuide: ['F1'],
+      openSettings: ['F2'],
+      openLeaderboard: ['F3'],
       closeMenus: ['Escape'],
     };
     for (let slot = 1; slot <= HOTBAR_SLOTS; slot += 1) {

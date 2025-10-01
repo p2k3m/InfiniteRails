@@ -956,6 +956,9 @@
       placeBlock: ['KeyQ'],
       toggleCrafting: ['KeyE'],
       toggleInventory: ['KeyI'],
+      openGuide: ['F1'],
+      openSettings: ['F2'],
+      openLeaderboard: ['F3'],
       buildPortal: ['KeyR'],
       resetPosition: ['KeyT'],
       toggleCameraPerspective: ['KeyV'],
@@ -1012,6 +1015,15 @@
         { id: 'toggleInventory', label: 'Toggle inventory' },
         { id: 'toggleCameraPerspective', label: 'Toggle camera view' },
         { id: 'closeMenus', label: 'Close menus' },
+      ],
+    },
+    {
+      id: 'interface',
+      title: 'Guides & overlays',
+      actions: [
+        { id: 'openGuide', label: 'Toggle game guide' },
+        { id: 'openSettings', label: 'Toggle settings' },
+        { id: 'openLeaderboard', label: 'Toggle leaderboard' },
       ],
     },
     {
@@ -1979,6 +1991,9 @@
       placeBlock: document.querySelector('[data-keybinding-table="placeBlock"]'),
       toggleCameraPerspective: document.querySelector('[data-keybinding-table="toggleCameraPerspective"]'),
       resetPosition: document.querySelector('[data-keybinding-table="resetPosition"]'),
+      openGuide: document.querySelector('[data-keybinding-table="openGuide"]'),
+      openSettings: document.querySelector('[data-keybinding-table="openSettings"]'),
+      openLeaderboard: document.querySelector('[data-keybinding-table="openLeaderboard"]'),
       hotbar: document.querySelector('[data-keybinding-table="hotbar"]'),
     };
 
@@ -22135,6 +22150,18 @@
       if (cameraSummary) {
         segments.push(`${cameraSummary} toggle view`);
       }
+      const guideSummary = getActionKeySummary('openGuide', { fallback: 'F1' });
+      if (guideSummary) {
+        segments.push(`${guideSummary} guide`);
+      }
+      const settingsSummary = getActionKeySummary('openSettings', { fallback: 'F2' });
+      if (settingsSummary) {
+        segments.push(`${settingsSummary} settings`);
+      }
+      const leaderboardSummary = getActionKeySummary('openLeaderboard', { fallback: 'F3' });
+      if (leaderboardSummary) {
+        segments.push(`${leaderboardSummary} leaderboard`);
+      }
       const closeMenusSummary = getActionKeySummary('closeMenus', { fallback: 'Esc' });
       if (closeMenusSummary) {
         segments.push(`${closeMenusSummary} close menus`);
@@ -22150,8 +22177,20 @@
       if (!controlReferenceCells) {
         return;
       }
-      const { movement, jump, interact, toggleCrafting, toggleInventory, placeBlock, toggleCameraPerspective, resetPosition, hotbar } =
-        controlReferenceCells;
+      const {
+        movement,
+        jump,
+        interact,
+        toggleCrafting,
+        toggleInventory,
+        placeBlock,
+        toggleCameraPerspective,
+        resetPosition,
+        openGuide,
+        openSettings,
+        openLeaderboard,
+        hotbar,
+      } = controlReferenceCells;
       if (movement) {
         const { primary, secondary } = getMovementKeySets();
         const parts = [];
@@ -22189,6 +22228,15 @@
       }
       if (resetPosition) {
         resetPosition.innerHTML = formatKbdSequence(getActionKeyLabels('resetPosition'), { fallback: '—' });
+      }
+      if (openGuide) {
+        openGuide.innerHTML = formatKbdSequence(getActionKeyLabels('openGuide'), { fallback: '—' });
+      }
+      if (openSettings) {
+        openSettings.innerHTML = formatKbdSequence(getActionKeyLabels('openSettings'), { fallback: '—' });
+      }
+      if (openLeaderboard) {
+        openLeaderboard.innerHTML = formatKbdSequence(getActionKeyLabels('openLeaderboard'), { fallback: '—' });
       }
       if (hotbar) {
         const hotbarLabel = getHotbarRange({ asMarkup: true });
@@ -22347,6 +22395,49 @@
             return;
           }
         }
+        if (isKeyForAction('openGuide', code)) {
+          event.preventDefault();
+          if (guideModal && guideModal.hidden === false) {
+            closeGuideModal();
+          } else {
+            closeCraftingModal({ focusTrigger: false });
+            closeInventoryModal(false);
+            closeSettingsModal(false);
+            closeLeaderboardModal(false);
+            openGuideModal();
+          }
+          return;
+        }
+        if (isKeyForAction('openSettings', code)) {
+          event.preventDefault();
+          if (settingsModal && settingsModal.hidden === false) {
+            closeSettingsModal(false);
+          } else {
+            if (guideModal && guideModal.hidden === false) {
+              closeGuideModal();
+            }
+            closeCraftingModal({ focusTrigger: false });
+            closeInventoryModal(false);
+            closeLeaderboardModal(false);
+            openSettingsModal();
+          }
+          return;
+        }
+        if (isKeyForAction('openLeaderboard', code)) {
+          event.preventDefault();
+          if (leaderboardModal && leaderboardModal.hidden === false) {
+            closeLeaderboardModal(false);
+          } else {
+            if (guideModal && guideModal.hidden === false) {
+              closeGuideModal();
+            }
+            closeCraftingModal({ focusTrigger: false });
+            closeInventoryModal(false);
+            closeSettingsModal(false);
+            openLeaderboardModal();
+          }
+          return;
+        }
         if (
           target instanceof HTMLElement &&
           (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)
@@ -22354,6 +22445,9 @@
           const allowedInInput =
             isKeyForAction('toggleInventory', code) ||
             isKeyForAction('toggleCrafting', code) ||
+            isKeyForAction('openGuide', code) ||
+            isKeyForAction('openSettings', code) ||
+            isKeyForAction('openLeaderboard', code) ||
             isKeyForAction('closeMenus', code);
           if (!allowedInInput) {
             return;

@@ -181,6 +181,9 @@ describe('key binding defaults', () => {
     expect(defaults.interact).toEqual(['KeyF']);
     expect(defaults.placeBlock).toEqual(['KeyQ']);
     expect(defaults.toggleCrafting).toEqual(['KeyE']);
+    expect(defaults.openGuide).toEqual(['F1']);
+    expect(defaults.openSettings).toEqual(['F2']);
+    expect(defaults.openLeaderboard).toEqual(['F3']);
     expect(defaults.buildPortal).toEqual(['KeyR']);
   });
 
@@ -199,6 +202,9 @@ describe('key binding defaults', () => {
     expect(defaults.interact).toEqual(['KeyF']);
     expect(defaults.placeBlock).toEqual(['KeyQ']);
     expect(defaults.toggleCrafting).toEqual(['KeyE']);
+    expect(defaults.openGuide).toEqual(['F1']);
+    expect(defaults.openSettings).toEqual(['F2']);
+    expect(defaults.openLeaderboard).toEqual(['F3']);
     expect(defaults.buildPortal).toEqual(['KeyR']);
   });
 });
