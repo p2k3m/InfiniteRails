@@ -22,10 +22,11 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           AWS_REGION: ${{ secrets.AWS_REGION }}
           AWS_S3_BUCKET: ${{ secrets.AWS_S3_BUCKET }}
+          AWS_CLOUDFRONT_DISTRIBUTION_ID: ${{ secrets.AWS_CLOUDFRONT_DISTRIBUTION_ID }}
         run: |
           set -euo pipefail
           missing=()
-          for var in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_REGION AWS_S3_BUCKET; do
+          for var in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_REGION AWS_S3_BUCKET AWS_CLOUDFRONT_DISTRIBUTION_ID; do
             if [ -z "${!var:-}" ]; then
               missing+=("$var")
             fi
@@ -161,11 +162,48 @@ jobs:
         env:
           DEPLOY_BUCKET: ${{ secrets.AWS_S3_BUCKET }}
           AWS_REGION: ${{ secrets.AWS_REGION }}
+          CLOUDFRONT_DISTRIBUTION_ID: ${{ secrets.AWS_CLOUDFRONT_DISTRIBUTION_ID }}
         run: |
           set -euo pipefail
           ORIGIN_CLASSIC="${DEPLOY_BUCKET}.s3.amazonaws.com"
           ORIGIN_REGIONAL="${DEPLOY_BUCKET}.s3.${AWS_REGION}.amazonaws.com"
           ORIGIN_WEBSITE="${DEPLOY_BUCKET}.s3-website-${AWS_REGION}.amazonaws.com"
+          if [ -n "${CLOUDFRONT_DISTRIBUTION_ID:-}" ]; then
+            if ! DISTRIBUTION_OUTPUT=$(aws cloudfront get-distribution --id "${CLOUDFRONT_DISTRIBUTION_ID}" 2>&1); then
+              echo "::error::Failed to fetch CloudFront distribution ${CLOUDFRONT_DISTRIBUTION_ID}. AWS CLI output: ${DISTRIBUTION_OUTPUT}"
+              exit 1
+            fi
+
+            CF_DOMAIN=$(echo "${DISTRIBUTION_OUTPUT}" | jq -r '.Distribution.DomainName // empty')
+            if [ -z "${CF_DOMAIN}" ]; then
+              echo '::error::CloudFront distribution response did not include a DomainName.'
+              exit 1
+            fi
+
+            ORIGIN_MATCH=0
+            while IFS= read -r origin; do
+              if [ "${origin}" = "${ORIGIN_CLASSIC}" ] || [ "${origin}" = "${ORIGIN_REGIONAL}" ] || [ "${origin}" = "${ORIGIN_WEBSITE}" ]; then
+                ORIGIN_MATCH=1
+                break
+              fi
+            done < <(echo "${DISTRIBUTION_OUTPUT}" | jq -r '.Distribution.DistributionConfig.Origins.Items[].DomainName // empty')
+
+            if [ "${ORIGIN_MATCH}" -ne 1 ]; then
+              echo "::error::CloudFront distribution ${CLOUDFRONT_DISTRIBUTION_ID} does not reference the ${DEPLOY_BUCKET} bucket. Update the secret or attach the bucket as an origin."
+              exit 1
+            fi
+
+            echo "distribution-id=${CLOUDFRONT_DISTRIBUTION_ID}" >> "$GITHUB_OUTPUT"
+            echo "distribution-domain=https://${CF_DOMAIN}" >> "$GITHUB_OUTPUT"
+
+            {
+              echo '### ✅ CloudFront distribution verified'
+              echo ''
+              echo "- **Distribution ID**: \`${CLOUDFRONT_DISTRIBUTION_ID}\`"
+              echo "- **CloudFront URL**: https://${CF_DOMAIN}"
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           MATCH=$(aws cloudfront list-distributions --query "DistributionList.Items[?Origins.Items[?DomainName=='${ORIGIN_CLASSIC}' || DomainName=='${ORIGIN_REGIONAL}' || DomainName=='${ORIGIN_WEBSITE}']]|[0]")
           if [ -n "$MATCH" ] && [ "$MATCH" != "null" ]; then
             CF_ID=$(echo "$MATCH" | jq -r '.Id // empty')
