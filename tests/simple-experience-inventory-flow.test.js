@@ -189,11 +189,24 @@ function createTrackedElement(tag = 'div') {
   ensureSimpleExperienceLoaded();
   const element = document.createElement(tag);
   const originalSetAttribute = element.setAttribute?.bind(element);
+  const originalToggleAttribute = typeof element.toggleAttribute === 'function' ? element.toggleAttribute.bind(element) : null;
   if (originalSetAttribute) {
     element.setAttribute = vi.fn((name, value) => {
       originalSetAttribute(name, value);
     });
   }
+  element.toggleAttribute = vi.fn((name, force) => {
+    if (originalToggleAttribute) {
+      return originalToggleAttribute(name, force);
+    }
+    const shouldSet = force === undefined ? !element.hasAttribute(name) : Boolean(force);
+    if (shouldSet) {
+      element.setAttribute(name, '');
+      return true;
+    }
+    element.removeAttribute(name);
+    return false;
+  });
   return element;
 }
 
@@ -213,6 +226,7 @@ describe('simple experience inventory and crafting flows', () => {
     const inventoryModal = {
       hidden: true,
       setAttribute: vi.fn(),
+      toggleAttribute: vi.fn(),
     };
     const inventorySortButton = { setAttribute: vi.fn() };
     const openButton = { tagName: 'BUTTON', textContent: 'Open Inventory', setAttribute: vi.fn() };
@@ -226,7 +240,7 @@ describe('simple experience inventory and crafting flows', () => {
 
     expect(preventDefault).toHaveBeenCalled();
     expect(inventoryModal.hidden).toBe(false);
-    expect(inventoryModal.setAttribute).toHaveBeenCalledWith('aria-hidden', 'false');
+    expect(inventoryModal.toggleAttribute).toHaveBeenCalledWith('inert', false);
     expect(updateModalSpy).toHaveBeenCalledTimes(1);
     expect(inventorySortButton.setAttribute).toHaveBeenCalledWith('aria-pressed', 'false');
     expect(openButton.setAttribute).toHaveBeenCalledWith('aria-expanded', 'true');
@@ -276,7 +290,7 @@ describe('simple experience inventory and crafting flows', () => {
 
     expect(preventDefault).toHaveBeenCalled();
     expect(craftingModal.hidden).toBe(false);
-    expect(craftingModal.setAttribute).toHaveBeenCalledWith('aria-hidden', 'false');
+    expect(craftingModal.toggleAttribute).toHaveBeenCalledWith('inert', false);
     expect(refreshSpy).toHaveBeenCalledTimes(1);
     expect(craftLauncherButton.setAttribute).toHaveBeenCalledWith('aria-expanded', 'true');
     expect(document.exitPointerLock).toHaveBeenCalledTimes(1);

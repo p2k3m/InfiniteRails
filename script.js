@@ -48,6 +48,19 @@
 
   loadInitialDebugModePreference();
 
+  function setInert(element, shouldBeInert) {
+    if (!element) {
+      return;
+    }
+    if (typeof element.toggleAttribute === 'function') {
+      element.toggleAttribute('inert', shouldBeInert);
+    } else if (shouldBeInert) {
+      element.setAttribute?.('inert', '');
+    } else {
+      element.removeAttribute?.('inert');
+    }
+  }
+
   const COLOR_MODE_STORAGE_KEY = 'infinite-rails-color-mode';
   const colorModeState = {
     preference: 'auto',
@@ -278,7 +291,7 @@
     }
     if (captionState.overlay) {
       captionState.overlay.setAttribute('data-state', 'hidden');
-      captionState.overlay.setAttribute('aria-hidden', 'true');
+      setInert(captionState.overlay, true);
     }
   }
 
@@ -289,7 +302,7 @@
     }
     if (captionState.overlay) {
       captionState.overlay.setAttribute('data-state', 'hidden');
-      captionState.overlay.setAttribute('aria-hidden', 'true');
+      setInert(captionState.overlay, true);
       captionState.overlay.hidden = !captionState.enabled;
     }
     if (captionState.overlayText) {
@@ -303,7 +316,7 @@
     if (captionState.overlay) {
       if (captionState.enabled) {
         captionState.overlay.hidden = false;
-        captionState.overlay.setAttribute('aria-hidden', 'true');
+        setInert(captionState.overlay, true);
         captionState.overlay.setAttribute('data-state', 'hidden');
       } else {
         hideCaptionOverlay();
@@ -326,7 +339,7 @@
     captionState.overlayText.textContent = text;
     captionState.overlay.hidden = false;
     captionState.overlay.setAttribute('data-state', 'visible');
-    captionState.overlay.setAttribute('aria-hidden', 'false');
+    setInert(captionState.overlay, false);
     if (captionState.hideTimer && typeof globalScope.clearTimeout === 'function') {
       globalScope.clearTimeout(captionState.hideTimer);
     }
@@ -334,7 +347,7 @@
       captionState.hideTimer = null;
       if (captionState.overlay) {
         captionState.overlay.setAttribute('data-state', 'hidden');
-        captionState.overlay.setAttribute('aria-hidden', 'true');
+        setInert(captionState.overlay, true);
       }
     }, 5200);
   }
@@ -680,7 +693,7 @@
       const { overlay, dialog, spinner, title, message } = elements;
       overlay.hidden = false;
       overlay.removeAttribute('hidden');
-      overlay.setAttribute('aria-hidden', 'false');
+      setInert(overlay, false);
       overlay.setAttribute('data-mode', mode === 'error' ? 'error' : 'loading');
       if (dialog) {
         if (mode === 'loading') {
@@ -720,7 +733,7 @@
       cancelFallbackTimer();
       removeBasicFallback(doc);
       const { overlay, dialog, spinner } = elements;
-      overlay.setAttribute('aria-hidden', 'true');
+      setInert(overlay, true);
       overlay.setAttribute('data-mode', 'idle');
       overlay.setAttribute('hidden', '');
       overlay.hidden = true;
