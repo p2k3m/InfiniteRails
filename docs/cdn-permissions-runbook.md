@@ -89,7 +89,17 @@ When every request to `d3gj6x3ityfh5o.cloudfront.net/*.js` (or other static asse
    aws cloudfront update-distribution --id E1234567890 --distribution-config file://dist-config.json --if-match E2SOMEE2TAG
    ```
 
-## 4. Test direct S3 access
+## 4. Inspect CloudFront cache behaviors
+
+1. In the CloudFront console open **Behaviors** and edit the path pattern that routes to the S3 origin (typically the default behaviour `/*`).
+2. Verify **Restrict viewer access (Use Signed URLs or Signed Cookies)** is **Disabled**. Enabling it without distributing signed credentials causes every anonymous CDN request to fail with `403`.
+3. Under **Cache key and origin requests** choose AWS managed policies that forward the required headers without forcing viewer credentials:
+   - **Cache policy**: `Managed-CachingOptimized` (or an equivalent custom policy that does not require viewer cookies or query strings).
+   - **Origin request policy**: `Managed-CORS-S3Origin` so CloudFront passes the `Origin`, `Access-Control-Request-*`, and `Host` headers S3 needs for CORS.
+   - If you use a custom origin request policy, double-check it forwards the same headers and does not require signed cookies.
+4. Save the behaviour. Once deployed CloudFront serves static assets anonymously and only the OAI/OAC credentials are used for the S3 fetch.
+
+## 5. Test direct S3 access
 
 - Temporarily (or in a non-production bucket), disable the OAI restriction by granting yourself access via IAM and fetch the object directly:
   ```bash
@@ -97,7 +107,7 @@ When every request to `d3gj6x3ityfh5o.cloudfront.net/*.js` (or other static asse
   ```
 - If this succeeds, the files exist and the problem is strictly IAM-related.
 
-## 5. Redeploy and invalidate
+## 6. Redeploy and invalidate
 
 1. After updating policies, wait for CloudFront to propagate the changes (or trigger a distribution update).
 2. Invalidate cached errors:
@@ -106,7 +116,7 @@ When every request to `d3gj6x3ityfh5o.cloudfront.net/*.js` (or other static asse
    ```
 3. Re-run the initial curl test to confirm the assets now return `200`.
 
-## 6. Automation checklist
+## 7. Automation checklist
 
 To prevent future regressions:
 
