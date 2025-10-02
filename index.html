@@ -520,7 +520,19 @@
         <section class="log-panel" aria-live="polite">
           <header>
             <h2>Event Log</h2>
+            <button
+              type="button"
+              class="ghost small log-panel__debug-toggle"
+              id="debugModeToggle"
+              aria-pressed="false"
+              data-hint="Enable verbose diagnostics"
+            >
+              Enable Debug Mode
+            </button>
           </header>
+          <p class="log-panel__debug-status" id="debugModeStatus" role="status" aria-live="polite">
+            Standard diagnostics active.
+          </p>
           <ul id="eventLog"></ul>
         </section>
       </aside>

@@ -4363,6 +4363,32 @@ body[data-crafting-drag='true'] {
   }
 }
 
+.log-panel header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.log-panel header h2 {
+  margin-bottom: 0;
+}
+
+.log-panel__debug-toggle {
+  white-space: nowrap;
+}
+
+.log-panel__debug-status {
+  margin: 0.35rem 0 0.5rem;
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
+  color: rgba(233, 245, 220, 0.7);
+}
+
+body[data-debug-mode='verbose'] .log-panel__debug-status {
+  color: rgba(134, 204, 255, 0.9);
+}
+
 .log-panel ul {
   list-style: none;
   display: grid;
@@ -4379,6 +4405,37 @@ body[data-crafting-drag='true'] {
   border-radius: 12px;
   padding: 0.5rem 0.7rem;
   border: 1px solid rgba(73, 242, 255, 0.08);
+}
+
+body[data-debug-mode='verbose'] .log-panel li {
+  border-color: rgba(73, 242, 255, 0.22);
+  box-shadow: 0 0 0 1px rgba(73, 242, 255, 0.12) inset;
+}
+
+.event-log__message {
+  line-height: 1.35;
+  letter-spacing: 0.04em;
+}
+
+.event-log__debug {
+  margin-top: 0.45rem;
+  padding: 0.45rem 0.55rem;
+  border-radius: 8px;
+  background: rgba(6, 16, 32, 0.78);
+  border: 1px solid rgba(73, 242, 255, 0.2);
+  font-family: 'JetBrains Mono', 'Fira Code', 'SFMono-Regular', Menlo, Monaco, Consolas, monospace;
+  font-size: 0.7rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 220px;
+  overflow: auto;
+  color: rgba(214, 236, 255, 0.9);
+}
+
+body[data-debug-mode='verbose'] .event-log__debug {
+  background: rgba(9, 24, 48, 0.88);
+  border-color: rgba(134, 204, 255, 0.45);
 }
 
 .footer {

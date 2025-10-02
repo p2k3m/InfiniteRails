@@ -14,6 +14,40 @@
     globalScope.__INFINITE_RAILS_RENDERER_MODE__ = null;
   }
 
+  const debugModeState = {
+    enabled: false,
+    storageKey: 'infinite-rails-debug-mode',
+    listeners: new Set(),
+    toggleButton: null,
+    statusElement: null,
+  };
+
+  function isDebugModeEnabled() {
+    return debugModeState.enabled;
+  }
+
+  function loadInitialDebugModePreference() {
+    if (!globalScope?.localStorage) {
+      debugModeState.enabled = false;
+      return;
+    }
+    try {
+      const stored = globalScope.localStorage.getItem(debugModeState.storageKey);
+      if (stored === '1' || stored === 'true') {
+        debugModeState.enabled = true;
+      } else if (stored === '0' || stored === 'false') {
+        debugModeState.enabled = false;
+      }
+    } catch (error) {
+      if (globalScope.console?.debug) {
+        globalScope.console.debug('Unable to load debug mode preference from storage.', error);
+      }
+      debugModeState.enabled = false;
+    }
+  }
+
+  loadInitialDebugModePreference();
+
   const configWarningDeduper = new Set();
 
   function logConfigWarning(message, context = {}) {
@@ -181,24 +215,22 @@
 
   bootstrapOverlay.showLoading();
 
+  let lastRendererFailureDetail = null;
+
   if (typeof globalScope?.addEventListener === 'function') {
     globalScope.addEventListener('infinite-rails:started', () => {
       bootstrapOverlay.hide({ force: true });
     });
     globalScope.addEventListener('infinite-rails:renderer-failure', (event) => {
-      const detail = event?.detail || {};
-      const message =
-        typeof detail.message === 'string' && detail.message.trim().length
-          ? detail.message.trim()
-          : 'Renderer unavailable. Reload to try again.';
-      const title = 'Renderer unavailable';
-      const suffix =
-        detail.stage && typeof detail.stage === 'string' && detail.stage.trim().length
-          ? ` (${detail.stage.trim()})`
-          : '';
+      const detail =
+        event?.detail && typeof event.detail === 'object' ? { ...event.detail } : {};
+      if (typeof detail.message !== 'string' || !detail.message.trim().length) {
+        detail.message = 'Renderer unavailable. Reload to try again.';
+      }
+      lastRendererFailureDetail = detail;
       bootstrapOverlay.showError({
-        title,
-        message: `${message}${suffix}`,
+        title: 'Renderer unavailable',
+        message: formatRendererFailureMessage(detail),
       });
     });
   }
@@ -466,8 +498,84 @@
         return summaryMessage(detail?.message, 'Leaderboard offline — progress saved locally.');
       case 'score-sync-restored':
         return summaryMessage(detail?.message, 'Leaderboard connection restored.');
+      case 'renderer-failure': {
+        const reason = summaryMessage(
+          detail?.message,
+          'Renderer failure encountered — reload recommended.',
+        );
+        const stage =
+          typeof detail?.stage === 'string' && detail.stage.trim().length ? detail.stage.trim() : null;
+        if (stage) {
+          return `${reason} (${stage})`;
+        }
+        return reason;
+      }
+      case 'debug-mode':
+        return detail?.enabled
+          ? 'Verbose debug mode enabled.'
+          : 'Verbose debug mode disabled — standard diagnostics restored.';
       default:
         return null;
+    }
+  }
+
+  function createDebugDetailString(detail) {
+    if (!detail || typeof detail !== 'object') {
+      return '';
+    }
+    const copy = {};
+    Object.keys(detail).forEach((key) => {
+      if (key === 'timestamp' || key === 'mode') {
+        return;
+      }
+      const value = detail[key];
+      if (typeof value === 'undefined') {
+        return;
+      }
+      if (value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+        copy[key] = value;
+        return;
+      }
+      try {
+        copy[key] = JSON.parse(JSON.stringify(value));
+      } catch (error) {
+        copy[key] = String(value);
+      }
+    });
+    const keys = Object.keys(copy);
+    if (!keys.length) {
+      return '';
+    }
+    try {
+      const payload = JSON.stringify(copy, null, 2);
+      if (payload.length > 4000) {
+        return `${payload.slice(0, 3997)}…`;
+      }
+      return payload;
+    } catch (error) {
+      return keys.map((key) => `${key}: ${String(copy[key])}`).join('\n');
+    }
+  }
+
+  function updateEventLogItemDebugBlock(item, detailString) {
+    if (!item) {
+      return;
+    }
+    const detail = typeof detailString === 'string' ? detailString : item.dataset.debugDetail;
+    const existing = item.querySelector?.('.event-log__debug') ?? null;
+    if (isDebugModeEnabled() && detail) {
+      const doc = item.ownerDocument || documentRef;
+      const target = existing || doc?.createElement?.('pre');
+      if (!target) {
+        return;
+      }
+      target.className = 'event-log__debug';
+      target.textContent = detail;
+      if (!existing) {
+        item.appendChild(target);
+      }
+    } else if (existing) {
+      existing.remove();
     }
   }
 
@@ -490,9 +598,20 @@
     }
     const timestamp = Number.isFinite(detail?.timestamp) ? detail.timestamp : Date.now();
     const timeLabel = formatEventTimestamp(timestamp);
-    item.textContent = `[${timeLabel}] ${message}`;
+    const messageEl = doc?.createElement?.('div');
+    if (!messageEl) {
+      return;
+    }
+    messageEl.className = 'event-log__message';
+    messageEl.textContent = `[${timeLabel}] ${message}`;
+    item.appendChild(messageEl);
     item.dataset.eventType = type;
     item.dataset.eventTimestamp = String(timestamp);
+    const debugDetail = createDebugDetailString(detail);
+    if (debugDetail) {
+      item.dataset.debugDetail = debugDetail;
+      updateEventLogItemDebugBlock(item, debugDetail);
+    }
     container.appendChild(item);
     while (container.children.length > eventLogState.maxEntries) {
       const first = container.firstElementChild || container.firstChild;
@@ -501,6 +620,17 @@
       }
       container.removeChild(first);
     }
+  }
+
+  function refreshEventLogDebugDetails() {
+    const container = getEventLogElement();
+    if (!container) {
+      return;
+    }
+    const items = Array.from(container.children || []);
+    items.forEach((item) => {
+      updateEventLogItemDebugBlock(item);
+    });
   }
 
   function ensureEventLogListeners() {
@@ -524,6 +654,7 @@
       'pointer-lock-fallback',
       'score-sync-offline',
       'score-sync-restored',
+      'renderer-failure',
     ].forEach(register);
     eventLogState.listenersBound = true;
   }
@@ -533,7 +664,182 @@
       setEventLogElement(ui.eventLogEl);
     }
     ensureEventLogListeners();
+    refreshEventLogDebugDetails();
   }
+
+  function persistDebugModePreference(enabled) {
+    if (!globalScope?.localStorage) {
+      return;
+    }
+    try {
+      if (enabled) {
+        globalScope.localStorage.setItem(debugModeState.storageKey, '1');
+      } else {
+        globalScope.localStorage.removeItem(debugModeState.storageKey);
+      }
+    } catch (error) {
+      if (globalScope.console?.debug) {
+        globalScope.console.debug('Unable to persist debug mode preference.', error);
+      }
+    }
+  }
+
+  function addDebugModeChangeListener(listener) {
+    if (typeof listener !== 'function') {
+      return () => {};
+    }
+    debugModeState.listeners.add(listener);
+    return () => {
+      debugModeState.listeners.delete(listener);
+    };
+  }
+
+  function refreshDebugModeUi() {
+    const doc = documentRef || globalScope.document || null;
+    const mode = isDebugModeEnabled() ? 'verbose' : 'standard';
+    if (doc?.documentElement?.setAttribute) {
+      doc.documentElement.setAttribute('data-debug-mode', mode);
+    }
+    if (doc?.body?.setAttribute) {
+      doc.body.setAttribute('data-debug-mode', mode);
+    }
+    const button = debugModeState.toggleButton;
+    if (button) {
+      const enabled = isDebugModeEnabled();
+      button.setAttribute('aria-pressed', enabled ? 'true' : 'false');
+      const label = enabled ? 'Disable Debug Mode' : 'Enable Debug Mode';
+      button.textContent = label;
+      const hint = enabled ? 'Disable verbose diagnostics' : 'Enable verbose diagnostics';
+      button.dataset.hint = hint;
+      button.setAttribute('aria-label', hint);
+    }
+    const statusEl = debugModeState.statusElement;
+    if (statusEl) {
+      statusEl.textContent = isDebugModeEnabled()
+        ? 'Verbose diagnostics enabled — event log entries now include detailed traces.'
+        : 'Standard diagnostics active. Enable debug mode to reveal detailed error traces.';
+      statusEl.dataset.state = isDebugModeEnabled() ? 'enabled' : 'disabled';
+    }
+  }
+
+  function formatRendererFailureMessage(detail) {
+    const baseMessage =
+      typeof detail?.message === 'string' && detail.message.trim().length
+        ? detail.message.trim()
+        : 'Renderer unavailable. Reload to try again.';
+    const stage =
+      typeof detail?.stage === 'string' && detail.stage.trim().length ? detail.stage.trim() : null;
+    if (!isDebugModeEnabled()) {
+      return stage ? `${baseMessage} (${stage})` : baseMessage;
+    }
+    const extras = [];
+    if (stage) {
+      extras.push(`Stage: ${stage}`);
+    }
+    const errorName =
+      typeof detail?.errorName === 'string' && detail.errorName.trim().length
+        ? detail.errorName.trim()
+        : null;
+    const errorMessage =
+      typeof detail?.error === 'string' && detail.error.trim().length ? detail.error.trim() : null;
+    if (errorName && errorMessage) {
+      extras.push(`${errorName}: ${errorMessage}`);
+    } else if (errorMessage) {
+      extras.push(`Error: ${errorMessage}`);
+    }
+    const stack =
+      typeof detail?.stack === 'string' && detail.stack.trim().length ? detail.stack.trim() : null;
+    if (stack) {
+      extras.push(stack);
+    }
+    if (extras.length) {
+      return `${baseMessage}\n\n${extras.join('\n')}`;
+    }
+    return baseMessage;
+  }
+
+  function refreshRendererFailureOverlay() {
+    if (!lastRendererFailureDetail) {
+      return;
+    }
+    if (typeof bootstrapOverlay?.showError !== 'function') {
+      return;
+    }
+    if (bootstrapOverlay.state?.mode !== 'error') {
+      return;
+    }
+    bootstrapOverlay.showError({
+      title: 'Renderer unavailable',
+      message: formatRendererFailureMessage(lastRendererFailureDetail),
+    });
+  }
+
+  function setDebugModeEnabled(enabled, options = {}) {
+    const next = Boolean(enabled);
+    const previous = debugModeState.enabled;
+    if (previous === next) {
+      if (options.forceRefresh) {
+        refreshDebugModeUi();
+        refreshEventLogDebugDetails();
+        refreshRendererFailureOverlay();
+      }
+      return next;
+    }
+    debugModeState.enabled = next;
+    if (options.persist !== false) {
+      persistDebugModePreference(next);
+    }
+    refreshDebugModeUi();
+    refreshEventLogDebugDetails();
+    refreshRendererFailureOverlay();
+    if (options.log !== false) {
+      appendEventLogEntry('debug-mode', {
+        enabled: next,
+        source: options.source || 'unknown',
+        timestamp: Date.now(),
+      });
+    }
+    const listeners = Array.from(debugModeState.listeners);
+    listeners.forEach((listener) => {
+      try {
+        listener(next);
+      } catch (error) {
+        if (globalScope.console?.debug) {
+          globalScope.console.debug('Debug mode listener error', error);
+        }
+      }
+    });
+    return next;
+  }
+
+  function toggleDebugMode(options = {}) {
+    return setDebugModeEnabled(!isDebugModeEnabled(), options);
+  }
+
+  function bindDebugModeControls(ui) {
+    if (!ui) {
+      return;
+    }
+    const toggle = ui.debugModeToggle;
+    if (toggle) {
+      debugModeState.toggleButton = toggle;
+      if (!toggle.dataset.debugModeBound) {
+        toggle.addEventListener('click', (event) => {
+          if (event?.preventDefault) {
+            event.preventDefault();
+          }
+          toggleDebugMode({ source: 'ui' });
+        });
+        toggle.dataset.debugModeBound = 'true';
+      }
+    }
+    if (ui.debugModeStatus) {
+      debugModeState.statusElement = ui.debugModeStatus;
+    }
+    setDebugModeEnabled(isDebugModeEnabled(), { persist: false, log: false, forceRefresh: true });
+  }
+
+  refreshDebugModeUi();
 
   const DEFAULT_KEY_BINDINGS = (() => {
     const bindings = {
@@ -1565,6 +1871,8 @@
       portalProgressLabel: query('#portalProgress .label'),
       portalProgressBar: query('#portalProgress .bar'),
       eventLogEl: byId('eventLog'),
+      debugModeToggle: byId('debugModeToggle'),
+      debugModeStatus: byId('debugModeStatus'),
       blockActionHud: byId('blockActionHud'),
       crosshairEl: byId('crosshair'),
       mobileControls: byId('mobileControls'),
@@ -1614,6 +1922,7 @@
       return null;
     }
     const ui = collectSimpleExperienceUi(doc);
+    bindDebugModeControls(ui);
     bindExperienceEventLog(ui);
     let experience;
     try {
@@ -1784,6 +2093,14 @@
   if (!globalScope.InfiniteRails.identity) {
     globalScope.InfiniteRails.identity = identityApi;
   }
+  const debugApi = globalScope.InfiniteRails.debug || {};
+  debugApi.isEnabled = () => isDebugModeEnabled();
+  debugApi.setEnabled = (value, options = {}) =>
+    setDebugModeEnabled(Boolean(value), { ...options, source: options.source ?? 'api' });
+  debugApi.toggle = (options = {}) => toggleDebugMode({ ...options, source: options.source ?? 'api' });
+  debugApi.onChange = addDebugModeChangeListener;
+  debugApi.getState = () => ({ enabled: isDebugModeEnabled() });
+  globalScope.InfiniteRails.debug = debugApi;
 
   globalScope.bootstrap = bootstrap;
 
