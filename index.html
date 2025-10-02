@@ -1453,13 +1453,33 @@
           }
           var overlay = doc.getElementById('globalOverlay');
           if (overlay && overlay.getAttribute('data-fallback-active') === 'true') {
+            var dialog = doc.getElementById('globalOverlayDialog');
+            var previouslyFocused = doc.activeElement;
+            if (dialog && previouslyFocused && dialog.contains(previouslyFocused)) {
+              if (typeof previouslyFocused.blur === 'function') {
+                previouslyFocused.blur();
+              }
+              var focusTarget = doc.body;
+              if (focusTarget) {
+                var originalTabIndex = focusTarget.getAttribute('tabindex');
+                if (originalTabIndex === null) {
+                  focusTarget.setAttribute('tabindex', '-1');
+                }
+                if (typeof focusTarget.focus === 'function') {
+                  focusTarget.focus();
+                }
+                if (originalTabIndex === null) {
+                  focusTarget.removeAttribute('tabindex');
+                }
+              }
+            }
+
             overlay.setAttribute('aria-hidden', 'true');
             overlay.setAttribute('data-mode', 'idle');
             overlay.removeAttribute('data-fallback-active');
             overlay.setAttribute('hidden', '');
             overlay.hidden = true;
 
-            var dialog = doc.getElementById('globalOverlayDialog');
             if (dialog) {
               dialog.removeAttribute('aria-busy');
             }
