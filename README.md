@@ -293,7 +293,7 @@ If no CloudFront distribution matches the S3 bucket, the workflow fails with ins
 
 ### Static asset permissions
 
-Every file uploaded during the deploy—including JavaScript bundles, GLTF models, textures, ambient audio, and any future additions under `assets/` or `vendor/`—must be readable by CloudFront. The GitHub Actions workflow configures the bucket with a permissive `s3:GetObject` statement by default, but infrastructure teams can swap this for an Origin Access Identity (OAI) or Origin Access Control (OAC) as long as the identity retains read access to the same object prefixes.
+Every file uploaded during the deploy—including JavaScript bundles, GLTF models, textures, ambient audio, and any future additions under `assets/` or `vendor/`—must be readable by CloudFront. The GitHub Actions workflow configures the bucket with a permissive `s3:GetObject` statement by default and now emits an explicit read grant for every GLTF/GLB/BIN model file and texture prefix under `assets/`. Infrastructure teams can swap this for an Origin Access Identity (OAI) or Origin Access Control (OAC) as long as the identity retains read access to the same object prefixes.
 
 To confirm nothing blocks the experience from loading:
 
