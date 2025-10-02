@@ -1263,6 +1263,36 @@
         <div class="compose-overlay__body">
           <h3 class="compose-overlay__title" id="globalOverlayTitle">Working…</h3>
           <p class="compose-overlay__message" id="globalOverlayMessage" aria-live="polite"></p>
+          <div class="compose-overlay__diagnostics" id="globalOverlayDiagnostics" aria-live="polite">
+            <ul class="diagnostic-list" role="list">
+              <li class="diagnostic-list__item" data-diagnostic="renderer" data-status="pending">
+                <span class="diagnostic-list__label">Renderer</span>
+                <span class="diagnostic-list__status" id="globalOverlayRendererStatus">Initialising renderer…</span>
+              </li>
+              <li class="diagnostic-list__item" data-diagnostic="assets" data-status="pending">
+                <span class="diagnostic-list__label">Assets</span>
+                <span class="diagnostic-list__status" id="globalOverlayAssetsStatus">Streaming core assets…</span>
+              </li>
+              <li class="diagnostic-list__item" data-diagnostic="backend" data-status="pending">
+                <span class="diagnostic-list__label">Backend</span>
+                <span class="diagnostic-list__status" id="globalOverlayBackendStatus">Checking leaderboard service…</span>
+              </li>
+            </ul>
+          </div>
+          <div class="compose-overlay__support" id="globalOverlaySupport">
+            <a
+              class="compose-overlay__support-link"
+              id="globalOverlaySupportLink"
+              href="https://support.infiniterails.app/diagnostics"
+              target="_blank"
+              rel="noreferrer noopener"
+            >
+              Need help? Visit support
+            </a>
+            <button type="button" class="compose-overlay__support-action" id="globalOverlayDownloadLogs">
+              Download logs
+            </button>
+          </div>
           <div class="compose-overlay__actions" id="globalOverlayActions"></div>
         </div>
       </div>

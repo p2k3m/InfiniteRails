@@ -3342,7 +3342,7 @@ body.sidebar-open .player-hint {
 }
 
 .compose-overlay__dialog {
-  width: min(360px, 100%);
+  width: min(420px, 100%);
   border-radius: 16px;
   padding: 1.75rem 1.5rem;
   background: rgba(9, 17, 34, 0.96);
@@ -3373,6 +3373,95 @@ body.sidebar-open .player-hint {
   font-size: 0.95rem;
   line-height: 1.5;
   color: var(--text-secondary);
+}
+
+.compose-overlay__diagnostics {
+  width: 100%;
+}
+
+.diagnostic-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.diagnostic-list__item {
+  display: flex;
+  gap: 0.75rem;
+  justify-content: space-between;
+  align-items: flex-start;
+  padding: 0.75rem 1rem;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(143, 187, 255, 0.12);
+  color: inherit;
+  transition: border-color 0.2s ease, background 0.2s ease;
+}
+
+.diagnostic-list__item[data-status='ok'] {
+  border-color: rgba(74, 222, 128, 0.45);
+  background: rgba(74, 222, 128, 0.12);
+}
+
+.diagnostic-list__item[data-status='warning'] {
+  border-color: rgba(251, 191, 36, 0.45);
+  background: rgba(251, 191, 36, 0.12);
+}
+
+.diagnostic-list__item[data-status='error'] {
+  border-color: rgba(248, 113, 113, 0.55);
+  background: rgba(248, 113, 113, 0.16);
+}
+
+.diagnostic-list__label {
+  font-weight: 600;
+  font-size: 0.95rem;
+  letter-spacing: 0.02em;
+}
+
+.diagnostic-list__status {
+  font-size: 0.9rem;
+  line-height: 1.4;
+  text-align: right;
+  color: rgba(229, 237, 255, 0.88);
+}
+
+.compose-overlay__support {
+  width: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  justify-content: center;
+  margin-top: 0.25rem;
+}
+
+.compose-overlay__support-link,
+.compose-overlay__support-action {
+  font-size: 0.9rem;
+  padding: 0.5rem 0.9rem;
+  border-radius: 999px;
+  border: 1px solid rgba(143, 187, 255, 0.28);
+  background: rgba(18, 48, 86, 0.45);
+  color: rgba(229, 237, 255, 0.94);
+  text-decoration: none;
+  transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+  cursor: pointer;
+}
+
+.compose-overlay__support-link:hover,
+.compose-overlay__support-link:focus-visible,
+.compose-overlay__support-action:hover,
+.compose-overlay__support-action:focus-visible {
+  border-color: rgba(99, 179, 237, 0.8);
+  background: rgba(20, 78, 134, 0.7);
+  color: #f6fbff;
+  outline: none;
+}
+
+.compose-overlay__support-action {
+  font-weight: 600;
 }
 
 .compose-overlay__spinner {
