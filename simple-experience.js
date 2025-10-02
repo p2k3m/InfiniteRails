@@ -7288,7 +7288,10 @@
       if (loot.message) {
         this.showHint(loot.message);
       }
-      this.audio.play('craftChime', { volume: 0.68 });
+      this.audio.play('lootChestOpen', {
+        volume: 0.62,
+        rate: 1.18 + Math.random() * 0.08,
+      });
       this.lastChestHintAt = this.elapsed;
       console.error(
         `Loot chest interaction flagged — ${chest.id}. If rewards are missing, review the chest configuration and loot tables for this encounter.`,
@@ -10257,7 +10260,10 @@
       this.health = Math.max(0, this.health - amount);
       if (this.health !== previous) {
         this.updateHud();
-        this.audio.play('crunch', { volume: 0.55 + Math.random() * 0.2 });
+        this.audio.play('playerHit', {
+          volume: 0.58 + Math.random() * 0.18,
+          rate: 0.88 + Math.random() * 0.12,
+        });
         this.triggerCameraImpulse(0.6, 0.4);
       }
       if (this.health <= 0) {
@@ -10423,7 +10429,10 @@
       this.score = Math.max(0, this.score - 0.25);
       this.updatePortalFrameStateForColumn(gx, gz);
       this.updateHud();
-      this.audio.play('crunch', { volume: 0.4 + Math.random() * 0.15 });
+      this.audio.play('blockPlace', {
+        volume: 0.42 + Math.random() * 0.12,
+        rate: 1.18 + Math.random() * 0.12,
+      });
       this.triggerCameraImpulse(0.32, 0.18);
     }
 
