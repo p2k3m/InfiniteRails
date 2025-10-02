@@ -1826,17 +1826,85 @@
       if (hudRootEl) {
         document.body.classList.add('game-active');
       }
-      if (this.canvas && typeof this.canvas.focus === 'function') {
-        try {
-          this.canvas.focus({ preventScroll: true });
-        } catch (error) {
-          try {
-            this.canvas.focus();
-          } catch (nestedError) {
-            console.debug('Canvas focus unavailable in this browser.', nestedError);
+      this.focusGameViewport();
+    }
+
+    focusGameViewport(options = {}) {
+      const doc = typeof document !== 'undefined' ? document : null;
+      if (!doc) {
+        return false;
+      }
+      const {
+        preventScroll = true,
+        preferCanvas = true,
+        preferredTarget = null,
+        fallbackSelectors = [
+          '[data-focus-default]',
+          '[data-focus-target]',
+          'button:not([disabled])',
+          '[href]',
+          '[tabindex]:not([tabindex="-1"])',
+        ],
+      } = typeof options === 'object' && options ? options : {};
+      const hudRoot = this.hudRootEl || this.ui?.hudRootEl || null;
+      const focusTargets = [];
+      if (preferredTarget && typeof preferredTarget.focus === 'function') {
+        focusTargets.push(preferredTarget);
+      }
+      if (preferCanvas && this.canvas && typeof this.canvas.focus === 'function') {
+        focusTargets.push(this.canvas);
+      }
+      if (hudRoot) {
+        if (typeof hudRoot.getAttribute === 'function' && hudRoot.getAttribute('tabindex') === null) {
+          hudRoot.setAttribute('tabindex', '-1');
+        }
+        if (typeof hudRoot.querySelector === 'function') {
+          for (const selector of fallbackSelectors) {
+            if (!selector) {
+              continue;
+            }
+            const candidate = hudRoot.querySelector(selector);
+            if (candidate && typeof candidate.focus === 'function') {
+              focusTargets.push(candidate);
+              break;
+            }
           }
         }
+        focusTargets.push(hudRoot);
       }
+      const attempted = new Set();
+      const tryFocus = (element) => {
+        if (!element || typeof element.focus !== 'function' || attempted.has(element)) {
+          return false;
+        }
+        attempted.add(element);
+        try {
+          if (preventScroll) {
+            element.focus({ preventScroll: true });
+          } else {
+            element.focus();
+          }
+          return true;
+        } catch (error) {
+          try {
+            element.focus();
+            return true;
+          } catch (nestedError) {
+            return false;
+          }
+        }
+      };
+      for (const element of focusTargets) {
+        if (tryFocus(element)) {
+          return true;
+        }
+      }
+      if (!preferCanvas && this.canvas && typeof this.canvas.focus === 'function') {
+        if (tryFocus(this.canvas)) {
+          return true;
+        }
+      }
+      return false;
     }
 
     bindFirstRunTutorialControls() {
@@ -1990,6 +2058,8 @@
         }
         if (showBriefingAfter) {
           this.showBriefingOverlay();
+        } else {
+          this.focusGameViewport();
         }
         this.firstRunTutorialHideTimer = null;
       };
@@ -2051,6 +2121,7 @@
       if (!briefing.classList.contains('is-visible')) {
         briefing.hidden = true;
         setInertState(briefing, true);
+        this.focusGameViewport();
         return;
       }
       briefing.classList.remove('is-visible');
@@ -2058,7 +2129,7 @@
       const duration = force ? 120 : 280;
       this.briefingFadeTimer = timerHost.setTimeout(() => {
         briefing.hidden = true;
-        this.canvas.focus({ preventScroll: true });
+        this.focusGameViewport();
       }, duration);
     }
 
@@ -12000,14 +12071,21 @@
     }
 
     hideAssetRecoveryPrompt() {
+      const wasActive = this.assetRecoveryPromptActive;
       if (!this.assetRecoveryOverlayEl) {
         this.assetRecoveryPromptActive = false;
+        if (wasActive) {
+          this.focusGameViewport();
+        }
         return;
       }
       setInertState(this.assetRecoveryOverlayEl, true);
       this.assetRecoveryOverlayEl.setAttribute('hidden', '');
       this.assetRecoveryOverlayEl.hidden = true;
       this.assetRecoveryPromptActive = false;
+      if (wasActive) {
+        this.focusGameViewport();
+      }
     }
 
     maybeHideAssetRecoveryPrompt() {
@@ -12471,7 +12549,7 @@
         this.craftingModal.hidden = true;
         setInertState(this.craftingModal, true);
         this.toggleCraftingSearch(false);
-        this.canvas.focus({ preventScroll: true });
+        this.focusGameViewport();
         this.clearCraftingHelperHint();
       }
       if (this.craftLauncherButton) {
@@ -12490,7 +12568,7 @@
       } else {
         this.inventoryModal.hidden = true;
         setInertState(this.inventoryModal, true);
-        this.canvas.focus({ preventScroll: true });
+        this.focusGameViewport();
         this.inventorySortButton?.setAttribute('aria-pressed', 'false');
       }
       this.openInventoryButtons.forEach((btn) => {
@@ -13708,6 +13786,7 @@
         if (this.victoryFireworksEl) {
           this.victoryFireworksEl.innerHTML = '';
         }
+        this.focusGameViewport();
       };
       if (this.victoryHideTimer) {
         clearTimeout(this.victoryHideTimer);
