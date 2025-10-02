@@ -49,7 +49,11 @@
       }
       return href;
     } catch (error) {
-      logAssetIssue('Invalid asset base URL encountered; ignoring configuration value.', error, { base });
+      logAssetIssue(
+        'Invalid asset base URL encountered; ignoring configuration value. Update APP_CONFIG.assetBaseUrl to a fully-qualified directory URL (ending with a slash) so CDN assets can be resolved.',
+        error,
+        { base },
+      );
       return null;
     }
   }
@@ -75,7 +79,7 @@
         pushCandidate(candidates, seen, new URL(relativePath, configBase).href);
       } catch (error) {
         logAssetIssue(
-          'Failed to resolve asset URL using configured base; falling back to defaults.',
+          'Failed to resolve asset URL using configured base; falling back to defaults. Verify APP_CONFIG.assetBaseUrl points to an accessible asset root or remove the override to use built-in paths.',
           error,
           { base: scope.APP_CONFIG?.assetBaseUrl ?? null, relativePath }
         );
@@ -105,7 +109,7 @@
           pushCandidate(candidates, seen, new URL(relativePath, `${scriptUrl.origin}/`).href);
         } catch (error) {
           logAssetIssue(
-            'Unable to derive asset URL from current script location; trying alternative fallbacks.',
+            'Unable to derive asset URL from current script location; trying alternative fallbacks. Ensure script.js is served from the asset bundle root or configure APP_CONFIG.assetBaseUrl explicitly.',
             error,
             { scriptSrc: currentScript?.src ?? null, relativePath }
           );
@@ -117,7 +121,7 @@
           pushCandidate(candidates, seen, new URL(relativePath, documentRef.baseURI).href);
         } catch (error) {
           logAssetIssue(
-            'Document base URI produced an invalid asset URL; continuing with other fallbacks.',
+            'Document base URI produced an invalid asset URL; continuing with other fallbacks. Review the <base href> element so it references the directory that hosts your Infinite Rails assets.',
             error,
             { baseURI: documentRef.baseURI, relativePath }
           );
@@ -130,7 +134,7 @@
         pushCandidate(candidates, seen, new URL(relativePath, `${windowRef.location.origin}/`).href);
       } catch (error) {
         logAssetIssue(
-          'Window origin fallback failed while resolving asset URL; relying on relative paths.',
+          'Window origin fallback failed while resolving asset URL; relying on relative paths. Confirm window.location.origin is reachable or configure APP_CONFIG.assetBaseUrl to bypass this fallback.',
           error,
           { origin: windowRef?.location?.origin ?? null, relativePath }
         );

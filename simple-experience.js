@@ -90,7 +90,11 @@
     } else if (typeof consoleRef.error === 'function') {
       consoleRef.error(message, context);
     } else if (typeof consoleRef.log === 'function') {
-      consoleRef.log(message, context);
+      if (typeof consoleRef.error === 'function') {
+        consoleRef.error(message, context);
+      } else {
+        consoleRef.log(message, context);
+      }
     }
   }
 
@@ -107,33 +111,45 @@
       const scope = typeof window !== 'undefined' ? window : typeof globalThis !== 'undefined' ? globalThis : null;
       resolved = new URL(trimmed, scope?.location?.href ?? undefined);
     } catch (error) {
-      logConfigWarning('Invalid APP_CONFIG.apiBaseUrl detected; remote sync disabled.', {
-        apiBaseUrl: base,
-        error: error?.message ?? String(error),
-      });
+      logConfigWarning(
+        'Invalid APP_CONFIG.apiBaseUrl detected; remote sync disabled. Update APP_CONFIG.apiBaseUrl to a valid absolute HTTP(S) URL in your configuration to restore remote synchronisation.',
+        {
+          apiBaseUrl: base,
+          error: error?.message ?? String(error),
+        },
+      );
       return null;
     }
     const hasExplicitProtocol = /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(trimmed);
     if (!hasExplicitProtocol) {
-      logConfigWarning('APP_CONFIG.apiBaseUrl must be an absolute URL including the protocol.', {
-        apiBaseUrl: base,
-        resolved: resolved.href,
-      });
+      logConfigWarning(
+        'APP_CONFIG.apiBaseUrl must be an absolute URL including the protocol. Set APP_CONFIG.apiBaseUrl to a fully-qualified HTTP(S) endpoint (for example, https://example.com/api).',
+        {
+          apiBaseUrl: base,
+          resolved: resolved.href,
+        },
+      );
       return null;
     }
     if (resolved.protocol !== 'https:' && resolved.protocol !== 'http:') {
-      logConfigWarning('APP_CONFIG.apiBaseUrl must use HTTP or HTTPS.', {
-        apiBaseUrl: base,
-        protocol: resolved.protocol,
-      });
+      logConfigWarning(
+        'APP_CONFIG.apiBaseUrl must use HTTP or HTTPS. Update the configuration to point at an HTTP(S) service that can accept leaderboard sync requests.',
+        {
+          apiBaseUrl: base,
+          protocol: resolved.protocol,
+        },
+      );
       return null;
     }
     if (resolved.search || resolved.hash) {
-      logConfigWarning('APP_CONFIG.apiBaseUrl should not include query strings or fragments; ignoring extras.', {
-        apiBaseUrl: base,
-        search: resolved.search,
-        hash: resolved.hash,
-      });
+      logConfigWarning(
+        'APP_CONFIG.apiBaseUrl should not include query strings or fragments; ignoring extras. Remove trailing query parameters or hashes from APP_CONFIG.apiBaseUrl so requests reach the API root.',
+        {
+          apiBaseUrl: base,
+          search: resolved.search,
+          hash: resolved.hash,
+        },
+      );
       resolved.search = '';
       resolved.hash = '';
     }
