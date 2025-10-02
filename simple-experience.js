@@ -7,13 +7,24 @@
     accent: '#b5b5b5',
   };
   const BLOCK_SIZE = 1;
+  const DEFAULT_TEXTURE_BASE_URL = 'https://infinite-rails-textures.s3.amazonaws.com/blocks';
   const DEFAULT_TEXTURE_MANIFEST = {
-    grass:
+    grass: [
+      `${DEFAULT_TEXTURE_BASE_URL}/grass.png`,
       'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAGUlEQVR4nGOMn2/KQApgIkn1qIZRDUNKAwDeMQFTRB/l3QAAAABJRU5ErkJggg==',
-    dirt:
+    ],
+    dirt: [
+      `${DEFAULT_TEXTURE_BASE_URL}/dirt.png`,
       'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAGUlEQVR4nGNsS3BmIAUwkaR6VMOohiGlAQC/vgFJA9SUHwAAAABJRU5ErkJggg==',
-    stone:
+    ],
+    stone: [
+      `${DEFAULT_TEXTURE_BASE_URL}/stone.png`,
       'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAGUlEQVR4nGNsaGhgIAUwkaR6VMOohiGlAQDJTAGgLgFHggAAAABJRU5ErkJggg==',
+    ],
+    rails: [
+      `${DEFAULT_TEXTURE_BASE_URL}/rails.png`,
+      'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4////fwAJ/wP+1n84xQAAAABJRU5ErkJggg==',
+    ],
   };
   const TEXTURE_PACK_ERROR_NOTICE_THRESHOLD = 3;
   const MIN_COLUMN_HEIGHT = 1;
