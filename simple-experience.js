@@ -35,7 +35,7 @@
   const ZOMBIE_CONTACT_RANGE = 1.35;
   const ZOMBIE_SPAWN_INTERVAL = 8;
   const ZOMBIE_MAX_PER_DIMENSION = 4;
-  const HOTBAR_SLOTS = 9;
+  const HOTBAR_SLOTS = 10;
   const KEY_BINDINGS_STORAGE_KEY = 'infinite-rails-keybindings';
   const SCOREBOARD_STORAGE_KEY = 'infinite-dimension-scoreboard';
   const FIRST_RUN_TUTORIAL_STORAGE_KEY = 'infinite-rails-first-run-tutorial';
@@ -60,13 +60,11 @@
       closeMenus: ['Escape'],
     };
     for (let slot = 1; slot <= HOTBAR_SLOTS; slot += 1) {
-      const digit = slot;
+      const digit = slot % 10;
       const action = `hotbar${slot}`;
-      const bindings = [`Digit${digit}`];
-      if (slot <= 9) {
-        bindings.push(`Numpad${slot}`);
-      }
-      map[action] = bindings;
+      const primary = digit === 0 ? 'Digit0' : `Digit${digit}`;
+      const secondary = digit === 0 ? 'Numpad0' : `Numpad${digit}`;
+      map[action] = [primary, secondary];
     }
     Object.keys(map).forEach((action) => {
       map[action] = Object.freeze([...map[action]]);
@@ -1162,6 +1160,13 @@
       this.handMaterials = [];
       this.handMaterialsDynamic = true;
       this.handModelLoaded = false;
+      this.leftHandGroup = null;
+      this.rightHandGroup = null;
+      this.handItemAnchor = null;
+      this.equippedItemMesh = null;
+      this.equippedItemId = null;
+      this.equippedItemQuantity = 0;
+      this.pendingEquippedItemId = null;
       this.portalShaderFallbackActive = false;
       this.lightingFallbackPending = false;
       this.lightingFallbackActive = false;
@@ -1207,6 +1212,9 @@
       this.lastOfflineSyncHintAt = 0;
       this.offlineSyncHintCooldownMs = 16000;
       this.hotbarEl = this.ui.hotbarEl || null;
+      this.handOverlayEl = this.ui.handOverlayEl || null;
+      this.handOverlayIconEl = this.ui.handOverlayIconEl || null;
+      this.handOverlayLabelEl = this.ui.handOverlayLabelEl || null;
       this.playerHintEl = this.ui.playerHintEl || null;
       this.pointerHintEl = this.ui.pointerHintEl || null;
       this.footerEl = this.ui.footerEl || null;
@@ -1540,6 +1548,7 @@
       this.hotbar = Array.from({ length: HOTBAR_SLOTS }, () => ({ item: null, quantity: 0 }));
       this.selectedHotbarIndex = 0;
       this.satchel = new Map();
+      this.refreshEquippedItem();
       this.craftingState = {
         sequence: [],
         unlocked: new Map(),
@@ -5266,8 +5275,12 @@
       }
 
       if (this.handGroup) {
+        this.disposeEquippedItemModel();
         this.camera.remove(this.handGroup);
       }
+      this.handItemAnchor = null;
+      this.leftHandGroup = null;
+      this.rightHandGroup = null;
 
       this.handGroup = new THREE.Group();
       this.handGroup.position.set(0.42, -0.46, -0.8);
@@ -5310,8 +5323,17 @@
       const right = createHand(1);
       this.handGroup.add(left.group);
       this.handGroup.add(right.group);
+      this.leftHandGroup = left.group;
+      this.rightHandGroup = right.group;
       this.camera.add(this.handGroup);
       this.handMaterials = [left.palm.material, right.palm.material, left.sleeve.material, right.sleeve.material];
+      this.ensureHandItemAnchor();
+      const equipped = this.equippedItemId || this.pendingEquippedItemId;
+      if (equipped) {
+        this.attachEquippedItemModel(equipped);
+      } else {
+        this.attachEquippedItemModel(null);
+      }
       this.ensurePlayerArmsVisible();
     }
 
@@ -11079,6 +11101,7 @@
       this.updateExtendedInventoryUi();
       this.updateHotbarExpansionUi();
       this.updateCraftButtonState();
+      this.refreshEquippedItem();
     }
 
     updateHotbarUi() {
@@ -11123,6 +11146,222 @@
       });
       this.hotbarEl.innerHTML = '';
       this.hotbarEl.appendChild(fragment);
+    }
+
+    refreshEquippedItem() {
+      const slot = Array.isArray(this.hotbar) ? this.hotbar[this.selectedHotbarIndex] : null;
+      const rawQuantity = Number.isFinite(slot?.quantity) ? slot.quantity : 0;
+      const quantity = Math.max(0, rawQuantity);
+      const itemId = slot?.item && quantity > 0 ? slot.item : null;
+      this.updateHandOverlay(itemId, quantity);
+      const normalisedQuantity = itemId ? quantity : 0;
+      if (this.equippedItemId === itemId && this.equippedItemQuantity === normalisedQuantity) {
+        this.pendingEquippedItemId = itemId || null;
+        if (!itemId) {
+          this.attachEquippedItemModel(null);
+        }
+        return;
+      }
+      this.equippedItemId = itemId;
+      this.equippedItemQuantity = normalisedQuantity;
+      this.pendingEquippedItemId = itemId || null;
+      this.attachEquippedItemModel(itemId);
+    }
+
+    updateHandOverlay(itemId, quantity = 0) {
+      const overlay = this.handOverlayEl;
+      const icon = this.handOverlayIconEl;
+      const labelEl = this.handOverlayLabelEl;
+      const hasItem = Boolean(itemId) && quantity > 0;
+      const datasetValue = hasItem ? itemId : 'fist';
+      const count = hasItem ? Math.max(1, quantity) : 0;
+      if (overlay) {
+        if (!overlay.dataset) {
+          overlay.dataset = {};
+        }
+        overlay.dataset.item = datasetValue;
+        overlay.dataset.quantity = String(count);
+        if (typeof overlay.setAttribute === 'function') {
+          overlay.setAttribute('aria-hidden', 'false');
+          const ariaLabel = hasItem ? formatInventoryLabel(itemId, count) : 'Fist equipped';
+          overlay.setAttribute('aria-label', ariaLabel);
+        }
+        overlay.hidden = false;
+        if (typeof overlay.removeAttribute === 'function') {
+          overlay.removeAttribute('hidden');
+        }
+      }
+      if (icon) {
+        if (!icon.dataset) {
+          icon.dataset = {};
+        }
+        icon.dataset.item = datasetValue;
+      }
+      if (labelEl) {
+        if (hasItem) {
+          const definition = getItemDefinition(itemId);
+          const label = definition?.label || itemId;
+          labelEl.textContent = count > 1 ? `${label} ×${count}` : label;
+        } else {
+          labelEl.textContent = 'Fist';
+        }
+      }
+    }
+
+    ensureHandItemAnchor() {
+      if (!this.THREE || !this.rightHandGroup) {
+        return null;
+      }
+      if (this.handItemAnchor && this.handItemAnchor.parent) {
+        return this.handItemAnchor;
+      }
+      const anchor = new this.THREE.Group();
+      anchor.name = 'EquippedItemAnchor';
+      anchor.position.set(0.18, -0.18, 0.16);
+      anchor.rotation.set(-0.55, 0.88, 0.35);
+      this.rightHandGroup.add(anchor);
+      this.handItemAnchor = anchor;
+      return anchor;
+    }
+
+    disposeEquippedItemModel() {
+      if (!this.equippedItemMesh) {
+        return;
+      }
+      const mesh = this.equippedItemMesh;
+      if (mesh.parent && typeof mesh.parent.remove === 'function') {
+        mesh.parent.remove(mesh);
+      }
+      disposeObject3D(mesh);
+      this.equippedItemMesh = null;
+    }
+
+    attachEquippedItemModel(itemId) {
+      this.pendingEquippedItemId = itemId || null;
+      if (!itemId) {
+        this.disposeEquippedItemModel();
+        return;
+      }
+      const anchor = this.ensureHandItemAnchor();
+      if (!anchor) {
+        return;
+      }
+      if (this.equippedItemMesh?.userData?.itemId === itemId && this.equippedItemMesh.parent === anchor) {
+        return;
+      }
+      this.disposeEquippedItemModel();
+      const model = this.buildEquippedItemModel(itemId);
+      if (!model) {
+        return;
+      }
+      anchor.add(model);
+      this.equippedItemMesh = model;
+    }
+
+    buildEquippedItemModel(itemId) {
+      const THREE = this.THREE;
+      if (!THREE || !itemId) {
+        return null;
+      }
+      const group = new THREE.Group();
+      group.name = `EquippedItem:${itemId}`;
+      const makeMaterial = (hex, options = {}) => {
+        const material = new THREE.MeshStandardMaterial({
+          color: new THREE.Color(hex),
+          roughness: options.roughness ?? 0.55,
+          metalness: options.metalness ?? 0.25,
+        });
+        if (options.emissive) {
+          material.emissive = new THREE.Color(options.emissive);
+          material.emissiveIntensity = options.emissiveIntensity ?? 0.6;
+        }
+        return material;
+      };
+      const colorFromMaterial = (material, fallback) => {
+        if (material?.color && typeof material.color.getHexString === 'function') {
+          return `#${material.color.getHexString()}`;
+        }
+        return fallback;
+      };
+      const addMesh = (geometry, material) => {
+        const mesh = new THREE.Mesh(geometry, material);
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+        group.add(mesh);
+        return mesh;
+      };
+      if (itemId === 'stone-pickaxe') {
+        const handleMaterial = makeMaterial('#8b5a2b', { roughness: 0.6, metalness: 0.08 });
+        const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.64, 8), handleMaterial);
+        handle.rotation.z = Math.PI / 2;
+        handle.position.set(0, -0.05, 0);
+        handle.castShadow = true;
+        handle.receiveShadow = true;
+        group.add(handle);
+        const headColor = colorFromMaterial(this.materials?.stone, '#9a9a9a');
+        const headMaterial = makeMaterial(headColor, { roughness: 0.45, metalness: 0.35 });
+        const head = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.12, 0.16), headMaterial);
+        head.position.set(0.18, 0.12, 0);
+        head.rotation.z = -Math.PI / 6;
+        head.castShadow = true;
+        head.receiveShadow = true;
+        group.add(head);
+        const spike = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.1, 0.1), headMaterial.clone());
+        spike.position.set(0.18, 0.2, 0);
+        spike.rotation.z = Math.PI / 4;
+        spike.castShadow = true;
+        spike.receiveShadow = true;
+        group.add(spike);
+      } else if (itemId === 'stick') {
+        const stickMaterial = makeMaterial('#a97142', { roughness: 0.65, metalness: 0.05 });
+        const rod = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.045, 0.6, 7), stickMaterial);
+        rod.rotation.z = Math.PI / 2;
+        rod.position.set(0, -0.05, 0);
+        rod.castShadow = true;
+        rod.receiveShadow = true;
+        group.add(rod);
+      } else if (itemId === 'portal-charge') {
+        const chargeMaterial = makeMaterial('#7f5af0', {
+          roughness: 0.25,
+          metalness: 0.4,
+          emissive: '#2cb67d',
+          emissiveIntensity: 0.75,
+        });
+        const core = new THREE.Mesh(new THREE.IcosahedronGeometry(0.18, 0), chargeMaterial);
+        core.castShadow = true;
+        core.receiveShadow = true;
+        group.add(core);
+      } else if (itemId === 'eternal-ingot') {
+        const ingotMaterial = makeMaterial('#fbbf24', { roughness: 0.3, metalness: 0.78 });
+        const ingot = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.16, 0.2), ingotMaterial);
+        ingot.castShadow = true;
+        ingot.receiveShadow = true;
+        group.add(ingot);
+      } else if (itemId === 'grass-block') {
+        const topColor = colorFromMaterial(this.materials?.grass, '#69c368');
+        const sideColor = colorFromMaterial(this.materials?.dirt, '#a66a33');
+        const base = addMesh(new THREE.BoxGeometry(0.34, 0.2, 0.34), makeMaterial(sideColor, { roughness: 0.7, metalness: 0.12 }));
+        base.position.y = -0.04;
+        const top = addMesh(new THREE.BoxGeometry(0.34, 0.14, 0.34), makeMaterial(topColor, { roughness: 0.5, metalness: 0.1 }));
+        top.position.y = 0.16;
+      } else if (itemId === 'dirt') {
+        const dirtColor = colorFromMaterial(this.materials?.dirt, '#a66a33');
+        addMesh(new THREE.BoxGeometry(0.34, 0.34, 0.34), makeMaterial(dirtColor, { roughness: 0.68, metalness: 0.12 }));
+      } else if (itemId === 'stone') {
+        const stoneColor = colorFromMaterial(this.materials?.stone, '#9a9a9a');
+        addMesh(new THREE.BoxGeometry(0.34, 0.34, 0.34), makeMaterial(stoneColor, { roughness: 0.55, metalness: 0.3 }));
+      } else {
+        const fallbackColor = colorFromMaterial(this.materials?.stone, '#9a9a9a');
+        addMesh(new THREE.BoxGeometry(0.3, 0.3, 0.3), makeMaterial(fallbackColor, { roughness: 0.6, metalness: 0.2 }));
+      }
+      group.userData = { ...(group.userData || {}), itemId };
+      group.traverse((child) => {
+        if (child.isMesh) {
+          child.castShadow = true;
+          child.receiveShadow = true;
+        }
+      });
+      return group;
     }
 
     clearHotbarDragIndicators() {
@@ -11473,6 +11712,7 @@
       }
       this.selectedHotbarIndex = index;
       this.updateHotbarUi();
+      this.refreshEquippedItem();
       if (announce) {
         const slot = this.hotbar[index];
         const label = slot?.item ? formatInventoryLabel(slot.item, slot.quantity) : 'Empty slot';
