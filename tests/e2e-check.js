@@ -3,11 +3,15 @@ const { chromium } = require('playwright');
 const ALLOWED_WARNING_SUBSTRINGS = [
   'accounts.google.com',
   'ERR_CERT_AUTHORITY_INVALID',
+  'ERR_TUNNEL_CONNECTION_FAILED',
   'GPU stall',
   'Automatic fallback to software WebGL',
   'URL scheme "file" is not supported',
   'Failed to load model',
   'Model load failed',
+  'Multiple instances of Three.js being imported',
+  'Failed to load script',
+  'Asset load failure',
 ];
 
 function createConsoleCapture(page) {

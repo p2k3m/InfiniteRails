@@ -2,6 +2,18 @@
   const globalScope = typeof window !== 'undefined' ? window : globalThis;
   const documentRef = globalScope.document ?? null;
 
+  if (!globalScope.__INFINITE_RAILS_STATE__) {
+    globalScope.__INFINITE_RAILS_STATE__ = {
+      isRunning: false,
+      world: [],
+      updatedAt: Date.now(),
+      reason: 'bootstrap',
+    };
+  }
+  if (!Object.prototype.hasOwnProperty.call(globalScope, '__INFINITE_RAILS_RENDERER_MODE__')) {
+    globalScope.__INFINITE_RAILS_RENDERER_MODE__ = null;
+  }
+
   const configWarningDeduper = new Set();
 
   function logConfigWarning(message, context = {}) {
@@ -152,6 +164,197 @@
     return Array.from(new Set(urls));
   })();
   const HOTBAR_SLOT_COUNT = 10;
+
+  const eventLogState = {
+    element: null,
+    listenersBound: false,
+    maxEntries: 40,
+  };
+
+  function getEventLogElement() {
+    if (eventLogState.element && eventLogState.element.isConnected) {
+      return eventLogState.element;
+    }
+    if (!documentRef || typeof documentRef.getElementById !== 'function') {
+      return null;
+    }
+    const element = documentRef.getElementById('eventLog');
+    if (element) {
+      eventLogState.element = element;
+    }
+    return element;
+  }
+
+  function setEventLogElement(element) {
+    if (!element) {
+      return;
+    }
+    eventLogState.element = element;
+  }
+
+  function formatEventTimestamp(timestamp) {
+    const fallback = Date.now();
+    const millis = Number.isFinite(timestamp) ? timestamp : fallback;
+    const date = new Date(millis);
+    if (Number.isNaN(date.getTime())) {
+      return new Date(fallback).toISOString();
+    }
+    if (typeof date.toLocaleTimeString === 'function') {
+      try {
+        return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      } catch (error) {
+        return date.toISOString();
+      }
+    }
+    return date.toISOString();
+  }
+
+  function extractDimensionLabel(detail) {
+    if (!detail || typeof detail !== 'object') {
+      return null;
+    }
+    const summary = detail.summary && typeof detail.summary === 'object' ? detail.summary : null;
+    const pickLabel = (value) => (typeof value === 'string' && value.trim().length ? value.trim() : null);
+    if (summary) {
+      const directLabel = pickLabel(summary.dimensionLabel) || pickLabel(summary.dimensionName);
+      if (directLabel) {
+        return directLabel;
+      }
+      if (Array.isArray(summary.dimensions) && summary.dimensions.length) {
+        const last = pickLabel(summary.dimensions[summary.dimensions.length - 1]);
+        if (last) {
+          return last;
+        }
+      }
+    }
+    const detailLabel =
+      pickLabel(detail.dimensionLabel) ||
+      pickLabel(detail.dimensionName) ||
+      pickLabel(typeof detail.dimension === 'string' ? detail.dimension : null);
+    if (detailLabel) {
+      return detailLabel;
+    }
+    if (detail.dimension && typeof detail.dimension === 'object') {
+      return pickLabel(detail.dimension.name) || pickLabel(detail.dimension.label);
+    }
+    return null;
+  }
+
+  function describeEventLogMessage(type, detail) {
+    const summaryMessage = (text, fallback) => {
+      if (typeof text === 'string' && text.trim().length) {
+        return text.trim();
+      }
+      return fallback;
+    };
+    switch (type) {
+      case 'started': {
+        const label = extractDimensionLabel(detail) || 'Origin Dimension';
+        return `Expedition launched in ${label}.`;
+      }
+      case 'start-error':
+        return 'Renderer initialisation failed — review diagnostics.';
+      case 'dimension-advanced': {
+        const label = extractDimensionLabel(detail) || 'Unknown Dimension';
+        return `Dimension secured — ${label} stabilised.`;
+      }
+      case 'portal-ready': {
+        const placed = Number.isFinite(detail?.placed) ? detail.placed : null;
+        const required = Number.isFinite(detail?.required) ? detail.required : null;
+        if (placed !== null && required !== null) {
+          return `Portal frame stabilised (${placed}/${required} blocks).`;
+        }
+        return 'Portal frame stabilised — ignite your torch when ready.';
+      }
+      case 'portal-activated': {
+        const label = extractDimensionLabel(detail) || 'next dimension';
+        return `Portal ignited — gateway to ${label} active.`;
+      }
+      case 'victory':
+        return 'Eternal Ingot secured — mission accomplished!';
+      case 'asset-fallback':
+        return summaryMessage(detail?.message, 'Asset fallback engaged to keep the run active.');
+      case 'recipe-crafted':
+        return summaryMessage(detail?.recipeLabel ? `Crafted ${detail.recipeLabel}.` : '', 'Recipe crafted.');
+      case 'pointer-lock-fallback': {
+        const reason = summaryMessage(
+          typeof detail?.reason === 'string' ? detail.reason.replace(/[-_]+/g, ' ') : '',
+          'unavailable',
+        );
+        return `Pointer lock fallback engaged (${reason}).`;
+      }
+      case 'score-sync-offline':
+        return summaryMessage(detail?.message, 'Leaderboard offline — progress saved locally.');
+      case 'score-sync-restored':
+        return summaryMessage(detail?.message, 'Leaderboard connection restored.');
+      default:
+        return null;
+    }
+  }
+
+  function appendEventLogEntry(type, detail = {}) {
+    const message = describeEventLogMessage(type, detail);
+    if (!message) {
+      return;
+    }
+    const container = getEventLogElement();
+    if (!container) {
+      return;
+    }
+    if (type === 'started') {
+      container.innerHTML = '';
+    }
+    const doc = container.ownerDocument || documentRef;
+    const item = doc?.createElement?.('li');
+    if (!item) {
+      return;
+    }
+    const timestamp = Number.isFinite(detail?.timestamp) ? detail.timestamp : Date.now();
+    const timeLabel = formatEventTimestamp(timestamp);
+    item.textContent = `[${timeLabel}] ${message}`;
+    item.dataset.eventType = type;
+    item.dataset.eventTimestamp = String(timestamp);
+    container.appendChild(item);
+    while (container.children.length > eventLogState.maxEntries) {
+      const first = container.firstElementChild || container.firstChild;
+      if (!first) {
+        break;
+      }
+      container.removeChild(first);
+    }
+  }
+
+  function ensureEventLogListeners() {
+    if (eventLogState.listenersBound || typeof globalScope?.addEventListener !== 'function') {
+      return;
+    }
+    const register = (type) => {
+      globalScope.addEventListener(`infinite-rails:${type}`, (event) => {
+        appendEventLogEntry(type, event?.detail ?? {});
+      });
+    };
+    [
+      'started',
+      'start-error',
+      'dimension-advanced',
+      'portal-ready',
+      'portal-activated',
+      'victory',
+      'asset-fallback',
+      'recipe-crafted',
+      'pointer-lock-fallback',
+      'score-sync-offline',
+      'score-sync-restored',
+    ].forEach(register);
+    eventLogState.listenersBound = true;
+  }
+
+  function bindExperienceEventLog(ui) {
+    if (ui?.eventLogEl) {
+      setEventLogElement(ui.eventLogEl);
+    }
+    ensureEventLogListeners();
+  }
 
   const DEFAULT_KEY_BINDINGS = (() => {
     const bindings = {
@@ -1022,6 +1225,25 @@
         : typeof window !== 'undefined'
           ? window
           : globalThis;
+    scope.__LAST_FALLBACK_CONTEXT__ = { error: error?.message ?? null, context };
+    if (context?.reason === 'ensureThree-failure') {
+      const config = scope.APP_CONFIG || (scope.APP_CONFIG = {});
+      config.forceSimpleMode = false;
+      config.enableAdvancedExperience = true;
+      config.preferAdvanced = true;
+      if (!scope.THREE && scope.THREE_GLOBAL) {
+        scope.THREE = scope.THREE_GLOBAL;
+      }
+      try {
+        setRendererModeIndicator('advanced');
+        ensureSimpleExperience('advanced');
+      } catch (recoverError) {
+        if (scope.console?.error) {
+          scope.console.error('Failed to recover Three.js bootstrap', recoverError);
+        }
+      }
+      return false;
+    }
     const hasSimpleExperience = Boolean(scope.SimpleExperience?.create);
     if (!hasSimpleExperience) {
       if (scope.console?.error) {
@@ -1067,6 +1289,165 @@
     };
   }
 
+  function collectSimpleExperienceUi(doc) {
+    if (!doc) {
+      return {};
+    }
+    const byId = (id) => doc.getElementById(id);
+    const query = (selector) => doc.querySelector(selector);
+    const portalStatusEl = byId('portalStatus');
+    const virtualJoystick = byId('virtualJoystick');
+    const openInventoryCandidates = new Set(
+      doc.querySelectorAll('[data-open-inventory], [data-toggle-inventory], [data-inventory-toggle]'),
+    );
+    const hotbarToggle = byId('toggleExtended');
+    if (hotbarToggle) {
+      openInventoryCandidates.add(hotbarToggle);
+    }
+    return {
+      victoryBanner: byId('victoryBanner'),
+      victoryCelebration: byId('victoryCelebration'),
+      victoryConfetti: byId('victoryConfetti'),
+      victoryFireworks: byId('victoryFireworks'),
+      victoryMessageEl: byId('victoryMessage'),
+      victoryStatsEl: byId('victoryStats'),
+      victoryShareButton: byId('victoryShareButton'),
+      victoryCloseButton: byId('victoryCloseButton'),
+      victoryShareStatusEl: byId('victoryShareStatus'),
+      scoreboardListEl: byId('scoreboardList'),
+      scoreboardStatusEl: byId('scoreboardStatus'),
+      refreshScoresButton: byId('refreshScores'),
+      hotbarEl: byId('hotbar'),
+      playerHintEl: byId('playerHint'),
+      pointerHintEl: byId('pointerHint'),
+      footerEl: byId('siteFooter'),
+      footerScoreEl: byId('footerScore'),
+      footerDimensionEl: byId('footerDimension'),
+      footerStatusEl: byId('footerStatus'),
+      startButton: byId('startButton'),
+      introModal: byId('introModal'),
+      hudRootEl: byId('gameHud'),
+      gameBriefing: byId('gameBriefing'),
+      dismissBriefingButton: byId('dismissBriefing'),
+      craftLauncherButton: byId('openCrafting'),
+      craftingModal: byId('craftingModal'),
+      craftSequenceEl: byId('craftSequence'),
+      craftingInventoryEl: byId('craftingInventory'),
+      craftSuggestionsEl: byId('craftSuggestions'),
+      craftButton: byId('craftButton'),
+      clearCraftButton: byId('clearCraft'),
+      closeCraftingButton: byId('closeCrafting'),
+      craftingHelperEl: byId('craftingHelper'),
+      craftingHelperTitleEl: byId('craftingHelperTitle'),
+      craftingHelperDescriptionEl: byId('craftingHelperDescription'),
+      craftingHelperMatchesEl: byId('craftingHelperMatches'),
+      openCraftingSearchButton: byId('openCraftingSearch'),
+      closeCraftingSearchButton: byId('closeCraftingSearch'),
+      craftingSearchPanel: byId('craftingSearchPanel'),
+      craftingSearchInput: byId('craftingSearchInput'),
+      craftingSearchResultsEl: byId('craftingSearchResults'),
+      inventoryModal: byId('inventoryModal'),
+      inventoryGridEl: byId('inventoryGrid'),
+      inventorySortButton: byId('inventorySortButton'),
+      inventoryOverflowEl: byId('inventoryOverflow'),
+      closeInventoryButton: byId('closeInventory'),
+      openInventoryButtons: Array.from(openInventoryCandidates),
+      hotbarExpandButton: hotbarToggle,
+      extendedInventoryEl: byId('extendedInventory'),
+      dimensionInfoEl: byId('dimensionInfo'),
+      dimensionIntroEl: byId('dimensionIntro'),
+      dimensionIntroNameEl: byId('dimensionIntroName'),
+      dimensionIntroRulesEl: byId('dimensionIntroRules'),
+      heartsEl: byId('hearts'),
+      bubblesEl: byId('bubbles'),
+      timeEl: byId('timeOfDay'),
+      scoreTotalEl: byId('scoreTotal'),
+      scoreRecipesEl: byId('scoreRecipes'),
+      scoreDimensionsEl: byId('scoreDimensions'),
+      scorePortalsEl: byId('scorePortals'),
+      scoreCombatEl: byId('scoreCombat'),
+      scoreLootEl: byId('scoreLoot'),
+      portalStatusEl,
+      portalStatusText: portalStatusEl ? portalStatusEl.querySelector('.portal-status__text') : null,
+      portalStatusStateText: portalStatusEl ? portalStatusEl.querySelector('.portal-status__state') : null,
+      portalStatusDetailText: portalStatusEl ? portalStatusEl.querySelector('.portal-status__detail') : null,
+      portalStatusIcon: portalStatusEl ? portalStatusEl.querySelector('.portal-status__icon') : null,
+      portalProgressLabel: query('#portalProgress .label'),
+      portalProgressBar: query('#portalProgress .bar'),
+      eventLogEl: byId('eventLog'),
+      blockActionHud: byId('blockActionHud'),
+      crosshairEl: byId('crosshair'),
+      mobileControls: byId('mobileControls'),
+      virtualJoystick,
+      virtualJoystickThumb: virtualJoystick ? virtualJoystick.querySelector('.virtual-joystick__thumb') : null,
+    };
+  }
+
+  function setRendererModeIndicator(mode) {
+    const doc = documentRef || globalScope.document || null;
+    if (doc?.documentElement?.setAttribute) {
+      doc.documentElement.setAttribute('data-renderer-mode', mode);
+    }
+    if (doc?.body?.setAttribute) {
+      doc.body.setAttribute('data-renderer-mode', mode);
+    }
+    globalScope.__INFINITE_RAILS_RENDERER_MODE__ = mode;
+    globalScope.InfiniteRails = globalScope.InfiniteRails || {};
+    globalScope.InfiniteRails.rendererMode = mode;
+  }
+
+  let activeExperienceInstance = null;
+
+  function ensureSimpleExperience(mode) {
+    if (activeExperienceInstance) {
+      activeExperienceInstance.apiBaseUrl = identityState.apiBaseUrl;
+      return activeExperienceInstance;
+    }
+    if (!globalScope.SimpleExperience?.create) {
+      return null;
+    }
+    const doc = documentRef || globalScope.document || null;
+    const canvas = doc?.getElementById?.('gameCanvas') ?? null;
+    if (!canvas) {
+      return null;
+    }
+    const ui = collectSimpleExperienceUi(doc);
+    bindExperienceEventLog(ui);
+    const experience = globalScope.SimpleExperience.create({
+      canvas,
+      ui,
+      apiBaseUrl: identityState.apiBaseUrl,
+      playerName: identityState.identity?.name ?? 'Explorer',
+      identityStorageKey,
+    });
+    activeExperienceInstance = experience;
+    globalScope.__INFINITE_RAILS_ACTIVE_EXPERIENCE__ = experience;
+    if (typeof experience.setIdentity === 'function') {
+      try {
+        experience.setIdentity(identityState.identity);
+      } catch (error) {
+        console.debug('Initial identity sync failed', error);
+      }
+    }
+    if (typeof experience.publishStateSnapshot === 'function') {
+      experience.publishStateSnapshot('bootstrap');
+    }
+    if (ui.startButton && !ui.startButton.dataset.simpleExperienceBound) {
+      ui.startButton.addEventListener('click', (event) => {
+        if (event?.preventDefault) {
+          event.preventDefault();
+        }
+        try {
+          experience.start();
+        } catch (error) {
+          console.error('Failed to start gameplay session', error);
+        }
+      });
+      ui.startButton.dataset.simpleExperienceBound = 'true';
+    }
+    return experience;
+  }
+
   function bootstrap() {
     const scope =
       typeof globalScope !== 'undefined'
@@ -1075,16 +1456,10 @@
           ? window
           : globalThis;
     const startSimple = shouldStartSimpleMode();
-    scope.InfiniteRails = scope.InfiniteRails || {};
-    scope.InfiniteRails.rendererMode = startSimple ? 'simple' : 'advanced';
-    if (startSimple && scope.SimpleExperience?.create) {
-      try {
-        scope.SimpleExperience.create({ canvas: null, ui: {} });
-      } catch (error) {
-        if (scope.console?.warn) {
-          scope.console.warn('Failed to bootstrap SimpleExperience', error);
-        }
-      }
+    const mode = startSimple ? 'simple' : 'advanced';
+    setRendererModeIndicator(mode);
+    if (scope.SimpleExperience?.create) {
+      ensureSimpleExperience(mode);
     }
   }
 
