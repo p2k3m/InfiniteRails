@@ -8,7 +8,9 @@ const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, '..');
 const scriptSource = fs.readFileSync(path.join(repoRoot, 'script.js'), 'utf8');
 
-const start = scriptSource.indexOf('function shouldStartSimpleMode() {');
+const simpleModeStart = scriptSource.indexOf('function hasCoarsePointer(');
+const start =
+  simpleModeStart !== -1 ? simpleModeStart : scriptSource.indexOf('function shouldStartSimpleMode() {');
 const end = scriptSource.indexOf('function setupSimpleExperienceIntegrations', start);
 if (start === -1 || end === -1 || end <= start) {
   throw new Error('Failed to locate shouldStartSimpleMode definition in script.js');
@@ -24,6 +26,9 @@ function instantiateShouldStartSimpleMode(windowStub) {
       '  if (!window.__bootstrapNotices) { window.__bootstrapNotices = []; }' +
       '  window.__bootstrapNotices.push({ key, message });' +
       '}' +
+      '\nconst globalScope = window;' +
+      '\nconst documentRef = window.document ?? null;' +
+      '\nconst document = window.document ?? undefined;' +
       shouldStartSimpleModeSource +
       '\nreturn shouldStartSimpleMode;'
   );
@@ -132,6 +137,75 @@ describe('renderer mode selection', () => {
           'WebGL is unavailable on this device, so the mission briefing view is shown instead of the full 3D renderer.',
       },
     ]);
+  });
+
+  it('falls back to the simple renderer on mobile when advanced mobile support is disabled', () => {
+    const matchMediaStub = (query) => ({ matches: query === '(pointer: coarse)' });
+    const canvasStub = { getContext: () => ({}) };
+    const windowStub = {
+      location: { search: '' },
+      navigator: { maxTouchPoints: 3, userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)' },
+      matchMedia: matchMediaStub,
+      document: {
+        createElement: (tag) => {
+          if (tag === 'canvas') {
+            return canvasStub;
+          }
+          return {};
+        },
+      },
+      APP_CONFIG: {
+        enableAdvancedExperience: true,
+        preferAdvanced: true,
+        supportsAdvancedMobile: false,
+      },
+      SimpleExperience: { create: () => ({}) },
+      console: { debug: () => {}, warn: () => {} },
+    };
+    const shouldStartSimpleMode = instantiateShouldStartSimpleMode(windowStub);
+    expect(shouldStartSimpleMode()).toBe(true);
+    expect(windowStub.APP_CONFIG.enableAdvancedExperience).toBe(false);
+    expect(windowStub.APP_CONFIG.preferAdvanced).toBe(false);
+    expect(windowStub.APP_CONFIG.forceAdvanced).toBe(false);
+    expect(windowStub.APP_CONFIG.defaultMode).toBe('simple');
+    expect(windowStub.APP_CONFIG.isMobileEnvironment).toBe(true);
+    expect(windowStub.__bootstrapNotices).toEqual([
+      {
+        key: 'mobile-simple-mode',
+        message:
+          'Advanced renderer is unavailable on mobile devices — loading the simplified sandbox instead.',
+      },
+    ]);
+  });
+
+  it('keeps the advanced renderer on mobile when explicitly supported', () => {
+    const matchMediaStub = (query) => ({ matches: query === '(pointer: coarse)' });
+    const canvasStub = { getContext: () => ({}) };
+    const windowStub = {
+      location: { search: '' },
+      navigator: { maxTouchPoints: 3, userAgent: 'Mozilla/5.0 (iPad; CPU OS 16_5 like Mac OS X)' },
+      matchMedia: matchMediaStub,
+      document: {
+        createElement: (tag) => {
+          if (tag === 'canvas') {
+            return canvasStub;
+          }
+          return {};
+        },
+      },
+      APP_CONFIG: {
+        enableAdvancedExperience: true,
+        preferAdvanced: true,
+        supportsAdvancedMobile: true,
+      },
+      SimpleExperience: { create: () => ({}) },
+    };
+    const shouldStartSimpleMode = instantiateShouldStartSimpleMode(windowStub);
+    expect(shouldStartSimpleMode()).toBe(false);
+    expect(windowStub.APP_CONFIG.enableAdvancedExperience).toBe(true);
+    expect(windowStub.APP_CONFIG.preferAdvanced).toBe(true);
+    expect(windowStub.APP_CONFIG.isMobileEnvironment).toBe(true);
+    expect(windowStub.__bootstrapNotices ?? []).toEqual([]);
   });
 
   describe('simple fallback bootstrap', () => {
