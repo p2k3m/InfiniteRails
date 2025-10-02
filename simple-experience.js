@@ -856,6 +856,13 @@
       this.footerScoreEl = this.ui.footerScoreEl || null;
       this.footerDimensionEl = this.ui.footerDimensionEl || null;
       this.footerStatusEl = this.ui.footerStatusEl || null;
+      this.assetRecoveryOverlayEl = this.ui.assetRecoveryOverlay || null;
+      this.assetRecoveryDialogEl = this.ui.assetRecoveryDialogEl || null;
+      this.assetRecoveryTitleEl = this.ui.assetRecoveryTitleEl || null;
+      this.assetRecoveryMessageEl = this.ui.assetRecoveryMessageEl || null;
+      this.assetRecoveryActionsEl = this.ui.assetRecoveryActionsEl || null;
+      this.assetRecoveryRetryButton = this.ui.assetRecoveryRetryButton || null;
+      this.assetRecoveryReloadButton = this.ui.assetRecoveryReloadButton || null;
       this.startButtonEl = this.ui.startButton || null;
       this.introModalEl = this.ui.introModal || null;
       this.hudRootEl = this.ui.hudRootEl || null;
@@ -876,6 +883,7 @@
       this.assetFailureNotices = new Set();
       this.eventFailureNotices = new Set();
       this.boundEventDisposers = [];
+      this.bindAssetRecoveryControls();
       this.onOpenCraftingSearchClick = () => this.toggleCraftingSearch(true);
       this.onCloseCraftingSearchClick = () => this.toggleCraftingSearch(false);
       this.lastHintMessage = '';
@@ -949,6 +957,38 @@
         models: new Map(),
       };
       this.assetLoadLog = [];
+      this.assetFailureCounts = new Map();
+      this.assetRetryState = new Map();
+      this.assetRecoveryPendingKeys = new Set();
+      this.assetRecoveryPromptActive = false;
+      this.assetRecoveryControlsBound = false;
+      this.assetRetryLimit = Number.isFinite(options.assetRetryLimit)
+        ? Math.max(1, Math.floor(options.assetRetryLimit))
+        : 3;
+      this.assetRetryBackoffMs = Number.isFinite(options.assetRetryBackoffMs)
+        ? Math.max(100, Math.floor(options.assetRetryBackoffMs))
+        : 700;
+      this.assetRetryBackoffMaxMs = Number.isFinite(options.assetRetryBackoffMaxMs)
+        ? Math.max(this.assetRetryBackoffMs, Math.floor(options.assetRetryBackoffMaxMs))
+        : 4000;
+      this.assetRecoveryPromptThreshold = Math.max(
+        2,
+        Number.isFinite(options.assetRecoveryPromptThreshold)
+          ? Math.floor(options.assetRecoveryPromptThreshold)
+          : 2,
+      );
+      this.onAssetRecoveryRetryClick = (event) => {
+        if (event?.preventDefault) {
+          event.preventDefault();
+        }
+        this.handleAssetRecoveryRetry();
+      };
+      this.onAssetRecoveryReloadClick = (event) => {
+        if (event?.preventDefault) {
+          event.preventDefault();
+        }
+        this.handleAssetRecoveryReload();
+      };
       this.materials = this.createMaterials();
       this.defaultKeyBindings = cloneKeyBindingMap(DEFAULT_KEY_BINDINGS);
       this.configKeyBindingOverrides = normaliseKeyBindingMap(window.APP_CONFIG?.keyBindings) || null;
@@ -4202,41 +4242,76 @@
         return this.modelPromises.get(key);
       }
       this.beginAssetTimer('models', key);
-      const promise = ensureGltfLoader(THREE)
-        .then((LoaderClass) => {
-          return new Promise((resolve, reject) => {
-            try {
-              const loader = new LoaderClass();
-              loader.load(
-                url,
-                (gltf) => {
-                  resolve({ scene: gltf.scene, animations: gltf.animations || [] });
-                },
-                undefined,
-                (error) => reject(error || new Error(`Failed to load GLTF: ${url}`)),
-              );
-            } catch (error) {
-              reject(error);
+      const attemptLoad = (attempt) => {
+        const attemptNumber = Math.max(1, attempt || 1);
+        this.assetRetryState.set(key, attemptNumber);
+        return ensureGltfLoader(THREE)
+          .then((LoaderClass) => {
+            return new Promise((resolve, reject) => {
+              try {
+                const loader = new LoaderClass();
+                loader.load(
+                  url,
+                  (gltf) => resolve(gltf),
+                  undefined,
+                  (error) => reject(error || new Error(`Failed to load GLTF: ${url}`)),
+                );
+              } catch (error) {
+                reject(error);
+              }
+            });
+          })
+          .then((gltf) => {
+            if (!gltf?.scene) {
+              throw new Error(`Model at ${url} is missing a scene graph.`);
             }
+            gltf.scene.traverse((child) => {
+              if (child.isMesh) {
+                child.castShadow = true;
+                child.receiveShadow = true;
+              }
+            });
+            return { scene: gltf.scene, animations: gltf.animations || [] };
+          })
+          .catch((error) => {
+            if (attemptNumber < this.assetRetryLimit) {
+              this.noteAssetRetry(key, attemptNumber, error, url);
+              const delay = this.computeAssetRetryDelay(attemptNumber);
+              return this.delay(delay).then(() => attemptLoad(attemptNumber + 1));
+            }
+            throw error;
           });
-        })
+      };
+      const promise = attemptLoad(1)
         .then((payload) => {
-          if (!payload?.scene) {
-            throw new Error(`Model at ${url} is missing a scene graph.`);
-          }
-          payload.scene.traverse((child) => {
-            if (child.isMesh) {
-              child.castShadow = true;
-              child.receiveShadow = true;
-            }
-          });
+          const attemptsUsed = this.assetRetryState.get(key) || 1;
+          this.assetRetryState.delete(key);
           this.completeAssetTimer('models', key, { success: true, url });
           this.loadedModels.set(key, payload);
+          this.assetFailureCounts.delete(key);
+          this.assetRecoveryPendingKeys.delete(key);
+          this.clearAssetFailureNoticesForKey(key);
+          if (attemptsUsed > 1) {
+            this.emitGameEvent('asset-retry-success', {
+              key,
+              attempts: attemptsUsed,
+              url,
+            });
+          }
+          this.maybeHideAssetRecoveryPrompt();
           return payload;
         })
         .catch((error) => {
+          const attemptsTried = this.assetRetryState.get(key) || this.assetRetryLimit;
+          this.assetRetryState.delete(key);
           this.completeAssetTimer('models', key, { success: false, url });
-          console.warn(`Failed to load model "${key}" from ${url}`, error);
+          if (error && typeof error === 'object') {
+            error.__assetFailureHandled = true;
+          }
+          console.warn(
+            `Failed to load model "${key}" from ${url} after ${attemptsTried} attempt(s).`,
+            error,
+          );
           this.handleAssetLoadFailure(key, error);
           this.modelPromises.delete(key);
           throw error;
@@ -4265,7 +4340,9 @@
         });
         return { scene: clone, animations: payload.animations };
       } catch (error) {
-        this.handleAssetLoadFailure(key, error);
+        if (!error || error.__assetFailureHandled !== true) {
+          this.handleAssetLoadFailure(key, error);
+        }
         return null;
       }
     }
@@ -8418,6 +8495,7 @@
         golem: 'Iron golems using simplified armour while detailed models load.',
       };
       const fallbackMessage = (options.fallbackMessage || messageMap[key] || '').trim();
+      this.recordAssetFailure(key, { error, fallbackMessage });
       if (!fallbackMessage) {
         return;
       }
@@ -8438,9 +8516,286 @@
       if (this.footerEl) {
         this.footerEl.dataset.state = 'warning';
       }
-      if (typeof this.emitGameEvent === 'function') {
-        this.emitGameEvent('asset-fallback', { key, message: fallbackMessage });
+      this.emitGameEvent('asset-fallback', {
+        key,
+        message: fallbackMessage,
+        failureCount: this.assetFailureCounts.get(typeof key === 'string' && key ? key : 'asset') || 1,
+      });
+    }
+
+    noteAssetRetry(key, attemptNumber, error, url) {
+      const friendlyName = this.describeAssetKey(key);
+      const nextAttempt = Math.min(this.assetRetryLimit, attemptNumber + 1);
+      if (typeof console !== 'undefined') {
+        console.warn(
+          `Retrying ${friendlyName} asset (attempt ${nextAttempt} of ${this.assetRetryLimit}) after a loading error.`,
+          {
+            key,
+            attempt: attemptNumber,
+            nextAttempt,
+            url,
+            error,
+          },
+        );
       }
+      this.emitGameEvent('asset-retry-scheduled', {
+        key,
+        attempt: nextAttempt,
+        previousAttempt: attemptNumber,
+        url,
+        errorMessage: error?.message ?? null,
+      });
+    }
+
+    computeAssetRetryDelay(attemptNumber) {
+      const exponent = Math.max(0, attemptNumber - 1);
+      const multiplier = Math.pow(1.8, exponent);
+      const delay = Math.round(this.assetRetryBackoffMs * multiplier);
+      return Math.min(this.assetRetryBackoffMaxMs, Math.max(this.assetRetryBackoffMs, delay));
+    }
+
+    delay(ms) {
+      const duration = Math.max(0, Number.isFinite(ms) ? Math.floor(ms) : 0);
+      return new Promise((resolve) => {
+        setTimeout(resolve, duration);
+      });
+    }
+
+    recordAssetFailure(key, context = {}) {
+      const normalisedKey = typeof key === 'string' && key.trim().length ? key : 'asset';
+      const previous = this.assetFailureCounts.get(normalisedKey) || 0;
+      const next = previous + 1;
+      this.assetFailureCounts.set(normalisedKey, next);
+      const detail = {
+        key: normalisedKey,
+        failureCount: next,
+        fallbackMessage: context?.fallbackMessage || null,
+        errorMessage: context?.error?.message ?? null,
+      };
+      this.emitGameEvent('asset-load-failure', detail);
+      if (next >= this.assetRecoveryPromptThreshold) {
+        this.assetRecoveryPendingKeys.add(normalisedKey);
+        this.promptAssetRecovery();
+      }
+    }
+
+    describeAssetKey(key) {
+      const normalisedKey = typeof key === 'string' && key.trim().length ? key : 'asset';
+      const mapping = {
+        arm: 'first-person hands',
+        steve: 'explorer avatar',
+        zombie: 'zombie models',
+        golem: 'golem armour',
+        asset: 'critical assets',
+      };
+      return mapping[normalisedKey] || `${normalisedKey} assets`;
+    }
+
+    buildAssetRecoveryMessage() {
+      if (!this.assetRecoveryPendingKeys.size) {
+        return 'Critical assets failed to load after multiple attempts. Reload the page or retry the stream to continue.';
+      }
+      const friendlyNames = Array.from(this.assetRecoveryPendingKeys).map((key) => this.describeAssetKey(key));
+      let label = friendlyNames[0] || 'critical assets';
+      if (friendlyNames.length === 2) {
+        label = `${friendlyNames[0]} and ${friendlyNames[1]}`;
+      } else if (friendlyNames.length > 2) {
+        const initial = friendlyNames.slice(0, -1).join(', ');
+        label = `${initial}, and ${friendlyNames[friendlyNames.length - 1]}`;
+      }
+      const capitalised = label.charAt(0).toUpperCase() + label.slice(1);
+      return `${capitalised} failed to load after multiple attempts. Reload the page to rebuild caches or press “Retry Assets” to try again.`;
+    }
+
+    updateAssetRecoveryPromptMessage(messageOverride = null) {
+      const message = messageOverride || this.buildAssetRecoveryMessage();
+      if (this.assetRecoveryTitleEl) {
+        this.assetRecoveryTitleEl.textContent = 'Restore missing assets';
+      }
+      if (this.assetRecoveryMessageEl) {
+        this.assetRecoveryMessageEl.textContent = message;
+      }
+      if (this.assetRecoveryActionsEl) {
+        this.assetRecoveryActionsEl.hidden = false;
+      }
+    }
+
+    showAssetRecoveryPrompt() {
+      if (!this.assetRecoveryOverlayEl) {
+        return;
+      }
+      this.updateAssetRecoveryPromptMessage();
+      this.assetRecoveryOverlayEl.hidden = false;
+      this.assetRecoveryOverlayEl.removeAttribute('hidden');
+      this.assetRecoveryOverlayEl.setAttribute('aria-hidden', 'false');
+      this.assetRecoveryOverlayEl.setAttribute('data-mode', 'error');
+      if (this.assetRecoveryDialogEl) {
+        this.assetRecoveryDialogEl.setAttribute('aria-busy', 'false');
+      }
+      this.assetRecoveryPromptActive = true;
+      if (typeof this.assetRecoveryDialogEl?.focus === 'function') {
+        try {
+          this.assetRecoveryDialogEl.focus();
+        } catch (error) {
+          if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+            console.debug('Unable to focus asset recovery dialog.', error);
+          }
+        }
+      }
+    }
+
+    promptAssetRecovery() {
+      const message = this.buildAssetRecoveryMessage();
+      if (this.assetRecoveryOverlayEl) {
+        const eventDetail = {
+          keys: Array.from(this.assetRecoveryPendingKeys),
+          failureCounts: Array.from(this.assetFailureCounts.entries()),
+          message,
+        };
+        if (this.assetRecoveryPromptActive) {
+          this.emitGameEvent('asset-recovery-prompt-update', eventDetail);
+        } else {
+          this.emitGameEvent('asset-recovery-prompt', eventDetail);
+        }
+        this.showAssetRecoveryPrompt();
+      } else {
+        this.showHint(message);
+      }
+    }
+
+    hideAssetRecoveryPrompt() {
+      if (!this.assetRecoveryOverlayEl) {
+        this.assetRecoveryPromptActive = false;
+        return;
+      }
+      this.assetRecoveryOverlayEl.setAttribute('aria-hidden', 'true');
+      this.assetRecoveryOverlayEl.setAttribute('hidden', '');
+      this.assetRecoveryOverlayEl.hidden = true;
+      this.assetRecoveryPromptActive = false;
+    }
+
+    maybeHideAssetRecoveryPrompt() {
+      if (!this.assetRecoveryPromptActive) {
+        return;
+      }
+      if (this.assetRecoveryPendingKeys.size === 0) {
+        this.hideAssetRecoveryPrompt();
+      } else {
+        this.updateAssetRecoveryPromptMessage();
+      }
+    }
+
+    handleAssetRecoveryRetry() {
+      const keys = Array.from(this.assetRecoveryPendingKeys);
+      if (!keys.length) {
+        this.hideAssetRecoveryPrompt();
+        return;
+      }
+      this.emitGameEvent('asset-retry-requested', { keys, source: 'player' });
+      this.retryFailedAssets(keys);
+    }
+
+    handleAssetRecoveryReload() {
+      const keys = Array.from(this.assetRecoveryPendingKeys);
+      this.emitGameEvent('asset-recovery-reload-requested', { keys, source: 'player' });
+      const scope =
+        (typeof window !== 'undefined' && window) ||
+        (typeof globalThis !== 'undefined' && globalThis) ||
+        null;
+      if (scope?.location?.reload) {
+        scope.location.reload();
+        return;
+      }
+      this.hideAssetRecoveryPrompt();
+      this.showHint('Reload the page to restore missing assets.');
+    }
+
+    bindAssetRecoveryControls() {
+      if (this.assetRecoveryControlsBound) {
+        return;
+      }
+      if (!this.assetRecoveryOverlayEl) {
+        return;
+      }
+      if (this.assetRecoveryRetryButton) {
+        this.addSafeEventListener(this.assetRecoveryRetryButton, 'click', this.onAssetRecoveryRetryClick, {
+          context: 'retrying missing assets',
+        });
+      }
+      if (this.assetRecoveryReloadButton) {
+        this.addSafeEventListener(this.assetRecoveryReloadButton, 'click', this.onAssetRecoveryReloadClick, {
+          context: 'reloading after asset failure',
+        });
+      }
+      this.assetRecoveryControlsBound = true;
+    }
+
+    retryFailedAssets(keys = []) {
+      const uniqueKeys = Array.from(
+        new Set(
+          keys
+            .map((entry) => (typeof entry === 'string' ? entry.trim() : ''))
+            .filter((entry) => entry.length > 0),
+        ),
+      );
+      if (!uniqueKeys.length) {
+        this.hideAssetRecoveryPrompt();
+        return;
+      }
+      uniqueKeys.forEach((assetKey) => {
+        this.assetFailureCounts.delete(assetKey);
+        this.assetRecoveryPendingKeys.delete(assetKey);
+        this.assetRetryState.delete(assetKey);
+        this.clearAssetFailureNoticesForKey(assetKey);
+        this.loadedModels.delete(assetKey);
+        this.modelPromises.delete(assetKey);
+      });
+      if (this.THREE?.Cache?.clear) {
+        try {
+          this.THREE.Cache.clear();
+        } catch (error) {
+          if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+            console.debug('Unable to clear Three.js cache during asset retry.', error);
+          }
+        }
+      }
+      this.hideAssetRecoveryPrompt();
+      this.emitGameEvent('asset-retry-queued', { keys: uniqueKeys });
+      this.showHint('Retrying asset stream — missing details will restore shortly.');
+      if (uniqueKeys.includes('arm')) {
+        this.loadFirstPersonArms(this.activeSessionId);
+      }
+      if (uniqueKeys.includes('steve')) {
+        this.loadPlayerCharacter();
+      }
+      if (uniqueKeys.includes('zombie') && Array.isArray(this.zombies)) {
+        this.zombies.forEach((zombie) => {
+          if (zombie && zombie.placeholder !== false) {
+            this.upgradeZombie(zombie);
+          }
+        });
+      }
+      if (uniqueKeys.includes('golem') && Array.isArray(this.golems)) {
+        this.golems.forEach((golem) => {
+          if (golem && golem.placeholder !== false) {
+            this.upgradeGolem(golem);
+          }
+        });
+      }
+      this.enqueueLazyModelWarmup(uniqueKeys);
+      this.maybeHideAssetRecoveryPrompt();
+    }
+
+    clearAssetFailureNoticesForKey(key) {
+      if (!key || !this.assetFailureNotices) {
+        return;
+      }
+      const prefix = `${key}|`;
+      Array.from(this.assetFailureNotices).forEach((entry) => {
+        if (entry.startsWith(prefix)) {
+          this.assetFailureNotices.delete(entry);
+        }
+      });
     }
 
     handleHotbarClick(event) {
@@ -10211,6 +10566,9 @@
         eternalIngotCollected: Boolean(this.eternalIngotCollected),
         daylight: this.daylightIntensity ?? 0,
         assetLoadsRecent: this.getAssetLoadLog(5),
+        assetFailures: Array.from(this.assetFailureCounts.entries()),
+        assetRecoveryPending: Array.from(this.assetRecoveryPendingKeys),
+        assetRecoveryPromptActive: Boolean(this.assetRecoveryPromptActive),
       };
     }
 
