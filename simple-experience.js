@@ -2622,19 +2622,70 @@
       return Date.now();
     }
 
+    formatBackendEndpointSummary(context = {}) {
+      if (!context || typeof context !== 'object') {
+        return '';
+      }
+      if (typeof context.summary === 'string' && context.summary.trim().length) {
+        return context.summary.trim();
+      }
+      const endpoint =
+        typeof context.endpoint === 'string' && context.endpoint.trim().length
+          ? context.endpoint.trim()
+          : '';
+      const method =
+        typeof context.method === 'string' && context.method.trim().length
+          ? context.method.trim().toUpperCase()
+          : '';
+      const status = Number.isFinite(context.status) ? context.status : null;
+      const location = endpoint ? (method ? `${method} ${endpoint}` : endpoint) : '';
+      if (location && status !== null) {
+        return `${location} → status ${status}`;
+      }
+      if (location) {
+        return location;
+      }
+      if (status !== null) {
+        return `status ${status}`;
+      }
+      return '';
+    }
+
     handleLeaderboardOffline(error, options = {}) {
       if (!this.apiBaseUrl) {
         return;
       }
       const { source = 'sync', reason = null } = options;
+      const method =
+        typeof options.method === 'string' && options.method.trim().length
+          ? options.method.trim().toUpperCase()
+          : typeof error?.method === 'string' && error.method.trim().length
+            ? error.method.trim().toUpperCase()
+            : null;
+      const endpoint =
+        typeof options.endpoint === 'string' && options.endpoint.trim().length
+          ? options.endpoint.trim()
+          : typeof error?.endpoint === 'string' && error.endpoint.trim().length
+            ? error.endpoint.trim()
+            : null;
+      const statusCode = Number.isFinite(options.status)
+        ? options.status
+        : Number.isFinite(error?.status)
+          ? error.status
+          : null;
+      const summary = this.formatBackendEndpointSummary({ method, endpoint, status: statusCode });
+      const fallbackStatusMessage = summary
+        ? `Leaderboard unreachable (${summary}) — progress saved locally.`
+        : 'Leaderboard offline — progress saved locally.';
       const statusMessage =
         typeof options.message === 'string' && options.message.trim().length
           ? options.message.trim()
-          : 'Leaderboard offline — progress saved locally.';
+          : fallbackStatusMessage;
+      const fallbackHint = summary
+        ? `Leaderboard unreachable (${summary}). Check your connection or API configuration.`
+        : 'Leaderboard offline — progress saved locally. Check your connection or API configuration.';
       const hintMessage =
-        typeof options.hint === 'string' && options.hint.trim().length
-          ? options.hint.trim()
-          : 'Connection lost — progress saved locally.';
+        typeof options.hint === 'string' && options.hint.trim().length ? options.hint.trim() : fallbackHint;
       this.persistScoreboardEntries();
       this.setScoreboardStatus(statusMessage, { offline: true });
       if (typeof this.showHint === 'function') {
@@ -2650,8 +2701,26 @@
         reason: reason ?? null,
         message: statusMessage,
       };
+      if (summary) {
+        detail.summary = summary;
+      }
+      if (endpoint) {
+        detail.endpoint = endpoint;
+      }
+      if (method) {
+        detail.method = method;
+      }
+      if (statusCode !== null) {
+        detail.status = statusCode;
+      }
       if (error) {
-        detail.error = typeof error.message === 'string' ? error.message : String(error);
+        const errorMessage =
+          typeof error.message === 'string' && error.message.trim().length
+            ? error.message.trim()
+            : String(error);
+        if (errorMessage) {
+          detail.error = errorMessage;
+        }
       }
       this.emitGameEvent('score-sync-offline', detail);
     }
@@ -2711,7 +2780,11 @@
           credentials: 'omit',
         });
         if (!response.ok) {
-          throw new Error(`Leaderboard request failed with ${response.status}`);
+          const failure = new Error(`Leaderboard request failed with ${response.status}`);
+          failure.status = response.status;
+          failure.endpoint = url;
+          failure.method = 'GET';
+          throw failure;
         }
         let payload = null;
         try {
@@ -2740,11 +2813,28 @@
         this.scoreboardHydrated = true;
         this.scoreboardPollTimer = 0;
       } catch (error) {
-        console.warn('Failed to load scoreboard data', error);
+        const statusCode = Number.isFinite(error?.status) ? error.status : null;
+        const summary = this.formatBackendEndpointSummary({ method: 'GET', endpoint: url, status: statusCode });
+        console.warn('Failed to load scoreboard data', {
+          error,
+          endpoint: url,
+          status: statusCode,
+          summary,
+        });
         this.handleLeaderboardOffline(error, {
           source: 'load',
-          message: 'Leaderboard offline — progress saved locally.',
-          hint: 'Leaderboard offline — progress saved locally.',
+          reason: 'score-fetch',
+          message:
+            summary && summary.length
+              ? `Leaderboard unreachable (${summary}) — progress saved locally.`
+              : undefined,
+          hint:
+            summary && summary.length
+              ? `Leaderboard unreachable (${summary}). We'll display cached runs until the service returns.`
+              : undefined,
+          endpoint: url,
+          method: 'GET',
+          status: statusCode ?? undefined,
         });
         if (!this.scoreboardHydrated) {
           this.renderScoreboard();
@@ -3219,7 +3309,11 @@
           credentials: 'omit',
         });
         if (!response.ok) {
-          throw new Error(`Score sync failed with ${response.status}`);
+          const failure = new Error(`Score sync failed with ${response.status}`);
+          failure.status = response.status;
+          failure.endpoint = url;
+          failure.method = 'POST';
+          throw failure;
         }
         let payload = null;
         try {
@@ -3246,13 +3340,30 @@
           },
         );
       } catch (error) {
-        console.warn('Unable to sync score to backend', error);
+        const statusCode = Number.isFinite(error?.status) ? error.status : null;
+        const summary = this.formatBackendEndpointSummary({ method: 'POST', endpoint: url, status: statusCode });
+        console.warn('Unable to sync score to backend', {
+          error,
+          endpoint: url,
+          reason,
+          status: statusCode,
+          summary,
+        });
         this.pendingScoreSyncReason = reason;
         this.handleLeaderboardOffline(error, {
           source: 'sync',
           reason,
-          message: 'Sync failed — run saved locally. Will retry shortly.',
-          hint: 'Leaderboard offline — progress saved locally.',
+          message:
+            summary && summary.length
+              ? `Sync failed — run saved locally. Will retry shortly. (${summary})`
+              : 'Sync failed — run saved locally. Will retry shortly.',
+          hint:
+            summary && summary.length
+              ? `Leaderboard unreachable (${summary}). We will retry automatically.`
+              : 'Leaderboard offline — progress saved locally. We will retry automatically.',
+          endpoint: url,
+          method: 'POST',
+          status: statusCode ?? undefined,
         });
       } finally {
         this.scoreSyncInFlight = false;
