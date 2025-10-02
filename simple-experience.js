@@ -1528,6 +1528,8 @@
       this.lastGolemSpawn = 0;
       this.scoreboardUtils = window.ScoreboardUtils || null;
       this.scoreEntries = [];
+      this.restoredScoreEntryIdentifiers = new Set();
+      this.pendingRestoredScoreMerge = false;
       this.restoreScoreboardEntries();
       this.sessionId =
         (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
@@ -2926,7 +2928,9 @@
 
     restoreScoreboardEntries() {
       const stored = this.getStoredScoreboardEntries();
+      this.restoredScoreEntryIdentifiers = new Set();
       if (!stored.length) {
+        this.pendingRestoredScoreMerge = false;
         return;
       }
       const utils = this.scoreboardUtils;
@@ -2934,7 +2938,78 @@
         ? utils.normalizeScoreEntries(stored)
         : stored.slice();
       this.scoreEntries = normalized;
+      normalized.forEach((entry) => {
+        const identifier = this.getScoreEntryIdentifier(entry);
+        if (identifier) {
+          this.restoredScoreEntryIdentifiers.add(identifier);
+        }
+      });
+      this.pendingRestoredScoreMerge = this.restoredScoreEntryIdentifiers.size > 0;
       this.renderScoreboard();
+    }
+
+    mergeRestoredLocalScoreEntriesWithIdentity() {
+      if (!this.playerGoogleId) {
+        return false;
+      }
+      const googleIdentifier = this.getScoreEntryIdentifier({ id: this.playerGoogleId });
+      if (!googleIdentifier) {
+        return false;
+      }
+      const identifiers = new Set(this.restoredScoreEntryIdentifiers || []);
+      const sessionIdentifier = this.getScoreEntryIdentifier({ id: this.sessionId });
+      if (sessionIdentifier) {
+        identifiers.add(sessionIdentifier);
+      }
+      if (!identifiers.size) {
+        this.scoreEntries.forEach((entry) => {
+          if (this.isPlayerScoreEntry(entry)) {
+            const identifier = this.getScoreEntryIdentifier(entry);
+            if (identifier && identifier !== googleIdentifier) {
+              identifiers.add(identifier);
+            }
+          }
+        });
+      }
+      if (!identifiers.size) {
+        this.pendingRestoredScoreMerge = false;
+        this.restoredScoreEntryIdentifiers = new Set([googleIdentifier]);
+        return false;
+      }
+      let updated = false;
+      const nextEntries = this.scoreEntries.map((entry) => {
+        if (!entry || typeof entry !== 'object') {
+          return entry;
+        }
+        const identifier = this.getScoreEntryIdentifier(entry);
+        if (!identifier || identifier === googleIdentifier || !identifiers.has(identifier)) {
+          return entry;
+        }
+        const next = {
+          ...entry,
+          id: this.playerGoogleId,
+          playerId: this.playerGoogleId,
+          googleId: this.playerGoogleId,
+        };
+        if (typeof next.name !== 'string' || !next.name.trim().length) {
+          next.name = this.playerDisplayName;
+        }
+        updated = true;
+        return next;
+      });
+      this.pendingRestoredScoreMerge = false;
+      this.restoredScoreEntryIdentifiers = new Set([googleIdentifier]);
+      if (!updated) {
+        return false;
+      }
+      const utils = this.scoreboardUtils;
+      const normalized = utils?.normalizeScoreEntries
+        ? utils.normalizeScoreEntries(nextEntries)
+        : nextEntries.slice().sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+      this.scoreEntries = normalized;
+      this.persistScoreboardEntries();
+      this.renderScoreboard();
+      return true;
     }
 
     updateLocalScoreEntry(reason) {
@@ -4165,6 +4240,7 @@
         }
         if (typeof payload.googleId === 'string' && payload.googleId.trim().length > 0) {
           this.playerGoogleId = payload.googleId.trim();
+          this.mergeRestoredLocalScoreEntriesWithIdentity();
         }
         if (payload.location && typeof payload.location === 'object') {
           this.setPlayerLocation({ ...payload.location });
@@ -4327,6 +4403,9 @@
       this.playerGoogleId = identity.googleId ?? null;
       this.playerEmail = identity.email ?? null;
       this.playerAvatarUrl = identity.avatar ?? null;
+      if (this.playerGoogleId) {
+        this.mergeRestoredLocalScoreEntriesWithIdentity();
+      }
       if (identity.location || identity.locationLabel) {
         this.setPlayerLocation(identity.location || { label: identity.locationLabel });
       }
