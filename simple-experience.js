@@ -479,6 +479,138 @@
     golem: MODEL_URLS.golem,
   };
 
+  const DEFAULT_TERRAIN_PROFILE = Object.freeze({
+    minHeight: MIN_COLUMN_HEIGHT,
+    maxHeight: MAX_COLUMN_HEIGHT,
+    baseHeight: 1,
+    falloffStrength: 2.6,
+    falloffRadius: 0.68,
+    falloffExponent: 1,
+    noiseFrequency: 0.35,
+    noiseAmplitude: 2,
+    secondaryFrequency: 0.18,
+    secondaryAmplitude: 0.9,
+    ridgeFrequency: 0,
+    ridgeAmplitude: 0,
+    rimHeightBias: 0,
+    centerHeightBias: 0,
+    voxelBudgetMultiplier: 1,
+    voxelBudgetOffset: 0,
+    seedMultiplier: 53,
+  });
+
+  function buildTerrainProfile(overrides = {}) {
+    const profile = {
+      ...DEFAULT_TERRAIN_PROFILE,
+      ...(overrides && typeof overrides === 'object' ? overrides : {}),
+    };
+    return Object.freeze(profile);
+  }
+
+  const DIMENSION_TERRAIN_PROFILES = deepFreeze({
+    origin: buildTerrainProfile({
+      minHeight: 1,
+      maxHeight: 5,
+      baseHeight: 1.15,
+      falloffStrength: 2.4,
+      falloffRadius: 0.7,
+      noiseFrequency: 0.32,
+      noiseAmplitude: 1.9,
+      secondaryFrequency: 0.2,
+      secondaryAmplitude: 0.65,
+      centerHeightBias: 0.45,
+      seedMultiplier: 41,
+    }),
+    rock: buildTerrainProfile({
+      minHeight: 2,
+      maxHeight: 6,
+      baseHeight: 1.35,
+      falloffStrength: 3.2,
+      falloffRadius: 0.62,
+      falloffExponent: 1.15,
+      noiseFrequency: 0.44,
+      noiseAmplitude: 2.35,
+      secondaryFrequency: 0.26,
+      secondaryAmplitude: 1.05,
+      ridgeFrequency: 0.18,
+      ridgeAmplitude: 0.7,
+      rimHeightBias: 0.35,
+      centerHeightBias: 0.25,
+      voxelBudgetMultiplier: 1.1,
+      seedMultiplier: 59,
+    }),
+    stone: buildTerrainProfile({
+      minHeight: 3,
+      maxHeight: 6,
+      baseHeight: 1.5,
+      falloffStrength: 3.4,
+      falloffRadius: 0.64,
+      falloffExponent: 1.25,
+      noiseFrequency: 0.36,
+      noiseAmplitude: 2.1,
+      secondaryFrequency: 0.22,
+      secondaryAmplitude: 0.95,
+      ridgeFrequency: 0.21,
+      ridgeAmplitude: 0.55,
+      centerHeightBias: 0.6,
+      voxelBudgetMultiplier: 1.05,
+      seedMultiplier: 67,
+    }),
+    tar: buildTerrainProfile({
+      minHeight: 1,
+      maxHeight: 5,
+      baseHeight: 0.9,
+      falloffStrength: 2.15,
+      falloffRadius: 0.74,
+      falloffExponent: 0.85,
+      noiseFrequency: 0.28,
+      noiseAmplitude: 1.45,
+      secondaryFrequency: 0.24,
+      secondaryAmplitude: 1.3,
+      ridgeFrequency: 0.16,
+      ridgeAmplitude: 0.4,
+      rimHeightBias: -0.2,
+      centerHeightBias: 0.2,
+      voxelBudgetMultiplier: 0.95,
+      seedMultiplier: 47,
+    }),
+    marble: buildTerrainProfile({
+      minHeight: 2,
+      maxHeight: 6,
+      baseHeight: 1.1,
+      falloffStrength: 2.9,
+      falloffRadius: 0.66,
+      falloffExponent: 0.9,
+      noiseFrequency: 0.33,
+      noiseAmplitude: 1.7,
+      secondaryFrequency: 0.19,
+      secondaryAmplitude: 0.75,
+      ridgeFrequency: 0.2,
+      ridgeAmplitude: 0.6,
+      centerHeightBias: 0.8,
+      voxelBudgetMultiplier: 1.08,
+      seedMultiplier: 73,
+    }),
+    netherite: buildTerrainProfile({
+      minHeight: 2,
+      maxHeight: 6,
+      baseHeight: 1.45,
+      falloffStrength: 3.6,
+      falloffRadius: 0.6,
+      falloffExponent: 1.32,
+      noiseFrequency: 0.46,
+      noiseAmplitude: 2.55,
+      secondaryFrequency: 0.27,
+      secondaryAmplitude: 1.25,
+      ridgeFrequency: 0.22,
+      ridgeAmplitude: 0.75,
+      rimHeightBias: 0.5,
+      centerHeightBias: 0.35,
+      voxelBudgetMultiplier: 1.12,
+      seedMultiplier: 89,
+    }),
+  });
+
   function normaliseStringSet(values, fallback) {
     const list = Array.isArray(values) && values.length ? values : fallback;
     return Array.from(
@@ -819,10 +951,11 @@
     },
   ].map((theme) => {
     const manifest = DIMENSION_ASSET_MANIFEST[theme.id] || null;
+    const terrainProfile = DIMENSION_TERRAIN_PROFILES[theme.id] || DEFAULT_TERRAIN_PROFILE;
     if (!manifest) {
-      return theme;
+      return { ...theme, terrainProfile };
     }
-    return { ...theme, assetManifest: manifest };
+    return { ...theme, assetManifest: manifest, terrainProfile };
   });
 
   function pseudoRandom(x, z) {
@@ -1077,6 +1210,11 @@
         minVoxelBudget,
         Math.min(requestedVoxelBudget, maxTerrainCap),
       );
+      this.baseTerrainConfig = {
+        minColumnHeight: this.minColumnHeight,
+        maxColumnHeight: this.maxColumnHeight,
+        voxelBudget: this.maxTerrainVoxels,
+      };
       this.renderAccumulator = 0;
       this.renderActiveInterval = 1 / 60;
       this.renderIdleInterval = 1 / 30;
@@ -1205,6 +1343,8 @@
       this.victoryAchieved = false;
       this.currentDimensionIndex = 0;
       this.dimensionSettings = DIMENSION_THEME[0];
+      this.dimensionTerrainProfile = this.dimensionSettings?.terrainProfile || DEFAULT_TERRAIN_PROFILE;
+      this.applyTerrainProfileToCaps(this.dimensionTerrainProfile);
       this.chestGroup = null;
       this.chests = [];
       this.activeChestId = null;
@@ -5511,6 +5651,8 @@
       this.currentDimensionIndex = safeIndex;
       const theme = DIMENSION_THEME[safeIndex] ?? DIMENSION_THEME[0];
       this.dimensionSettings = theme;
+      this.dimensionTerrainProfile = theme?.terrainProfile || DEFAULT_TERRAIN_PROFILE;
+      this.applyTerrainProfileToCaps(this.dimensionTerrainProfile);
       this.currentSpeed = PLAYER_BASE_SPEED * (theme.speedMultiplier ?? 1);
       this.gravityScale = theme.gravity ?? 1;
       this.netheriteChallengePlanned = theme.id === 'netherite';
@@ -5578,6 +5720,44 @@
       );
     }
 
+    applyTerrainProfileToCaps(profile) {
+      const baseConfig = this.baseTerrainConfig || {
+        minColumnHeight: MIN_COLUMN_HEIGHT,
+        maxColumnHeight: MAX_COLUMN_HEIGHT,
+        voxelBudget: DEFAULT_TERRAIN_VOXEL_CAP,
+      };
+      const baseMin = Math.max(1, Math.floor(baseConfig.minColumnHeight ?? MIN_COLUMN_HEIGHT));
+      const baseMax = Math.max(baseMin, Math.floor(baseConfig.maxColumnHeight ?? MAX_COLUMN_HEIGHT));
+      const baseBudget = Math.max(
+        WORLD_SIZE * WORLD_SIZE * baseMin,
+        Math.floor(baseConfig.voxelBudget ?? DEFAULT_TERRAIN_VOXEL_CAP),
+      );
+      const minOverride = Number.isFinite(profile?.minHeight)
+        ? Math.max(1, Math.floor(profile.minHeight))
+        : baseMin;
+      const maxOverride = Number.isFinite(profile?.maxHeight)
+        ? Math.max(minOverride, Math.floor(profile.maxHeight))
+        : baseMax;
+      const budgetMultiplier = Number.isFinite(profile?.voxelBudgetMultiplier)
+        ? Math.max(0.1, profile.voxelBudgetMultiplier)
+        : 1;
+      const budgetOffset = Number.isFinite(profile?.voxelBudgetOffset)
+        ? Math.floor(profile.voxelBudgetOffset)
+        : 0;
+      const requestedBudget = Math.max(0, Math.floor(baseBudget * budgetMultiplier + budgetOffset));
+      const minBudgetRequirement = WORLD_SIZE * WORLD_SIZE * minOverride;
+      const maxTerrainCap = Math.min(MAX_TERRAIN_VOXELS, DEFAULT_TERRAIN_VOXEL_CAP);
+      const safeBudget = Math.max(minBudgetRequirement, Math.min(requestedBudget, maxTerrainCap));
+      this.minColumnHeight = minOverride;
+      this.maxColumnHeight = Math.min(Math.max(minOverride, maxOverride), MAX_COLUMN_HEIGHT);
+      this.maxTerrainVoxels = Math.max(minBudgetRequirement, safeBudget);
+      return {
+        minColumnHeight: this.minColumnHeight,
+        maxColumnHeight: this.maxColumnHeight,
+        maxTerrainVoxels: this.maxTerrainVoxels,
+      };
+    }
+
     buildTerrain() {
       const THREE = this.THREE;
       this.clearChests();
@@ -5631,6 +5811,65 @@
       let remainingVoxels = voxelBudget;
       let cappedColumns = 0;
       let voxelCount = 0;
+      const profile = this.dimensionTerrainProfile || DEFAULT_TERRAIN_PROFILE;
+      const baseHeight = Number.isFinite(profile?.baseHeight)
+        ? profile.baseHeight
+        : DEFAULT_TERRAIN_PROFILE.baseHeight;
+      const falloffStrength = Number.isFinite(profile?.falloffStrength)
+        ? profile.falloffStrength
+        : DEFAULT_TERRAIN_PROFILE.falloffStrength;
+      const falloffRadius = Math.max(
+        0.1,
+        Number.isFinite(profile?.falloffRadius) ? profile.falloffRadius : DEFAULT_TERRAIN_PROFILE.falloffRadius,
+      );
+      const falloffExponent = Math.max(
+        0.1,
+        Number.isFinite(profile?.falloffExponent)
+          ? profile.falloffExponent
+          : DEFAULT_TERRAIN_PROFILE.falloffExponent,
+      );
+      const noiseFrequency = Math.max(
+        0.01,
+        Number.isFinite(profile?.noiseFrequency)
+          ? profile.noiseFrequency
+          : DEFAULT_TERRAIN_PROFILE.noiseFrequency,
+      );
+      const noiseAmplitude = Number.isFinite(profile?.noiseAmplitude)
+        ? profile.noiseAmplitude
+        : DEFAULT_TERRAIN_PROFILE.noiseAmplitude;
+      const secondaryFrequency = Math.max(
+        0.01,
+        Number.isFinite(profile?.secondaryFrequency)
+          ? profile.secondaryFrequency
+          : DEFAULT_TERRAIN_PROFILE.secondaryFrequency,
+      );
+      const secondaryAmplitude = Number.isFinite(profile?.secondaryAmplitude)
+        ? profile.secondaryAmplitude
+        : DEFAULT_TERRAIN_PROFILE.secondaryAmplitude;
+      const ridgeFrequency = Math.max(
+        0,
+        Number.isFinite(profile?.ridgeFrequency)
+          ? profile.ridgeFrequency
+          : DEFAULT_TERRAIN_PROFILE.ridgeFrequency,
+      );
+      const ridgeAmplitude = Math.max(
+        0,
+        Number.isFinite(profile?.ridgeAmplitude)
+          ? profile.ridgeAmplitude
+          : DEFAULT_TERRAIN_PROFILE.ridgeAmplitude,
+      );
+      const rimHeightBias = Number.isFinite(profile?.rimHeightBias)
+        ? profile.rimHeightBias
+        : DEFAULT_TERRAIN_PROFILE.rimHeightBias;
+      const centerHeightBias = Number.isFinite(profile?.centerHeightBias)
+        ? profile.centerHeightBias
+        : DEFAULT_TERRAIN_PROFILE.centerHeightBias;
+      const seedMultiplier = Number.isFinite(profile?.seedMultiplier)
+        ? profile.seedMultiplier
+        : DEFAULT_TERRAIN_PROFILE.seedMultiplier;
+      const dimensionSeedBase = (this.currentDimensionIndex + 1) * seedMultiplier;
+      const seedOffsetX = dimensionSeedBase * 0.137;
+      const seedOffsetZ = dimensionSeedBase * 0.173;
       for (let gx = 0; gx < WORLD_SIZE; gx += 1) {
         for (let gz = 0; gz < WORLD_SIZE; gz += 1) {
           const offsetX = gx - half;
@@ -5638,13 +5877,35 @@
           const worldX = offsetX * BLOCK_SIZE;
           const worldZ = offsetZ * BLOCK_SIZE;
           const distance = Math.hypot(offsetX, offsetZ);
-          const falloff = Math.max(0, 1 - distance / (WORLD_SIZE * 0.68));
-          const heightNoise = pseudoRandom(gx * 0.35, gz * 0.35);
-          const secondary = pseudoRandom(gz * 0.12, gx * 0.18);
+          const falloffBase = Math.max(0, 1 - distance / (WORLD_SIZE * falloffRadius));
+          const falloff = Math.pow(falloffBase, falloffExponent);
+          const primaryNoise = pseudoRandom(
+            (gx + seedOffsetX) * noiseFrequency,
+            (gz - seedOffsetZ) * noiseFrequency,
+          );
+          const secondaryNoise = pseudoRandom(
+            (gz + seedOffsetZ) * secondaryFrequency,
+            (gx - seedOffsetX) * secondaryFrequency,
+          );
+          let heightSample =
+            baseHeight +
+            falloff * falloffStrength +
+            primaryNoise * noiseAmplitude +
+            secondaryNoise * secondaryAmplitude +
+            falloff * centerHeightBias +
+            (1 - falloff) * rimHeightBias;
+          if (ridgeAmplitude > 0 && ridgeFrequency > 0) {
+            const ridgeNoise = pseudoRandom(
+              (gx - seedOffsetZ) * ridgeFrequency + seedOffsetX,
+              (gz + seedOffsetX) * ridgeFrequency - seedOffsetZ,
+            );
+            const ridgeValue = Math.abs(ridgeNoise - 0.5) * 2 * ridgeAmplitude;
+            heightSample += ridgeValue;
+          }
           const columnIndex = gx * WORLD_SIZE + gz;
           const desiredHeight = Math.max(
             minColumnHeight,
-            Math.round(1 + falloff * 2.6 + heightNoise * 2 + secondary * 0.9),
+            Math.round(heightSample),
           );
           const cappedHeight = Math.min(desiredHeight, maxColumnHeight);
           const columnsRemaining = totalColumns - columnIndex - 1;
@@ -12276,6 +12537,8 @@
     create: createSimpleExperience,
     dimensionManifest: DIMENSION_ASSET_MANIFEST,
     dimensionThemes: DIMENSION_THEME,
+    terrainProfiles: DIMENSION_TERRAIN_PROFILES,
+    defaultTerrainProfile: DEFAULT_TERRAIN_PROFILE,
   };
 
   if (typeof module !== 'undefined' && module.exports) {

@@ -187,4 +187,42 @@ describe('simple experience terrain generation', () => {
       window.APP_CONFIG = {};
     }
   });
+
+  it('applies per-dimension terrain profiles without generating flat or empty worlds', () => {
+    const canvas = {
+      width: 512,
+      height: 512,
+      clientWidth: 512,
+      clientHeight: 512,
+      getContext: () => null,
+    };
+
+    const experience = window.SimpleExperience.create({ canvas, ui: {} });
+    experience.terrainGroup = new THREE.Group();
+    experience.terrainChunkGroups = [];
+    experience.terrainChunkMap = new Map();
+    experience.dirtyTerrainChunks = new Set();
+
+    const themes = window.SimpleExperience.dimensionThemes;
+    const heightRanges = [];
+
+    themes.forEach((theme, index) => {
+      experience.applyDimensionSettings(index);
+      experience.buildTerrain();
+      const worldSize = experience.heightMap.length;
+      const heights = experience.heightMap.flat();
+      expect(worldSize).toBeGreaterThan(0);
+      expect(heights.length).toBe(worldSize * worldSize);
+      const minHeight = Math.min(...heights);
+      const maxHeight = Math.max(...heights);
+      expect(minHeight).toBeGreaterThanOrEqual(experience.minColumnHeight);
+      expect(maxHeight).toBeLessThanOrEqual(experience.maxColumnHeight);
+      expect(new Set(heights).size).toBeGreaterThan(1);
+      expect(Number.isFinite(experience.maxTerrainVoxels)).toBe(true);
+      heightRanges.push(`${minHeight}-${maxHeight}`);
+    });
+
+    const uniqueRanges = new Set(heightRanges);
+    expect(uniqueRanges.size).toBeGreaterThan(1);
+  });
 });
