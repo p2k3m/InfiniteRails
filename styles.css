@@ -3159,6 +3159,10 @@ body.sidebar-open .player-hint {
   min-height: 1.25rem;
 }
 
+.leaderboard-status[data-offline='true'] {
+  color: var(--accent-strong);
+}
+
 .leaderboard-controls {
   display: flex;
   justify-content: flex-end;

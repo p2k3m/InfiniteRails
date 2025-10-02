@@ -1240,6 +1240,7 @@
     googleError: null,
     identity: null,
     scoreboardMessage: '',
+    scoreboardOffline: false,
     endpoints: {
       scores: buildScoreboardUrl(apiBaseUrl),
       users: apiBaseUrl ? `${apiBaseUrl.replace(/\/$/, '')}/users` : null,
@@ -2414,12 +2415,20 @@
   let googleInitPromise = null;
   let googleIdentityScriptPromise = null;
 
-  function updateScoreboardStatus(message) {
+  function updateScoreboardStatus(message, options = {}) {
+    if (typeof options.offline === 'boolean') {
+      identityState.scoreboardOffline = options.offline;
+    }
     if (typeof message === 'string' && message.trim().length > 0) {
       identityState.scoreboardMessage = message.trim();
     }
     if (scoreboardStatusEl) {
       scoreboardStatusEl.textContent = identityState.scoreboardMessage;
+      if (identityState.scoreboardOffline) {
+        scoreboardStatusEl.dataset.offline = 'true';
+      } else {
+        delete scoreboardStatusEl.dataset.offline;
+      }
     }
   }
 
@@ -3725,6 +3734,9 @@
       });
       googleInitPromise = null;
       initialiseGoogleSignIn();
+    },
+    setScoreboardStatus(message, options = {}) {
+      updateScoreboardStatus(message, options);
     },
   };
 
