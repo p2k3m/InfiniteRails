@@ -165,19 +165,19 @@ jobs:
                     },
                     Action: "s3:GetObject",
                     Resource: [
-                      "arn:aws:s3:::" + $bucket + "/index.html",
-                      "arn:aws:s3:::" + $bucket + "/styles.css",
-                      "arn:aws:s3:::" + $bucket + "/asset-resolver.js",
-                      "arn:aws:s3:::" + $bucket + "/audio-aliases.js",
-                      "arn:aws:s3:::" + $bucket + "/audio-captions.js",
-                      "arn:aws:s3:::" + $bucket + "/combat-utils.js",
-                      "arn:aws:s3:::" + $bucket + "/crafting.js",
-                      "arn:aws:s3:::" + $bucket + "/portal-mechanics.js",
-                      "arn:aws:s3:::" + $bucket + "/scoreboard-utils.js",
-                      "arn:aws:s3:::" + $bucket + "/script.js",
-                      "arn:aws:s3:::" + $bucket + "/simple-experience.js",
-                      "arn:aws:s3:::" + $bucket + "/assets/*",
-                      "arn:aws:s3:::" + $bucket + "/vendor/*"
+                      ("arn:aws:s3:::" + $bucket + "/index.html"),
+                      ("arn:aws:s3:::" + $bucket + "/styles.css"),
+                      ("arn:aws:s3:::" + $bucket + "/asset-resolver.js"),
+                      ("arn:aws:s3:::" + $bucket + "/audio-aliases.js"),
+                      ("arn:aws:s3:::" + $bucket + "/audio-captions.js"),
+                      ("arn:aws:s3:::" + $bucket + "/combat-utils.js"),
+                      ("arn:aws:s3:::" + $bucket + "/crafting.js"),
+                      ("arn:aws:s3:::" + $bucket + "/portal-mechanics.js"),
+                      ("arn:aws:s3:::" + $bucket + "/scoreboard-utils.js"),
+                      ("arn:aws:s3:::" + $bucket + "/script.js"),
+                      ("arn:aws:s3:::" + $bucket + "/simple-experience.js"),
+                      ("arn:aws:s3:::" + $bucket + "/assets/*"),
+                      ("arn:aws:s3:::" + $bucket + "/vendor/*")
                     ]
                   }
                 ]
@@ -200,7 +200,7 @@ jobs:
                     Effect: "Allow",
                     Principal: "*",
                     Action: "s3:GetObject",
-                    Resource: "arn:aws:s3:::" + $bucket + "/*"
+                    Resource: ("arn:aws:s3:::" + $bucket + "/*")
                   }
                 ]
               }' > "${POLICY_FILE}"
