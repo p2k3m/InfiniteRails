@@ -8,6 +8,7 @@ const workflowPath = path.join(repoRoot, '.github', 'workflows', 'deploy.yml');
 
 const indexHtml = fs.readFileSync(indexHtmlPath, 'utf8');
 const workflowContents = fs.readFileSync(workflowPath, 'utf8');
+const assetsDir = path.join(repoRoot, 'assets');
 
 function extractLocalScriptSources(html) {
   const results = new Set();
@@ -63,6 +64,30 @@ function patternMatchesAsset(pattern, asset) {
   return asset === pattern;
 }
 
+function listFilesRecursive(directory) {
+  const entries = fs.readdirSync(directory, { withFileTypes: true });
+  const files = [];
+  for (const entry of entries) {
+    const entryPath = path.join(directory, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...listFilesRecursive(entryPath));
+    } else if (entry.isFile()) {
+      files.push(entryPath);
+    }
+  }
+  return files;
+}
+
+function collectGltfAssets() {
+  if (!fs.existsSync(assetsDir)) {
+    return [];
+  }
+  const files = listFilesRecursive(assetsDir);
+  return files
+    .filter((file) => file.toLowerCase().endsWith('.gltf'))
+    .map((file) => path.relative(repoRoot, file).split(path.sep).join('/'));
+}
+
 describe('deployment workflow asset coverage', () => {
   it('syncs every local asset referenced by index.html', () => {
     const localAssets = new Set([
@@ -98,6 +123,18 @@ describe('deployment workflow asset coverage', () => {
       !includePatterns.some((pattern) => patternMatchesAsset(pattern, asset)),
     );
 
+    expect(missing).toEqual([]);
+  });
+
+  it('deploys every GLTF model referenced by the experience', () => {
+    const includePatterns = extractIncludePatterns(workflowContents);
+    const gltfAssets = collectGltfAssets();
+
+    const missing = gltfAssets.filter(
+      (asset) => !includePatterns.some((pattern) => patternMatchesAsset(pattern, asset)),
+    );
+
+    expect(gltfAssets.length).toBeGreaterThan(0);
     expect(missing).toEqual([]);
   });
 });
