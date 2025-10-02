@@ -956,6 +956,7 @@
       this.playerAvatar = null;
       this.playerMixer = null;
       this.playerIdleAction = null;
+      this.playerAnimationRig = null;
       this.handSwingStrength = 0;
       this.handSwingTimer = 0;
       this.modelPromises = new Map();
@@ -2618,7 +2619,10 @@
     }
 
     resetPlayerCharacterState() {
-      if (this.playerMixer) {
+      if (this.playerAnimationRig) {
+        this.disposeAnimationRig(this.playerAnimationRig);
+        this.playerAnimationRig = null;
+      } else if (this.playerMixer) {
         try {
           this.playerMixer.stopAllAction();
           if (this.playerAvatar && typeof this.playerMixer.uncacheRoot === 'function') {
@@ -4890,6 +4894,305 @@
       }
     }
 
+    createProceduralAnimationClip(label, options = {}) {
+      const THREE = this.THREE;
+      if (!THREE) return null;
+      switch (label) {
+        case 'idle': {
+          const offsetY = Number.isFinite(options.idleYOffset) ? options.idleYOffset : 0;
+          const idleTrack = new THREE.NumberKeyframeTrack('.rotation[y]', [0, 1.5, 3], [0, 0.1, 0]);
+          const bobTrack = new THREE.NumberKeyframeTrack(
+            '.position[y]',
+            [0, 1.5, 3],
+            [offsetY, offsetY + 0.05, offsetY],
+          );
+          return new THREE.AnimationClip('ProceduralIdle', 3, [idleTrack, bobTrack]);
+        }
+        case 'walk': {
+          const stride = Math.max(0.45, Math.min(1.2, Number.isFinite(options.walkStride) ? options.walkStride : 0.8));
+          const sway = Math.max(0.08, Math.min(0.35, Number.isFinite(options.walkSway) ? options.walkSway : 0.18));
+          const duration = Math.max(0.6, Number.isFinite(options.walkDuration) ? options.walkDuration : stride);
+          const swayTrack = new THREE.NumberKeyframeTrack(
+            '.rotation[y]',
+            [0, duration * 0.5, duration],
+            [-sway, sway, -sway],
+          );
+          const bobTrack = new THREE.NumberKeyframeTrack('.position[y]', [0, duration * 0.5, duration], [0, 0.08, 0]);
+          return new THREE.AnimationClip('ProceduralWalk', duration, [swayTrack, bobTrack]);
+        }
+        case 'attack': {
+          const swing = Math.max(0.25, Math.min(Math.PI / 2, Number.isFinite(options.attackSwing) ? options.attackSwing : 0.6));
+          const forward = Math.max(0.1, Math.min(0.6, Number.isFinite(options.attackForward) ? options.attackForward : 0.35));
+          const duration = Math.max(0.4, Number.isFinite(options.attackDuration) ? options.attackDuration : 0.6);
+          const swingTrack = new THREE.NumberKeyframeTrack(
+            '.rotation[x]',
+            [0, duration * 0.5, duration],
+            [0, -swing, 0],
+          );
+          const thrustTrack = new THREE.NumberKeyframeTrack(
+            '.position[z]',
+            [0, duration * 0.5, duration],
+            [0, -forward, 0],
+          );
+          return new THREE.AnimationClip('ProceduralAttack', duration, [swingTrack, thrustTrack]);
+        }
+        default:
+          return null;
+      }
+    }
+
+    prepareAnimationRig(key, model, animations = [], options = {}) {
+      const THREE = this.THREE;
+      if (!THREE || !model) {
+        return null;
+      }
+      const clips = Array.isArray(animations) ? animations.slice() : [];
+      const used = new Set();
+      const takeClip = (predicate) => {
+        for (let i = 0; i < clips.length; i += 1) {
+          if (used.has(i)) continue;
+          const clip = clips[i];
+          if (!clip) continue;
+          if (!predicate || predicate(clip, i)) {
+            used.add(i);
+            return clip;
+          }
+        }
+        return null;
+      };
+      const keywordsMap = {
+        idle: options.idleKeywords || ['idle', 'breath', 'stand'],
+        walk: options.walkKeywords || ['walk', 'run', 'move'],
+        attack: options.attackKeywords || ['attack', 'punch', 'hit', 'swing', 'strike'],
+      };
+      const fallbackClip = (label) => {
+        if (options.fallbackClips && options.fallbackClips[label]) {
+          return options.fallbackClips[label];
+        }
+        return this.createProceduralAnimationClip(label, options.fallbackContext || {});
+      };
+      const findClip = (label) => {
+        const keywords = keywordsMap[label] || [];
+        if (keywords.length) {
+          const keywordMatch = takeClip((clip) => {
+            const name = `${clip?.name ?? ''}`.toLowerCase();
+            return keywords.some((keyword) => name.includes(keyword));
+          });
+          if (keywordMatch) {
+            return keywordMatch;
+          }
+        }
+        const anyClip = takeClip();
+        if (anyClip) {
+          return anyClip;
+        }
+        return fallbackClip(label);
+      };
+      const mixer = new THREE.AnimationMixer(model);
+      const actions = {};
+      const registerAction = (label) => {
+        const clip = findClip(label);
+        if (!clip) {
+          return null;
+        }
+        const action = mixer.clipAction(clip);
+        if (!action) {
+          return null;
+        }
+        action.reset();
+        action.enabled = true;
+        action.setLoop(THREE.LoopRepeat, Infinity);
+        action.clampWhenFinished = false;
+        action.play();
+        action.setEffectiveWeight(0);
+        actions[label] = action;
+        return action;
+      };
+      registerAction('idle');
+      registerAction('walk');
+      registerAction('attack');
+      const rig = {
+        key: key || 'entity',
+        root: model,
+        mixer,
+        actions,
+        state: null,
+        baseState: null,
+        activePulse: null,
+      };
+      const defaultState = options.defaultState || 'idle';
+      if (actions[defaultState]) {
+        this.setAnimationRigState(rig, defaultState, { fade: 0, forceDuringPulse: true });
+      } else if (actions.idle) {
+        this.setAnimationRigState(rig, 'idle', { fade: 0, forceDuringPulse: true });
+      }
+      return rig;
+    }
+
+    setAnimationRigState(rig, state, options = {}) {
+      if (!rig || !rig.actions) {
+        return;
+      }
+      rig.baseState = state;
+      const action = rig.actions[state];
+      if (!action) {
+        return;
+      }
+      if (rig.activePulse && options.forceDuringPulse !== true) {
+        return;
+      }
+      if (rig.state === state && options.force !== true) {
+        return;
+      }
+      const THREE = this.THREE;
+      const fade = Math.max(0, Number.isFinite(options.fade) ? options.fade : 0.2);
+      const previousState = rig.state;
+      const previousAction = previousState ? rig.actions[previousState] : null;
+      action.enabled = true;
+      action.clampWhenFinished = false;
+      action.setLoop(THREE.LoopRepeat, Infinity);
+      action.play();
+      if (fade > 0 && previousAction && previousAction !== action) {
+        action.reset();
+        action.fadeIn(fade);
+        previousAction.fadeOut(fade);
+      } else {
+        action.reset();
+        action.setEffectiveWeight(1);
+        if (previousAction && previousAction !== action) {
+          previousAction.setEffectiveWeight(0);
+        }
+      }
+      Object.entries(rig.actions).forEach(([name, other]) => {
+        if (other === action) {
+          return;
+        }
+        if (rig.activePulse && rig.activePulse.state === name) {
+          return;
+        }
+        if (fade > 0 && other === previousAction && previousAction !== action) {
+          return;
+        }
+        other.enabled = true;
+        other.play();
+        other.setLoop(THREE.LoopRepeat, Infinity);
+        other.clampWhenFinished = false;
+        other.setEffectiveWeight(0);
+      });
+      rig.state = state;
+    }
+
+    triggerAnimationRigPulse(rig, state, options = {}) {
+      if (!rig || !rig.actions) {
+        return false;
+      }
+      const action = rig.actions[state];
+      if (!action) {
+        return false;
+      }
+      const fadeIn = Math.max(0, Number.isFinite(options.fadeIn) ? options.fadeIn : 0.1);
+      const fadeOut = Math.max(0, Number.isFinite(options.fadeOut) ? options.fadeOut : 0.18);
+      const clip = typeof action.getClip === 'function' ? action.getClip() : action._clip;
+      const clipDuration = clip && Number.isFinite(clip.duration) ? clip.duration : 0.6;
+      const duration = Math.max(0.05, Number.isFinite(options.duration) ? options.duration : clipDuration);
+      const fallbackState = options.fallbackState || rig.baseState || rig.state || 'idle';
+      action.reset();
+      action.enabled = true;
+      action.setLoop(THREE.LoopOnce, 1);
+      action.clampWhenFinished = true;
+      action.play();
+      if (fadeIn > 0) {
+        action.fadeIn(fadeIn);
+      } else {
+        action.setEffectiveWeight(1);
+      }
+      if (fallbackState && rig.actions[fallbackState] && rig.actions[fallbackState] !== action) {
+        const baseAction = rig.actions[fallbackState];
+        if (fadeOut > 0) {
+          baseAction.fadeOut(fadeOut);
+        } else {
+          baseAction.setEffectiveWeight(0);
+        }
+      }
+      rig.activePulse = {
+        state,
+        remaining: duration,
+        fallbackState,
+        fadeOut,
+      };
+      rig.state = state;
+      return true;
+    }
+
+    updateAnimationRig(rig, delta) {
+      if (!rig || !rig.mixer) {
+        return;
+      }
+      try {
+        rig.mixer.update(delta);
+      } catch (error) {
+        if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+          console.debug('Animation mixer update failed.', { key: rig.key, error });
+        }
+      }
+      if (rig.activePulse) {
+        rig.activePulse.remaining -= delta;
+        if (rig.activePulse.remaining <= 0) {
+          const { state, fallbackState, fadeOut } = rig.activePulse;
+          const action = rig.actions?.[state] || null;
+          if (action) {
+            action.clampWhenFinished = false;
+            action.setLoop(this.THREE.LoopRepeat, Infinity);
+            if (fadeOut > 0) {
+              action.fadeOut(fadeOut);
+            } else {
+              action.setEffectiveWeight(0);
+            }
+          }
+          rig.activePulse = null;
+          const targetState = fallbackState || rig.baseState || 'idle';
+          if (targetState) {
+            const fadeBack = Number.isFinite(fadeOut) ? Math.max(0, fadeOut) : 0.2;
+            this.setAnimationRigState(rig, targetState, {
+              fade: fadeBack,
+              forceDuringPulse: true,
+              force: true,
+            });
+          }
+        }
+      }
+    }
+
+    disposeAnimationRig(rig) {
+      if (!rig) {
+        return;
+      }
+      if (rig.actions) {
+        Object.values(rig.actions).forEach((action) => {
+          if (!action) return;
+          try {
+            action.stop();
+          } catch (error) {
+            if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+              console.debug('Failed to stop animation action cleanly.', error);
+            }
+          }
+        });
+      }
+      if (rig.mixer) {
+        try {
+          rig.mixer.stopAllAction();
+          if (rig.root && typeof rig.mixer.uncacheRoot === 'function') {
+            rig.mixer.uncacheRoot(rig.root);
+          }
+        } catch (error) {
+          if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+            console.debug('Unable to dispose animation mixer cleanly.', error);
+          }
+        }
+      }
+    }
+
     ensurePlayerAvatarPlaceholder(reason = 'loading') {
       const THREE = this.THREE;
       if (!THREE || !this.playerRig) {
@@ -5114,33 +5417,21 @@
 
       this.applyCameraPerspective(this.cameraPerspective);
 
-      if (this.playerMixer) {
+      if (this.playerAnimationRig) {
+        this.disposeAnimationRig(this.playerAnimationRig);
+        this.playerAnimationRig = null;
+      } else if (this.playerMixer) {
         this.playerMixer.stopAllAction();
         this.playerMixer = null;
         this.playerIdleAction = null;
       }
 
-      let clip = null;
-      if (Array.isArray(asset.animations) && asset.animations.length) {
-        clip = asset.animations.find((animation) => `${animation?.name ?? ''}`.toLowerCase().includes('idle')) || asset.animations[0];
-      }
-      this.playerMixer = new THREE.AnimationMixer(model);
-      if (clip) {
-        this.playerIdleAction = this.playerMixer.clipAction(clip);
-      } else {
-        const idleTrack = new THREE.NumberKeyframeTrack('.rotation[y]', [0, 1.5, 3], [0, 0.1, 0]);
-        const bobTrack = new THREE.NumberKeyframeTrack(
-          '.position[y]',
-          [0, 1.5, 3],
-          [-PLAYER_EYE_HEIGHT, -PLAYER_EYE_HEIGHT + 0.05, -PLAYER_EYE_HEIGHT],
-        );
-        const proceduralClip = new THREE.AnimationClip('ProceduralIdle', 3, [idleTrack, bobTrack]);
-        this.playerIdleAction = this.playerMixer.clipAction(proceduralClip);
-      }
-      if (this.playerIdleAction) {
-        this.playerIdleAction.loop = THREE.LoopRepeat;
-        this.playerIdleAction.play();
-      }
+      this.playerAnimationRig = this.prepareAnimationRig('steve', model, asset.animations, {
+        defaultState: 'idle',
+        fallbackContext: { idleYOffset: -PLAYER_EYE_HEIGHT },
+      });
+      this.playerMixer = this.playerAnimationRig?.mixer || null;
+      this.playerIdleAction = this.playerAnimationRig?.actions?.idle || null;
       console.error(
         'Avatar visibility confirmed — verify animation rig initialises correctly if the player appears static.',
       );
@@ -5163,6 +5454,15 @@
           disposeObject3D(placeholder);
           zombie.mesh = model;
           zombie.placeholder = false;
+          if (zombie.animation) {
+            this.disposeAnimationRig(zombie.animation);
+          }
+          zombie.animation = this.prepareAnimationRig(`zombie-${zombie.id}`, model, asset.animations, {
+            defaultState: 'walk',
+          });
+          if (zombie.animation) {
+            this.setAnimationRigState(zombie.animation, 'walk', { fade: 0, forceDuringPulse: true });
+          }
         })
         .catch((error) => {
           console.warn('Failed to upgrade zombie model', error);
@@ -5185,6 +5485,15 @@
           disposeObject3D(placeholder);
           golem.mesh = model;
           golem.placeholder = false;
+          if (golem.animation) {
+            this.disposeAnimationRig(golem.animation);
+          }
+          golem.animation = this.prepareAnimationRig(`golem-${golem.id ?? 'actor'}`, model, asset.animations, {
+            defaultState: 'idle',
+          });
+          if (golem.animation) {
+            this.setAnimationRigState(golem.animation, 'idle', { fade: 0, forceDuringPulse: true });
+          }
         })
         .catch((error) => {
           console.warn('Failed to upgrade golem model', error);
@@ -8194,8 +8503,13 @@
     }
 
     updatePlayerAnimation(delta) {
-      if (!this.playerMixer) return;
-      this.playerMixer.update(delta);
+      if (this.playerAnimationRig) {
+        this.updateAnimationRig(this.playerAnimationRig, delta);
+        return;
+      }
+      if (this.playerMixer) {
+        this.playerMixer.update(delta);
+      }
     }
 
     updateScoreSync(delta) {
@@ -8419,17 +8733,33 @@
         const { mesh } = zombie;
         tmpDir.subVectors(playerPosition, mesh.position);
         const distance = tmpDir.length();
+        let baseState = 'idle';
         if (distance > 0.001) {
           tmpDir.normalize();
           tmpStep.copy(tmpDir).multiplyScalar(zombie.speed * delta);
           mesh.position.add(tmpStep);
           mesh.rotation.y = Math.atan2(tmpDir.x, tmpDir.z);
+          if (tmpStep.lengthSq() > 1e-6) {
+            baseState = 'walk';
+          }
         }
         const groundHeight = this.sampleGroundHeight(mesh.position.x, mesh.position.z);
         mesh.position.y = THREE.MathUtils.lerp(mesh.position.y, groundHeight + 0.9, delta * 10);
         if (distance < ZOMBIE_CONTACT_RANGE && this.elapsed - zombie.lastAttack > 1.2) {
           this.damagePlayer(1);
           zombie.lastAttack = this.elapsed;
+          if (zombie.animation) {
+            this.triggerAnimationRigPulse(zombie.animation, 'attack', {
+              duration: 0.7,
+              fadeIn: 0.08,
+              fadeOut: 0.22,
+              fallbackState: baseState,
+            });
+          }
+        }
+        if (zombie.animation) {
+          this.setAnimationRigState(zombie.animation, baseState);
+          this.updateAnimationRig(zombie.animation, delta);
         }
       }
     }
@@ -8461,7 +8791,7 @@
       mesh.receiveShadow = true;
       mesh.position.set(x, ground + 0.9, z);
       zombieGroup.add(mesh);
-      const zombie = { id, mesh, speed: 2.4, lastAttack: this.elapsed, placeholder: true };
+      const zombie = { id, mesh, speed: 2.4, lastAttack: this.elapsed, placeholder: true, animation: null };
       this.zombies.push(zombie);
       this.upgradeZombie(zombie);
       console.error(
@@ -8471,6 +8801,10 @@
 
     clearZombies() {
       for (const zombie of this.zombies) {
+        if (zombie.animation) {
+          this.disposeAnimationRig(zombie.animation);
+          zombie.animation = null;
+        }
         this.zombieGroup.remove(zombie.mesh);
         disposeObject3D(zombie.mesh);
       }
@@ -8483,6 +8817,10 @@
       const index = this.zombies.indexOf(target);
       if (index >= 0) {
         this.zombies.splice(index, 1);
+      }
+      if (target.animation) {
+        this.disposeAnimationRig(target.animation);
+        target.animation = null;
       }
       this.zombieGroup.remove(target.mesh);
       disposeObject3D(target.mesh);
@@ -8584,6 +8922,7 @@
         cooldown: 0,
         speed: 3.1,
         placeholder: true,
+        animation: null,
       };
       this.golems.push(golem);
       this.upgradeGolem(golem);
@@ -8612,11 +8951,15 @@
         if (destination) {
           this.tmpVector.subVectors(destination, golem.mesh.position);
           const distance = this.tmpVector.length();
+          let baseState = 'idle';
           if (distance > 0.001) {
             this.tmpVector.normalize();
             this.tmpVector2.copy(this.tmpVector).multiplyScalar(golem.speed * delta);
             golem.mesh.position.add(this.tmpVector2);
             golem.mesh.rotation.y = Math.atan2(this.tmpVector.x, this.tmpVector.z);
+            if (this.tmpVector2.lengthSq() > 1e-6) {
+              baseState = 'walk';
+            }
           }
           const ground = this.sampleGroundHeight(golem.mesh.position.x, golem.mesh.position.z);
           golem.mesh.position.y = THREE.MathUtils.lerp(golem.mesh.position.y, ground + 1.1, delta * 8);
@@ -8629,15 +8972,41 @@
             this.audio.play('zombieGroan', { volume: 0.3 });
             this.showHint('Iron golem smashed a zombie!');
             this.scheduleScoreSync('golem-defense');
+            if (golem.animation) {
+              this.triggerAnimationRigPulse(golem.animation, 'attack', {
+                duration: 0.8,
+                fadeIn: 0.1,
+                fadeOut: 0.25,
+                fallbackState: baseState,
+              });
+            }
           }
+          if (golem.animation) {
+            this.setAnimationRigState(golem.animation, baseState);
+            this.updateAnimationRig(golem.animation, delta);
+          }
+        } else if (golem.animation) {
+          this.setAnimationRigState(golem.animation, 'idle');
+          this.updateAnimationRig(golem.animation, delta);
         }
       }
-      this.golems = this.golems.filter((golem) => golem.mesh.parent === this.golemGroup);
+      this.golems = this.golems.filter((golem) => {
+        const keep = golem.mesh.parent === this.golemGroup;
+        if (!keep && golem.animation) {
+          this.disposeAnimationRig(golem.animation);
+          golem.animation = null;
+        }
+        return keep;
+      });
     }
 
     clearGolems() {
       if (!this.golems.length) return;
       for (const golem of this.golems) {
+        if (golem.animation) {
+          this.disposeAnimationRig(golem.animation);
+          golem.animation = null;
+        }
         this.golemGroup.remove(golem.mesh);
         disposeObject3D(golem.mesh);
       }
