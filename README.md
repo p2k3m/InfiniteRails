@@ -243,6 +243,7 @@ This repository ships with a GitHub Actions workflow that deploys the static sit
 | `AWS_SECRET_ACCESS_KEY` | Matching secret key |
 | `AWS_REGION` | AWS region that hosts the target bucket |
 | `AWS_S3_BUCKET` | Name of the S3 bucket that serves the site |
+| `AWS_CLOUDFRONT_DISTRIBUTION_ID` | CloudFront distribution that fronts the bucket |
 
 > The workflow fails fast when any secret is missing and writes detailed remediation steps (including the exact secret name) to the job summary and log output.
 
