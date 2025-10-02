@@ -81,6 +81,182 @@
     'bubble',
   ]);
 
+  const GAME_GUIDE_SLIDES = Object.freeze([
+    {
+      id: 'controls',
+      icon: '🎮',
+      label: 'Core Systems',
+      title: 'Command the Rails',
+      description:
+        'Comfortable movement and smart interactions keep you alive long enough to craft an exit. Use these bindings to stay nimble.',
+      sections(experience) {
+        const moveKeys = experience.getCombinedActionLabels(
+          ['moveForward', 'moveLeft', 'moveBackward', 'moveRight'],
+          { limitPerAction: 1 },
+        );
+        const jumpKeys = experience.getActionKeyLabels('jump', { limit: 2 });
+        const interactKeys = experience.getActionKeyLabels('interact', { limit: 3 });
+        const placeKeys = experience.getActionKeyLabels('placeBlock', { limit: 3 });
+        const resetKeys = experience.getActionKeyLabels('resetPosition', { limit: 2 });
+        return [
+          {
+            title: 'Movement & Awareness',
+            items: [
+              {
+                label: 'Traverse the rail',
+                description: 'Walk, strafe, and reposition with your primary movement keys or virtual joystick.',
+                keys: moveKeys,
+              },
+              {
+                label: 'Jump / climb',
+                description: 'Clear gaps, scramble up ledges, and cancel fall momentum.',
+                keys: jumpKeys,
+              },
+              {
+                label: 'Look around',
+                description:
+                  'Move the mouse, drag on touch, or swipe the viewport. Tap the canvas to recapture pointer lock if the cursor appears.',
+              },
+            ],
+          },
+          {
+            title: 'Immediate actions',
+            items: [
+              {
+                label: 'Gather / interact',
+                description: 'Harvest resources, open chests, and trigger switches while facing the target block.',
+                keys: interactKeys,
+              },
+              {
+                label: 'Place block',
+                description: 'Drop the equipped hotbar block onto the world. Perfect placement keeps the frame aligned.',
+                keys: placeKeys,
+              },
+              {
+                label: 'Reset position',
+                description: 'Return to the spawn anchor if you become wedged between blocks.',
+                keys: resetKeys,
+              },
+              {
+                label: 'Swap hotbar items',
+                description: 'Press number keys 1–0 or tap a slot to equip different tools and materials.',
+              },
+            ],
+          },
+        ];
+      },
+      footer:
+        'Need breathing room? Press Esc to pause interactions, then refocus the canvas when you are ready to continue.',
+    },
+    {
+      id: 'crafting',
+      icon: '🛠️',
+      label: 'Crafting & Inventory',
+      title: 'Assemble Essential Gear',
+      description:
+        'Queue ingredients into the crafting ring, manage your satchel, and unlock recipes that reinforce the rail network.',
+      sections(experience) {
+        const craftingKeys = experience.getActionKeyLabels('toggleCrafting', { limit: 3 });
+        const inventoryKeys = experience.getActionKeyLabels('toggleInventory', { limit: 3 });
+        const interactKeys = experience.getActionKeyLabels('interact', { limit: 3 });
+        return [
+          {
+            title: 'Access interfaces',
+            items: [
+              {
+                label: 'Open crafting',
+                description: 'Tap the hammer icon or use the shortcut to pop open the portable crafting terminal.',
+                keys: craftingKeys,
+              },
+              {
+                label: 'Review inventory',
+                description: 'Toggle the satchel view to rearrange slots, move items, and expand storage.',
+                keys: inventoryKeys,
+              },
+              {
+                label: 'Confirm crafting',
+                description: 'Select the Craft button or your interact key to forge the queued recipe when all ingredients align.',
+                keys: interactKeys,
+              },
+            ],
+          },
+          {
+            title: 'Recipe flow',
+            items: [
+              {
+                label: 'Queue ingredients',
+                description: 'Select items from the hotbar or satchel to line up the exact order required by each recipe.',
+              },
+              {
+                label: 'Consult the helper',
+                description: 'Hover over an ingredient or recipe to view the crafting helper’s tips and unlock hints.',
+              },
+              {
+                label: 'Search quickly',
+                description: 'Use the magnifier to filter recipes. Matching results can be slotted directly into the crafting circle.',
+              },
+            ],
+          },
+        ];
+      },
+      footer: 'Unlocking new recipes awards score bonuses—craft early, craft often.',
+    },
+    {
+      id: 'portals',
+      icon: '🌀',
+      label: 'Portals & Progression',
+      title: 'Stabilise Escape Portals',
+      description:
+        'Every biome demands a precise frame. Gather blocks, build the structure, and ignite it before nightfall overwhelms you.',
+      sections(experience) {
+        const placeKeys = experience.getActionKeyLabels('placeBlock', { limit: 3 });
+        const buildKeys = experience.getActionKeyLabels('buildPortal', { limit: 3 });
+        const interactKeys = experience.getActionKeyLabels('interact', { limit: 3 });
+        return [
+          {
+            title: 'Portal construction',
+            items: [
+              {
+                label: 'Set the frame',
+                description: 'Arrange a 4×3 rectangle using the biome’s required block. Corners must align to register.',
+                keys: placeKeys,
+              },
+              {
+                label: 'Ignite the gateway',
+                description: 'Use the ignition binding once the frame is complete to spin up the vortex.',
+                keys: buildKeys,
+              },
+              {
+                label: 'Enter the portal',
+                description: 'Step in or use your interact key once the status reads Active to travel to the next dimension.',
+                keys: interactKeys,
+              },
+            ],
+          },
+          {
+            title: 'Stay informed',
+            items: [
+              {
+                label: 'Monitor portal HUD',
+                description: 'Watch the portal status tile and progress bar at the bottom of the HUD for readiness cues.',
+              },
+              {
+                label: 'Track objectives',
+                description: 'The Objectives panel highlights current biome goals, hazards, and portal requirements.',
+              },
+              {
+                label: 'Log your run',
+                description: 'Complete a dimension or finish the expedition to sync stats with the leaderboard modal.',
+              },
+            ],
+          },
+        ];
+      },
+      footer:
+        'Portals destabilise overnight—ignite them quickly and bring spare blocks in case the frame gets damaged.',
+    },
+  ]);
+
   function logConfigWarning(message, context = {}) {
     const consoleRef = typeof console !== 'undefined' ? console : null;
     if (!consoleRef) {
@@ -1229,6 +1405,21 @@
       this.assetRecoveryRetryButton = this.ui.assetRecoveryRetryButton || null;
       this.assetRecoveryReloadButton = this.ui.assetRecoveryReloadButton || null;
       this.startButtonEl = this.ui.startButton || null;
+      this.openGuideButton = this.ui.openGuideButton || null;
+      this.guideModalEl = this.ui.guideModal || null;
+      this.guideCloseButtons = Array.isArray(this.ui.guideCloseButtons)
+        ? this.ui.guideCloseButtons.filter(Boolean)
+        : [];
+      this.guideScrollContainer = this.ui.guideScrollContainer || null;
+      this.guideCardEl = this.ui.guideCardEl || null;
+      this.guidePrevButton = this.ui.guidePrevButton || null;
+      this.guideNextButton = this.ui.guideNextButton || null;
+      this.guideDotsContainer = this.ui.guideDotsContainer || null;
+      this.guideDotButtons = [];
+      this.guideSlides = GAME_GUIDE_SLIDES;
+      this.activeGuideIndex = 0;
+      this.lastGuideTrigger = null;
+      this.guideModalVisible = false;
       this.introModalEl = this.ui.introModal || null;
       this.hudRootEl = this.ui.hudRootEl || null;
       this.pointerHintActive = false;
@@ -1651,6 +1842,13 @@
       this.onCraftSuggestionBlur = this.handleCraftSuggestionBlur.bind(this);
       this.onCraftSequenceFocus = this.handleCraftSequenceFocus.bind(this);
       this.onCraftSequenceBlur = this.handleCraftSequenceBlur.bind(this);
+      this.onOpenGuide = this.handleOpenGuide.bind(this);
+      this.onCloseGuide = this.handleCloseGuide.bind(this);
+      this.onGuideModalClick = this.handleGuideModalClick.bind(this);
+      this.onGuidePrev = this.handleGuidePrev.bind(this);
+      this.onGuideNext = this.handleGuideNext.bind(this);
+      this.onGuideDotActivate = this.handleGuideDotActivate.bind(this);
+      this.onGuideKeyDown = this.handleGuideKeyDown.bind(this);
       this.onVictoryReplay = this.handleVictoryReplay.bind(this);
       this.onVictoryClose = this.handleVictoryClose.bind(this);
       this.onVictoryShare = this.handleVictoryShare.bind(this);
@@ -1676,6 +1874,7 @@
       this.onVisibilityChange = this.handleVisibilityChange.bind(this);
       this.eventsBound = false;
       this.onCanvasPointerLock = this.handleCanvasPointerLockRequest.bind(this);
+      this.setupGuideUi();
     }
 
     emitGameEvent(type, detail = {}) {
@@ -2068,6 +2267,457 @@
         document.body.classList.add('game-active');
       }
       this.focusGameViewport();
+    }
+
+    setupGuideUi() {
+      if (this.guideModalEl) {
+        const visible = this.guideModalEl.hidden === false;
+        this.guideModalVisible = visible;
+        this.guideModalEl.setAttribute('aria-hidden', visible ? 'false' : 'true');
+        if (!visible) {
+          setInertState(this.guideModalEl, true);
+        }
+        if (!this.guideModalEl.dataset.simpleGuideBound) {
+          this.addSafeEventListener(this.guideModalEl, 'click', this.onGuideModalClick, {
+            context: 'handling game guide backdrop',
+          });
+          this.addSafeEventListener(this.guideModalEl, 'keydown', this.onGuideKeyDown, {
+            context: 'navigating game guide',
+          });
+          this.guideModalEl.dataset.simpleGuideBound = 'true';
+        }
+      }
+      if (!Array.isArray(this.guideCloseButtons)) {
+        this.guideCloseButtons = [];
+      }
+      if (this.openGuideButton && !this.openGuideButton.dataset.simpleGuideBound) {
+        this.addSafeEventListener(this.openGuideButton, 'click', this.onOpenGuide, {
+          context: 'opening game guide',
+        });
+        this.openGuideButton.dataset.simpleGuideBound = 'true';
+      }
+      this.guideCloseButtons.forEach((button) => {
+        if (!button || button.dataset.simpleGuideBound) {
+          return;
+        }
+        this.addSafeEventListener(button, 'click', this.onCloseGuide, {
+          context: 'closing game guide',
+        });
+        button.dataset.simpleGuideBound = 'true';
+      });
+      if (this.guidePrevButton && !this.guidePrevButton.dataset.simpleGuideBound) {
+        this.addSafeEventListener(this.guidePrevButton, 'click', this.onGuidePrev, {
+          context: 'showing previous guide slide',
+        });
+        this.guidePrevButton.dataset.simpleGuideBound = 'true';
+      }
+      if (this.guideNextButton && !this.guideNextButton.dataset.simpleGuideBound) {
+        this.addSafeEventListener(this.guideNextButton, 'click', this.onGuideNext, {
+          context: 'showing next guide slide',
+        });
+        this.guideNextButton.dataset.simpleGuideBound = 'true';
+      }
+      this.renderGuideCard(this.activeGuideIndex ?? 0, {
+        rebuildDots: true,
+        scrollToTop: false,
+        silent: true,
+      });
+      this.updateGuideAria();
+    }
+
+    getGuideSlides() {
+      return Array.isArray(this.guideSlides) ? this.guideSlides : [];
+    }
+
+    resolveGuideItemKeys(item) {
+      if (!item) {
+        return [];
+      }
+      let keys = [];
+      if (typeof item.resolveKeys === 'function') {
+        const resolved = item.resolveKeys(this);
+        if (Array.isArray(resolved)) {
+          keys = resolved;
+        } else if (typeof resolved === 'string') {
+          keys = [resolved];
+        }
+      } else if (Array.isArray(item.keys)) {
+        keys = item.keys;
+      } else if (typeof item.keys === 'string') {
+        keys = [item.keys];
+      }
+      const seen = new Set();
+      const output = [];
+      keys.forEach((value) => {
+        if (typeof value !== 'string') {
+          return;
+        }
+        const label = value.trim();
+        if (!label || seen.has(label)) {
+          return;
+        }
+        seen.add(label);
+        output.push(label);
+      });
+      return output;
+    }
+
+    renderGuideCard(index, options = {}) {
+      if (!this.guideCardEl) {
+        this.updateGuideDots({ rebuild: options?.rebuildDots === true });
+        return;
+      }
+      const { rebuildDots = false, scrollToTop = true, silent = false } = options ?? {};
+      const slides = this.getGuideSlides();
+      if (!slides.length) {
+        this.guideCardEl.textContent = 'Game guide unavailable.';
+        this.updateGuideDots({ rebuild: rebuildDots });
+        return;
+      }
+      const count = slides.length;
+      const normalized = ((index % count) + count) % count;
+      this.activeGuideIndex = normalized;
+      const slide = slides[normalized];
+      const card = this.guideCardEl;
+      card.innerHTML = '';
+      if (slide?.id) {
+        card.dataset.guideId = slide.id;
+      } else {
+        delete card.dataset.guideId;
+      }
+      card.setAttribute('data-guide-index', String(normalized));
+      if (slide?.title) {
+        card.setAttribute('aria-label', `${slide.title} (${normalized + 1} of ${count})`);
+      } else {
+        card.removeAttribute('aria-label');
+      }
+      const header = document.createElement('div');
+      header.className = 'guide-card__header';
+      if (slide?.icon) {
+        const iconEl = document.createElement('span');
+        iconEl.className = 'guide-card__icon';
+        const glyph = document.createElement('span');
+        glyph.textContent = slide.icon;
+        glyph.setAttribute('aria-hidden', 'true');
+        iconEl.appendChild(glyph);
+        header.appendChild(iconEl);
+      }
+      const headerBody = document.createElement('div');
+      if (slide?.label) {
+        const labelEl = document.createElement('span');
+        labelEl.className = 'guide-card__label';
+        labelEl.textContent = slide.label;
+        headerBody.appendChild(labelEl);
+      }
+      if (slide?.title) {
+        const titleEl = document.createElement('h3');
+        titleEl.className = 'guide-card__title';
+        titleEl.textContent = slide.title;
+        headerBody.appendChild(titleEl);
+      }
+      if (slide?.description) {
+        const descriptionEl = document.createElement('p');
+        descriptionEl.className = 'guide-card__description';
+        descriptionEl.textContent = slide.description;
+        headerBody.appendChild(descriptionEl);
+      }
+      header.appendChild(headerBody);
+      card.appendChild(header);
+
+      const sections =
+        typeof slide?.sections === 'function'
+          ? slide.sections(this)
+          : Array.isArray(slide?.sections)
+            ? slide.sections
+            : [];
+      if (sections.length) {
+        const columns = document.createElement('div');
+        columns.className = 'guide-card__columns';
+        sections.forEach((section) => {
+          if (!section) {
+            return;
+          }
+          const { items = [], title } = section;
+          if (!Array.isArray(items) || !items.length) {
+            return;
+          }
+          const sectionEl = document.createElement('section');
+          sectionEl.className = 'guide-card__list';
+          if (title) {
+            const heading = document.createElement('h4');
+            heading.textContent = title;
+            sectionEl.appendChild(heading);
+          }
+          const listEl = document.createElement('ul');
+          items.forEach((item) => {
+            if (!item) {
+              return;
+            }
+            const entry = document.createElement('li');
+            entry.className = 'guide-card__control';
+            if (item.label) {
+              const caption = document.createElement('p');
+              caption.className = 'guide-card__caption';
+              caption.textContent = item.label;
+              entry.appendChild(caption);
+            }
+            const keyLabels = this.resolveGuideItemKeys(item);
+            if (keyLabels.length) {
+              const keyList = document.createElement('div');
+              keyList.className = 'guide-card__control-keys';
+              keyLabels.forEach((label) => {
+                const kbd = document.createElement('kbd');
+                kbd.textContent = label;
+                keyList.appendChild(kbd);
+              });
+              entry.appendChild(keyList);
+            }
+            if (item.description) {
+              const detail = document.createElement('p');
+              detail.className = 'guide-card__tip';
+              detail.textContent = item.description;
+              entry.appendChild(detail);
+            }
+            listEl.appendChild(entry);
+          });
+          sectionEl.appendChild(listEl);
+          columns.appendChild(sectionEl);
+        });
+        card.appendChild(columns);
+      }
+      if (slide?.footer) {
+        const footer = document.createElement('p');
+        footer.className = 'guide-card__caption';
+        footer.textContent = slide.footer;
+        card.appendChild(footer);
+      }
+      this.updateGuideDots({ rebuild: rebuildDots });
+      this.updateGuideNavigationState();
+      if (scrollToTop) {
+        this.scrollGuideToTop();
+      }
+      if (!silent) {
+        card.setAttribute('data-updated-at', String(Date.now()));
+      }
+    }
+
+    updateGuideDots(options = {}) {
+      if (!this.guideDotsContainer) {
+        return;
+      }
+      const slides = this.getGuideSlides();
+      if (!slides.length) {
+        this.guideDotsContainer.innerHTML = '';
+        this.guideDotButtons = [];
+        return;
+      }
+      const rebuild = Boolean(options?.rebuild) || this.guideDotButtons.length !== slides.length;
+      if (rebuild) {
+        this.guideDotsContainer.innerHTML = '';
+        this.guideDotButtons = slides.map((slide, index) => {
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.dataset.guideIndex = String(index);
+          button.setAttribute(
+            'aria-label',
+            `${slide?.title ?? 'Guide card'} (${index + 1} of ${slides.length})`,
+          );
+          this.addSafeEventListener(button, 'click', this.onGuideDotActivate, {
+            context: 'activating guide slide via dot',
+          });
+          this.guideDotsContainer.appendChild(button);
+          return button;
+        });
+      }
+      this.guideDotButtons.forEach((button, index) => {
+        if (!button) {
+          return;
+        }
+        const isActive = index === this.activeGuideIndex;
+        button.setAttribute('data-active', isActive ? 'true' : 'false');
+        if (isActive) {
+          button.setAttribute('aria-current', 'true');
+        } else {
+          button.removeAttribute('aria-current');
+        }
+      });
+    }
+
+    updateGuideNavigationState() {
+      const slides = this.getGuideSlides();
+      const count = slides.length || 1;
+      if (this.guidePrevButton) {
+        const prevIndex = ((this.activeGuideIndex - 1 + count) % count + count) % count;
+        this.guidePrevButton.dataset.targetIndex = String(prevIndex);
+        const title = slides[prevIndex]?.title ?? 'Previous guide card';
+        this.guidePrevButton.setAttribute('aria-label', `Previous: ${title} (${prevIndex + 1} of ${count})`);
+      }
+      if (this.guideNextButton) {
+        const nextIndex = (this.activeGuideIndex + 1) % count;
+        this.guideNextButton.dataset.targetIndex = String(nextIndex);
+        const title = slides[nextIndex]?.title ?? 'Next guide card';
+        this.guideNextButton.setAttribute('aria-label', `Next: ${title} (${nextIndex + 1} of ${count})`);
+      }
+    }
+
+    updateGuideAria() {
+      if (this.openGuideButton) {
+        this.openGuideButton.setAttribute('aria-expanded', this.guideModalVisible ? 'true' : 'false');
+      }
+    }
+
+    scrollGuideToTop() {
+      if (!this.guideScrollContainer) {
+        return;
+      }
+      try {
+        if (typeof this.guideScrollContainer.scrollTo === 'function') {
+          this.guideScrollContainer.scrollTo({ top: 0, behavior: 'instant' });
+          return;
+        }
+      } catch (error) {
+        if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+          console.debug('Guide scroll reset failed; falling back to scrollTop.', error);
+        }
+      }
+      this.guideScrollContainer.scrollTop = 0;
+    }
+
+    toggleGuideModal(visible, options = {}) {
+      if (!this.guideModalEl) {
+        return;
+      }
+      const nextVisible = Boolean(visible);
+      if (nextVisible === this.guideModalVisible && !options?.force) {
+        return;
+      }
+      if (nextVisible) {
+        this.renderGuideCard(this.activeGuideIndex ?? 0, { rebuildDots: true, scrollToTop: true });
+        this.guideModalEl.hidden = false;
+        setInertState(this.guideModalEl, false);
+        this.guideModalEl.setAttribute('aria-hidden', 'false');
+        if (typeof document !== 'undefined' && typeof document.exitPointerLock === 'function') {
+          document.exitPointerLock();
+        }
+        this.scrollGuideToTop();
+        const focusTarget =
+          options?.focusTarget || this.guideCloseButtons?.[0] || this.guidePrevButton || this.guideCardEl;
+        if (focusTarget && typeof focusTarget.focus === 'function') {
+          focusTarget.focus({ preventScroll: true });
+        }
+      } else {
+        this.guideModalEl.hidden = true;
+        setInertState(this.guideModalEl, true);
+        this.guideModalEl.setAttribute('aria-hidden', 'true');
+        const restore = options?.returnFocus === false ? null : this.lastGuideTrigger || this.openGuideButton;
+        if (restore && typeof restore.focus === 'function') {
+          restore.focus({ preventScroll: true });
+        } else {
+          this.focusGameViewport();
+        }
+      }
+      this.guideModalVisible = nextVisible;
+      this.updateGuideAria();
+    }
+
+    showGuideSlide(index, options = {}) {
+      const slides = this.getGuideSlides();
+      if (!slides.length) {
+        return;
+      }
+      const count = slides.length;
+      const normalized = ((index % count) + count) % count;
+      const rebuildDots = Boolean(options?.rebuildDots);
+      const scrollToTop = options?.scrollToTop !== false;
+      this.renderGuideCard(normalized, { rebuildDots, scrollToTop });
+      if (options?.focusTarget && typeof options.focusTarget.focus === 'function') {
+        options.focusTarget.focus({ preventScroll: true });
+      }
+    }
+
+    handleOpenGuide(event) {
+      if (event?.preventDefault) {
+        event.preventDefault();
+      }
+      const trigger = event?.currentTarget || event?.target || this.openGuideButton;
+      this.lastGuideTrigger = trigger && typeof trigger.focus === 'function' ? trigger : this.openGuideButton;
+      this.toggleGuideModal(true, { focusTarget: this.guideCloseButtons?.[0] || null });
+    }
+
+    handleCloseGuide(event) {
+      if (event?.preventDefault) {
+        event.preventDefault();
+      }
+      this.toggleGuideModal(false);
+    }
+
+    handleGuideModalClick(event) {
+      if (!this.guideModalVisible) {
+        return;
+      }
+      if (event?.target === this.guideModalEl) {
+        this.toggleGuideModal(false);
+      }
+    }
+
+    handleGuidePrev(event) {
+      if (event?.preventDefault) {
+        event.preventDefault();
+      }
+      this.showGuideSlide(this.activeGuideIndex - 1, { scrollToTop: true });
+    }
+
+    handleGuideNext(event) {
+      if (event?.preventDefault) {
+        event.preventDefault();
+      }
+      this.showGuideSlide(this.activeGuideIndex + 1, { scrollToTop: true });
+    }
+
+    handleGuideDotActivate(event) {
+      if (event?.preventDefault) {
+        event.preventDefault();
+      }
+      const target = event?.currentTarget || event?.target || null;
+      const rawIndex = target?.dataset?.guideIndex ?? '-1';
+      const index = Number.parseInt(rawIndex, 10);
+      if (!Number.isInteger(index) || index < 0) {
+        return;
+      }
+      this.showGuideSlide(index, { scrollToTop: true });
+    }
+
+    handleGuideKeyDown(event) {
+      if (!this.guideModalVisible || !event) {
+        return;
+      }
+      const key = event.key || event.code;
+      switch (key) {
+        case 'Escape':
+        case 'Esc':
+          event.preventDefault();
+          this.toggleGuideModal(false);
+          break;
+        case 'ArrowLeft':
+        case 'Left':
+          event.preventDefault();
+          this.showGuideSlide(this.activeGuideIndex - 1, { scrollToTop: false });
+          break;
+        case 'ArrowRight':
+        case 'Right':
+          event.preventDefault();
+          this.showGuideSlide(this.activeGuideIndex + 1, { scrollToTop: false });
+          break;
+        case 'Home':
+          event.preventDefault();
+          this.showGuideSlide(0, { scrollToTop: true });
+          break;
+        case 'End':
+          event.preventDefault();
+          this.showGuideSlide(this.getGuideSlides().length - 1, { scrollToTop: true });
+          break;
+        default:
+      }
     }
 
     focusGameViewport(options = {}) {
@@ -9920,9 +10570,16 @@
         this.toggleInventoryModal(open);
         event.preventDefault();
       }
+      if (this.isKeyForAction(code, 'openGuide') && !event.repeat) {
+        this.lastGuideTrigger = this.openGuideButton || this.lastGuideTrigger;
+        const open = this.guideModalEl?.hidden !== false;
+        this.toggleGuideModal(open, { focusTarget: this.guideCloseButtons?.[0] || null });
+        event.preventDefault();
+      }
       if (this.isKeyForAction(code, 'closeMenus')) {
         this.toggleCraftingModal(false);
         this.toggleInventoryModal(false);
+        this.toggleGuideModal(false, { returnFocus: false });
       }
       const hotbarSlot = this.getHotbarSlotFromKey(code);
       if (hotbarSlot !== null) {
