@@ -142,6 +142,22 @@ jobs:
                 "Principal": "*",
                 "Action": "s3:GetObject",
                 "Resource": "arn:aws:s3:::${DEPLOY_BUCKET}/*"
+              },
+              {
+                "Sid": "AllowPublicReadModelsAndTextures",
+                "Effect": "Allow",
+                "Principal": "*",
+                "Action": "s3:GetObject",
+                "Resource": [
+                  "arn:aws:s3:::${DEPLOY_BUCKET}/assets/*.gltf",
+                  "arn:aws:s3:::${DEPLOY_BUCKET}/assets/*.glb",
+                  "arn:aws:s3:::${DEPLOY_BUCKET}/assets/*.bin",
+                  "arn:aws:s3:::${DEPLOY_BUCKET}/assets/*/*.gltf",
+                  "arn:aws:s3:::${DEPLOY_BUCKET}/assets/*/*.glb",
+                  "arn:aws:s3:::${DEPLOY_BUCKET}/assets/*/*.bin",
+                  "arn:aws:s3:::${DEPLOY_BUCKET}/assets/textures/*",
+                  "arn:aws:s3:::${DEPLOY_BUCKET}/assets/*/textures/*"
+                ]
               }
             ]
           }
