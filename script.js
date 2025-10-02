@@ -881,24 +881,78 @@
     return baseMessage;
   }
 
+  function applyRendererReadyState(detail = null, options = {}) {
+    bootstrapOverlay.setDiagnostic('renderer', {
+      status: 'ok',
+      message: 'Renderer initialised successfully.',
+    });
+    bootstrapOverlay.setDiagnostic('assets', {
+      status: 'ok',
+      message: 'World assets loaded.',
+    });
+    bootstrapOverlay.hide({ force: true });
+    if (typeof logDiagnosticsEvent === 'function' && options.log !== false) {
+      const logMessage =
+        typeof options.logMessage === 'string' && options.logMessage.trim().length
+          ? options.logMessage.trim()
+          : 'Renderer initialised successfully.';
+      const logLevel =
+        typeof options.logLevel === 'string' && options.logLevel.trim().length
+          ? options.logLevel.trim()
+          : 'success';
+      const detailPayload = detail && typeof detail === 'object' ? { ...detail } : null;
+      const logOptions = { level: logLevel };
+      if (detailPayload) {
+        logOptions.detail = detailPayload;
+      }
+      const timestamp = detail && typeof detail === 'object' ? detail.timestamp : undefined;
+      if (Number.isFinite(timestamp)) {
+        logOptions.timestamp = timestamp;
+      }
+      logDiagnosticsEvent('startup', logMessage, logOptions);
+    }
+  }
+
+  function buildRendererDetailFromState(state) {
+    if (!state || typeof state !== 'object') {
+      return null;
+    }
+    const detail = {};
+    if (typeof state.rendererMode === 'string' && state.rendererMode.trim().length) {
+      detail.mode = state.rendererMode.trim();
+    }
+    if (typeof state.reason === 'string' && state.reason.trim().length) {
+      detail.reason = state.reason.trim();
+    }
+    if (typeof state.isRunning === 'boolean') {
+      detail.isRunning = state.isRunning;
+    }
+    if (Number.isFinite(state.updatedAt)) {
+      detail.timestamp = state.updatedAt;
+    }
+    return Object.keys(detail).length ? detail : null;
+  }
+
+  function synchroniseBootstrapWithExistingState() {
+    const state = globalScope?.__INFINITE_RAILS_STATE__;
+    if (!state || typeof state !== 'object') {
+      return;
+    }
+    if (state.isRunning) {
+      const detail = buildRendererDetailFromState(state);
+      applyRendererReadyState(detail, {
+        logLevel: 'info',
+        logMessage: 'Renderer already active — synchronised diagnostics state.',
+      });
+    }
+  }
+
   if (typeof globalScope?.addEventListener === 'function') {
     globalScope.addEventListener('infinite-rails:started', (event) => {
-      bootstrapOverlay.setDiagnostic('renderer', {
-        status: 'ok',
-        message: 'Renderer initialised successfully.',
+      applyRendererReadyState(event?.detail && typeof event.detail === 'object' ? event.detail : null, {
+        logLevel: 'success',
+        logMessage: 'Renderer initialised successfully.',
       });
-      bootstrapOverlay.setDiagnostic('assets', {
-        status: 'ok',
-        message: 'World assets loaded.',
-      });
-      bootstrapOverlay.hide({ force: true });
-      if (typeof logDiagnosticsEvent === 'function') {
-        logDiagnosticsEvent('startup', 'Renderer initialised successfully.', {
-          level: 'success',
-          detail: event?.detail && typeof event.detail === 'object' ? event.detail : null,
-          timestamp: Number.isFinite(event?.detail?.timestamp) ? event.detail.timestamp : undefined,
-        });
-      }
     });
     globalScope.addEventListener('infinite-rails:renderer-failure', (event) => {
       const detail =
@@ -3807,6 +3861,8 @@
   globalScope.InfiniteRails.debug = debugApi;
 
   globalScope.bootstrap = bootstrap;
+
+  synchroniseBootstrapWithExistingState();
 
   ensureThree()
     .then(() => {
