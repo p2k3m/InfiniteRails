@@ -4575,6 +4575,23 @@ body.sidebar-open .player-hint {
   background: rgba(73, 242, 255, 0.25);
 }
 
+.crafting-suggestions button[aria-disabled='true'],
+.crafting-suggestions button[data-eligible='false'] {
+  opacity: 0.45;
+  cursor: not-allowed;
+  background: rgba(73, 242, 255, 0.08);
+  border-color: rgba(73, 242, 255, 0.16);
+  color: rgba(200, 244, 255, 0.65);
+}
+
+.crafting-suggestions button[aria-disabled='true']:hover,
+.crafting-suggestions button[aria-disabled='true']:focus-visible,
+.crafting-suggestions button[data-eligible='false']:hover,
+.crafting-suggestions button[data-eligible='false']:focus-visible {
+  background: rgba(73, 242, 255, 0.08);
+  border-color: rgba(73, 242, 255, 0.16);
+}
+
 .crafting-search-panel {
   position: absolute;
   inset: 0;
@@ -4651,6 +4668,33 @@ body.sidebar-open .player-hint {
 .crafting-search-panel__results button:focus-visible {
   border-color: rgba(73, 242, 255, 0.45);
   background: rgba(73, 242, 255, 0.22);
+}
+
+.crafting-search-panel__results button[aria-disabled='true'],
+.crafting-search-panel__results button[data-eligible='false'] {
+  opacity: 0.55;
+  cursor: not-allowed;
+  border-color: rgba(73, 242, 255, 0.14);
+  background: rgba(73, 242, 255, 0.08);
+  color: rgba(200, 244, 255, 0.7);
+}
+
+.crafting-search-panel__results button[aria-disabled='true'] .crafting-search-panel__result-output,
+.crafting-search-panel__results button[data-eligible='false'] .crafting-search-panel__result-output {
+  color: rgba(200, 244, 255, 0.55);
+}
+
+.crafting-search-panel__results button[aria-disabled='true'] .crafting-search-panel__result-subtitle,
+.crafting-search-panel__results button[data-eligible='false'] .crafting-search-panel__result-subtitle {
+  color: rgba(73, 242, 255, 0.55);
+}
+
+.crafting-search-panel__results button[aria-disabled='true']:hover,
+.crafting-search-panel__results button[aria-disabled='true']:focus-visible,
+.crafting-search-panel__results button[data-eligible='false']:hover,
+.crafting-search-panel__results button[data-eligible='false']:focus-visible {
+  border-color: rgba(73, 242, 255, 0.14);
+  background: rgba(73, 242, 255, 0.08);
 }
 
 .crafting-search-panel__result-subtitle {
