@@ -320,7 +320,32 @@
   const CHEST_INTERACT_RANGE = 1.8;
   const CHEST_HINT_COOLDOWN = 4.5;
 
-  const DIMENSION_LOOT_TABLES = {
+  function freezeDimensionLootTables(sourceTables) {
+    const output = {};
+    const entries = Object.entries(sourceTables || {});
+    for (const [dimensionId, table] of entries) {
+      const items = Array.isArray(table) ? table : [];
+      const frozenEntries = items.map((entry) => {
+        const lootItems = Array.isArray(entry.items)
+          ? entry.items.map((item) =>
+              Object.freeze({
+                item: item.item,
+                quantity: item.quantity,
+              }),
+            )
+          : [];
+        return Object.freeze({
+          items: Object.freeze(lootItems),
+          score: Number.isFinite(entry.score) ? entry.score : 0,
+          message: entry.message || '',
+        });
+      });
+      output[dimensionId] = Object.freeze(frozenEntries);
+    }
+    return Object.freeze(output);
+  }
+
+  const DIMENSION_LOOT_TABLE_SOURCE = {
     origin: [
       {
         items: [
@@ -428,6 +453,8 @@
       },
     ],
   };
+
+  const DIMENSION_LOOT_TABLES = freezeDimensionLootTables(DIMENSION_LOOT_TABLE_SOURCE);
 
   const GLTF_LOADER_URLS = ['vendor/GLTFLoader.js'];
 
@@ -984,6 +1011,34 @@
     return value - Math.floor(value);
   }
 
+  function hashStringToSeed(value) {
+    const str = String(value ?? '');
+    let hash = 0;
+    for (let i = 0; i < str.length; i += 1) {
+      hash = (hash * 31 + str.charCodeAt(i)) >>> 0;
+    }
+    return hash || 1;
+  }
+
+  function createShuffledIndexOrder(length, seedSource) {
+    const count = Math.max(0, Math.floor(length));
+    const order = Array.from({ length: count }, (_, index) => index);
+    if (count <= 1) {
+      return order;
+    }
+    const baseSeed = hashStringToSeed(seedSource);
+    for (let i = count - 1; i > 0; i -= 1) {
+      const seedA = baseSeed + i * 23.917;
+      const seedB = baseSeed * 0.318 + i * 11.137;
+      const roll = pseudoRandom(seedA, seedB);
+      const swapIndex = Math.floor(roll * (i + 1));
+      const tmp = order[i];
+      order[i] = order[swapIndex];
+      order[swapIndex] = tmp;
+    }
+    return order;
+  }
+
   function getItemDefinition(id) {
     if (!id) {
       return { label: 'Empty', icon: '·', placeable: false };
@@ -1118,6 +1173,10 @@
       this.handSwingTimer = 0;
       this.modelPromises = new Map();
       this.loadedModels = new Map();
+      this.dimensionLootCache = new Map();
+      this.dimensionLootOrders = new Map();
+      this.dimensionLootOrderOffsets = new Map();
+      this.ensureDimensionLootTablesLoaded();
       this.dimensionBadgeSymbols = DIMENSION_BADGE_SYMBOLS;
       this.scoreboardListEl = this.ui.scoreboardListEl || null;
       this.scoreboardStatusEl = this.ui.scoreboardStatusEl || null;
@@ -7371,14 +7430,53 @@
       this.evaluateBossChallenge();
     }
 
+    ensureDimensionLootTablesLoaded() {
+      if (!(this.dimensionLootCache instanceof Map)) {
+        this.dimensionLootCache = new Map();
+      }
+      if (!(this.dimensionLootOrders instanceof Map)) {
+        this.dimensionLootOrders = new Map();
+      }
+      if (!(this.dimensionLootOrderOffsets instanceof Map)) {
+        this.dimensionLootOrderOffsets = new Map();
+      }
+      const dimensionIds = new Set([
+        ...Object.keys(DIMENSION_LOOT_TABLES),
+        ...DIMENSION_THEME.map((theme) => (typeof theme?.id === 'string' ? theme.id : null)).filter(Boolean),
+      ]);
+      const fallback = DIMENSION_LOOT_TABLES.origin || [];
+      dimensionIds.forEach((dimensionId) => {
+        const table = DIMENSION_LOOT_TABLES[dimensionId] || fallback;
+        this.dimensionLootCache.set(dimensionId, table);
+        if (!this.dimensionLootOrders.has(dimensionId)) {
+          const order = createShuffledIndexOrder(table.length, `${dimensionId}:${table.length}`);
+          this.dimensionLootOrders.set(dimensionId, order);
+        }
+        if (!this.dimensionLootOrderOffsets.has(dimensionId)) {
+          this.dimensionLootOrderOffsets.set(dimensionId, 0);
+        }
+      });
+    }
+
     getChestLootForDimension(dimensionId, index) {
       const normalizedId = typeof dimensionId === 'string' ? dimensionId : 'origin';
-      const tables = DIMENSION_LOOT_TABLES[normalizedId] || DIMENSION_LOOT_TABLES.origin || [];
+      this.ensureDimensionLootTablesLoaded();
+      let tables = this.dimensionLootCache.get(normalizedId);
+      if (!Array.isArray(tables) || !tables.length) {
+        tables = this.dimensionLootCache.get('origin') || DIMENSION_LOOT_TABLES.origin || [];
+      }
       if (!tables.length) {
         return { items: [], score: 0, message: '' };
       }
-      const safeIndex = ((index % tables.length) + tables.length) % tables.length;
-      const entry = tables[safeIndex];
+      let order = this.dimensionLootOrders.get(normalizedId);
+      if (!order || !order.length) {
+        order = createShuffledIndexOrder(tables.length, `${normalizedId}:${tables.length}`);
+        this.dimensionLootOrders.set(normalizedId, order);
+      }
+      const safeIndex = Number.isFinite(index) ? Number(index) : 0;
+      const wrappedIndex = ((safeIndex % order.length) + order.length) % order.length;
+      const selectedIndex = order[wrappedIndex] ?? 0;
+      const entry = tables[selectedIndex] || tables[0];
       return {
         items: Array.isArray(entry.items)
           ? entry.items.map((item) => ({ item: item.item, quantity: item.quantity }))
@@ -7446,6 +7544,8 @@
       const chestCount = CHEST_COUNT_PER_DIMENSION;
       const seedBase = (this.currentDimensionIndex + 1) * 97;
       this.chestPulseTime = 0;
+      const dimensionId = typeof theme?.id === 'string' ? theme.id : 'origin';
+      const lootCursorStart = this.dimensionLootOrderOffsets.get(dimensionId) || 0;
       for (let i = 0; i < chestCount; i += 1) {
         const randAngle = pseudoRandom(seedBase + i * 11.37, seedBase - i * 5.29);
         const randRadius = pseudoRandom(seedBase * 0.41 + i * 3.17, seedBase * 0.77 - i * 2.61);
@@ -7458,7 +7558,7 @@
         mesh.position.set(x, ground + 0.35, z);
         mesh.name = `LootChest-${theme?.id || 'dimension'}-${i}`;
         chestGroup.add(mesh);
-        const loot = this.getChestLootForDimension(theme?.id || 'origin', i);
+        const loot = this.getChestLootForDimension(dimensionId, lootCursorStart + i);
         const chest = {
           id: `${theme?.id || 'dimension'}-${i}-${Date.now()}`,
           mesh,
@@ -7466,6 +7566,11 @@
           lid: mesh.userData?.lid ?? null,
           highlightMaterials: mesh.userData?.highlightMaterials ?? [],
           baseY: mesh.position.y,
+          baseScale: {
+            x: mesh.scale?.x ?? 1,
+            y: mesh.scale?.y ?? 1,
+            z: mesh.scale?.z ?? 1,
+          },
           opened: false,
           openProgress: 0,
           loot,
@@ -7476,6 +7581,7 @@
         this.chests.push(chest);
       }
       this.lastChestHintAt = this.elapsed;
+      this.dimensionLootOrderOffsets.set(dimensionId, lootCursorStart + chestCount);
     }
 
     clearChests() {
@@ -7556,8 +7662,33 @@
         if (!Number.isFinite(chest.baseY)) {
           chest.baseY = mesh.position.y;
         }
-        const floatOffset = Math.sin(this.chestPulseTime * 2 + (chest.pulseOffset || 0)) * 0.05;
+        if (!chest.baseScale) {
+          chest.baseScale = {
+            x: mesh.scale?.x ?? 1,
+            y: mesh.scale?.y ?? 1,
+            z: mesh.scale?.z ?? 1,
+          };
+        }
+        const distance = mesh.position.distanceTo(playerPosition);
+        if (!Number.isFinite(distance)) {
+          continue;
+        }
+        const proximityRange = CHEST_INTERACT_RANGE + 2.5;
+        const proximity = 1 - Math.min(distance, proximityRange) / proximityRange;
+        const pulseSpeed = 2.4 + proximity * 3.6;
+        const floatAmplitude = 0.05 + proximity * 0.08;
+        const floatOffset = Math.sin(this.chestPulseTime * pulseSpeed + (chest.pulseOffset || 0)) * floatAmplitude;
         mesh.position.y = chest.baseY + Math.max(0, floatOffset);
+        const scalePulse =
+          Math.sin(this.chestPulseTime * (3 + proximity * 5.5) + (chest.pulseOffset || 0)) * (0.02 + proximity * 0.12);
+        const targetScale = {
+          x: chest.baseScale.x * (1 + scalePulse),
+          y: chest.baseScale.y * (1 + scalePulse * 0.6),
+          z: chest.baseScale.z * (1 + scalePulse),
+        };
+        mesh.scale.x = THREE.MathUtils.lerp(mesh.scale.x, targetScale.x, delta * 5.2);
+        mesh.scale.y = THREE.MathUtils.lerp(mesh.scale.y, targetScale.y, delta * 5.2);
+        mesh.scale.z = THREE.MathUtils.lerp(mesh.scale.z, targetScale.z, delta * 5.2);
         if (chest.lidPivot) {
           const target = chest.opened ? 1 : 0;
           const speed = chest.opened ? 3.2 : 4.5;
@@ -7565,14 +7696,13 @@
           const eased = chest.openProgress * chest.openProgress;
           chest.lidPivot.rotation.x = -Math.PI * 0.6 * eased;
         }
-        const distance = mesh.position.distanceTo(playerPosition);
         if (!chest.opened && distance < nearestDistance) {
           nearest = chest;
           nearestDistance = distance;
         }
-        let targetGlow = chest.opened ? 0.15 : 0.35;
+        let targetGlow = chest.opened ? 0.15 : 0.35 + proximity * 0.45;
         if (!chest.opened && distance <= CHEST_INTERACT_RANGE + 0.6) {
-          targetGlow = 1.05;
+          targetGlow = Math.max(targetGlow, 1.05);
           if (
             distance <= CHEST_INTERACT_RANGE &&
             !chest.hintShown &&
@@ -13681,6 +13811,7 @@
     create: createSimpleExperience,
     dimensionManifest: DIMENSION_ASSET_MANIFEST,
     dimensionThemes: DIMENSION_THEME,
+    dimensionLootTables: DIMENSION_LOOT_TABLES,
     terrainProfiles: DIMENSION_TERRAIN_PROFILES,
     defaultTerrainProfile: DEFAULT_TERRAIN_PROFILE,
   };
