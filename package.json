@@ -5,7 +5,8 @@
   "main": "script.js",
   "scripts": {
     "test": "vitest run",
-    "test:e2e": "node tests/e2e-check.js"
+    "test:e2e": "node tests/e2e-check.js",
+    "check:manifest": "node scripts/check-manifest.js"
   },
   "keywords": [],
   "author": "",
