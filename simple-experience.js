@@ -390,11 +390,7 @@
     ],
   };
 
-  const GLTF_LOADER_URLS = [
-    'vendor/GLTFLoader.js',
-    'https://unpkg.com/three@0.161.0/examples/js/loaders/GLTFLoader.js',
-    'https://cdn.jsdelivr.net/npm/three@0.161.0/examples/js/loaders/GLTFLoader.js',
-  ];
+  const GLTF_LOADER_URLS = ['vendor/GLTFLoader.js'];
 
   const assetResolver =
     (typeof window !== 'undefined' && window.InfiniteRailsAssetResolver) ||

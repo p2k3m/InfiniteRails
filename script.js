@@ -2154,15 +2154,54 @@
     });
   }
 
-  const THREE_CDN_URLS = [
-    ...createAssetUrlCandidates('vendor/three.min.js'),
-    'https://unpkg.com/three@0.161.0/build/three.min.js',
-    'https://cdn.jsdelivr.net/npm/three@0.161.0/build/three.min.js',
-  ];
-  const GLTF_LOADER_URLS = [
-    ...createAssetUrlCandidates('vendor/GLTFLoader.js'),
-    'https://cdn.jsdelivr.net/npm/three@0.161.0/examples/js/loaders/GLTFLoader.js',
-  ];
+  const THREE_SCRIPT_URLS = [...createAssetUrlCandidates('vendor/three.min.js')];
+  const GLTF_LOADER_URLS = [...createAssetUrlCandidates('vendor/GLTFLoader.js')];
+
+  let hasReportedThreeLoadFailure = false;
+
+  function reportThreeLoadFailure(error, context = {}) {
+    const scope =
+      typeof globalScope !== 'undefined'
+        ? globalScope
+        : typeof window !== 'undefined'
+          ? window
+          : globalThis;
+    if (scope?.console?.error) {
+      scope.console.error('Three.js failed to load.', { error, context });
+    }
+    if (typeof logDiagnosticsEvent === 'function') {
+      try {
+        logDiagnosticsEvent('startup', 'Three.js failed to load.', {
+          level: 'error',
+          detail: {
+            ...context,
+            message: error?.message,
+          },
+        });
+      } catch (logError) {
+        if (scope?.console?.warn) {
+          scope.console.warn('Failed to log diagnostics event for Three.js failure.', logError);
+        }
+      }
+    }
+    if (!hasReportedThreeLoadFailure && typeof bootstrapOverlay !== 'undefined') {
+      hasReportedThreeLoadFailure = true;
+      try {
+        bootstrapOverlay.showError({
+          title: 'Renderer unavailable',
+          message: 'Unable to load the 3D renderer. Reload the page to try again.',
+        });
+        bootstrapOverlay.setDiagnostic('renderer', {
+          status: 'error',
+          message: 'Three.js failed to load. Reload to try again.',
+        });
+      } catch (overlayError) {
+        if (scope?.console?.warn) {
+          scope.console.warn('Failed to display overlay message for Three.js failure.', overlayError);
+        }
+      }
+    }
+  }
 
   let threeLoaderPromise = null;
   let gltfLoaderPromise = null;
@@ -2211,22 +2250,35 @@
 
     function loadThreeFromCandidates({ startIndex = 0, exclude = [] } = {}) {
       return new Promise((resolve, reject) => {
+        const attemptedUrls = [];
+        const encounteredErrors = [];
         const attempt = (index) => {
           if (scope.THREE && typeof scope.THREE === 'object') {
             scope.THREE_GLOBAL = scope.THREE;
             resolve(scope.THREE);
             return;
           }
-          if (index >= THREE_CDN_URLS.length) {
-            reject(new Error('Unable to load Three.js from configured sources.'));
+          if (index >= THREE_SCRIPT_URLS.length) {
+            const failureError = new Error('Unable to load Three.js from bundled sources.');
+            if (encounteredErrors.length > 0) {
+              failureError.cause = encounteredErrors[encounteredErrors.length - 1];
+              failureError.errors = [...encounteredErrors];
+            }
+            failureError.attemptedUrls = [...attemptedUrls];
+            reportThreeLoadFailure(failureError, {
+              attemptedUrls: failureError.attemptedUrls,
+              errors: encounteredErrors.map((err) => err?.message ?? String(err)),
+            });
+            reject(failureError);
             return;
           }
-          const candidate = THREE_CDN_URLS[index];
+          const candidate = THREE_SCRIPT_URLS[index];
           const normalisedCandidate = normaliseUrlForComparison(candidate);
           if (exclude.includes(normalisedCandidate)) {
             attempt(index + 1);
             return;
           }
+          attemptedUrls.push(normalisedCandidate);
           const attrs = {
             'data-three-fallback': 'true',
             'data-three-fallback-index': String(index),
@@ -2237,6 +2289,8 @@
                 scope.THREE_GLOBAL = scope.THREE;
                 resolve(scope.THREE);
               } else {
+                const exposureError = new Error('Three.js script loaded without exposing THREE.');
+                encounteredErrors.push(exposureError);
                 attempt(index + 1);
               }
             })
@@ -2246,9 +2300,7 @@
               if (failingElement?.setAttribute) {
                 failingElement.setAttribute('data-three-fallback-error', 'true');
               }
-              if (scope.console?.warn) {
-                scope.console.warn('Failed to load Three.js fallback', { url: candidate, error });
-              }
+              encounteredErrors.push(error);
               attempt(index + 1);
             });
         };
@@ -3566,6 +3618,7 @@
       bootstrap();
     })
     .catch((error) => {
+      reportThreeLoadFailure(error, { reason: 'ensureThree-rejection' });
       if (!simpleFallbackAttempted) {
         tryStartSimpleFallback(error, { reason: 'ensureThree-failure' });
       }
