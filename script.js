@@ -376,6 +376,33 @@
     }
   }
 
+  if (typeof globalScope.addEventListener === 'function') {
+    globalScope.addEventListener('infinite-rails:score-sync-offline', (event) => {
+      const detail = event?.detail ?? {};
+      const fallback = 'Leaderboard offline — runs stored locally until connection returns.';
+      const message =
+        typeof detail.message === 'string' && detail.message.trim().length ? detail.message.trim() : fallback;
+      updateScoreboardStatus(message);
+    });
+
+    globalScope.addEventListener('infinite-rails:score-sync-restored', (event) => {
+      const detail = event?.detail ?? {};
+      if (typeof detail.message === 'string' && detail.message.trim().length) {
+        updateScoreboardStatus(detail.message.trim());
+        return;
+      }
+      if (!identityState.apiBaseUrl) {
+        return;
+      }
+      const activeIdentity = identityState.identity ?? null;
+      if (activeIdentity?.googleId) {
+        updateScoreboardStatus(`Signed in as ${activeIdentity.name}. Leaderboard sync active.`);
+      } else {
+        updateScoreboardStatus('Leaderboard connected — sign in to publish your run.');
+      }
+    });
+  }
+
   function createAnonymousIdentity(base) {
     const location = base?.location && typeof base.location === 'object' ? { ...base.location } : null;
     const locationLabel =

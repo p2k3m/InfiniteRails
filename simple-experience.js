@@ -830,6 +830,9 @@
       this.scoreboardPollTimer = 0;
       this.scoreboardStorageKey = options.scoreboardStorageKey || SCOREBOARD_STORAGE_KEY;
       this.lastScoreboardFetch = 0;
+      this.offlineSyncActive = false;
+      this.lastOfflineSyncHintAt = 0;
+      this.offlineSyncHintCooldownMs = 16000;
       this.hotbarEl = this.ui.hotbarEl || null;
       this.playerHintEl = this.ui.playerHintEl || null;
       this.pointerHintEl = this.ui.pointerHintEl || null;
@@ -1559,6 +1562,62 @@
       }
     }
 
+    getNowTimestamp() {
+      if (typeof performance !== 'undefined' && typeof performance.now === 'function') {
+        return performance.now();
+      }
+      return Date.now();
+    }
+
+    handleLeaderboardOffline(error, options = {}) {
+      if (!this.apiBaseUrl) {
+        return;
+      }
+      const { source = 'sync', reason = null } = options;
+      const statusMessage =
+        typeof options.message === 'string' && options.message.trim().length
+          ? options.message.trim()
+          : 'Leaderboard offline — progress saved locally.';
+      const hintMessage =
+        typeof options.hint === 'string' && options.hint.trim().length
+          ? options.hint.trim()
+          : 'Connection lost — progress saved locally.';
+      this.persistScoreboardEntries();
+      if (this.scoreboardStatusEl) {
+        this.scoreboardStatusEl.textContent = statusMessage;
+      }
+      if (typeof this.showHint === 'function') {
+        const now = this.getNowTimestamp();
+        if (!this.offlineSyncActive || now - this.lastOfflineSyncHintAt >= this.offlineSyncHintCooldownMs) {
+          this.showHint(hintMessage);
+          this.lastOfflineSyncHintAt = now;
+        }
+      }
+      this.offlineSyncActive = true;
+      const detail = {
+        source,
+        reason: reason ?? null,
+        message: statusMessage,
+      };
+      if (error) {
+        detail.error = typeof error.message === 'string' ? error.message : String(error);
+      }
+      this.emitGameEvent('score-sync-offline', detail);
+    }
+
+    clearOfflineSyncNotice(source, options = {}) {
+      if (!this.offlineSyncActive) {
+        return;
+      }
+      this.offlineSyncActive = false;
+      this.lastOfflineSyncHintAt = 0;
+      const detail = { source };
+      if (typeof options.message === 'string' && options.message.trim().length) {
+        detail.message = options.message.trim();
+      }
+      this.emitGameEvent('score-sync-restored', detail);
+    }
+
     async loadScoreboard({ force = false } = {}) {
       if (!this.apiBaseUrl) {
         this.scoreboardPollTimer = 0;
@@ -1615,20 +1674,25 @@
         } else {
           this.renderScoreboard();
         }
-        if (this.scoreboardStatusEl) {
-          if (incoming.length) {
-            this.scoreboardStatusEl.textContent = 'Live multiverse rankings';
-          } else {
-            this.scoreboardStatusEl.textContent = 'No public runs yet — forge the first legend!';
-          }
+        let statusMessage;
+        if (incoming.length) {
+          statusMessage = 'Live multiverse rankings';
+        } else {
+          statusMessage = 'No public runs yet — forge the first legend!';
         }
+        if (this.scoreboardStatusEl) {
+          this.scoreboardStatusEl.textContent = statusMessage;
+        }
+        this.clearOfflineSyncNotice('load', { message: statusMessage });
         this.scoreboardHydrated = true;
         this.scoreboardPollTimer = 0;
       } catch (error) {
         console.warn('Failed to load scoreboard data', error);
-        if (this.scoreboardStatusEl) {
-          this.scoreboardStatusEl.textContent = 'Leaderboard offline — tracking locally.';
-        }
+        this.handleLeaderboardOffline(error, {
+          source: 'load',
+          message: 'Leaderboard offline — progress saved locally.',
+          hint: 'Leaderboard offline — progress saved locally.',
+        });
         if (!this.scoreboardHydrated) {
           this.renderScoreboard();
           this.scoreboardHydrated = true;
@@ -2110,16 +2174,21 @@
         this.mergeScoreEntries(entries);
         this.lastScoreSyncAt = performance.now();
         this.scoreSyncHeartbeat = 0;
+        const statusMessage = 'Leaderboard synced';
         if (this.scoreboardStatusEl) {
-          this.scoreboardStatusEl.textContent = 'Leaderboard synced';
+          this.scoreboardStatusEl.textContent = statusMessage;
         }
+        this.clearOfflineSyncNotice('sync', { message: statusMessage });
         console.log('Score synced', { reason, score: entry.score });
       } catch (error) {
         console.warn('Unable to sync score to backend', error);
-        if (this.scoreboardStatusEl) {
-          this.scoreboardStatusEl.textContent = 'Sync failed — will retry shortly.';
-        }
         this.pendingScoreSyncReason = reason;
+        this.handleLeaderboardOffline(error, {
+          source: 'sync',
+          reason,
+          message: 'Sync failed — run saved locally. Will retry shortly.',
+          hint: 'Leaderboard offline — progress saved locally.',
+        });
       } finally {
         this.scoreSyncInFlight = false;
       }
