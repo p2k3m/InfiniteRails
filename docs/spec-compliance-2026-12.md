@@ -8,7 +8,7 @@ This audit maps the requested "Portals of Dimension" gameplay brief to the shipp
 
 ## First-Person Player Experience & Controls
 * First-person hands and the Steve model attach directly to the camera rig; a fallback cube keeps the avatar visible if GLTF loading fails while logging “Avatar visibility confirmed — verify animation rig initialises correctly if the player appears static.” for testers.【F:simple-experience.js†L2753-L3034】
-* Input listeners cover WASD, jump, pointer-lock look, mining/placing, crafting/inventory toggles, hotbar selection, and pointer hints; the handler explicitly logs “Movement input detected (forward). If the avatar fails to advance, confirm control bindings and resolve any physics constraints blocking motion.” to prove keyboard bindings are active when QA follows the tutorial overlay.【F:simple-experience.js†L4438-L4635】
+* Input listeners cover WASD, jump, pointer-lock look, mining/placing, crafting/inventory toggles, hotbar selection, and pointer hints; the handler explicitly logs “Movement input detected (forward). If the avatar fails to advance, confirm control bindings and resolve any locked physics/body constraints or failed transform updates blocking motion.” to prove keyboard bindings are active when QA follows the tutorial overlay.【F:simple-experience.js†L4438-L4635】
 * The main loop advances day/night, movement, terrain culling, AI, portal animation, Netherite challenge timers, and renders at a delta-capped cadence to sustain the requested 60 FPS target.【F:simple-experience.js†L4611-L4635】【F:simple-experience.js†L4884-L4944】
 
 ## Survival Actors & Combat Feedback

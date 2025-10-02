@@ -16,7 +16,7 @@ future regressions.
 - **First-person Steve embodiment** – GLTF assets (with box-mesh fallbacks)
   attach the camera to the head bone, add animated arms, and emit “Avatar visibility confirmed — verify animation rig initialises correctly if the player appears static.” once the rig is ready.【F:simple-experience.js†L1984-L2055】【F:simple-experience.js†L2170-L2249】
 - **Responsive controls** – Pointer lock, WASD, jump, mining, placement, and the
-  virtual joystick bind inside `bindEvents()`, logging “Movement input detected (forward). If the avatar fails to advance, confirm control bindings and resolve any physics constraints blocking motion.” on the
+  virtual joystick bind inside `bindEvents()`, logging “Movement input detected (forward). If the avatar fails to advance, confirm control bindings and resolve any locked physics/body constraints or failed transform updates blocking motion.” on the
   first `W` press to prove input wiring.【F:simple-experience.js†L3510-L3654】
 - **Portals & dimension advancement** – Portal frames activate with shader
   planes, queue score syncs, and advance to the next gravity palette while

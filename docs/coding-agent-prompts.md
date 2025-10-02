@@ -48,7 +48,7 @@ rotateY); 'click' for pointerlock and left/right mine/place (raycast from camera
 remove/add voxel to hotbar). For mobile, add touchstart/move/end on canvas for
 virtual joystick (bottom-left div, analog vector to movement). Fix no-response:
 Use preventDefault(), global scope, and pressedKeys Set for held keys. Add Space
-for jump (velocity.y += 10delta). Validate: Press W → console.error('Movement input detected (forward). If the avatar fails to advance, confirm control bindings and resolve any physics constraints blocking motion.');
+for jump (velocity.y += 10delta). Validate: Press W → console.error('Movement input detected (forward). If the avatar fails to advance, confirm control bindings and resolve any locked physics/body constraints or failed transform updates blocking motion.');
 ensure 1 unit/sec speed. Output full event handlers, normalized for
 desktop/mobile like Minecraft controls.
 ```
