@@ -1742,6 +1742,7 @@
         this.renderFrame(performance.now());
         this.emitGameEvent('started', { summary: this.createRunSummary('start') });
         this.publishStateSnapshot('started');
+        this.logEngineBootDiagnostics({ status: 'success', phase: 'start' });
         this.lastStatePublish = 0;
       } catch (error) {
         const failureMessage = 'Renderer initialisation failed. Check your browser console for details.';
@@ -1761,6 +1762,234 @@
           stage: 'startup',
         });
         this.publishStateSnapshot('start-error');
+        this.logEngineBootDiagnostics({ status: 'error', phase: 'start', error });
+      }
+    }
+
+    logEngineBootDiagnostics(context = {}) {
+      const consoleRef = typeof console !== 'undefined' ? console : null;
+      if (!consoleRef || typeof consoleRef.log !== 'function') {
+        return;
+      }
+      const status = context.status || (context.error ? 'error' : 'success');
+      const phase = context.phase || 'start';
+      const now = new Date();
+      const rootGroupOpen =
+        typeof consoleRef.groupCollapsed === 'function'
+          ? consoleRef.groupCollapsed.bind(consoleRef)
+          : typeof consoleRef.group === 'function'
+            ? consoleRef.group.bind(consoleRef)
+            : null;
+      const groupEnd = typeof consoleRef.groupEnd === 'function' ? consoleRef.groupEnd.bind(consoleRef) : null;
+      const sectionGroupOpen =
+        typeof consoleRef.groupCollapsed === 'function'
+          ? consoleRef.groupCollapsed.bind(consoleRef)
+          : typeof consoleRef.group === 'function'
+            ? consoleRef.group.bind(consoleRef)
+            : null;
+      const printValue = (value) => {
+        if (Array.isArray(value) && value.length > 0 && typeof consoleRef.table === 'function') {
+          consoleRef.table(value);
+          return;
+        }
+        if (value && typeof value === 'object') {
+          consoleRef.log({ ...value });
+          return;
+        }
+        consoleRef.log(value);
+      };
+      const logNestedArrays = (value) => {
+        if (!value || typeof value !== 'object') {
+          return;
+        }
+        if (Array.isArray(value)) {
+          if (value.length > 0) {
+            printValue(value);
+          }
+          return;
+        }
+        for (const nestedValue of Object.values(value)) {
+          if (nestedValue && typeof nestedValue === 'object') {
+            logNestedArrays(nestedValue);
+          }
+        }
+      };
+      const logSection = (title, payload) => {
+        if (sectionGroupOpen) {
+          sectionGroupOpen(title);
+          printValue(payload);
+          logNestedArrays(payload);
+          if (groupEnd) {
+            groupEnd();
+          }
+        } else {
+          consoleRef.log(`${title}:`, payload);
+        }
+      };
+      const label = `Engine boot diagnostics — ${status}${phase ? ` (${phase})` : ''}`;
+      if (rootGroupOpen) {
+        rootGroupOpen(label);
+      } else {
+        consoleRef.log(label);
+      }
+
+      const assetTimers = this.assetLoadTimers || {};
+      const pendingAssetTimers = Object.entries(assetTimers).map(([kind, map]) => ({
+        kind,
+        pending: map instanceof Map ? map.size : 0,
+      }));
+      const recentLoads = typeof this.getAssetLoadLog === 'function'
+        ? this.getAssetLoadLog(5).map((entry) => ({
+            kind: entry.kind,
+            key: entry.key,
+            status: entry.status,
+            durationMs: Number.isFinite(entry.duration) ? Math.round(entry.duration) : null,
+            completedAt: entry.timestamp ?? null,
+          }))
+        : [];
+      const assetFailureEntries =
+        this.assetFailureCounts instanceof Map
+          ? Array.from(this.assetFailureCounts.entries()).map(([key, count]) => ({ key, failures: count }))
+          : [];
+      const assetStatus = {
+        timestamp: now.toISOString(),
+        pendingLoads: pendingAssetTimers,
+        recentLoads,
+        recovery: {
+          pendingKeys: Array.from(this.assetRecoveryPendingKeys || []),
+          promptActive: Boolean(this.assetRecoveryPromptActive),
+          delayNotices: Array.from(this.assetDelayNotices || []),
+        },
+      };
+
+      const loadedModelKeys =
+        this.loadedModels instanceof Map ? Array.from(this.loadedModels.keys()).slice(-5) : [];
+      const pendingModelKeys =
+        this.modelPromises instanceof Map ? Array.from(this.modelPromises.keys()).slice(0, 5) : [];
+      const modelStatus = {
+        loadedCount: this.loadedModels instanceof Map ? this.loadedModels.size : 0,
+        pendingCount: this.modelPromises instanceof Map ? this.modelPromises.size : 0,
+        warmupQueue: Array.isArray(this.lazyModelWarmupQueue) ? this.lazyModelWarmupQueue.length : 0,
+        handModelLoaded: Boolean(this.handModelLoaded),
+        playerAvatarLoaded: Boolean(this.playerAvatar),
+        sampleLoaded: loadedModelKeys,
+        samplePending: pendingModelKeys,
+      };
+
+      const sceneStatus = {
+        rendererReady: Boolean(this.renderer && !this.rendererUnavailable),
+        sceneChildren: this.scene?.children?.length ?? 0,
+        worldChildren: this.worldRoot?.children?.length ?? 0,
+        terrainColumns: this.columns instanceof Map ? this.columns.size : 0,
+        terrainMeshes: this.terrainGroup?.children?.length ?? 0,
+        railSegments: this.railsGroup?.children?.length ?? 0,
+        portalElements: this.portalGroup?.children?.length ?? 0,
+        zombieActors: Array.isArray(this.zombies) ? this.zombies.length : 0,
+        golemActors: Array.isArray(this.golems) ? this.golems.length : 0,
+      };
+
+      const controlStatus = {
+        pointerLocked: Boolean(this.pointerLocked),
+        pointerFallbackActive: Boolean(this.pointerLockFallbackActive),
+        pointerFallbackNotice: Boolean(this.pointerLockFallbackNoticeShown),
+        keyBindingCount: this.keyBindings ? Object.keys(this.keyBindings).length : 0,
+        mobileControlsActive: Boolean(this.mobileControlsActive),
+        touchPreferred: Boolean(this.isTouchPreferred),
+        boundEvents: Array.isArray(this.boundEventRecords) ? this.boundEventRecords.length : 0,
+        cameraPerspective: this.cameraPerspective ?? null,
+      };
+
+      const navigationMeshes = this.navigationMeshes instanceof Map ? this.navigationMeshes : null;
+      const navigationSummary = this.navigationMeshSummary || {};
+      let zombieDiagnostics = null;
+      if (typeof this.getZombieAIDiagnostics === 'function') {
+        try {
+          zombieDiagnostics = this.getZombieAIDiagnostics();
+        } catch (diagnosticError) {
+          consoleRef.debug?.('Failed to gather zombie AI diagnostics for boot log.', diagnosticError);
+        }
+      }
+      const aiStatus = {
+        navmesh: {
+          trackedChunks: navigationMeshes ? navigationMeshes.size : 0,
+          generation: this.navigationMeshGeneration ?? 0,
+          chunkCount: navigationSummary.chunkCount ?? (navigationMeshes ? navigationMeshes.size : 0),
+          walkableCells: navigationSummary.walkableCells ?? 0,
+          lastUpdatedAt: navigationSummary.updatedAt ?? null,
+          lastReason: navigationSummary.reason ?? null,
+        },
+        zombies: zombieDiagnostics
+          ? {
+              activeCount: zombieDiagnostics.activeCount ?? 0,
+              activeChunks: Array.isArray(zombieDiagnostics.navigation?.activeChunks)
+                ? zombieDiagnostics.navigation.activeChunks
+                : [],
+              lastSpawnAt: zombieDiagnostics.lastSpawnAt ?? null,
+              timeSinceLastSpawn: zombieDiagnostics.timeSinceLastSpawn ?? null,
+            }
+          : null,
+      };
+
+      const doc = typeof document !== 'undefined' ? document : null;
+      const portalStateText = this.ui?.portalStatusStateText?.textContent;
+      const portalDetailText = this.ui?.portalStatusDetailText?.textContent;
+      const uiStatus = {
+        hudActive: doc?.body?.classList?.contains?.('game-active') ?? false,
+        introHidden: this.ui?.introModal ? Boolean(this.ui.introModal.hidden) : null,
+        briefingVisible: this.playerHintEl ? this.playerHintEl.hidden === false : null,
+        tutorialVisible: this.firstRunTutorialEl ? this.firstRunTutorialEl.hidden === false : null,
+        pointerHintActive: Boolean(this.pointerHintActive),
+        pointerHintMessage: this.pointerHintLastMessage || null,
+        mobileControlsVisible: this.mobileControlsRoot ? this.mobileControlsRoot.hidden === false : null,
+        scoreboardStatus:
+          this.scoreboardStatusEl && typeof this.scoreboardStatusEl.textContent === 'string'
+            ? this.scoreboardStatusEl.textContent.trim()
+            : null,
+        portalStatus: portalStateText && typeof portalStateText === 'string' ? portalStateText.trim() : null,
+        portalDetail: portalDetailText && typeof portalDetailText === 'string' ? portalDetailText.trim() : null,
+      };
+
+      let bootError = null;
+      if (context.error) {
+        const errorMessage =
+          typeof context.error.message === 'string' && context.error.message.trim().length
+            ? context.error.message.trim()
+            : String(context.error);
+        const errorName =
+          typeof context.error.name === 'string' && context.error.name.trim().length
+            ? context.error.name.trim()
+            : context.error.constructor?.name ?? 'Error';
+        bootError = {
+          name: errorName,
+          message: errorMessage,
+          stack: typeof context.error.stack === 'string'
+            ? context.error.stack
+                .split('\n')
+                .slice(0, 6)
+                .join('\n')
+            : null,
+        };
+      }
+      const errorStatus = {
+        status,
+        phase,
+        rendererUnavailable: Boolean(this.rendererUnavailable),
+        assetFailures: assetFailureEntries,
+        assetNotices: Array.from(this.assetFailureNotices || []),
+        eventNotices: Array.from(this.eventFailureNotices || []),
+        bootError,
+      };
+
+      logSection('Asset status', assetStatus);
+      logSection('Model status', modelStatus);
+      logSection('Scene objects', sceneStatus);
+      logSection('Controls', controlStatus);
+      logSection('AI navmesh', aiStatus);
+      logSection('UI states', uiStatus);
+      logSection('Errors', errorStatus);
+
+      if (rootGroupOpen && groupEnd) {
+        groupEnd();
       }
     }
 
