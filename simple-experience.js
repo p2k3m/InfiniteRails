@@ -7026,6 +7026,18 @@
               ? details.error.message
               : String(details.error);
           failureDetail.error = errorMessage;
+          if (typeof details.error?.name === 'string' && details.error.name.trim().length) {
+            failureDetail.errorName = details.error.name.trim();
+          }
+          if (typeof details.error?.stack === 'string' && details.error.stack.trim().length) {
+            failureDetail.stack = details.error.stack.trim();
+          }
+        }
+        if (!failureDetail.stack && typeof details.errorStack === 'string' && details.errorStack.trim().length) {
+          failureDetail.stack = details.errorStack.trim();
+        }
+        if (!failureDetail.errorName && typeof details.errorName === 'string' && details.errorName.trim().length) {
+          failureDetail.errorName = details.errorName.trim();
         }
       }
       this.emitGameEvent('renderer-failure', failureDetail);
@@ -10032,6 +10044,58 @@
         ignitePortal: (tool) => this.debugIgnitePortal(tool),
         advanceDimension: () => this.debugAdvanceDimension(),
         assetLoads: (limit) => this.getAssetLoadLog(limit),
+        setVerboseMode: (enabled) => {
+          const controls = scope.InfiniteRails?.debug;
+          if (controls && typeof controls.setEnabled === 'function') {
+            controls.setEnabled(Boolean(enabled), { source: 'debug-interface' });
+            return true;
+          }
+          return false;
+        },
+        enableVerboseMode: () => {
+          const controls = scope.InfiniteRails?.debug;
+          if (controls && typeof controls.setEnabled === 'function') {
+            controls.setEnabled(true, { source: 'debug-interface' });
+            return true;
+          }
+          return false;
+        },
+        disableVerboseMode: () => {
+          const controls = scope.InfiniteRails?.debug;
+          if (controls && typeof controls.setEnabled === 'function') {
+            controls.setEnabled(false, { source: 'debug-interface' });
+            return true;
+          }
+          return false;
+        },
+        toggleVerboseMode: () => {
+          const controls = scope.InfiniteRails?.debug;
+          if (controls && typeof controls.toggle === 'function') {
+            controls.toggle({ source: 'debug-interface' });
+            return true;
+          }
+          if (controls && typeof controls.setEnabled === 'function' && typeof controls.isEnabled === 'function') {
+            try {
+              const current = Boolean(controls.isEnabled());
+              controls.setEnabled(!current, { source: 'debug-interface' });
+              return true;
+            } catch (error) {
+              console.debug('Verbose mode toggle failed', error);
+            }
+          }
+          return false;
+        },
+        isVerboseModeEnabled: () => {
+          const controls = scope.InfiniteRails?.debug;
+          if (controls && typeof controls.isEnabled === 'function') {
+            try {
+              return Boolean(controls.isEnabled());
+            } catch (error) {
+              console.debug('Verbose mode probe failed', error);
+            }
+          }
+          return false;
+        },
       };
       try {
         scope.dispatchEvent(
