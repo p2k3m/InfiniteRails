@@ -3509,6 +3509,29 @@
     if (typeof experience.publishStateSnapshot === 'function') {
       experience.publishStateSnapshot('bootstrap');
     }
+    if (typeof bootstrapOverlay !== 'undefined') {
+      if (typeof bootstrapOverlay.setDiagnostic === 'function') {
+        bootstrapOverlay.setDiagnostic('renderer', {
+          status: 'ok',
+          message: 'Renderer ready — press Start Expedition to begin.',
+        });
+        bootstrapOverlay.setDiagnostic('assets', {
+          status: 'pending',
+          message: 'World assets will stream after launch.',
+        });
+      }
+      if (typeof bootstrapOverlay.hide === 'function') {
+        const overlayState = bootstrapOverlay.state ?? {};
+        if (overlayState.mode !== 'error') {
+          bootstrapOverlay.hide({ force: true });
+        }
+      }
+    }
+    if (typeof logDiagnosticsEvent === 'function') {
+      logDiagnosticsEvent('startup', 'Renderer initialised; awaiting player input.', {
+        level: 'success',
+      });
+    }
     if (ui.startButton && !ui.startButton.dataset.simpleExperienceBound) {
       ui.startButton.addEventListener('click', (event) => {
         if (event?.preventDefault) {
