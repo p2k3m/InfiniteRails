@@ -6967,6 +6967,20 @@
         this.pointerHintEl.hidden = true;
         this.pointerHintEl.classList.remove('is-visible');
       }
+      const failureDetail = { message: typeof message === 'string' ? message : 'Renderer unavailable' };
+      if (details && typeof details === 'object') {
+        if (details.stage && typeof details.stage === 'string') {
+          failureDetail.stage = details.stage;
+        }
+        if (details.error) {
+          const errorMessage =
+            typeof details.error?.message === 'string'
+              ? details.error.message
+              : String(details.error);
+          failureDetail.error = errorMessage;
+        }
+      }
+      this.emitGameEvent('renderer-failure', failureDetail);
       this.publishStateSnapshot('renderer-failure');
     }
 

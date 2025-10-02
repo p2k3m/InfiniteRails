@@ -36,6 +36,169 @@
     }
   }
 
+  const bootstrapOverlay = (() => {
+    const state = { mode: 'idle', visible: false };
+
+    function getDocument() {
+      if (documentRef) {
+        return documentRef;
+      }
+      if (typeof document !== 'undefined') {
+        return document;
+      }
+      return globalScope?.document ?? null;
+    }
+
+    function getElements(doc) {
+      if (!doc || typeof doc.getElementById !== 'function') {
+        return null;
+      }
+      const overlay = doc.getElementById('globalOverlay');
+      if (!overlay) {
+        return null;
+      }
+      return {
+        overlay,
+        dialog: doc.getElementById('globalOverlayDialog'),
+        spinner: doc.getElementById('globalOverlaySpinner'),
+        title: doc.getElementById('globalOverlayTitle'),
+        message: doc.getElementById('globalOverlayMessage'),
+      };
+    }
+
+    function cancelFallbackTimer() {
+      const scope =
+        typeof globalScope !== 'undefined'
+          ? globalScope
+          : typeof window !== 'undefined'
+            ? window
+            : globalThis;
+      const fallback = scope?.__infiniteRailsBootstrapFallback;
+      if (fallback?.timer && typeof scope.clearTimeout === 'function') {
+        scope.clearTimeout(fallback.timer);
+        fallback.timer = null;
+      }
+    }
+
+    function removeBasicFallback(doc) {
+      if (!doc || typeof doc.getElementById !== 'function') {
+        return;
+      }
+      const basicFallback = doc.getElementById('bootstrapFallbackMessage');
+      if (basicFallback?.parentNode) {
+        basicFallback.parentNode.removeChild(basicFallback);
+      }
+    }
+
+    function show(mode, options = {}) {
+      const doc = getDocument();
+      const elements = getElements(doc);
+      if (!elements) {
+        return;
+      }
+      cancelFallbackTimer();
+      removeBasicFallback(doc);
+      const { overlay, dialog, spinner, title, message } = elements;
+      overlay.hidden = false;
+      overlay.removeAttribute('hidden');
+      overlay.setAttribute('aria-hidden', 'false');
+      overlay.setAttribute('data-mode', mode === 'error' ? 'error' : 'loading');
+      if (dialog) {
+        if (mode === 'loading') {
+          dialog.setAttribute('aria-busy', 'true');
+        } else {
+          dialog.removeAttribute('aria-busy');
+        }
+      }
+      if (spinner) {
+        if (mode === 'loading') {
+          spinner.removeAttribute('aria-hidden');
+        } else {
+          spinner.setAttribute('aria-hidden', 'true');
+        }
+      }
+      if (title && typeof options.title === 'string') {
+        title.textContent = options.title;
+      }
+      if (message && typeof options.message === 'string') {
+        message.textContent = options.message;
+      }
+      state.mode = mode;
+      state.visible = true;
+    }
+
+    function hide({ force = false } = {}) {
+      if (state.mode === 'error' && !force) {
+        return;
+      }
+      const doc = getDocument();
+      const elements = getElements(doc);
+      if (!elements) {
+        return;
+      }
+      cancelFallbackTimer();
+      removeBasicFallback(doc);
+      const { overlay, dialog, spinner } = elements;
+      overlay.setAttribute('aria-hidden', 'true');
+      overlay.setAttribute('data-mode', 'idle');
+      overlay.setAttribute('hidden', '');
+      overlay.hidden = true;
+      if (dialog) {
+        dialog.removeAttribute('aria-busy');
+      }
+      if (spinner) {
+        spinner.setAttribute('aria-hidden', 'true');
+      }
+      state.mode = 'idle';
+      state.visible = false;
+    }
+
+    return {
+      showLoading(options = {}) {
+        const defaults = {
+          title: 'Preparing experience…',
+          message: 'Loading world assets. Hang tight while the realm forms.',
+        };
+        show('loading', { ...defaults, ...options });
+      },
+      showError(options = {}) {
+        const defaults = {
+          title: 'Renderer unavailable',
+          message: 'Unable to load the experience. Check your connection and reload.',
+        };
+        show('error', { ...defaults, ...options });
+      },
+      hide,
+      get state() {
+        return { ...state };
+      },
+    };
+  })();
+
+  bootstrapOverlay.showLoading();
+
+  if (typeof globalScope?.addEventListener === 'function') {
+    globalScope.addEventListener('infinite-rails:started', () => {
+      bootstrapOverlay.hide({ force: true });
+    });
+    globalScope.addEventListener('infinite-rails:renderer-failure', (event) => {
+      const detail = event?.detail || {};
+      const message =
+        typeof detail.message === 'string' && detail.message.trim().length
+          ? detail.message.trim()
+          : 'Renderer unavailable. Reload to try again.';
+      const title = 'Renderer unavailable';
+      const suffix =
+        detail.stage && typeof detail.stage === 'string' && detail.stage.trim().length
+          ? ` (${detail.stage.trim()})`
+          : '';
+      bootstrapOverlay.showError({
+        title,
+        message: `${message}${suffix}`,
+      });
+    });
+  }
+
   function normaliseApiBaseUrl(base) {
     if (!base || typeof base !== 'string') {
       return null;
@@ -1219,6 +1382,11 @@
     if (simpleFallbackAttempted) {
       return false;
     }
+    if (typeof bootstrapOverlay !== 'undefined' && bootstrapOverlay.state.mode !== 'error') {
+      bootstrapOverlay.showLoading({
+        message: 'Attempting simplified renderer fallback…',
+      });
+    }
     const scope =
       typeof globalScope !== 'undefined'
         ? globalScope
@@ -1250,6 +1418,12 @@
         scope.console.error('Simple experience unavailable; cannot start fallback renderer.', {
           error,
           context,
+        });
+      }
+      if (typeof bootstrapOverlay !== 'undefined') {
+        bootstrapOverlay.showError({
+          title: 'Renderer unavailable',
+          message: 'Fallback renderer is unavailable. Check your extensions or reload the page.',
         });
       }
       return false;
@@ -1404,22 +1578,48 @@
       return activeExperienceInstance;
     }
     if (!globalScope.SimpleExperience?.create) {
+      if (typeof bootstrapOverlay !== 'undefined') {
+        bootstrapOverlay.showError({
+          title: 'Renderer unavailable',
+          message: 'Simplified renderer is missing from the build output.',
+        });
+      }
       return null;
     }
     const doc = documentRef || globalScope.document || null;
     const canvas = doc?.getElementById?.('gameCanvas') ?? null;
     if (!canvas) {
+      if (typeof bootstrapOverlay !== 'undefined') {
+        bootstrapOverlay.showError({
+          title: 'Renderer unavailable',
+          message: 'Game canvas could not be located. Reload the page to retry.',
+        });
+      }
       return null;
     }
     const ui = collectSimpleExperienceUi(doc);
     bindExperienceEventLog(ui);
-    const experience = globalScope.SimpleExperience.create({
-      canvas,
-      ui,
-      apiBaseUrl: identityState.apiBaseUrl,
-      playerName: identityState.identity?.name ?? 'Explorer',
-      identityStorageKey,
-    });
+    let experience;
+    try {
+      experience = globalScope.SimpleExperience.create({
+        canvas,
+        ui,
+        apiBaseUrl: identityState.apiBaseUrl,
+        playerName: identityState.identity?.name ?? 'Explorer',
+        identityStorageKey,
+      });
+    } catch (error) {
+      if (globalScope.console?.error) {
+        globalScope.console.error('Failed to initialise simplified renderer.', error);
+      }
+      if (typeof bootstrapOverlay !== 'undefined') {
+        bootstrapOverlay.showError({
+          title: 'Renderer unavailable',
+          message: 'Failed to initialise the renderer. Check your connection and reload.',
+        });
+      }
+      throw error;
+    }
     activeExperienceInstance = experience;
     globalScope.__INFINITE_RAILS_ACTIVE_EXPERIENCE__ = experience;
     if (typeof experience.setIdentity === 'function') {
@@ -1444,6 +1644,9 @@
         }
       });
       ui.startButton.dataset.simpleExperienceBound = 'true';
+    }
+    if (typeof bootstrapOverlay !== 'undefined') {
+      bootstrapOverlay.hide({ force: true });
     }
     return experience;
   }
