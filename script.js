@@ -2294,9 +2294,41 @@
         : typeof window !== 'undefined'
           ? window
           : globalThis;
-    if (scope.THREE && typeof scope.THREE === 'object') {
-      scope.THREE_GLOBAL = scope.THREE;
-      return Promise.resolve(scope.THREE);
+    function resolveThreeFromScope() {
+      const hasThree = scope && scope.THREE && typeof scope.THREE === 'object';
+      const hasThreeGlobal = scope && scope.THREE_GLOBAL && typeof scope.THREE_GLOBAL === 'object';
+      if (hasThree && hasThreeGlobal && scope.THREE !== scope.THREE_GLOBAL) {
+        const duplicateError = new Error('Multiple Three.js contexts detected; refusing to bootstrap duplicate instance.');
+        duplicateError.code = 'duplicate-three-global';
+        try {
+          if (typeof reportThreeLoadFailure === 'function') {
+            reportThreeLoadFailure(duplicateError, { reason: 'duplicate-three-global' });
+          }
+        } catch (reportError) {
+          if (scope?.console?.warn) {
+            scope.console.warn('Failed to report duplicate Three.js context.', reportError);
+          }
+        }
+        scope.THREE = scope.THREE_GLOBAL;
+        throw duplicateError;
+      }
+      if (hasThree) {
+        scope.THREE_GLOBAL = scope.THREE;
+        return scope.THREE;
+      }
+      if (hasThreeGlobal) {
+        scope.THREE = scope.THREE_GLOBAL;
+        return scope.THREE_GLOBAL;
+      }
+      return null;
+    }
+    try {
+      const existingThree = resolveThreeFromScope();
+      if (existingThree) {
+        return Promise.resolve(existingThree);
+      }
+    } catch (error) {
+      return Promise.reject(error);
     }
     if (threeLoaderPromise) {
       return threeLoaderPromise;
@@ -2334,9 +2366,15 @@
         const attemptedUrls = [];
         const encounteredErrors = [];
         const attempt = (index) => {
-          if (scope.THREE && typeof scope.THREE === 'object') {
-            scope.THREE_GLOBAL = scope.THREE;
-            resolve(scope.THREE);
+          let resolvedThree = null;
+          try {
+            resolvedThree = resolveThreeFromScope();
+          } catch (error) {
+            reject(error);
+            return;
+          }
+          if (resolvedThree) {
+            resolve(resolvedThree);
             return;
           }
           if (index >= THREE_SCRIPT_URLS.length) {
@@ -2366,9 +2404,15 @@
           };
           loadScript(candidate, attrs)
             .then(() => {
-              if (scope.THREE && typeof scope.THREE === 'object') {
-                scope.THREE_GLOBAL = scope.THREE;
-                resolve(scope.THREE);
+              let resolvedThreeAfterLoad = null;
+              try {
+                resolvedThreeAfterLoad = resolveThreeFromScope();
+              } catch (error) {
+                reject(error);
+                return;
+              }
+              if (resolvedThreeAfterLoad) {
+                resolve(resolvedThreeAfterLoad);
               } else {
                 const exposureError = new Error('Three.js script loaded without exposing THREE.');
                 encounteredErrors.push(exposureError);
@@ -2394,25 +2438,37 @@
       if (!script) {
         return null;
       }
-      if (scope.THREE && typeof scope.THREE === 'object') {
-        scope.THREE_GLOBAL = scope.THREE;
-        return Promise.resolve(scope.THREE);
+      try {
+        const existingThree = resolveThreeFromScope();
+        if (existingThree) {
+          return Promise.resolve(existingThree);
+        }
+      } catch (error) {
+        return Promise.reject(error);
       }
       const readyState = script.readyState;
       if (readyState === 'loaded' || readyState === 'complete') {
-        if (scope.THREE && typeof scope.THREE === 'object') {
-          scope.THREE_GLOBAL = scope.THREE;
-          return Promise.resolve(scope.THREE);
+        try {
+          const resolvedThree = resolveThreeFromScope();
+          if (resolvedThree) {
+            return Promise.resolve(resolvedThree);
+          }
+        } catch (error) {
+          return Promise.reject(error);
         }
         return Promise.reject(new Error('Preloaded Three.js script finished without exposing THREE.'));
       }
       return new Promise((resolve, reject) => {
         const handleLoad = () => {
-          if (scope.THREE && typeof scope.THREE === 'object') {
-            scope.THREE_GLOBAL = scope.THREE;
-            resolve(scope.THREE);
-          } else {
-            reject(new Error('Preloaded Three.js script loaded without exposing THREE.'));
+          try {
+            const resolvedThree = resolveThreeFromScope();
+            if (resolvedThree) {
+              resolve(resolvedThree);
+            } else {
+              reject(new Error('Preloaded Three.js script loaded without exposing THREE.'));
+            }
+          } catch (error) {
+            reject(error);
           }
         };
         const handleError = (event) => {
@@ -2423,14 +2479,19 @@
       });
     }
 
-    const preloadPromise = waitForPreloadedThree();
-    if (preloadPromise) {
-      const excluded = [];
-      const preloadedScript = getPreloadedThreeScript();
-      if (preloadedScript?.src) {
-        excluded.push(normaliseUrlForComparison(preloadedScript.src));
+    try {
+      const preloadPromise = waitForPreloadedThree();
+      if (preloadPromise) {
+        const excluded = [];
+        const preloadedScript = getPreloadedThreeScript();
+        if (preloadedScript?.src) {
+          excluded.push(normaliseUrlForComparison(preloadedScript.src));
+        }
+        threeLoaderPromise = preloadPromise.catch(() => loadThreeFromCandidates({ startIndex: 0, exclude: excluded }));
+        return threeLoaderPromise;
       }
-      threeLoaderPromise = preloadPromise.catch(() => loadThreeFromCandidates({ startIndex: 0, exclude: excluded }));
+    } catch (error) {
+      threeLoaderPromise = Promise.reject(error);
       return threeLoaderPromise;
     }
 
