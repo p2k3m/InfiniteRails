@@ -8566,29 +8566,16 @@
     }
 
     handleCraftButton() {
-      if (!this.craftingState.sequence.length) {
-        this.showHint('Add items to the sequence to craft.');
-        return;
-      }
-      const key = this.craftingState.sequence.join(',');
       const craftedSequence = this.craftingState.sequence.slice();
-      const recipe = this.craftingRecipes.get(key);
-      if (!recipe) {
-        this.showHint('Sequence unstable. Try a different item order.');
+      const validation = this.validateCraftingSequence();
+      if (!validation.valid) {
+        this.showHint(validation.message || 'Sequence unstable.');
+        this.announceCraftingValidation(validation);
         return;
       }
-      const counts = new Map();
-      this.craftingState.sequence.forEach((item) => {
-        counts.set(item, (counts.get(item) ?? 0) + 1);
-      });
-      for (const [item, required] of counts.entries()) {
-        if (this.getInventoryCountForItem(item) < required) {
-          this.showHint('Not enough materials. Gather or reclaim resources.');
-          return;
-        }
-      }
-      counts.forEach((required, item) => {
-        this.removeItemFromInventory(item, required);
+      const { recipe, key } = validation;
+      recipe.sequence.forEach((itemId) => {
+        this.removeItemFromInventory(itemId, 1);
       });
       this.addItemToInventory(recipe.id, 1);
       this.craftingState.sequence = [];
@@ -8597,7 +8584,8 @@
       this.score += recipe.score;
       this.addScoreBreakdown('recipes', recipe.score);
       this.savePersistentUnlocks();
-      this.showHint(`${recipe.label} crafted!`);
+      this.announceCraftingValidation({ valid: true });
+      this.showHint(validation.message || `${recipe.label} crafted!`);
       this.refreshCraftingUi();
       this.updateHud();
       this.scheduleScoreSync('recipe-crafted');
@@ -8798,22 +8786,159 @@
 
     updateCraftButtonState() {
       if (!this.craftButton) return;
-      const key = this.craftingState.sequence.join(',');
-      const recipe = this.craftingRecipes.get(key);
-      let enabled = Boolean(recipe);
-      if (enabled && recipe) {
-        const counts = new Map();
-        this.craftingState.sequence.forEach((item) => {
-          counts.set(item, (counts.get(item) ?? 0) + 1);
-        });
-        for (const [item, required] of counts.entries()) {
-          if (this.getInventoryCountForItem(item) < required) {
-            enabled = false;
+      const validation = this.validateCraftingSequence();
+      const enabled = validation.valid === true;
+      this.craftButton.disabled = !enabled;
+      if (validation.reason) {
+        this.craftButton.dataset.validationState = enabled ? 'ready' : validation.reason;
+      } else {
+        delete this.craftButton.dataset.validationState;
+      }
+    }
+
+    buildIngredientCount(parts = []) {
+      const tally = new Map();
+      if (!Array.isArray(parts)) {
+        return tally;
+      }
+      parts.forEach((itemId) => {
+        if (!itemId) return;
+        tally.set(itemId, (tally.get(itemId) ?? 0) + 1);
+      });
+      return tally;
+    }
+
+    findRecipeByIngredients(sequence) {
+      if (!Array.isArray(sequence) || !sequence.length) {
+        return null;
+      }
+      const target = this.buildIngredientCount(sequence);
+      let match = null;
+      this.craftingRecipes.forEach((recipe, key) => {
+        if (match || !recipe) {
+          return;
+        }
+        const parts = this.getRecipeSequence(recipe, key);
+        if (parts.length !== sequence.length) {
+          return;
+        }
+        const counts = this.buildIngredientCount(parts);
+        if (counts.size !== target.size) {
+          return;
+        }
+        let valid = true;
+        for (const [itemId, required] of counts.entries()) {
+          if (target.get(itemId) !== required) {
+            valid = false;
             break;
           }
         }
+        if (valid) {
+          match = { recipe, key, parts };
+        }
+      });
+      return match;
+    }
+
+    describeMissingIngredients(missing = []) {
+      if (!Array.isArray(missing) || !missing.length) {
+        return '';
       }
-      this.craftButton.disabled = !enabled;
+      return missing
+        .map((entry) => {
+          const def = getItemDefinition(entry.itemId);
+          const shortfall = Number.isFinite(entry.missing) ? Math.max(1, entry.missing) : 1;
+          return `${def.label} ×${shortfall}`;
+        })
+        .join(', ');
+    }
+
+    validateCraftingSequence() {
+      const sequence = Array.isArray(this.craftingState?.sequence)
+        ? this.craftingState.sequence.filter(Boolean)
+        : [];
+      if (!sequence.length) {
+        return {
+          valid: false,
+          reason: 'empty-sequence',
+          message: 'Add items to the sequence to craft.',
+        };
+      }
+      const key = sequence.join(',');
+      const recipe = this.craftingRecipes.get(key);
+      if (!recipe) {
+        const ingredientMatch = this.findRecipeByIngredients(sequence);
+        if (ingredientMatch) {
+          const order = this.formatRecipeSequence(ingredientMatch.parts);
+          return {
+            valid: false,
+            reason: 'order-mismatch',
+            recipe: ingredientMatch.recipe,
+            message: `${ingredientMatch.recipe.label} requires the order ${order}.`,
+          };
+        }
+        return {
+          valid: false,
+          reason: 'no-recipe',
+          message: 'Sequence fizzles. No recipe matched.',
+        };
+      }
+      const counts = this.buildIngredientCount(recipe.sequence);
+      const missing = [];
+      counts.forEach((required, itemId) => {
+        const available = this.getInventoryCountForItem(itemId);
+        if (available < required) {
+          missing.push({
+            itemId,
+            required,
+            available,
+            missing: required - available,
+          });
+        }
+      });
+      if (missing.length) {
+        return {
+          valid: false,
+          reason: 'missing-ingredients',
+          recipe,
+          missing,
+          message: `Missing materials: ${this.describeMissingIngredients(missing)}.`,
+        };
+      }
+      return {
+        valid: true,
+        reason: 'ready',
+        recipe,
+        key,
+        message: `${recipe.label} crafted!`,
+      };
+    }
+
+    announceCraftingValidation(validation) {
+      if (!validation) {
+        return;
+      }
+      if (!validation.valid) {
+        const matches = [];
+        if (validation.reason === 'order-mismatch' && validation.recipe) {
+          const parts = this.getRecipeSequence(validation.recipe);
+          matches.push(
+            `${validation.recipe.label} — ${this.formatRecipeSequence(parts)} • +${validation.recipe.score} pts`,
+          );
+        } else if (validation.reason === 'missing-ingredients' && Array.isArray(validation.missing)) {
+          const summary = this.describeMissingIngredients(validation.missing);
+          if (summary) {
+            matches.push(`Still required: ${summary}`);
+          }
+        }
+        this.showCraftingHelperHint('craft-validation', {
+          title: 'Sequence Invalid',
+          description: validation.message || 'This combination cannot be crafted yet.',
+          matches,
+        });
+      } else {
+        this.clearCraftingHelperHint('craft-validation');
+      }
     }
 
     updateCraftingSearchResults() {
