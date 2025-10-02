@@ -1017,6 +1017,7 @@
       this.assetFailureNotices = new Set();
       this.eventFailureNotices = new Set();
       this.boundEventDisposers = [];
+      this.boundEventRecords = [];
       this.bindAssetRecoveryControls();
       this.onOpenCraftingSearchClick = () => this.toggleCraftingSearch(true);
       this.onCloseCraftingSearchClick = () => this.toggleCraftingSearch(false);
@@ -1146,6 +1147,13 @@
       this.tmpVector2 = new THREE.Vector3();
       this.tmpVector3 = new THREE.Vector3();
       this.tmpQuaternion = new THREE.Quaternion();
+      this.movementBindingDiagnostics = {
+        pending: false,
+        triggeredAt: 0,
+        timeoutMs: 650,
+        initialPosition: new THREE.Vector3(),
+        key: null,
+      };
       this.cameraBaseOffset = new THREE.Vector3();
       this.cameraShakeOffset = new THREE.Vector3();
       this.cameraShakeRotation = new THREE.Euler();
@@ -6984,6 +6992,7 @@
         return;
       }
       this.boundEventDisposers = [];
+      this.boundEventRecords = [];
       const add = (target, eventName, handler, context, eventOptions) => {
         this.addSafeEventListener(target, eventName, handler, { context, eventOptions });
       };
@@ -6996,6 +7005,21 @@
       add(document, 'visibilitychange', this.onVisibilityChange, 'monitoring tab visibility');
       add(document, 'keydown', this.onKeyDown, 'processing keyboard input');
       add(document, 'keyup', this.onKeyUp, 'releasing keyboard input');
+      const view = typeof window !== 'undefined' ? window : null;
+      if (view) {
+        add(view, 'keydown', this.onKeyDown, 'processing keyboard input (window fallback)');
+        add(view, 'keyup', this.onKeyUp, 'releasing keyboard input (window fallback)');
+      }
+      if (this.canvas) {
+        if (typeof this.canvas.setAttribute === 'function') {
+          const existingTabIndex = this.canvas.getAttribute ? this.canvas.getAttribute('tabindex') : null;
+          if (existingTabIndex === null) {
+            this.canvas.setAttribute('tabindex', '0');
+          }
+        }
+        add(this.canvas, 'keydown', this.onKeyDown, 'processing keyboard input (canvas focus fallback)');
+        add(this.canvas, 'keyup', this.onKeyUp, 'releasing keyboard input (canvas focus fallback)');
+      }
       add(document, 'mousemove', this.onMouseMove, 'tracking pointer movement');
       add(document, 'mousedown', this.onMouseDown, 'handling pointer presses');
       add(document, 'mouseup', this.onMouseUp, 'handling pointer releases');
@@ -7081,6 +7105,7 @@
         }
       });
       this.boundEventDisposers = [];
+      this.boundEventRecords = [];
       if (this.detachPointerPreferenceObserver) {
         try {
           this.detachPointerPreferenceObserver();
@@ -7335,6 +7360,12 @@
     }
 
     handleKeyDown(event) {
+      if (event && event.__infiniteRailsHandled) {
+        return;
+      }
+      if (event) {
+        event.__infiniteRailsHandled = true;
+      }
       this.markInteraction();
       const code = typeof event.code === 'string' ? event.code : '';
       if (code) {
@@ -7347,6 +7378,7 @@
         console.error(
           'Movement input detected (forward). If the avatar fails to advance, confirm control bindings and resolve any physics constraints blocking motion.',
         );
+        this.queueMovementBindingValidation('moveForward');
       }
       if (this.isKeyForAction(code, 'resetPosition')) {
         this.resetPosition();
@@ -7395,10 +7427,192 @@
     }
 
     handleKeyUp(event) {
+      if (event && event.__infiniteRailsHandled) {
+        return;
+      }
+      if (event) {
+        event.__infiniteRailsHandled = true;
+      }
       this.markInteraction();
       const code = typeof event.code === 'string' ? event.code : '';
       if (code) {
         this.keys.delete(code);
+      }
+    }
+
+    queueMovementBindingValidation(actionLabel) {
+      const diagnostics = this.movementBindingDiagnostics;
+      if (!diagnostics) {
+        return;
+      }
+      const anchor = this.getMovementAnchorPosition();
+      if (!anchor) {
+        diagnostics.pending = false;
+        this.validateMovementBindings(null, null);
+        return;
+      }
+      if (!diagnostics.initialPosition) {
+        diagnostics.initialPosition = this.THREE?.Vector3 ? new this.THREE.Vector3() : null;
+      }
+      if (!diagnostics.initialPosition) {
+        diagnostics.pending = false;
+        this.validateMovementBindings(anchor, null);
+        return;
+      }
+      diagnostics.initialPosition.copy(anchor);
+      diagnostics.pending = true;
+      diagnostics.triggeredAt = this.getHighResTimestamp();
+      diagnostics.key = typeof actionLabel === 'string' ? actionLabel : null;
+    }
+
+    getMovementAnchorPosition() {
+      if (this.playerRig?.position) {
+        return this.playerRig.position;
+      }
+      if (this.camera?.position) {
+        return this.camera.position;
+      }
+      return null;
+    }
+
+    evaluateMovementBindingDiagnostics() {
+      const diagnostics = this.movementBindingDiagnostics;
+      if (!diagnostics || !diagnostics.pending) {
+        return;
+      }
+      const anchor = this.getMovementAnchorPosition();
+      if (!anchor) {
+        diagnostics.pending = false;
+        this.validateMovementBindings(null, null);
+        diagnostics.key = null;
+        return;
+      }
+      if (!diagnostics.initialPosition) {
+        diagnostics.initialPosition = anchor.clone ? anchor.clone() : null;
+        diagnostics.pending = false;
+        diagnostics.key = null;
+        return;
+      }
+      const canMeasureDisplacement =
+        diagnostics.initialPosition && typeof anchor.distanceToSquared === 'function';
+      const displacementSq = canMeasureDisplacement
+        ? anchor.distanceToSquared(diagnostics.initialPosition)
+        : null;
+      if (Number.isFinite(displacementSq) && displacementSq > 0.0025) {
+        diagnostics.pending = false;
+        diagnostics.key = null;
+        return;
+      }
+      const now = this.getHighResTimestamp();
+      if (now - diagnostics.triggeredAt < diagnostics.timeoutMs) {
+        return;
+      }
+      diagnostics.pending = false;
+      this.validateMovementBindings(anchor, displacementSq);
+      diagnostics.key = null;
+    }
+
+    validateMovementBindings(anchor, displacementSq) {
+      const consoleRef = typeof console !== 'undefined' ? console : null;
+      if (!consoleRef) {
+        return;
+      }
+      const warn =
+        typeof consoleRef.warn === 'function'
+          ? consoleRef.warn.bind(consoleRef)
+          : typeof consoleRef.error === 'function'
+            ? consoleRef.error.bind(consoleRef)
+            : typeof consoleRef.log === 'function'
+              ? consoleRef.log.bind(consoleRef)
+              : null;
+      const groupCollapsed =
+        typeof consoleRef.groupCollapsed === 'function' ? consoleRef.groupCollapsed.bind(consoleRef) : null;
+      const groupEnd = typeof consoleRef.groupEnd === 'function' ? consoleRef.groupEnd.bind(consoleRef) : null;
+      const records = Array.isArray(this.boundEventRecords) ? this.boundEventRecords : [];
+      const hasDocumentKeydown = records.some(
+        (record) => record && record.eventName === 'keydown' && record.targetLabel === 'document',
+      );
+      const hasDocumentKeyup = records.some(
+        (record) => record && record.eventName === 'keyup' && record.targetLabel === 'document',
+      );
+      const hasWindowKeydown = records.some(
+        (record) => record && record.eventName === 'keydown' && record.targetLabel === 'window',
+      );
+      const hasWindowKeyup = records.some(
+        (record) => record && record.eventName === 'keyup' && record.targetLabel === 'window',
+      );
+      const hasCanvasKeydown = records.some(
+        (record) => record && record.eventName === 'keydown' && record.targetLabel === 'canvas',
+      );
+      const hasCanvasKeyup = records.some(
+        (record) => record && record.eventName === 'keyup' && record.targetLabel === 'canvas',
+      );
+      const summariseVector = (vector) => {
+        if (!vector || typeof vector.x !== 'number' || typeof vector.y !== 'number' || typeof vector.z !== 'number') {
+          return null;
+        }
+        return {
+          x: Number.parseFloat(vector.x.toFixed(3)),
+          y: Number.parseFloat(vector.y.toFixed(3)),
+          z: Number.parseFloat(vector.z.toFixed(3)),
+        };
+      };
+      const rigPosition = this.playerRig?.position || null;
+      const rigSummary = summariseVector(rigPosition);
+      const cameraPosition = this.camera?.position || null;
+      const cameraSummary = summariseVector(cameraPosition);
+      let avatarWorldSummary = null;
+      if (this.playerAvatar && typeof this.playerAvatar.getWorldPosition === 'function' && this.THREE?.Vector3) {
+        const probe = new this.THREE.Vector3();
+        try {
+          this.playerAvatar.getWorldPosition(probe);
+          avatarWorldSummary = {
+            x: Number.parseFloat(probe.x.toFixed(3)),
+            y: Number.parseFloat(probe.y.toFixed(3)),
+            z: Number.parseFloat(probe.z.toFixed(3)),
+          };
+        } catch (error) {
+          if (typeof consoleRef.debug === 'function') {
+            consoleRef.debug('Unable to read player avatar world position for diagnostics.', error);
+          }
+        }
+      }
+      const anchorSummary = summariseVector(anchor);
+      const message =
+        'Movement diagnostics: input registered but no displacement detected. Verify keyboard listeners and avatar rig transforms.';
+      const report = {
+        keyboardListeners: {
+          document: { keydown: hasDocumentKeydown, keyup: hasDocumentKeyup },
+          window: { keydown: hasWindowKeydown, keyup: hasWindowKeyup },
+          canvas: { keydown: hasCanvasKeydown, keyup: hasCanvasKeyup },
+        },
+        displacementSq,
+        rig: {
+          present: Boolean(this.playerRig),
+          position: rigSummary,
+          avatarAttached: Boolean(this.playerAvatar && this.playerAvatar.parent === this.playerRig),
+        },
+        camera: {
+          present: Boolean(this.camera),
+          position: cameraSummary,
+        },
+        avatarWorldPosition: avatarWorldSummary,
+        anchorPosition: anchorSummary,
+      };
+      if (!warn) {
+        return;
+      }
+      if (groupCollapsed && groupEnd) {
+        groupCollapsed(message);
+        warn('Keyboard listener coverage', report.keyboardListeners);
+        warn('Rig status', report.rig);
+        warn('Camera status', report.camera);
+        warn('Avatar mesh position', report.avatarWorldPosition);
+        warn('Anchor position', report.anchorPosition);
+        warn('Displacement squared', report.displacementSq);
+        groupEnd();
+      } else {
+        warn(message, report);
       }
     }
 
@@ -7915,6 +8129,8 @@
       const maxDistance = (WORLD_SIZE / 2 - 2) * BLOCK_SIZE;
       position.x = THREE.MathUtils.clamp(position.x, -maxDistance, maxDistance);
       position.z = THREE.MathUtils.clamp(position.z, -maxDistance, maxDistance);
+
+      this.evaluateMovementBindingDiagnostics();
     }
 
     updateCameraShake(delta) {
@@ -9109,6 +9325,14 @@
         }
       };
       target.addEventListener(eventName, safeHandler, eventOptions);
+      if (!this.boundEventRecords) {
+        this.boundEventRecords = [];
+      }
+      this.boundEventRecords.push({
+        targetLabel: this.describeEventTarget(target),
+        eventName,
+        contextLabel: label,
+      });
       this.boundEventDisposers.push(() => {
         if (typeof target.removeEventListener === 'function') {
           try {
@@ -9123,6 +9347,30 @@
           }
         }
       });
+    }
+
+    describeEventTarget(target) {
+      if (!target) {
+        return 'unknown';
+      }
+      const scopeWindow = typeof window !== 'undefined' ? window : null;
+      if (scopeWindow && target === scopeWindow) {
+        return 'window';
+      }
+      const scopeDocument = typeof document !== 'undefined' ? document : null;
+      if (scopeDocument && target === scopeDocument) {
+        return 'document';
+      }
+      if (this.canvas && target === this.canvas) {
+        return 'canvas';
+      }
+      if (typeof target.nodeName === 'string' && target.nodeName) {
+        return target.nodeName.toLowerCase();
+      }
+      if (typeof target.constructor?.name === 'string' && target.constructor.name) {
+        return target.constructor.name;
+      }
+      return 'unknown';
     }
 
     handleAssetLoadFailure(key, error, options = {}) {
