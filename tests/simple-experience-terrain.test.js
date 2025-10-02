@@ -188,6 +188,72 @@ describe('simple experience terrain generation', () => {
     }
   });
 
+  it('notifies the player after repeated texture pack failures', async () => {
+    window.APP_CONFIG = {
+      textures: {
+        grass: 'https://cdn.example.com/grass.png',
+      },
+    };
+
+    const canvas = {
+      width: 512,
+      height: 512,
+      clientWidth: 512,
+      clientHeight: 512,
+      getContext: () => null,
+    };
+
+    const playerHintEl = {
+      textContent: '',
+      classList: {
+        add: vi.fn(),
+      },
+      setAttribute: vi.fn(),
+    };
+
+    const footerEl = {
+      dataset: {},
+    };
+
+    const footerStatusEl = {
+      textContent: '',
+    };
+
+    const loadSpy = vi
+      .spyOn(THREE.TextureLoader.prototype, 'load')
+      .mockImplementation((url, onLoad, onProgress, onError) => {
+        const texture = new THREE.Texture();
+        setTimeout(() => {
+          onError?.(new Error('Failed to fetch texture'));
+        }, 0);
+        return texture;
+      });
+
+    try {
+      const experience = window.SimpleExperience.create({
+        canvas,
+        ui: { playerHintEl, footerEl, footerStatusEl },
+        texturePackErrorNoticeThreshold: 2,
+      });
+
+      const first = await experience.loadExternalVoxelTexture('grass');
+      await Promise.resolve();
+      const second = await experience.loadExternalVoxelTexture('grass');
+      await Promise.resolve();
+
+      expect(first).toBeInstanceOf(THREE.Texture);
+      expect(second).toBeInstanceOf(THREE.Texture);
+      expect(playerHintEl.textContent).toContain('Texture pack offline');
+      expect(footerStatusEl.textContent).toContain('Texture pack offline');
+      expect(footerEl.dataset.state).toBe('warning');
+      expect(experience.texturePackNoticeShown).toBe(true);
+      expect(experience.texturePackErrorCount).toBeGreaterThanOrEqual(2);
+    } finally {
+      loadSpy.mockRestore();
+      window.APP_CONFIG = {};
+    }
+  });
+
   it('applies per-dimension terrain profiles without generating flat or empty worlds', () => {
     const canvas = {
       width: 512,
