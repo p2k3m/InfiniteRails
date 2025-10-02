@@ -922,6 +922,7 @@
       this.pendingLocationRequest = null;
       this.deviceLabel = this.describeDevice();
       this.scene = null;
+      this.worldRoot = null;
       this.camera = null;
       this.cameraFrustumHeight = 6;
       this.cameraFieldOfView = 60;
@@ -2718,6 +2719,10 @@
       this.scene.background = new THREE.Color('#87ceeb');
       this.scene.fog = new THREE.Fog(0x87ceeb, 40, 140);
 
+      this.worldRoot = new THREE.Group();
+      this.worldRoot.name = 'WorldRoot';
+      this.scene.add(this.worldRoot);
+
       const fov = this.cameraFieldOfView ?? 60;
       this.camera = new THREE.PerspectiveCamera(fov, aspect, 0.1, 250);
       this.camera.position.set(0, 0, 0);
@@ -2734,7 +2739,7 @@
       this.updateCameraFrustum(width, height);
 
       this.hemiLight = new THREE.HemisphereLight(0xbddcff, 0x34502d, 0.9);
-      this.scene.add(this.hemiLight);
+      this.worldRoot.add(this.hemiLight);
 
       this.sunLight = new THREE.DirectionalLight(0xffffff, 1.1);
       this.sunLight.position.set(18, 32, 12);
@@ -2746,17 +2751,17 @@
       this.sunLight.shadow.camera.right = 60;
       this.sunLight.shadow.camera.top = 60;
       this.sunLight.shadow.camera.bottom = -60;
-      this.scene.add(this.sunLight);
-      this.scene.add(this.sunLight.target);
+      this.worldRoot.add(this.sunLight);
+      this.worldRoot.add(this.sunLight.target);
 
       this.moonLight = new THREE.DirectionalLight(0x8ea2ff, 0.4);
       this.moonLight.position.set(-32, 18, -20);
       this.moonLight.castShadow = false;
-      this.scene.add(this.moonLight);
-      this.scene.add(this.moonLight.target);
+      this.worldRoot.add(this.moonLight);
+      this.worldRoot.add(this.moonLight.target);
 
       this.ambientLight = new THREE.AmbientLight(0xffffff, 0.18);
-      this.scene.add(this.ambientLight);
+      this.worldRoot.add(this.ambientLight);
 
       this.terrainGroup = new THREE.Group();
       this.railsGroup = new THREE.Group();
@@ -2765,13 +2770,13 @@
       this.golemGroup = new THREE.Group();
       this.chestGroup = new THREE.Group();
       this.challengeGroup = new THREE.Group();
-      this.scene.add(this.terrainGroup);
-      this.scene.add(this.railsGroup);
-      this.scene.add(this.portalGroup);
-      this.scene.add(this.zombieGroup);
-      this.scene.add(this.golemGroup);
-      this.scene.add(this.chestGroup);
-      this.scene.add(this.challengeGroup);
+      this.worldRoot.add(this.terrainGroup);
+      this.worldRoot.add(this.railsGroup);
+      this.worldRoot.add(this.portalGroup);
+      this.worldRoot.add(this.zombieGroup);
+      this.worldRoot.add(this.golemGroup);
+      this.worldRoot.add(this.chestGroup);
+      this.worldRoot.add(this.challengeGroup);
       this.createFirstPersonHands();
       this.loadPlayerCharacter().catch((error) => {
         console.warn('Player model failed to load; continuing with primitive hands.', error);
@@ -8515,11 +8520,12 @@
         group.name = `${kind.charAt(0).toUpperCase() + kind.slice(1)}Group`;
         this[property] = group;
       }
-      if (group.parent && group.parent !== this.scene && typeof group.parent.remove === 'function') {
+      const worldRoot = this.worldRoot || this.scene;
+      if (group.parent && group.parent !== worldRoot && typeof group.parent.remove === 'function') {
         group.parent.remove(group);
       }
-      if (this.scene && group.parent !== this.scene && typeof this.scene.add === 'function') {
-        this.scene.add(group);
+      if (worldRoot && group.parent !== worldRoot && typeof worldRoot.add === 'function') {
+        worldRoot.add(group);
       }
       return group;
     }
