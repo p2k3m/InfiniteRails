@@ -127,41 +127,85 @@ jobs:
             exit 1
           fi
 
-          aws s3api put-public-access-block \
-            --bucket "${DEPLOY_BUCKET}" \
-            --public-access-block-configuration BlockPublicAcls=false,IgnorePublicAcls=false,BlockPublicPolicy=false,RestrictPublicBuckets=false
+          ORIGIN_CLASSIC="${DEPLOY_BUCKET}.s3.amazonaws.com"
+          ORIGIN_REGIONAL="${DEPLOY_BUCKET}.s3.${AWS_REGION}.amazonaws.com"
+          ORIGIN_WEBSITE="${DEPLOY_BUCKET}.s3-website-${AWS_REGION}.amazonaws.com"
+          OAI_ID=""
+
+          MATCH=$(aws cloudfront list-distributions --query "DistributionList.Items[?Origins.Items[?DomainName=='${ORIGIN_CLASSIC}' || DomainName=='${ORIGIN_REGIONAL}' || DomainName=='${ORIGIN_WEBSITE}']]|[0]")
+          if [ -n "${MATCH}" ] && [ "${MATCH}" != "null" ]; then
+            OAI_PATH=$(echo "${MATCH}" | jq -r \
+              --arg classic "${ORIGIN_CLASSIC}" \
+              --arg regional "${ORIGIN_REGIONAL}" \
+              --arg website "${ORIGIN_WEBSITE}" \
+              '.Origins.Items[] | select(.DomainName == $classic or .DomainName == $regional or .DomainName == $website) | .S3OriginConfig.OriginAccessIdentity // empty' | head -n 1)
+            if [ -n "${OAI_PATH}" ] && [ "${OAI_PATH}" != "null" ]; then
+              OAI_ID="${OAI_PATH##*/}"
+            fi
+          fi
 
           POLICY_FILE=$(mktemp)
-          cat >"${POLICY_FILE}" <<POLICY
-          {
-            "Version": "2012-10-17",
-            "Statement": [
-              {
-                "Sid": "AllowPublicRead",
-                "Effect": "Allow",
-                "Principal": "*",
-                "Action": "s3:GetObject",
-                "Resource": "arn:aws:s3:::${DEPLOY_BUCKET}/*"
-              },
-              {
-                "Sid": "AllowPublicReadModelsAndTextures",
-                "Effect": "Allow",
-                "Principal": "*",
-                "Action": "s3:GetObject",
-                "Resource": [
-                  "arn:aws:s3:::${DEPLOY_BUCKET}/assets/*.gltf",
-                  "arn:aws:s3:::${DEPLOY_BUCKET}/assets/*.glb",
-                  "arn:aws:s3:::${DEPLOY_BUCKET}/assets/*.bin",
-                  "arn:aws:s3:::${DEPLOY_BUCKET}/assets/*/*.gltf",
-                  "arn:aws:s3:::${DEPLOY_BUCKET}/assets/*/*.glb",
-                  "arn:aws:s3:::${DEPLOY_BUCKET}/assets/*/*.bin",
-                  "arn:aws:s3:::${DEPLOY_BUCKET}/assets/textures/*",
-                  "arn:aws:s3:::${DEPLOY_BUCKET}/assets/*/textures/*"
-                ]
-              }
-            ]
-          }
-          POLICY
+
+          if [ -n "${OAI_ID}" ]; then
+            aws s3api put-public-access-block \
+              --bucket "${DEPLOY_BUCKET}" \
+              --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=false,RestrictPublicBuckets=false
+
+            cat >"${POLICY_FILE}" <<POLICY
+            {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Sid": "AllowCloudFrontOAIRead",
+                  "Effect": "Allow",
+                  "Principal": {
+                    "AWS": "arn:aws:iam::cloudfront:user/CloudFront Origin Access Identity ${OAI_ID}"
+                  },
+                  "Action": "s3:GetObject",
+                  "Resource": [
+                    "arn:aws:s3:::${DEPLOY_BUCKET}/index.html",
+                    "arn:aws:s3:::${DEPLOY_BUCKET}/styles.css",
+                    "arn:aws:s3:::${DEPLOY_BUCKET}/asset-resolver.js",
+                    "arn:aws:s3:::${DEPLOY_BUCKET}/audio-aliases.js",
+                    "arn:aws:s3:::${DEPLOY_BUCKET}/audio-captions.js",
+                    "arn:aws:s3:::${DEPLOY_BUCKET}/combat-utils.js",
+                    "arn:aws:s3:::${DEPLOY_BUCKET}/crafting.js",
+                    "arn:aws:s3:::${DEPLOY_BUCKET}/portal-mechanics.js",
+                    "arn:aws:s3:::${DEPLOY_BUCKET}/scoreboard-utils.js",
+                    "arn:aws:s3:::${DEPLOY_BUCKET}/script.js",
+                    "arn:aws:s3:::${DEPLOY_BUCKET}/simple-experience.js",
+                    "arn:aws:s3:::${DEPLOY_BUCKET}/assets/*",
+                    "arn:aws:s3:::${DEPLOY_BUCKET}/vendor/*"
+                  ]
+                }
+              ]
+            }
+            POLICY
+
+            ACCESS_MODE="CloudFront OAI (${OAI_ID})"
+          else
+            echo '::warning::No CloudFront Origin Access Identity is attached to the distribution. Falling back to a public read bucket policy.'
+            aws s3api put-public-access-block \
+              --bucket "${DEPLOY_BUCKET}" \
+              --public-access-block-configuration BlockPublicAcls=false,IgnorePublicAcls=false,BlockPublicPolicy=false,RestrictPublicBuckets=false
+
+            cat >"${POLICY_FILE}" <<POLICY
+            {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Sid": "AllowPublicRead",
+                  "Effect": "Allow",
+                  "Principal": "*",
+                  "Action": "s3:GetObject",
+                  "Resource": "arn:aws:s3:::${DEPLOY_BUCKET}/*"
+                }
+              ]
+            }
+            POLICY
+
+            ACCESS_MODE="Public read"
+          fi
 
           aws s3api put-bucket-policy --bucket "${DEPLOY_BUCKET}" --policy "file://${POLICY_FILE}"
           rm -f "${POLICY_FILE}"
@@ -170,7 +214,7 @@ jobs:
             echo '### 📄 Configured bucket access'
             echo ''
             echo "- Bucket: \`${DEPLOY_BUCKET}\`"
-            echo "- Public reads: enabled"
+            echo "- Access: ${ACCESS_MODE}"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Ensure CloudFront distribution
