@@ -231,9 +231,24 @@ function validateManifest() {
       issues.push(`Dimension "${dimensionId}" has no texture manifest.`);
     } else {
       Object.entries(textures).forEach(([key, value]) => {
-        if (typeof value !== 'string' || value.trim().length === 0) {
-          issues.push(`Dimension "${dimensionId}" texture "${key}" is empty.`);
+        if (typeof value === 'string') {
+          if (value.trim().length === 0) {
+            issues.push(`Dimension "${dimensionId}" texture "${key}" is empty.`);
+          }
+          return;
         }
+        if (Array.isArray(value)) {
+          const normalized = value
+            .map((entry) => (typeof entry === 'string' ? entry.trim() : ''))
+            .filter(Boolean);
+          if (normalized.length === 0) {
+            issues.push(`Dimension "${dimensionId}" texture "${key}" array is empty.`);
+          }
+          return;
+        }
+        issues.push(
+          `Dimension "${dimensionId}" texture "${key}" must be a string or string array, received ${typeof value}.`,
+        );
       });
     }
 

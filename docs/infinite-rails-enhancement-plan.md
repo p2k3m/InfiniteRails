@@ -41,7 +41,7 @@ The following refined prompts correspond one-to-one with the implementation stag
 
 1. **Rendering and World Generation**
    - Extend `bootstrap()` to load Three.js (preferring local vendor bundle), create `scene`, `camera`, `renderer`, `clock`, and `worldGroup`.
-   - Generate 64×64 voxel terrain using seeded noise for height variance and apply textures from `assets/textures/{grass,dirt,stone}.png`.
+   - Generate 64×64 voxel terrain using seeded noise for height variance and apply textures streamed from `https://infinite-rails-textures.s3.amazonaws.com/blocks/{grass,dirt,stone,rails}.png` (with embedded data URL fallbacks when offline).
    - Configure ambient (`HemisphereLight`) and key (`DirectionalLight`) lighting with orbital animation and update the sky shader uniform for day/night.
    - Begin `gameLoop(delta)` via `requestAnimationFrame`, logging `World generated: 4096 voxels` on completion and guarding against multiple initialisations.
 

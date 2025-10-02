@@ -45,7 +45,16 @@ describe('dimension asset manifest', () => {
       expect(Object.keys(textures)).toEqual(expect.arrayContaining(['grass', 'dirt', 'stone', 'rails']));
       expect(Object.keys(models)).toEqual(expect.arrayContaining(['player', 'helperArm', 'zombie', 'golem']));
       Object.values(textures).forEach((value) => {
-        expect(typeof value === 'string').toBe(true);
+        if (Array.isArray(value)) {
+          expect(value.length).toBeGreaterThan(0);
+          value.forEach((entry) => {
+            expect(typeof entry === 'string').toBe(true);
+            expect(entry.trim().length).toBeGreaterThan(0);
+          });
+        } else {
+          expect(typeof value === 'string').toBe(true);
+          expect(value.trim().length).toBeGreaterThan(0);
+        }
       });
       Object.values(models).forEach((value) => {
         expect(typeof value === 'string').toBe(true);
