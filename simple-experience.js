@@ -99,6 +99,24 @@
     }
   }
 
+  function deepFreeze(value, seen = new WeakSet()) {
+    if (!value || typeof value !== 'object') {
+      return value;
+    }
+    if (seen.has(value)) {
+      return value;
+    }
+    seen.add(value);
+    const propertyNames = Object.getOwnPropertyNames(value);
+    for (const name of propertyNames) {
+      const property = value[name];
+      if (property && typeof property === 'object') {
+        deepFreeze(property, seen);
+      }
+    }
+    return Object.freeze(value);
+  }
+
   function normaliseApiBaseUrl(base) {
     if (!base || typeof base !== 'string') {
       return null;
@@ -438,6 +456,108 @@
     golem: resolveAssetUrl('assets/iron_golem.gltf'),
   };
 
+  const BASE_TERRAIN_REFERENCES = ['grass-block', 'dirt', 'stone', 'rail-segment', 'portal-anchor'];
+  const BASE_MOB_REFERENCES = ['player-avatar', 'zombie', 'iron-golem'];
+  const BASE_OBJECT_REFERENCES = [
+    'loot-chest',
+    'portal-frame',
+    'portal-core',
+    'rail-network',
+    'crafting-interface',
+    'eternal-ingot',
+  ];
+  const BASE_TEXTURE_REFERENCES = {
+    grass: 'grass',
+    dirt: 'dirt',
+    stone: 'stone',
+    rails: 'rails',
+  };
+  const BASE_MODEL_REFERENCES = {
+    player: MODEL_URLS.steve,
+    helperArm: MODEL_URLS.arm,
+    zombie: MODEL_URLS.zombie,
+    golem: MODEL_URLS.golem,
+  };
+
+  function normaliseStringSet(values, fallback) {
+    const list = Array.isArray(values) && values.length ? values : fallback;
+    return Array.from(
+      new Set(
+        list
+          .map((value) => (typeof value === 'string' ? value.trim() : ''))
+          .filter((value) => value.length > 0),
+      ),
+    );
+  }
+
+  function buildDimensionManifestEntry({
+    id,
+    name,
+    inheritsFrom = null,
+    terrain = BASE_TERRAIN_REFERENCES,
+    mobs = BASE_MOB_REFERENCES,
+    objects = BASE_OBJECT_REFERENCES,
+    textures = BASE_TEXTURE_REFERENCES,
+    models = BASE_MODEL_REFERENCES,
+  }) {
+    return {
+      id,
+      name,
+      inheritsFrom,
+      terrain: normaliseStringSet(terrain, BASE_TERRAIN_REFERENCES),
+      mobs: normaliseStringSet(mobs, BASE_MOB_REFERENCES),
+      objects: normaliseStringSet(objects, BASE_OBJECT_REFERENCES),
+      assets: {
+        textures: { ...(textures && typeof textures === 'object' ? textures : BASE_TEXTURE_REFERENCES) },
+        models: { ...(models && typeof models === 'object' ? models : BASE_MODEL_REFERENCES) },
+      },
+    };
+  }
+
+  const DIMENSION_ASSET_MANIFEST = deepFreeze({
+    origin: buildDimensionManifestEntry({ id: 'origin', name: 'Origin Grassland' }),
+    rock: buildDimensionManifestEntry({
+      id: 'rock',
+      name: 'Rock Frontier',
+      inheritsFrom: 'origin',
+    }),
+    stone: buildDimensionManifestEntry({
+      id: 'stone',
+      name: 'Stone Bastion',
+      inheritsFrom: 'rock',
+      objects: [...BASE_OBJECT_REFERENCES, 'bastion-rampart'],
+    }),
+    tar: buildDimensionManifestEntry({
+      id: 'tar',
+      name: 'Tar Marsh',
+      inheritsFrom: 'stone',
+      terrain: [...BASE_TERRAIN_REFERENCES, 'tar-pool'],
+      mobs: [...BASE_MOB_REFERENCES, 'swamp-phantom'],
+    }),
+    marble: buildDimensionManifestEntry({
+      id: 'marble',
+      name: 'Marble Heights',
+      inheritsFrom: 'tar',
+      objects: [...BASE_OBJECT_REFERENCES, 'marble-bridge'],
+    }),
+    netherite: buildDimensionManifestEntry({
+      id: 'netherite',
+      name: 'Netherite Terminus',
+      inheritsFrom: 'marble',
+      objects: [...BASE_OBJECT_REFERENCES, 'eternal-ingot-pedestal'],
+    }),
+  });
+
+  if (typeof window !== 'undefined') {
+    window.InfiniteRailsDimensionManifest = DIMENSION_ASSET_MANIFEST;
+  } else if (typeof globalThis !== 'undefined') {
+    globalThis.InfiniteRailsDimensionManifest = DIMENSION_ASSET_MANIFEST;
+  }
+
+  if (typeof module !== 'undefined' && module.exports) {
+    module.exports.DIMENSION_ASSET_MANIFEST = DIMENSION_ASSET_MANIFEST;
+  }
+
   let cachedGltfLoaderPromise = null;
 
   function loadExternalScript(url) {
@@ -697,7 +817,13 @@
       description:
         'Final gauntlet of collapsing rails. Activate the portal swiftly to claim the Eternal Ingot.',
     },
-  ];
+  ].map((theme) => {
+    const manifest = DIMENSION_ASSET_MANIFEST[theme.id] || null;
+    if (!manifest) {
+      return theme;
+    }
+    return { ...theme, assetManifest: manifest };
+  });
 
   function pseudoRandom(x, z) {
     const value = Math.sin(x * 127.1 + z * 311.7) * 43758.5453;
@@ -11141,5 +11267,11 @@
 
   window.SimpleExperience = {
     create: createSimpleExperience,
+    dimensionManifest: DIMENSION_ASSET_MANIFEST,
+    dimensionThemes: DIMENSION_THEME,
   };
+
+  if (typeof module !== 'undefined' && module.exports) {
+    module.exports.SimpleExperience = window.SimpleExperience;
+  }
 })();
