@@ -176,6 +176,33 @@
           aria-label="Game world"
           data-hint="Navigate and interact with the voxel realm here."
         ></canvas>
+        <div
+          class="developer-stats"
+          id="developerStatsPanel"
+          role="status"
+          aria-live="polite"
+          hidden
+        >
+          <p class="developer-stats__title">Developer Stats</p>
+          <dl class="developer-stats__metrics">
+            <div class="developer-stats__metric">
+              <dt>FPS</dt>
+              <dd data-stat="fps">—</dd>
+            </div>
+            <div class="developer-stats__metric">
+              <dt>Models</dt>
+              <dd data-stat="models">—</dd>
+            </div>
+            <div class="developer-stats__metric">
+              <dt>Textures</dt>
+              <dd data-stat="textures">—</dd>
+            </div>
+            <div class="developer-stats__metric">
+              <dt>Audio</dt>
+              <dd data-stat="audio">—</dd>
+            </div>
+          </dl>
+        </div>
         <div class="game-briefing" id="gameBriefing" role="region" aria-live="polite" hidden>
           <div class="game-briefing__content">
             <div class="game-briefing__header">
@@ -574,15 +601,27 @@
         <section class="log-panel" aria-live="polite">
           <header>
             <h2>Event Log</h2>
-            <button
-              type="button"
-              class="ghost small log-panel__debug-toggle"
-              id="debugModeToggle"
-              aria-pressed="false"
-              data-hint="Enable verbose diagnostics"
-            >
-              Enable Debug Mode
-            </button>
+            <div class="log-panel__actions">
+              <button
+                type="button"
+                class="ghost small log-panel__developer-toggle"
+                id="developerStatsToggle"
+                aria-pressed="false"
+                aria-controls="developerStatsPanel"
+                data-hint="Show developer performance metrics"
+              >
+                Show Developer Stats
+              </button>
+              <button
+                type="button"
+                class="ghost small log-panel__debug-toggle"
+                id="debugModeToggle"
+                aria-pressed="false"
+                data-hint="Enable verbose diagnostics"
+              >
+                Enable Debug Mode
+              </button>
+            </div>
           </header>
           <p class="log-panel__debug-status" id="debugModeStatus" role="status" aria-live="polite">
             Standard diagnostics active.
