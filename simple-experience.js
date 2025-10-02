@@ -1421,6 +1421,7 @@
       this.scoreSyncCooldownSeconds = 6;
       this.scoreboardHydrated = false;
       this.scoreSyncHeartbeat = 0;
+      this.scoreboardOffline = false;
       this.portalFrameGeometryVertical = null;
       this.portalFrameGeometryHorizontal = null;
       this.portalPlaneGeometry = null;
@@ -2105,8 +2106,42 @@
           }
         });
       }
+      this.setScoreboardStatus('Preparing leaderboard…', { offline: false });
+    }
+
+    setScoreboardStatus(message, options = {}) {
+      const offline =
+        typeof options.offline === 'boolean' ? options.offline : this.scoreboardOffline === true;
+      const trimmed = typeof message === 'string' && message.trim().length > 0 ? message.trim() : '';
+      const scope =
+        typeof window !== 'undefined'
+          ? window
+          : typeof globalThis !== 'undefined'
+            ? globalThis
+            : null;
+      const identityApi = scope?.InfiniteRailsIdentity || scope?.InfiniteRails?.identity || null;
+      let targetMessage = trimmed;
+      if (!targetMessage && identityApi?.state?.scoreboardMessage) {
+        targetMessage = identityApi.state.scoreboardMessage;
+      }
+      if (!targetMessage && this.scoreboardStatusEl?.textContent) {
+        targetMessage = this.scoreboardStatusEl.textContent;
+      }
+      if (!targetMessage) {
+        targetMessage = '';
+      }
+      this.scoreboardOffline = offline;
+      if (identityApi && typeof identityApi.setScoreboardStatus === 'function') {
+        identityApi.setScoreboardStatus(targetMessage, { offline });
+        return;
+      }
       if (this.scoreboardStatusEl) {
-        this.scoreboardStatusEl.textContent = 'Preparing leaderboard…';
+        this.scoreboardStatusEl.textContent = targetMessage;
+        if (offline) {
+          this.scoreboardStatusEl.dataset.offline = 'true';
+        } else {
+          delete this.scoreboardStatusEl.dataset.offline;
+        }
       }
     }
 
@@ -2131,9 +2166,7 @@
           ? options.hint.trim()
           : 'Connection lost — progress saved locally.';
       this.persistScoreboardEntries();
-      if (this.scoreboardStatusEl) {
-        this.scoreboardStatusEl.textContent = statusMessage;
-      }
+      this.setScoreboardStatus(statusMessage, { offline: true });
       if (typeof this.showHint === 'function') {
         const now = this.getNowTimestamp();
         if (!this.offlineSyncActive || now - this.lastOfflineSyncHintAt >= this.offlineSyncHintCooldownMs) {
@@ -2154,6 +2187,11 @@
     }
 
     clearOfflineSyncNotice(source, options = {}) {
+      const message =
+        typeof options.message === 'string' && options.message.trim().length
+          ? options.message.trim()
+          : null;
+      this.setScoreboardStatus(message, { offline: false });
       if (!this.offlineSyncActive) {
         return;
       }
@@ -2169,12 +2207,13 @@
     async loadScoreboard({ force = false } = {}) {
       if (!this.apiBaseUrl) {
         this.scoreboardPollTimer = 0;
-        if (force && this.scoreboardStatusEl) {
-          this.scoreboardStatusEl.textContent = 'Offline mode: connect an API to sync runs.';
-        }
-        if (!force && this.scoreboardStatusEl) {
-          this.scoreboardStatusEl.textContent =
-            'Local leaderboard active — set APP_CONFIG.apiBaseUrl to publish runs.';
+        if (force) {
+          this.setScoreboardStatus('Offline mode: connect an API to sync runs.', { offline: true });
+        } else {
+          this.setScoreboardStatus(
+            'Local leaderboard active — set APP_CONFIG.apiBaseUrl to publish runs.',
+            { offline: true },
+          );
         }
         if (!this.scoreboardHydrated) {
           this.renderScoreboard();
@@ -2188,9 +2227,7 @@
       const baseUrl = this.apiBaseUrl.replace(/\/$/, '');
       const url = `${baseUrl}/scores`;
       this.lastScoreboardFetch = typeof performance !== 'undefined' ? performance.now() : Date.now();
-      if (this.scoreboardStatusEl) {
-        this.scoreboardStatusEl.textContent = 'Syncing leaderboard…';
-      }
+      this.setScoreboardStatus('Syncing leaderboard…', { offline: false });
       if (this.refreshScoresButton) {
         this.refreshScoresButton.dataset.loading = 'true';
         this.refreshScoresButton.disabled = true;
@@ -2228,9 +2265,7 @@
         } else {
           statusMessage = 'No public runs yet — forge the first legend!';
         }
-        if (this.scoreboardStatusEl) {
-          this.scoreboardStatusEl.textContent = statusMessage;
-        }
+        this.setScoreboardStatus(statusMessage, { offline: false });
         this.clearOfflineSyncNotice('load', { message: statusMessage });
         this.scoreboardHydrated = true;
         this.scoreboardPollTimer = 0;
@@ -2723,9 +2758,7 @@
         this.lastScoreSyncAt = performance.now();
         this.scoreSyncHeartbeat = 0;
         const statusMessage = 'Leaderboard synced';
-        if (this.scoreboardStatusEl) {
-          this.scoreboardStatusEl.textContent = statusMessage;
-        }
+        this.setScoreboardStatus(statusMessage, { offline: false });
         this.clearOfflineSyncNotice('sync', { message: statusMessage });
         console.error(
           'Score sync diagnostic — confirm the leaderboard API accepted the update. Inspect the network panel if the leaderboard remains stale.',
@@ -9011,7 +9044,7 @@
         this.footerEl.dataset.state = 'alert';
       }
       if (this.scoreboardStatusEl) {
-        this.scoreboardStatusEl.textContent = 'Renderer offline — unable to sync runs.';
+        this.setScoreboardStatus('Renderer offline — unable to sync runs.', { offline: true });
       }
       if (this.startButtonEl) {
         this.startButtonEl.disabled = true;
