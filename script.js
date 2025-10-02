@@ -3251,11 +3251,11 @@
       return value;
     };
 
-    ensureScoreMetric('scoreRecipes', 'Crafting', '0 (+0 pts)');
-    ensureScoreMetric('scoreDimensions', 'Dimensions', '0 (+0 pts)');
-    ensureScoreMetric('scorePortals', 'Portals', '+0 pts');
-    ensureScoreMetric('scoreCombat', 'Combat', '+0 pts');
-    ensureScoreMetric('scoreLoot', 'Loot', '+0 pts');
+    ensureScoreMetric('scoreRecipes', 'Crafting', '0 crafts (+0 pts)');
+    ensureScoreMetric('scoreDimensions', 'Dimensions', '1 (+0 pts)');
+    ensureScoreMetric('scorePortals', 'Portals', '0 events (+0 pts)');
+    ensureScoreMetric('scoreCombat', 'Combat', '0 victories (+0 pts)');
+    ensureScoreMetric('scoreLoot', 'Loot', '0 finds (+0 pts)');
 
     if (!doc.getElementById('hotbar')) {
       const hotbarEl = doc.createElement('div');
@@ -3359,6 +3359,7 @@
       heartsEl: byId('hearts'),
       bubblesEl: byId('bubbles'),
       timeEl: byId('timeOfDay'),
+      scorePanelEl: byId('scorePanel'),
       scoreTotalEl: byId('scoreTotal'),
       scoreRecipesEl: byId('scoreRecipes'),
       scoreDimensionsEl: byId('scoreDimensions'),
