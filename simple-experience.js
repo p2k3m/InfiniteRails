@@ -1286,6 +1286,8 @@
       this.extendedInventoryEl = this.ui.extendedInventoryEl || null;
       this.hotbarExpanded = false;
       this.activeHotbarDrag = null;
+      this.activeHotbarPointerDrag = null;
+      this.ignoreNextHotbarClick = false;
       this.columns = new Map();
       this.heightMap = Array.from({ length: WORLD_SIZE }, () => Array(WORLD_SIZE).fill(0));
       this.blockGeometry = new THREE.BoxGeometry(BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE);
@@ -1606,6 +1608,11 @@
       this.onHotbarDragLeave = this.handleHotbarDragLeave.bind(this);
       this.onHotbarDrop = this.handleHotbarDrop.bind(this);
       this.onHotbarDragEnd = this.handleHotbarDragEnd.bind(this);
+      this.onHotbarPointerDown = this.handleHotbarPointerDown.bind(this);
+      this.onHotbarPointerEnter = this.handleHotbarPointerEnter.bind(this);
+      this.onHotbarPointerLeave = this.handleHotbarPointerLeave.bind(this);
+      this.onHotbarPointerUp = this.handleHotbarPointerUp.bind(this);
+      this.onHotbarPointerCancel = this.handleHotbarPointerCancel.bind(this);
       this.onCanvasWheel = this.handleCanvasWheel.bind(this);
       this.onCraftButton = this.handleCraftButton.bind(this);
       this.onClearCraft = this.handleClearCraft.bind(this);
@@ -11065,6 +11072,7 @@
 
     updateInventoryUi() {
       this.activeHotbarDrag = null;
+      this.activeHotbarPointerDrag = null;
       this.updateHotbarUi();
       this.updateCraftingInventoryUi();
       this.updateInventoryModal();
@@ -11106,6 +11114,11 @@
         button.addEventListener('dragleave', this.onHotbarDragLeave);
         button.addEventListener('drop', this.onHotbarDrop);
         button.addEventListener('dragend', this.onHotbarDragEnd);
+        button.addEventListener('pointerdown', this.onHotbarPointerDown);
+        button.addEventListener('pointerenter', this.onHotbarPointerEnter);
+        button.addEventListener('pointerleave', this.onHotbarPointerLeave);
+        button.addEventListener('pointerup', this.onHotbarPointerUp);
+        button.addEventListener('pointercancel', this.onHotbarPointerCancel);
         fragment.appendChild(button);
       });
       this.hotbarEl.innerHTML = '';
@@ -11221,6 +11234,112 @@
     handleHotbarDragEnd() {
       this.clearHotbarDragIndicators();
       this.activeHotbarDrag = null;
+    }
+
+    isTouchLikePointerEvent(event) {
+      const pointerType = event?.pointerType;
+      if (pointerType === 'touch' || pointerType === 'pen') {
+        return true;
+      }
+      if (!pointerType && this.isTouchPreferred) {
+        return true;
+      }
+      return false;
+    }
+
+    isActiveHotbarPointer(event) {
+      if (!this.activeHotbarPointerDrag) return false;
+      const { pointerId } = this.activeHotbarPointerDrag;
+      if (pointerId === null || pointerId === undefined) {
+        return true;
+      }
+      return pointerId === event?.pointerId;
+    }
+
+    handleHotbarPointerDown(event) {
+      if (!this.isTouchLikePointerEvent(event)) {
+        return;
+      }
+      const button = event.currentTarget;
+      const index = this.getHotbarSlotIndexFromElement(button);
+      if (index === null) {
+        return;
+      }
+      const slot = this.hotbar[index];
+      if (!slot?.item) {
+        return;
+      }
+      this.clearHotbarDragIndicators();
+      const pointerId = Number.isFinite(event.pointerId) ? event.pointerId : null;
+      this.activeHotbarPointerDrag = { from: index, pointerId };
+      button.classList.add('dragging');
+      if (pointerId !== null && typeof button.setPointerCapture === 'function') {
+        try {
+          button.setPointerCapture(pointerId);
+        } catch (error) {
+          // Ignore pointer capture failures on unsupported elements/browsers.
+        }
+      }
+    }
+
+    handleHotbarPointerEnter(event) {
+      if (!this.isTouchLikePointerEvent(event)) {
+        return;
+      }
+      if (!this.isActiveHotbarPointer(event)) {
+        return;
+      }
+      event.currentTarget.classList.add('drag-over');
+    }
+
+    handleHotbarPointerLeave(event) {
+      if (!this.isActiveHotbarPointer(event)) {
+        return;
+      }
+      event.currentTarget.classList.remove('drag-over');
+    }
+
+    handleHotbarPointerUp(event) {
+      if (!this.isActiveHotbarPointer(event)) {
+        return;
+      }
+      const pointerId = this.activeHotbarPointerDrag?.pointerId ?? null;
+      const fromIndex = this.activeHotbarPointerDrag?.from ?? null;
+      this.activeHotbarPointerDrag = null;
+      this.clearHotbarDragIndicators();
+      const button = event.currentTarget;
+      if (pointerId !== null && typeof button.releasePointerCapture === 'function') {
+        try {
+          button.releasePointerCapture(pointerId);
+        } catch (error) {
+          // Ignore pointer capture release failures.
+        }
+      }
+      const targetIndex = this.getHotbarSlotIndexFromElement(button);
+      if (fromIndex === null || targetIndex === null || fromIndex === targetIndex) {
+        return;
+      }
+      const swapped = this.swapHotbarSlots(fromIndex, targetIndex);
+      if (swapped) {
+        this.ignoreNextHotbarClick = true;
+      }
+    }
+
+    handleHotbarPointerCancel(event) {
+      if (!this.isActiveHotbarPointer(event)) {
+        return;
+      }
+      const pointerId = this.activeHotbarPointerDrag?.pointerId ?? null;
+      this.activeHotbarPointerDrag = null;
+      this.clearHotbarDragIndicators();
+      const button = event.currentTarget;
+      if (pointerId !== null && typeof button.releasePointerCapture === 'function') {
+        try {
+          button.releasePointerCapture(pointerId);
+        } catch (error) {
+          // Ignore pointer capture release failures.
+        }
+      }
     }
 
     getCombinedInventoryEntries() {
@@ -11777,6 +11896,13 @@
     }
 
     handleHotbarClick(event) {
+      if (this.ignoreNextHotbarClick) {
+        this.ignoreNextHotbarClick = false;
+        if (event?.preventDefault) {
+          event.preventDefault();
+        }
+        return;
+      }
       const button = event.target.closest('[data-hotbar-slot]');
       if (!button) return;
       const index = Number.parseInt(button.dataset.hotbarSlot ?? '-1', 10);
