@@ -964,12 +964,17 @@
         textures: new Map(),
         models: new Map(),
       };
+      this.assetDelayHandles = {
+        textures: new Map(),
+        models: new Map(),
+      };
       this.assetLoadLog = [];
       this.assetFailureCounts = new Map();
       this.assetRetryState = new Map();
       this.assetRecoveryPendingKeys = new Set();
       this.assetRecoveryPromptActive = false;
       this.assetRecoveryControlsBound = false;
+      this.assetDelayNotices = new Set();
       this.assetRetryLimit = Number.isFinite(options.assetRetryLimit)
         ? Math.max(1, Math.floor(options.assetRetryLimit))
         : 3;
@@ -2461,6 +2466,7 @@
 
     stop() {
       this.cancelQueuedModelPreload();
+      this.cancelAllAssetDelayWarnings();
       if (this.animationFrame !== null) {
         cancelAnimationFrame(this.animationFrame);
         this.animationFrame = null;
@@ -2763,6 +2769,7 @@
       }
       timers.set(key, this.getHighResTimestamp());
       this.emitGameEvent('asset-fetch-start', { kind, key });
+      this.scheduleAssetDelayWarning(kind, key);
     }
 
     completeAssetTimer(kind, key, details = {}) {
@@ -2789,6 +2796,8 @@
         this.assetLoadLog.splice(0, this.assetLoadLog.length - 40);
       }
       this.emitGameEvent('asset-fetch-complete', entry);
+      this.cancelAssetDelayWarning(kind, key);
+      this.clearAssetDelayNoticesForKey(key);
       const budget = Number.isFinite(this.assetLoadBudgetMs) ? this.assetLoadBudgetMs : 3000;
       const formattedDuration = duration.toFixed(0);
       const sourceLabel = details.url ? ` from ${details.url}` : '';
@@ -2806,6 +2815,155 @@
         const logFn = scheme === 'file:' ? console.info : console.warn;
         logFn(`[AssetBudget] ${kind}:${key} failed after ${formattedDuration}ms${attemptLabel}.`);
       }
+    }
+
+    scheduleAssetDelayWarning(kind, key) {
+      if (!kind || !key) {
+        return;
+      }
+      const handles = this.assetDelayHandles?.[kind];
+      if (!handles || handles.has(key)) {
+        return;
+      }
+      const budget = Number.isFinite(this.assetLoadBudgetMs) ? Math.max(500, this.assetLoadBudgetMs) : 3000;
+      const scope =
+        typeof window !== 'undefined'
+          ? window
+          : typeof globalThis !== 'undefined'
+            ? globalThis
+            : null;
+      const setTimer = typeof scope?.setTimeout === 'function' ? scope.setTimeout.bind(scope) : setTimeout;
+      const handle = setTimer(() => {
+        handles.delete(key);
+        this.handleAssetLoadDelay(kind, key);
+      }, budget);
+      handles.set(key, handle);
+    }
+
+    cancelAssetDelayWarning(kind, key) {
+      if (!kind || !key) {
+        return;
+      }
+      const handles = this.assetDelayHandles?.[kind];
+      if (!handles || !handles.has(key)) {
+        return;
+      }
+      const handle = handles.get(key);
+      handles.delete(key);
+      const scope =
+        typeof window !== 'undefined'
+          ? window
+          : typeof globalThis !== 'undefined'
+            ? globalThis
+            : null;
+      const clearTimer = typeof scope?.clearTimeout === 'function' ? scope.clearTimeout.bind(scope) : clearTimeout;
+      try {
+        clearTimer(handle);
+      } catch (error) {
+        if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+          console.debug('Failed to cancel asset delay timer cleanly.', { kind, key, error });
+        }
+      }
+    }
+
+    cancelAllAssetDelayWarnings() {
+      const scope =
+        typeof window !== 'undefined'
+          ? window
+          : typeof globalThis !== 'undefined'
+            ? globalThis
+            : null;
+      const clearTimer = typeof scope?.clearTimeout === 'function' ? scope.clearTimeout.bind(scope) : clearTimeout;
+      if (!this.assetDelayHandles) {
+        return;
+      }
+      Object.values(this.assetDelayHandles).forEach((handles) => {
+        if (!handles) {
+          return;
+        }
+        handles.forEach((handle, key) => {
+          try {
+            clearTimer(handle);
+          } catch (error) {
+            if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+              console.debug('Failed to cancel asset delay timer during teardown.', { key, error });
+            }
+          }
+        });
+        handles.clear();
+      });
+      if (this.assetDelayNotices && typeof this.assetDelayNotices.clear === 'function') {
+        this.assetDelayNotices.clear();
+      }
+    }
+
+    handleAssetLoadDelay(kind, key) {
+      if (!key) {
+        return;
+      }
+      if (kind === 'models') {
+        if (key === 'steve') {
+          this.ensurePlayerAvatarPlaceholder('loading');
+        } else if (key === 'arm') {
+          this.ensurePlayerArmsVisible();
+        }
+      }
+      const messageMap = {
+        arm: 'Explorer hands streaming slowly — simplified overlay active.',
+        steve: 'Explorer avatar streaming slowly — placeholder rig active.',
+        zombie: 'Hostile models streaming slowly — husk stand-ins deployed.',
+        golem: 'Golem armour streaming slowly — placeholder guardian active.',
+      };
+      const fallbackMessage = messageMap[key] || 'Asset stream delayed — placeholder visuals active.';
+      this.announceAssetStreamIssue(key, fallbackMessage, { kind: 'delay', variant: 'warning' });
+    }
+
+    announceAssetStreamIssue(key, message, options = {}) {
+      const text = typeof message === 'string' ? message.trim() : '';
+      if (!text) {
+        return;
+      }
+      const kind = options.kind || 'delay';
+      const normalisedKey = typeof key === 'string' && key.trim().length ? key.trim() : 'asset';
+      const dedupeKey = `${kind}:${normalisedKey}|${text}`;
+      if (this.assetDelayNotices?.has(dedupeKey)) {
+        return;
+      }
+      this.assetDelayNotices?.add(dedupeKey);
+      const variant = options.variant || 'warning';
+      if (this.playerHintEl) {
+        this.playerHintEl.textContent = text;
+        this.playerHintEl.classList.add('visible');
+        this.playerHintEl.setAttribute('data-variant', variant);
+      }
+      this.lastHintMessage = text;
+      if (this.footerStatusEl) {
+        this.footerStatusEl.textContent = text;
+      }
+      if (this.footerEl) {
+        this.footerEl.dataset.state = variant === 'critical' ? 'error' : 'warning';
+      }
+      this.updateFooterSummary();
+      this.emitGameEvent('asset-delay-warning', {
+        key: normalisedKey,
+        originalKey: typeof key === 'string' ? key : null,
+        kind,
+        message: text,
+        variant,
+      });
+    }
+
+    clearAssetDelayNoticesForKey(key) {
+      if (!this.assetDelayNotices) {
+        return;
+      }
+      const normalisedKey = typeof key === 'string' && key.trim().length ? key.trim() : 'asset';
+      const prefix = `delay:${normalisedKey}|`;
+      Array.from(this.assetDelayNotices).forEach((entry) => {
+        if (entry.startsWith(prefix)) {
+          this.assetDelayNotices.delete(entry);
+        }
+      });
     }
 
     getAssetLoadLog(limit = 20) {
@@ -4593,6 +4751,92 @@
       }
     }
 
+    ensurePlayerAvatarPlaceholder(reason = 'loading') {
+      const THREE = this.THREE;
+      if (!THREE || !this.playerRig) {
+        return null;
+      }
+      if (this.playerAvatar && !this.playerAvatar.userData?.placeholder) {
+        return this.playerAvatar;
+      }
+      const reasonLabel = typeof reason === 'string' && reason.trim().length ? reason.trim() : 'loading';
+      const severityOrder = { boot: 0, loading: 1, failed: 2 };
+      const placeholderColor =
+        reasonLabel === 'failed'
+          ? 0xf97316
+          : reasonLabel === 'boot'
+            ? 0x22d3ee
+            : 0x3b82f6;
+      if (this.playerAvatar && this.playerAvatar.userData?.placeholder) {
+        const currentReason = this.playerAvatar.userData.placeholderReason || 'loading';
+        const currentSeverity = severityOrder[currentReason] ?? 0;
+        const nextSeverity = severityOrder[reasonLabel] ?? 0;
+        if (nextSeverity < currentSeverity) {
+          return this.playerAvatar;
+        }
+        if (this.playerAvatar.material?.color) {
+          this.playerAvatar.material.color.set(placeholderColor);
+        }
+        this.playerAvatar.userData.placeholderReason = reasonLabel;
+        if (this.camera && this.camera.parent !== this.playerAvatar) {
+          try {
+            this.playerAvatar.add(this.camera);
+            this.camera.position.copy(this.firstPersonCameraOffset);
+          } catch (error) {
+            if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+              console.debug('Unable to reparent camera to placeholder avatar.', error);
+            }
+          }
+        }
+        this.applyCameraPerspective(this.cameraPerspective);
+        this.ensurePlayerArmsVisible();
+        this.emitGameEvent('avatar-placeholder-activated', {
+          key: 'steve',
+          reason: reasonLabel,
+        });
+        return this.playerAvatar;
+      }
+      const material = new THREE.MeshStandardMaterial({ color: placeholderColor, metalness: 0.12, roughness: 0.58 });
+      const geometry = new THREE.BoxGeometry(0.6, 1.8, 0.4);
+      const placeholder = new THREE.Mesh(geometry, material);
+      placeholder.name = 'PlayerAvatarPlaceholder';
+      placeholder.position.set(0, -PLAYER_EYE_HEIGHT, 0);
+      placeholder.castShadow = true;
+      placeholder.receiveShadow = true;
+      placeholder.userData = placeholder.userData || {};
+      placeholder.userData.placeholder = true;
+      placeholder.userData.placeholderReason = reasonLabel;
+      if (this.playerAvatar && this.playerRig?.remove) {
+        try {
+          this.playerRig.remove(this.playerAvatar);
+        } catch (error) {
+          if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+            console.debug('Unable to remove previous avatar placeholder cleanly.', error);
+          }
+        }
+      }
+      this.playerRig.add(placeholder);
+      this.playerAvatar = placeholder;
+      this.playerHeadAttachment = placeholder;
+      if (this.camera && placeholder && this.camera.parent !== placeholder) {
+        try {
+          placeholder.add(this.camera);
+          this.camera.position.copy(this.firstPersonCameraOffset);
+        } catch (error) {
+          if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+            console.debug('Unable to attach camera to avatar placeholder.', error);
+          }
+        }
+      }
+      this.applyCameraPerspective(this.cameraPerspective);
+      this.ensurePlayerArmsVisible();
+      this.emitGameEvent('avatar-placeholder-activated', {
+        key: 'steve',
+        reason: reasonLabel,
+      });
+      return placeholder;
+    }
+
     async loadFirstPersonArms(sessionId = this.activeSessionId) {
       if (!this.handGroup) return;
       const currentSessionId = sessionId;
@@ -4681,6 +4925,7 @@
       if (!this.playerRig) return;
       const THREE = this.THREE;
       const sessionId = this.activeSessionId;
+      this.ensurePlayerAvatarPlaceholder('boot');
       let asset = null;
       try {
         asset = await this.cloneModelScene('steve');
@@ -4696,25 +4941,12 @@
       }
       if (!asset?.scene) {
         console.warn('Model load failed, using fallback cube');
-        const fallbackMaterial = new THREE.MeshStandardMaterial({ color: 0x3b82f6, metalness: 0.12, roughness: 0.58 });
-        const fallbackGeometry = new THREE.BoxGeometry(0.6, 1.8, 0.4);
-        const fallback = new THREE.Mesh(fallbackGeometry, fallbackMaterial);
-        fallback.name = 'PlayerAvatarFallback';
-        fallback.position.set(0, -PLAYER_EYE_HEIGHT, 0);
-        fallback.castShadow = true;
-        fallback.receiveShadow = true;
-        this.playerRig.add(fallback);
-        this.playerAvatar = fallback;
-        this.playerHeadAttachment = fallback;
-        if (this.camera.parent !== fallback) {
-          fallback.add(this.camera);
-          this.camera.position.copy(this.firstPersonCameraOffset);
+        const fallback = this.ensurePlayerAvatarPlaceholder('failed');
+        if (fallback) {
+          console.error(
+            'Avatar visibility fallback active — Steve forced visible without standard model. Inspect character load pipeline to restore the default avatar.',
+          );
         }
-        this.applyCameraPerspective(this.cameraPerspective);
-        console.error(
-          'Avatar visibility fallback active — Steve forced visible without standard model. Inspect character load pipeline to restore the default avatar.',
-        );
-        this.ensurePlayerArmsVisible();
         return;
       }
       if (this.playerAvatar) {
@@ -8750,6 +8982,11 @@
       if (error && typeof console !== 'undefined') {
         console.warn(`Asset load failure for ${key || 'unknown asset'}.`, error);
       }
+      if (key === 'steve') {
+        this.ensurePlayerAvatarPlaceholder('failed');
+      } else if (key === 'arm') {
+        this.ensurePlayerArmsVisible();
+      }
       const messageMap = {
         arm: 'First-person hands offline — showing simplified explorer arms.',
         steve: 'Explorer avatar unavailable — using the fallback rig until models return.',
@@ -9009,6 +9246,7 @@
         this.assetRecoveryPendingKeys.delete(assetKey);
         this.assetRetryState.delete(assetKey);
         this.clearAssetFailureNoticesForKey(assetKey);
+        this.clearAssetDelayNoticesForKey(assetKey);
         this.loadedModels.delete(assetKey);
         this.modelPromises.delete(assetKey);
       });
