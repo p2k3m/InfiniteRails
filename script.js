@@ -1465,6 +1465,18 @@
         }
         return reason;
       }
+      case 'audio-error': {
+        const fallbackName =
+          typeof detail?.resolvedName === 'string' && detail.resolvedName.trim().length
+            ? detail.resolvedName.trim()
+            : typeof detail?.requestedName === 'string' && detail.requestedName.trim().length
+            ? detail.requestedName.trim()
+            : null;
+        const fallback = fallbackName
+          ? `Audio sample "${fallbackName}" failed to play.`
+          : 'Audio playback issue detected.';
+        return summaryMessage(detail?.message, fallback);
+      }
       case 'start-error':
         return summaryMessage(detail?.message, 'Renderer initialisation failed.');
       case 'initialisation-error': {
@@ -1640,6 +1652,7 @@
       'score-sync-offline',
       'score-sync-restored',
       'renderer-failure',
+      'audio-error',
     ].forEach(register);
     eventLogState.listenersBound = true;
   }

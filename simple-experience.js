@@ -4279,6 +4279,150 @@
         }
       };
 
+      const logAudioPlaybackIssue = (requestedName, resolvedName, info = {}) => {
+        const fallbackName = resolvedName || requestedName || 'unknown sample';
+        const message =
+          typeof info?.message === 'string' && info.message.trim().length
+            ? info.message.trim()
+            : `Audio sample "${fallbackName}" failed to play.`;
+        const timestamp = Date.now();
+        if (typeof console !== 'undefined' && typeof console.warn === 'function') {
+          if (info?.error) {
+            console.warn(message, info.error);
+          } else {
+            console.warn(message);
+          }
+        }
+        if (typeof scope?.dispatchEvent !== 'function' || typeof CustomEvent !== 'function') {
+          return;
+        }
+        const detail = {
+          message,
+          requestedName: requestedName || null,
+          resolvedName: resolvedName || null,
+          code: typeof info?.code === 'string' ? info.code : 'playback-error',
+          timestamp,
+        };
+        const error = info?.error;
+        if (error) {
+          const errorMessage =
+            typeof error === 'string'
+              ? error
+              : typeof error?.message === 'string'
+              ? error.message
+              : null;
+          const errorName = typeof error?.name === 'string' ? error.name : null;
+          const errorCode =
+            typeof error === 'object' && error !== null && typeof error.code !== 'undefined'
+              ? error.code
+              : null;
+          if (errorMessage) {
+            detail.errorMessage = errorMessage;
+          }
+          if (errorName) {
+            detail.errorName = errorName;
+          }
+          if (errorCode !== null) {
+            detail.errorCode = errorCode;
+          }
+        }
+        try {
+          scope.dispatchEvent(new CustomEvent('infinite-rails:audio-error', { detail }));
+        } catch (error) {
+          if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+            console.debug('Unable to dispatch audio error event.', error);
+          }
+        }
+      };
+
+      const createAudioPlaybackWatchdog = (requestedName, resolvedName, options = {}) => {
+        const getTimerScope = () => {
+          if (typeof scope?.setTimeout === 'function') {
+            return scope;
+          }
+          if (typeof globalThis !== 'undefined' && typeof globalThis.setTimeout === 'function') {
+            return globalThis;
+          }
+          return null;
+        };
+        const timerScope = getTimerScope();
+        let settled = false;
+        let timerId = null;
+        const onTimeout = typeof options?.onTimeout === 'function' ? options.onTimeout : null;
+        const onSettle = typeof options?.onSettle === 'function' ? options.onSettle : null;
+        const clearTimer = () => {
+          if (timerId !== null && timerScope && typeof timerScope.clearTimeout === 'function') {
+            timerScope.clearTimeout(timerId);
+          }
+          timerId = null;
+        };
+        const settle = () => {
+          if (settled) {
+            return false;
+          }
+          settled = true;
+          clearTimer();
+          if (onSettle) {
+            try {
+              onSettle();
+            } catch (error) {
+              if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+                console.debug('Audio watchdog settle callback failed.', error);
+              }
+            }
+          }
+          return true;
+        };
+        if (timerScope && typeof timerScope.setTimeout === 'function') {
+          timerId = timerScope.setTimeout(() => {
+            if (settled) {
+              return;
+            }
+            settled = true;
+            if (onTimeout) {
+              try {
+                onTimeout();
+              } catch (error) {
+                if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+                  console.debug('Audio watchdog timeout callback failed.', error);
+                }
+              }
+            }
+            if (onSettle) {
+              try {
+                onSettle();
+              } catch (error) {
+                if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+                  console.debug('Audio watchdog settle callback failed.', error);
+                }
+              }
+            }
+            logAudioPlaybackIssue(requestedName, resolvedName, {
+              message: `Audio sample "${resolvedName || requestedName || 'unknown sample'}" failed to start within 1 second.`,
+              code: 'playback-timeout',
+            });
+          }, 1000);
+        }
+        return {
+          confirm() {
+            settle();
+          },
+          fail(error, customMessage) {
+            if (!settle()) {
+              return;
+            }
+            logAudioPlaybackIssue(requestedName, resolvedName, {
+              error,
+              message:
+                typeof customMessage === 'string' && customMessage.trim().length
+                  ? customMessage
+                  : `Audio sample "${resolvedName || requestedName || 'unknown sample'}" failed to play.`,
+              code: 'playback-error',
+            });
+          },
+        };
+      };
+
       const resumeAudioContext = () => {
         const ctx = scope?.Howler?.ctx;
         const state = typeof ctx?.state === 'string' ? ctx.state : '';
@@ -4325,7 +4469,74 @@
           if (options.loop !== undefined && typeof howl.loop === 'function') {
             howl.loop(Boolean(options.loop));
           }
-          howl.play();
+          let onPlay;
+          let onPlayError;
+          let onLoadError;
+          const detachWatchers = () => {
+            if (typeof howl?.off !== 'function') {
+              return;
+            }
+            if (typeof onPlay === 'function') {
+              howl.off('play', onPlay);
+            }
+            if (typeof onPlayError === 'function') {
+              howl.off('playerror', onPlayError);
+            }
+            if (typeof onLoadError === 'function') {
+              howl.off('loaderror', onLoadError);
+            }
+          };
+          const watchdog = createAudioPlaybackWatchdog(requestedName, resolvedName, {
+            onTimeout: detachWatchers,
+            onSettle: detachWatchers,
+          });
+          let soundId;
+          try {
+            soundId = howl.play();
+          } catch (error) {
+            watchdog.fail(error, `Audio sample "${resolvedName}" failed to play.`);
+            return;
+          }
+          if (soundId === null || typeof soundId === 'undefined') {
+            watchdog.fail(null, `Audio sample "${resolvedName}" failed to start playback.`);
+            return;
+          }
+          onPlay = (id) => {
+            if (id !== soundId) {
+              return;
+            }
+            watchdog.confirm();
+            detachWatchers();
+          };
+          onPlayError = (id, error) => {
+            if (id !== soundId) {
+              return;
+            }
+            watchdog.fail(error, `Audio sample "${resolvedName}" failed to play.`);
+            detachWatchers();
+          };
+          onLoadError = (id, error) => {
+            if (id !== null && id !== soundId) {
+              return;
+            }
+            watchdog.fail(error, `Audio sample "${resolvedName}" failed to load.`);
+            detachWatchers();
+          };
+          if (typeof howl?.on === 'function' && typeof howl?.off === 'function') {
+            howl.on('play', onPlay);
+            howl.on('playerror', onPlayError);
+            howl.on('loaderror', onLoadError);
+          } else {
+            try {
+              if (typeof howl?.playing === 'function' && howl.playing(soundId)) {
+                watchdog.confirm();
+              }
+            } catch (error) {
+              if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+                console.debug('Unable to inspect Howler playback state.', error);
+              }
+            }
+          }
         } else {
           const baseVolume = options.volume !== undefined ? clampVolume(options.volume) : 1;
           const src = `data:audio/wav;base64,${samples[resolvedName]}`;
@@ -4342,30 +4553,65 @@
             }
           }
           applyMasterVolume(instance, baseVolume);
-          const cleanup = () => {
+          let cleanup = () => {
             fallbackPlaying.delete(instance);
-            instance.removeEventListener('ended', cleanup);
-            instance.removeEventListener('error', cleanup);
           };
-          instance.addEventListener('ended', cleanup);
-          instance.addEventListener('error', cleanup);
+          const watchdog = createAudioPlaybackWatchdog(requestedName, resolvedName, {
+            onTimeout: () => {
+              cleanup();
+            },
+          });
+          const detachStartListeners = () => {
+            instance.removeEventListener('play', onPlaybackStarted);
+            instance.removeEventListener('playing', onPlaybackStarted);
+            instance.removeEventListener('canplay', onPlaybackStarted);
+            instance.removeEventListener('canplaythrough', onPlaybackStarted);
+          };
+          const onPlaybackStarted = () => {
+            watchdog.confirm();
+            detachStartListeners();
+          };
+          const onPlaybackEnded = () => {
+            watchdog.confirm();
+            cleanup();
+          };
+          const onPlaybackError = (event) => {
+            const error = event?.error || instance?.error || null;
+            watchdog.fail(error, `Audio sample "${resolvedName}" encountered a playback error.`);
+            cleanup();
+          };
+          cleanup = () => {
+            fallbackPlaying.delete(instance);
+            instance.removeEventListener('ended', onPlaybackEnded);
+            instance.removeEventListener('error', onPlaybackError);
+            detachStartListeners();
+          };
+          instance.addEventListener('play', onPlaybackStarted);
+          instance.addEventListener('playing', onPlaybackStarted);
+          instance.addEventListener('canplay', onPlaybackStarted);
+          instance.addEventListener('canplaythrough', onPlaybackStarted);
+          instance.addEventListener('ended', onPlaybackEnded);
+          instance.addEventListener('error', onPlaybackError);
           fallbackPlaying.set(instance, baseVolume);
           let playPromise;
           try {
             playPromise = instance.play();
           } catch (error) {
             fallbackPlaying.delete(instance);
-            if (typeof console !== 'undefined' && typeof console.warn === 'function') {
-              console.warn('Audio playback failed in fallback controller.', error);
-            }
+            watchdog.fail(error, `Audio sample "${resolvedName}" failed to play.`);
+            cleanup();
             return;
           }
           if (playPromise && typeof playPromise.catch === 'function') {
             playPromise.catch((error) => {
               fallbackPlaying.delete(instance);
-              if (typeof console !== 'undefined' && typeof console.warn === 'function') {
-                console.warn('Audio playback failed in fallback controller.', error);
-              }
+              watchdog.fail(error, `Audio sample "${resolvedName}" failed to play.`);
+              cleanup();
+            });
+          }
+          if (playPromise && typeof playPromise.then === 'function') {
+            playPromise.then(() => {
+              watchdog.confirm();
             });
           }
         }
