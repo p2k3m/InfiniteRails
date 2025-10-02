@@ -7,6 +7,14 @@
     accent: '#b5b5b5',
   };
   const BLOCK_SIZE = 1;
+  const DEFAULT_TEXTURE_MANIFEST = {
+    grass:
+      'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAGUlEQVR4nGOMn2/KQApgIkn1qIZRDUNKAwDeMQFTRB/l3QAAAABJRU5ErkJggg==',
+    dirt:
+      'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAGUlEQVR4nGNsS3BmIAUwkaR6VMOohiGlAQC/vgFJA9SUHwAAAABJRU5ErkJggg==',
+    stone:
+      'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAGUlEQVR4nGNsaGhgIAUwkaR6VMOohiGlAQDJTAGgLgFHggAAAABJRU5ErkJggg==',
+  };
   const TEXTURE_PACK_ERROR_NOTICE_THRESHOLD = 3;
   const MIN_COLUMN_HEIGHT = 1;
   const MAX_COLUMN_HEIGHT = 6;
@@ -5259,6 +5267,15 @@
             .forEach((value) => sources.push(value));
         }
       }
+      const defaultManifestEntry = DEFAULT_TEXTURE_MANIFEST[key];
+      if (typeof defaultManifestEntry === 'string' && defaultManifestEntry) {
+        sources.push(defaultManifestEntry);
+      } else if (Array.isArray(defaultManifestEntry)) {
+        defaultManifestEntry
+          .map((value) => (typeof value === 'string' ? value.trim() : ''))
+          .filter(Boolean)
+          .forEach((value) => sources.push(value));
+      }
       return sources.filter(Boolean);
     }
 
@@ -5314,6 +5331,15 @@
     }
 
     loadExternalVoxelTexture(key) {
+      const canStreamTextures =
+        typeof document !== 'undefined' &&
+        typeof document.createElement === 'function' &&
+        typeof Image !== 'undefined';
+      if (!canStreamTextures) {
+        const fallback = this.ensureProceduralTexture(key);
+        this.noteTexturePackFallback('unsupported-environment', { key });
+        return Promise.resolve(fallback);
+      }
       const sources = this.getExternalTextureSources(key);
       if (!sources.length) {
         const fallback = this.ensureProceduralTexture(key);
