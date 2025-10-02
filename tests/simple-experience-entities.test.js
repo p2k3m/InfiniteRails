@@ -603,7 +603,7 @@ describe('simple experience entity lifecycle', () => {
     const topMesh = column[column.length - 1];
     experience.castFromCamera = vi.fn(() => [{ object: topMesh }]);
 
-    experience.hotbar = Array.from({ length: 9 }, () => ({ item: null, quantity: 0 }));
+    experience.hotbar = Array.from({ length: experience.hotbar.length }, () => ({ item: null, quantity: 0 }));
     experience.selectedHotbarIndex = 0;
     experience.hotbar[0] = { item: 'stone', quantity: 2 };
 
@@ -660,7 +660,7 @@ describe('simple experience entity lifecycle', () => {
     const topMesh = column[column.length - 1];
     experience.castFromCamera = vi.fn(() => [{ object: topMesh }]);
 
-    experience.hotbar = Array.from({ length: 9 }, () => ({ item: null, quantity: 0 }));
+    experience.hotbar = Array.from({ length: experience.hotbar.length }, () => ({ item: null, quantity: 0 }));
     experience.selectedHotbarIndex = 0;
     experience.hotbar[0] = { item: 'stone', quantity: 3 };
 
@@ -693,6 +693,79 @@ describe('simple experience entity lifecycle', () => {
     } finally {
       warnSpy.mockRestore();
       useSelectedSpy.mockRestore();
+    }
+  });
+});
+
+describe('hotbar equipping feedback', () => {
+  it('selects the tenth hotbar slot when pressing the 0 key', () => {
+    const { experience } = createExperienceForTest();
+    const selectSpy = vi.spyOn(experience, 'selectHotbarSlot');
+    const preventDefault = vi.fn();
+
+    experience.handleKeyDown({ code: 'Digit0', preventDefault, repeat: false });
+
+    expect(selectSpy).toHaveBeenCalledWith(9, true);
+    expect(preventDefault).toHaveBeenCalled();
+  });
+
+  it('updates the hand overlay and equipped model when switching slots', () => {
+    ensureSimpleExperienceLoaded();
+    const canvas = createCanvasStub();
+    const overlay = {
+      dataset: {},
+      attributes: {},
+      hidden: true,
+      setAttribute: vi.fn(function (name, value) {
+        this.attributes[name] = value;
+      }),
+      removeAttribute: vi.fn(function (name) {
+        delete this.attributes[name];
+      }),
+    };
+    const icon = { dataset: {} };
+    const label = { textContent: '' };
+    const experience = window.SimpleExperience.create({
+      canvas,
+      ui: {
+        handOverlayEl: overlay,
+        handOverlayIconEl: icon,
+        handOverlayLabelEl: label,
+      },
+    });
+    experience.canvas = canvas;
+    experience.playerRig = new window.THREE.Group();
+    experience.camera = new window.THREE.PerspectiveCamera();
+    experience.playerRig.add(experience.camera);
+
+    experience.hotbar[1] = { item: 'stone', quantity: 3 };
+    experience.selectHotbarSlot(1, false);
+
+    expect(overlay.dataset.item).toBe('stone');
+    expect(icon.dataset.item).toBe('stone');
+    expect(label.textContent).toBe('Stone Brick ×3');
+
+    experience.hotbar[1].quantity = 0;
+    experience.refreshEquippedItem();
+
+    expect(overlay.dataset.item).toBe('fist');
+    expect(label.textContent).toBe('Fist');
+
+    experience.hotbar[2] = { item: 'stone-pickaxe', quantity: 1 };
+    experience.selectHotbarSlot(2, false);
+    experience.createFirstPersonHands();
+
+    expect(experience.equippedItemMesh?.userData?.itemId).toBe('stone-pickaxe');
+    expect(experience.handItemAnchor?.children).toContain(experience.equippedItemMesh);
+
+    experience.hotbar[2].quantity = 0;
+    experience.refreshEquippedItem();
+
+    expect(experience.equippedItemMesh).toBeNull();
+    expect(experience.handItemAnchor?.children?.length ?? 0).toBe(0);
+
+    if (window.SimpleExperience?.destroyAll) {
+      window.SimpleExperience.destroyAll();
     }
   });
 });

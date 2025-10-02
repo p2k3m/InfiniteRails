@@ -192,7 +192,7 @@ describe('key binding defaults', () => {
     const defaults = extractDefaultBindings({
       source: simpleSource,
       hotbarConstantName: 'HOTBAR_SLOTS',
-      hotbarCount: 9,
+      hotbarCount: 10,
     });
     expect(defaults.moveForward).toEqual(['KeyW', 'ArrowUp']);
     expect(defaults.moveBackward).toEqual(['KeyS', 'ArrowDown']);

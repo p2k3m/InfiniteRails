@@ -97,7 +97,7 @@ describe('block placement and mining update world state', () => {
       },
     ]);
 
-    experience.hotbar = Array.from({ length: 9 }, () => ({ item: null, quantity: 0 }));
+    experience.hotbar = Array.from({ length: experience.hotbar.length }, () => ({ item: null, quantity: 0 }));
     experience.selectedHotbarIndex = 0;
     experience.hotbar[0] = { item: 'stone', quantity: 1 };
 
