@@ -2900,16 +2900,31 @@
       message = `Signed out — continuing as ${merged.name}.`;
     } else if (reason === 'fallback-signin') {
       message = `Playing as ${merged.name}. Google Sign-In unavailable; storing locally.`;
+    } else if (reason === 'google-sign-in-failed') {
+      if (typeof options.message === 'string' && options.message.trim().length) {
+        message = options.message.trim();
+      } else {
+        message = `Google Sign-In failed — continuing as ${merged.name}. Scores stay on this device.`;
+      }
     } else if (reason === 'external-set') {
       if (typeof options.message === 'string' && options.message.trim().length) {
         message = options.message.trim();
       }
     }
 
+    const hasOfflineOption = Object.prototype.hasOwnProperty.call(options, 'offline');
     if (message) {
-      updateScoreboardStatus(message);
+      if (hasOfflineOption) {
+        updateScoreboardStatus(message, { offline: options.offline });
+      } else {
+        updateScoreboardStatus(message);
+      }
     } else if (!options.silent) {
-      updateScoreboardStatus(identityState.scoreboardMessage);
+      if (hasOfflineOption) {
+        updateScoreboardStatus(identityState.scoreboardMessage, { offline: options.offline });
+      } else {
+        updateScoreboardStatus(identityState.scoreboardMessage);
+      }
     }
 
     if (reason === 'google-sign-in' && identityState.apiBaseUrl && identityState.endpoints.users) {
@@ -2943,7 +2958,7 @@
       location: identityState.identity?.location ?? null,
       locationLabel: identityState.identity?.locationLabel ?? null,
     };
-    applyIdentity(next, { reason: 'fallback-signin' });
+    applyIdentity(next, { reason: 'fallback-signin', offline: true });
   }
 
   function handleSignOut() {
@@ -2962,7 +2977,7 @@
         console.debug('Failed to cancel Google prompt', error);
       }
     }
-    applyIdentity(createAnonymousIdentity(identityState.identity), { reason: 'sign-out' });
+    applyIdentity(createAnonymousIdentity(identityState.identity), { reason: 'sign-out', offline: true });
     if (identityState.googleReady && !identityState.googleError) {
       showGoogleSigninUi();
     } else {
@@ -3001,16 +3016,25 @@
     }
   }
 
+  function handleGoogleSignInFailure(message) {
+    const fallback = createAnonymousIdentity(identityState.identity);
+    applyIdentity(fallback, {
+      reason: 'google-sign-in-failed',
+      message,
+      offline: true,
+    });
+  }
+
   function handleGoogleCredential(response) {
     try {
       const credential = response?.credential;
       if (!credential) {
-        updateScoreboardStatus('Google Sign-In failed — missing credential response.');
+        handleGoogleSignInFailure('Google Sign-In failed — missing credential response. Scores stay on this device.');
         return;
       }
       const payload = decodeJwtPayload(credential);
       if (!payload) {
-        updateScoreboardStatus('Google Sign-In failed — unable to parse credential.');
+        handleGoogleSignInFailure('Google Sign-In failed — unable to parse credential. Scores stay on this device.');
         return;
       }
       const fullName =
@@ -3026,13 +3050,14 @@
         locationLabel: identityState.identity?.locationLabel ?? null,
       };
       if (!identity.googleId) {
-        updateScoreboardStatus('Google Sign-In returned without an ID; continuing locally.');
+        handleGoogleSignInFailure('Google Sign-In returned without an ID; continuing as Guest. Scores stay on this device.');
         return;
       }
-      applyIdentity(identity, { reason: 'google-sign-in' });
+      const canSyncIdentity = Boolean(identityState.apiBaseUrl && identityState.endpoints.users);
+      applyIdentity(identity, { reason: 'google-sign-in', offline: !canSyncIdentity });
     } catch (error) {
       console.warn('Google Sign-In credential handling failed', error);
-      updateScoreboardStatus('Google Sign-In failed — see console for details. Continuing with local profile.');
+      handleGoogleSignInFailure('Google Sign-In failed — see console for details. Scores stay on this device.');
     }
   }
 
