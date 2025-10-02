@@ -247,6 +247,51 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+describe('dimension loot tables', () => {
+  it('exposes frozen loot tables for every dimension', () => {
+    ensureSimpleExperienceLoaded();
+    const lootTables = window.SimpleExperience?.dimensionLootTables;
+    expect(lootTables).toBeTruthy();
+    const expectedIds = ['origin', 'rock', 'stone', 'tar', 'marble', 'netherite'];
+    expect(Object.keys(lootTables)).toEqual(expect.arrayContaining(expectedIds));
+    expectedIds.forEach((id) => {
+      const table = lootTables[id];
+      expect(Array.isArray(table)).toBe(true);
+      expect(table.length).toBeGreaterThan(0);
+      expect(Object.isFrozen(table)).toBe(true);
+      table.forEach((entry) => {
+        expect(Object.isFrozen(entry)).toBe(true);
+        expect(Object.isFrozen(entry.items)).toBe(true);
+      });
+    });
+  });
+
+  it('initialises loot order caches for each dimension', () => {
+    const { experience } = createExperienceForTest();
+    const lootTables = window.SimpleExperience.dimensionLootTables;
+    Object.entries(lootTables).forEach(([id, entries]) => {
+      const order = experience.dimensionLootOrders.get(id);
+      expect(Array.isArray(order)).toBe(true);
+      expect(order.length).toBe(entries.length);
+      expect(new Set(order).size).toBe(entries.length);
+      expect(experience.dimensionLootOrderOffsets.get(id)).toBe(0);
+    });
+  });
+
+  it('cycles through shuffled loot entries per dimension index', () => {
+    const { experience } = createExperienceForTest();
+    const originTable = window.SimpleExperience.dimensionLootTables.origin;
+    const seenMessages = [];
+    for (let i = 0; i < originTable.length; i += 1) {
+      const loot = experience.getChestLootForDimension('origin', i);
+      seenMessages.push(loot.message);
+    }
+    expect(new Set(seenMessages).size).toBe(originTable.length);
+    const wrapped = experience.getChestLootForDimension('origin', originTable.length);
+    expect(wrapped.message).toBe(seenMessages[0]);
+  });
+});
+
 describe('simple experience entity lifecycle', () => {
   it('positions Steve and spawns treasure chests when the scene loads', async () => {
     const { experience, spawnTop } = createExperienceForTest();
@@ -274,6 +319,21 @@ describe('simple experience entity lifecycle', () => {
     expect(experience.playerRig.position.x).toBeCloseTo(spawnTop.position.x);
     expect(experience.playerRig.position.y).toBeCloseTo(spawnTop.position.y + 1.8);
     expect(experience.playerRig.position.z).toBeCloseTo(spawnTop.position.z);
+  });
+
+  it('advances loot order offsets whenever chests respawn', async () => {
+    const { experience } = createExperienceForTest();
+    experience.start();
+    await Promise.resolve();
+
+    const dimensionId = experience.dimensionSettings?.id || 'origin';
+    const initialOffset = experience.dimensionLootOrderOffsets.get(dimensionId) || 0;
+    const chestCount = experience.chests.length;
+
+    experience.spawnDimensionChests();
+
+    const updatedOffset = experience.dimensionLootOrderOffsets.get(dimensionId) || 0;
+    expect(updatedOffset - initialOffset).toBe(chestCount);
   });
 
   it('spawns zombies at night and summons iron golems to defend the player', async () => {
@@ -464,6 +524,54 @@ describe('simple experience entity lifecycle', () => {
     expect(hint).toContain('Portal activation blocked');
     expect(hint).toContain('loot chest');
     expect(experience.scheduleScoreSync).not.toHaveBeenCalledWith('portal-primed');
+  });
+
+  it('pulses chest scale and glow when the player is nearby', () => {
+    const { experience } = createExperienceForTest();
+    const THREE = window.THREE;
+    const glowMaterial = new THREE.MeshStandardMaterial({
+      color: 0xffcc66,
+      emissive: new THREE.Color('#ffaa33'),
+      emissiveIntensity: 0.1,
+    });
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), glowMaterial);
+    mesh.position.set(0, 1, 0);
+    mesh.userData = { highlightMaterials: [glowMaterial] };
+
+    experience.chestGroup = new THREE.Group();
+    experience.chestGroup.add(mesh);
+    experience.tmpVector3 = new THREE.Vector3();
+    experience.chests = [
+      {
+        id: 'pulse-test',
+        mesh,
+        lidPivot: null,
+        highlightMaterials: [glowMaterial],
+        baseY: mesh.position.y,
+        baseScale: { x: mesh.scale.x, y: mesh.scale.y, z: mesh.scale.z },
+        opened: false,
+        openProgress: 0,
+        glowLevel: 0.25,
+        pulseOffset: 0,
+        hintShown: false,
+      },
+    ];
+
+    const farPosition = new THREE.Vector3(6, 1.6, 6);
+    const nearPosition = new THREE.Vector3(0.4, 1.6, 0.4);
+    vi.spyOn(experience, 'getCameraWorldPosition').mockImplementation((target) => target.copy(farPosition));
+
+    const baseScale = mesh.scale.x;
+    experience.updateLootChests(0.016);
+    const farDeviation = Math.abs(mesh.scale.x - baseScale);
+    const farGlow = glowMaterial.emissiveIntensity;
+
+    experience.getCameraWorldPosition.mockImplementation((target) => target.copy(nearPosition));
+    experience.updateLootChests(0.2);
+
+    const nearDeviation = Math.abs(mesh.scale.x - baseScale);
+    expect(nearDeviation).toBeGreaterThanOrEqual(farDeviation);
+    expect(glowMaterial.emissiveIntensity).toBeGreaterThan(farGlow);
   });
 
   it('rejects portal frame placement when a player blocks the slot', async () => {
