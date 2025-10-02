@@ -1332,6 +1332,12 @@
         voxelBudget: this.maxTerrainVoxels,
       };
       this.renderAccumulator = 0;
+      this.frameStats = {
+        fps: 0,
+        framesSinceSample: 0,
+        lastSampleTimestamp: 0,
+        sampleWindowMs: 500,
+      };
       this.renderActiveInterval = 1 / 60;
       this.renderIdleInterval = 1 / 30;
       this.renderIdleThresholdSeconds = 2.5;
@@ -4727,15 +4733,20 @@
     createAudioController() {
       const scope = typeof window !== 'undefined' ? window : typeof globalThis !== 'undefined' ? globalThis : null;
       const samples = scope?.INFINITE_RAILS_EMBEDDED_ASSETS?.audioSamples || null;
-      if (!samples || !Object.keys(samples).length) {
+      const sampleNames =
+        samples && typeof samples === 'object' ? Object.keys(samples) : [];
+      const available = new Set(sampleNames);
+      if (!available.size) {
         return {
           has: () => false,
           play: () => {},
           playRandom: () => {},
           stopAll: () => {},
           setMasterVolume: () => {},
+          getLoadedSampleCount: () => 0,
         };
       }
+      const totalSamples = available.size;
       const HowlCtor = scope?.Howl;
       const useHowler = typeof HowlCtor === 'function';
       const AudioCtor = !useHowler
@@ -4743,15 +4754,15 @@
         : null;
       if (!useHowler && typeof AudioCtor !== 'function') {
         return {
-          has: (name) => Boolean(samples[name]),
+          has: (name) => available.has(name),
           play: () => {},
           playRandom: () => {},
           stopAll: () => {},
           setMasterVolume: () => {},
-          _resolve: (name) => (samples[name] ? name : null),
+          getLoadedSampleCount: () => totalSamples,
+          _resolve: (name) => (available.has(name) ? name : null),
         };
       }
-      const available = new Set(Object.keys(samples));
       const aliasSource = scope?.INFINITE_RAILS_AUDIO_ALIASES || null;
       const aliasMap = new Map();
       if (aliasSource && typeof aliasSource === 'object') {
@@ -5244,6 +5255,9 @@
             return;
           }
           fallbackPlaying.forEach((baseVolume, audio) => applyMasterVolume(audio, baseVolume));
+        },
+        getLoadedSampleCount() {
+          return totalSamples;
         },
         resumeContextIfNeeded() {
           resumeAudioContext();
@@ -10223,6 +10237,7 @@
     handleRenderLoopError(stage, error) {
       this.animationFrame = null;
       this.prevTime = null;
+      this.resetFrameStats(0);
       if (this.rendererUnavailable) {
         if (typeof console !== 'undefined' && error) {
           const label = stage === 'simulation' ? 'updating the world' : 'rendering the scene';
@@ -10235,18 +10250,56 @@
       this.presentRendererFailure(message, { error, stage });
     }
 
+    resetFrameStats(timestamp = 0) {
+      if (!this.frameStats) {
+        return;
+      }
+      const stats = this.frameStats;
+      stats.framesSinceSample = 0;
+      if (Number.isFinite(timestamp) && timestamp > 0) {
+        stats.lastSampleTimestamp = timestamp;
+      } else {
+        stats.lastSampleTimestamp = 0;
+        stats.fps = 0;
+      }
+    }
+
+    recordFrameStats(timestamp) {
+      if (!this.frameStats || !Number.isFinite(timestamp)) {
+        return;
+      }
+      const stats = this.frameStats;
+      if (!stats.lastSampleTimestamp) {
+        stats.lastSampleTimestamp = timestamp;
+        stats.framesSinceSample = 1;
+        return;
+      }
+      stats.framesSinceSample += 1;
+      const windowMs = Number.isFinite(stats.sampleWindowMs) ? stats.sampleWindowMs : 500;
+      const elapsed = timestamp - stats.lastSampleTimestamp;
+      if (elapsed >= windowMs) {
+        const fps = elapsed > 0 ? (stats.framesSinceSample * 1000) / elapsed : 0;
+        stats.fps = fps;
+        stats.framesSinceSample = 0;
+        stats.lastSampleTimestamp = timestamp;
+      }
+    }
+
     renderFrame(timestamp) {
       if (this.rendererUnavailable || !this.renderer) {
         this.animationFrame = null;
+        this.resetFrameStats(0);
         return;
       }
       if (!this.isTabVisible) {
         this.prevTime = null;
         this.animationFrame = null;
+        this.resetFrameStats(0);
         return;
       }
       if (!this.prevTime) {
         this.prevTime = timestamp;
+        this.resetFrameStats(timestamp);
       }
       const rawDelta = (timestamp - this.prevTime) / 1000;
       this.prevTime = timestamp;
@@ -10285,6 +10338,7 @@
         this.publishStateSnapshot('frame');
         this.lastStatePublish = timestamp;
       }
+      this.recordFrameStats(timestamp);
       this.scheduleNextFrame();
     }
 
@@ -10296,6 +10350,7 @@
       this.isTabVisible = !hidden;
       if (hidden) {
         this.prevTime = null;
+        this.resetFrameStats(0);
         if (this.animationFrame !== null) {
           cancelAnimationFrame(this.animationFrame);
           this.animationFrame = null;
@@ -10308,6 +10363,7 @@
       }
       this.queueCharacterPreload();
       this.prevTime = null;
+      this.resetFrameStats(0);
       if (this.animationFrame === null) {
         const now =
           typeof performance !== 'undefined' && typeof performance.now === 'function'
@@ -14629,6 +14685,27 @@
         score,
         reason,
         updatedAt: Date.now(),
+      };
+    }
+
+    getDeveloperMetrics() {
+      const stats = this.frameStats || {};
+      const fps = Number.isFinite(stats.fps) ? stats.fps : 0;
+      const models = this.loadedModels instanceof Map ? this.loadedModels.size : 0;
+      const textures = this.textureCache instanceof Map ? this.textureCache.size : 0;
+      let audio = 0;
+      if (this.audio && typeof this.audio.getLoadedSampleCount === 'function') {
+        try {
+          audio = this.audio.getLoadedSampleCount();
+        } catch (error) {
+          audio = 0;
+        }
+      }
+      return {
+        fps,
+        models,
+        textures,
+        audio,
       };
     }
 

@@ -22,6 +22,24 @@
     statusElement: null,
   };
 
+  const developerStatsState = {
+    enabled: false,
+    storageKey: 'infinite-rails-developer-stats',
+    toggleButton: null,
+    panel: null,
+    fields: {
+      fps: null,
+      models: null,
+      textures: null,
+      audio: null,
+    },
+    updateHandle: null,
+    updateMode: null,
+    lastUpdateAt: 0,
+    listeners: new Set(),
+    metricsErrorLogged: false,
+  };
+
   function isDebugModeEnabled() {
     return debugModeState.enabled;
   }
@@ -47,6 +65,28 @@
   }
 
   loadInitialDebugModePreference();
+
+  function loadInitialDeveloperStatsPreference() {
+    if (!globalScope?.localStorage) {
+      developerStatsState.enabled = false;
+      return;
+    }
+    try {
+      const stored = globalScope.localStorage.getItem(developerStatsState.storageKey);
+      if (stored === '1' || stored === 'true') {
+        developerStatsState.enabled = true;
+      } else if (stored === '0' || stored === 'false') {
+        developerStatsState.enabled = false;
+      }
+    } catch (error) {
+      if (globalScope.console?.debug) {
+        globalScope.console.debug('Unable to load developer stats preference from storage.', error);
+      }
+      developerStatsState.enabled = false;
+    }
+  }
+
+  loadInitialDeveloperStatsPreference();
 
   function setInert(element, shouldBeInert) {
     if (!element) {
@@ -1987,6 +2027,259 @@
 
   refreshDebugModeUi();
 
+  function persistDeveloperStatsPreference(enabled) {
+    if (!globalScope?.localStorage) {
+      return;
+    }
+    try {
+      if (enabled) {
+        globalScope.localStorage.setItem(developerStatsState.storageKey, '1');
+      } else {
+        globalScope.localStorage.removeItem(developerStatsState.storageKey);
+      }
+    } catch (error) {
+      if (globalScope.console?.debug) {
+        globalScope.console.debug('Unable to persist developer stats preference.', error);
+      }
+    }
+  }
+
+  function addDeveloperStatsChangeListener(listener) {
+    if (typeof listener !== 'function') {
+      return () => {};
+    }
+    developerStatsState.listeners.add(listener);
+    return () => {
+      developerStatsState.listeners.delete(listener);
+    };
+  }
+
+  function clearDeveloperStatsDisplay() {
+    const { fields } = developerStatsState;
+    if (!fields) {
+      return;
+    }
+    ['fps', 'models', 'textures', 'audio'].forEach((key) => {
+      const element = fields[key];
+      if (element) {
+        element.textContent = '—';
+      }
+    });
+  }
+
+  function formatDeveloperStatCount(value) {
+    if (!Number.isFinite(value) || value < 0) {
+      return '—';
+    }
+    return Math.round(value).toLocaleString(undefined);
+  }
+
+  function formatDeveloperStatFps(value) {
+    if (!Number.isFinite(value) || value <= 0) {
+      return '—';
+    }
+    const safe = Math.max(0, value);
+    if (safe >= 100) {
+      return Math.round(safe).toString();
+    }
+    return safe.toFixed(1);
+  }
+
+  function updateDeveloperStatsDisplay(metrics) {
+    const { fields } = developerStatsState;
+    if (!fields) {
+      return;
+    }
+    if (fields.fps) {
+      fields.fps.textContent = formatDeveloperStatFps(metrics?.fps);
+    }
+    if (fields.models) {
+      fields.models.textContent = formatDeveloperStatCount(metrics?.models);
+    }
+    if (fields.textures) {
+      fields.textures.textContent = formatDeveloperStatCount(metrics?.textures);
+    }
+    if (fields.audio) {
+      fields.audio.textContent = formatDeveloperStatCount(metrics?.audio);
+    }
+  }
+
+  function collectDeveloperMetrics() {
+    const instance = activeExperienceInstance;
+    if (!instance || typeof instance.getDeveloperMetrics !== 'function') {
+      return null;
+    }
+    try {
+      const metrics = instance.getDeveloperMetrics();
+      if (!metrics || typeof metrics !== 'object') {
+        return null;
+      }
+      developerStatsState.metricsErrorLogged = false;
+      return {
+        fps: Number.isFinite(metrics.fps) ? metrics.fps : 0,
+        models: Number.isFinite(metrics.models) ? metrics.models : 0,
+        textures: Number.isFinite(metrics.textures) ? metrics.textures : 0,
+        audio: Number.isFinite(metrics.audio) ? metrics.audio : 0,
+      };
+    } catch (error) {
+      if (!developerStatsState.metricsErrorLogged && globalScope.console?.debug) {
+        globalScope.console.debug('Developer metrics retrieval failed.', error);
+        developerStatsState.metricsErrorLogged = true;
+      }
+      return null;
+    }
+  }
+
+  function cancelDeveloperStatsUpdate() {
+    if (developerStatsState.updateHandle === null) {
+      return;
+    }
+    const scope = globalScope;
+    if (!scope) {
+      developerStatsState.updateHandle = null;
+      developerStatsState.updateMode = null;
+      return;
+    }
+    if (developerStatsState.updateMode === 'raf' && typeof scope.cancelAnimationFrame === 'function') {
+      scope.cancelAnimationFrame(developerStatsState.updateHandle);
+    } else if (developerStatsState.updateMode === 'timeout' && typeof scope.clearTimeout === 'function') {
+      scope.clearTimeout(developerStatsState.updateHandle);
+    }
+    developerStatsState.updateHandle = null;
+    developerStatsState.updateMode = null;
+  }
+
+  function runDeveloperStatsUpdate(timestamp) {
+    if (!developerStatsState.enabled) {
+      return;
+    }
+    const now = Number.isFinite(timestamp) ? timestamp : Date.now();
+    if (!developerStatsState.lastUpdateAt || now - developerStatsState.lastUpdateAt >= 250) {
+      const metrics = collectDeveloperMetrics();
+      if (metrics) {
+        updateDeveloperStatsDisplay(metrics);
+      } else {
+        clearDeveloperStatsDisplay();
+      }
+      developerStatsState.lastUpdateAt = now;
+    }
+    scheduleDeveloperStatsUpdate();
+  }
+
+  function scheduleDeveloperStatsUpdate() {
+    cancelDeveloperStatsUpdate();
+    if (!developerStatsState.enabled) {
+      return;
+    }
+    const scope = globalScope;
+    if (!scope) {
+      return;
+    }
+    const step = (timestamp) => {
+      developerStatsState.updateHandle = null;
+      runDeveloperStatsUpdate(typeof timestamp === 'number' ? timestamp : Date.now());
+    };
+    if (typeof scope.requestAnimationFrame === 'function') {
+      developerStatsState.updateMode = 'raf';
+      developerStatsState.updateHandle = scope.requestAnimationFrame(step);
+    } else if (typeof scope.setTimeout === 'function') {
+      developerStatsState.updateMode = 'timeout';
+      developerStatsState.updateHandle = scope.setTimeout(() => step(Date.now()), 250);
+    }
+  }
+
+  function refreshDeveloperStatsUi() {
+    const button = developerStatsState.toggleButton;
+    const panel = developerStatsState.panel;
+    const enabled = developerStatsState.enabled;
+    if (button) {
+      button.setAttribute('aria-pressed', enabled ? 'true' : 'false');
+      const label = enabled ? 'Hide Developer Stats' : 'Show Developer Stats';
+      button.textContent = label;
+      const hint = enabled
+        ? 'Hide developer performance metrics'
+        : 'Show developer performance metrics';
+      button.dataset.hint = hint;
+      button.setAttribute('aria-label', hint);
+    }
+    if (panel) {
+      panel.hidden = !enabled;
+      panel.dataset.state = enabled ? 'enabled' : 'disabled';
+    }
+    developerStatsState.lastUpdateAt = 0;
+    if (enabled) {
+      const metrics = collectDeveloperMetrics();
+      if (metrics) {
+        updateDeveloperStatsDisplay(metrics);
+      } else {
+        clearDeveloperStatsDisplay();
+      }
+      scheduleDeveloperStatsUpdate();
+    } else {
+      cancelDeveloperStatsUpdate();
+      clearDeveloperStatsDisplay();
+    }
+  }
+
+  function setDeveloperStatsEnabled(enabled, options = {}) {
+    const next = Boolean(enabled);
+    const previous = developerStatsState.enabled;
+    if (previous === next && !options.forceRefresh) {
+      return next;
+    }
+    developerStatsState.enabled = next;
+    if (options.persist !== false) {
+      persistDeveloperStatsPreference(next);
+    }
+    refreshDeveloperStatsUi();
+    if (previous !== next || options.forceRefresh) {
+      const listeners = Array.from(developerStatsState.listeners);
+      listeners.forEach((listener) => {
+        try {
+          listener(next);
+        } catch (error) {
+          if (globalScope.console?.debug) {
+            globalScope.console.debug('Developer stats listener error', error);
+          }
+        }
+      });
+    }
+    return next;
+  }
+
+  function toggleDeveloperStats(options = {}) {
+    return setDeveloperStatsEnabled(!developerStatsState.enabled, options);
+  }
+
+  function bindDeveloperStatsControls(ui) {
+    if (!ui) {
+      return;
+    }
+    const toggle = ui.developerStatsToggle;
+    if (toggle) {
+      developerStatsState.toggleButton = toggle;
+      if (!toggle.dataset.developerStatsBound) {
+        toggle.addEventListener('click', (event) => {
+          if (event?.preventDefault) {
+            event.preventDefault();
+          }
+          toggleDeveloperStats({ source: 'ui' });
+        });
+        toggle.dataset.developerStatsBound = 'true';
+      }
+    }
+    if (ui.developerStatsPanel) {
+      developerStatsState.panel = ui.developerStatsPanel;
+      developerStatsState.fields = {
+        fps: ui.developerStatsPanel.querySelector('[data-stat="fps"]') || null,
+        models: ui.developerStatsPanel.querySelector('[data-stat="models"]') || null,
+        textures: ui.developerStatsPanel.querySelector('[data-stat="textures"]') || null,
+        audio: ui.developerStatsPanel.querySelector('[data-stat="audio"]') || null,
+      };
+    }
+    setDeveloperStatsEnabled(developerStatsState.enabled, { persist: false, forceRefresh: true });
+  }
+
   const DEFAULT_KEY_BINDINGS = (() => {
     const bindings = {
       moveForward: ['KeyW', 'ArrowUp'],
@@ -3638,6 +3931,8 @@
       portalProgressLabel: query('#portalProgress .label'),
       portalProgressBar: query('#portalProgress .bar'),
       eventLogEl: byId('eventLog'),
+      developerStatsToggle: byId('developerStatsToggle'),
+      developerStatsPanel: byId('developerStatsPanel'),
       debugModeToggle: byId('debugModeToggle'),
       debugModeStatus: byId('debugModeStatus'),
       blockActionHud: byId('blockActionHud'),
@@ -3709,6 +4004,7 @@
     ensureHudDefaults(doc);
     const ui = collectSimpleExperienceUi(doc);
     bindDebugModeControls(ui);
+    bindDeveloperStatsControls(ui);
     bindExperienceEventLog(ui);
     let experience;
     try {
@@ -3750,6 +4046,14 @@
     }
     activeExperienceInstance = experience;
     globalScope.__INFINITE_RAILS_ACTIVE_EXPERIENCE__ = experience;
+    if (developerStatsState.enabled) {
+      developerStatsState.lastUpdateAt = 0;
+      const metrics = collectDeveloperMetrics();
+      if (metrics) {
+        updateDeveloperStatsDisplay(metrics);
+      }
+      scheduleDeveloperStatsUpdate();
+    }
     if (typeof experience.setIdentity === 'function') {
       try {
         experience.setIdentity(identityState.identity);
@@ -4056,6 +4360,28 @@
   debugApi.onChange = addDebugModeChangeListener;
   debugApi.getState = () => ({ enabled: isDebugModeEnabled() });
   globalScope.InfiniteRails.debug = debugApi;
+
+  const developerStatsApi = globalScope.InfiniteRails.developerStats || {};
+  developerStatsApi.isEnabled = () => developerStatsState.enabled;
+  developerStatsApi.setEnabled = (value, options = {}) =>
+    setDeveloperStatsEnabled(Boolean(value), { ...options, source: options.source ?? 'api' });
+  developerStatsApi.toggle = (options = {}) =>
+    toggleDeveloperStats({ ...options, source: options.source ?? 'api' });
+  developerStatsApi.getState = () => ({ enabled: developerStatsState.enabled });
+  developerStatsApi.getMetrics = () => {
+    const metrics = collectDeveloperMetrics();
+    if (!metrics) {
+      return { fps: null, models: null, textures: null, audio: null };
+    }
+    return {
+      fps: metrics.fps,
+      models: metrics.models,
+      textures: metrics.textures,
+      audio: metrics.audio,
+    };
+  };
+  developerStatsApi.onChange = addDeveloperStatsChangeListener;
+  globalScope.InfiniteRails.developerStats = developerStatsApi;
 
   globalScope.bootstrap = bootstrap;
 
