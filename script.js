@@ -1969,6 +1969,152 @@
         reject(new Error('Document unavailable for script injection.'));
         return;
       }
+      const normaliseForComparison = (value) => {
+        if (!value) {
+          return '';
+        }
+        try {
+          const base =
+            doc.baseURI ||
+            (typeof globalScope?.location?.href === 'string' ? globalScope.location.href : undefined);
+          return new URL(value, base).href;
+        } catch (error) {
+          return value;
+        }
+      };
+
+      const getDataAttribute = (element, name) => {
+        if (!element) {
+          return null;
+        }
+        if (typeof element.getAttribute === 'function') {
+          try {
+            return element.getAttribute(name);
+          } catch (error) {
+            // Ignore attribute access errors and fall back to dataset if available.
+          }
+        }
+        if (element.dataset) {
+          const datasetKey = name
+            .replace(/^data-/, '')
+            .replace(/-([a-z])/g, (_, char) => char.toUpperCase());
+          return element.dataset[datasetKey] ?? null;
+        }
+        return null;
+      };
+
+      const markLoaded = (element) => {
+        if (!element) {
+          return;
+        }
+        try {
+          element.setAttribute('data-load-script-loaded', 'true');
+        } catch (error) {
+          if (element.dataset) {
+            element.dataset.loadScriptLoaded = 'true';
+          }
+        }
+        try {
+          element.removeAttribute('data-load-script-error');
+        } catch (error) {
+          if (element.dataset) {
+            delete element.dataset.loadScriptError;
+          }
+        }
+      };
+
+      const markErrored = (element) => {
+        if (!element) {
+          return;
+        }
+        try {
+          element.setAttribute('data-load-script-error', 'true');
+        } catch (error) {
+          if (element.dataset) {
+            element.dataset.loadScriptError = 'true';
+          }
+        }
+      };
+
+      const removeElement = (element) => {
+        if (!element) {
+          return;
+        }
+        if (typeof element.remove === 'function') {
+          element.remove();
+        } else if (element.parentNode && typeof element.parentNode.removeChild === 'function') {
+          element.parentNode.removeChild(element);
+        }
+      };
+
+      const resolveWithExisting = (element) => {
+        markLoaded(element);
+        resolve(element);
+      };
+
+      const attachExistingListeners = (element) => {
+        if (typeof element.addEventListener !== 'function') {
+          return false;
+        }
+        element.addEventListener(
+          'load',
+          () => {
+            resolveWithExisting(element);
+          },
+          { once: true },
+        );
+        element.addEventListener(
+          'error',
+          () => {
+            markErrored(element);
+            reject(new Error(`Failed to load script: ${url}`));
+          },
+          { once: true },
+        );
+        return true;
+      };
+
+      let existingScript = null;
+      if (typeof doc.querySelectorAll === 'function') {
+        try {
+          const scripts = doc.querySelectorAll('script[src]');
+          for (const candidate of scripts) {
+            const src =
+              typeof candidate.getAttribute === 'function' ? candidate.getAttribute('src') : candidate.src;
+            if (!src) {
+              continue;
+            }
+            if (normaliseForComparison(src) === normaliseForComparison(url)) {
+              existingScript = candidate;
+              break;
+            }
+          }
+        } catch (error) {
+          existingScript = null;
+        }
+      }
+
+      if (existingScript) {
+        const hadPreviousError = Boolean(getDataAttribute(existingScript, 'data-load-script-error'));
+        if (hadPreviousError) {
+          removeElement(existingScript);
+          existingScript = null;
+        } else {
+          const readyState = existingScript.readyState;
+          const alreadyLoaded =
+            Boolean(getDataAttribute(existingScript, 'data-load-script-loaded')) ||
+            readyState === 'loaded' ||
+            readyState === 'complete';
+          if (alreadyLoaded) {
+            resolveWithExisting(existingScript);
+            return;
+          }
+          if (attachExistingListeners(existingScript)) {
+            return;
+          }
+        }
+      }
+
       const script = doc.createElement('script');
       script.src = url;
       script.async = false;
@@ -1979,16 +2125,30 @@
           // Attribute assignment failure should not block loading.
         }
       });
-      script.addEventListener('load', () => resolve(script), { once: true });
-      script.addEventListener(
-        'error',
-        () => reject(new Error(`Failed to load script: ${url}`)),
-        { once: true },
-      );
+      if (typeof script.addEventListener === 'function') {
+        script.addEventListener(
+          'load',
+          () => {
+            markLoaded(script);
+            resolve(script);
+          },
+          { once: true },
+        );
+        script.addEventListener(
+          'error',
+          () => {
+            markErrored(script);
+            removeElement(script);
+            reject(new Error(`Failed to load script: ${url}`));
+          },
+          { once: true },
+        );
+      }
       const parent = doc.head || doc.body || doc.documentElement;
       if (parent && typeof parent.appendChild === 'function') {
         parent.appendChild(script);
       } else {
+        markErrored(script);
         reject(new Error('Unable to append script element.'));
       }
     });

@@ -16,6 +16,13 @@ if (ensureThreeStart === -1 || ensureThreeEnd === -1 || ensureThreeEnd <= ensure
 }
 const ensureThreeSource = scriptSource.slice(ensureThreeStart, ensureThreeEnd);
 
+const loadScriptStart = scriptSource.indexOf('function loadScript(');
+const loadScriptEnd = scriptSource.indexOf('const THREE_CDN_URLS', loadScriptStart);
+if (loadScriptStart === -1 || loadScriptEnd === -1 || loadScriptEnd <= loadScriptStart) {
+  throw new Error('Failed to locate loadScript definition in script.js');
+}
+const loadScriptSource = scriptSource.slice(loadScriptStart, loadScriptEnd);
+
 function instantiateEnsureThree({ loadScript, cdnUrls = [], documentStub }) {
   const factory = new Function(
     'loadScript',
@@ -27,6 +34,142 @@ function instantiateEnsureThree({ loadScript, cdnUrls = [], documentStub }) {
   );
   return factory(loadScript, cdnUrls, documentStub);
 }
+
+function instantiateLoadScript({ documentStub, documentRef = null, globalScopeStub = {} } = {}) {
+  const factory = new Function(
+    'documentRef',
+    'globalScope',
+    "'use strict';" + loadScriptSource + '\n  return loadScript;'
+  );
+  return factory(documentRef, globalScopeStub);
+}
+
+describe('loadScript helper', () => {
+  let originalDocument;
+
+  beforeEach(() => {
+    originalDocument = global.document;
+  });
+
+  afterEach(() => {
+    global.document = originalDocument;
+  });
+
+  it('reuses existing matching script elements without duplicating them', async () => {
+    const listeners = {};
+    const existingScript = {
+      src: 'https://cdn.example.com/three.min.js',
+      readyState: 'loading',
+      setAttribute: vi.fn(),
+      removeAttribute: vi.fn(),
+      getAttribute: vi.fn((name) => {
+        if (name === 'src') {
+          return existingScript.src;
+        }
+        return null;
+      }),
+      addEventListener: vi.fn((event, handler) => {
+        listeners[event] = handler;
+      }),
+    };
+
+    const documentStub = {
+      baseURI: 'https://game.example/',
+      querySelectorAll: vi.fn(() => [existingScript]),
+      createElement: vi.fn(() => {
+        throw new Error('loadScript should not create a new element when reusing existing scripts.');
+      }),
+      head: { appendChild: vi.fn() },
+      body: null,
+      documentElement: null,
+    };
+
+    const globalScopeStub = { location: { href: 'https://game.example/' } };
+    const loadScript = instantiateLoadScript({
+      documentStub,
+      documentRef: documentStub,
+      globalScopeStub,
+    });
+
+    global.document = documentStub;
+
+    const promise = loadScript('https://cdn.example.com/three.min.js');
+
+    expect(documentStub.createElement).not.toHaveBeenCalled();
+    expect(existingScript.addEventListener).toHaveBeenCalledWith('load', expect.any(Function), { once: true });
+    expect(existingScript.addEventListener).toHaveBeenCalledWith('error', expect.any(Function), { once: true });
+
+    existingScript.readyState = 'complete';
+    listeners.load?.();
+
+    const resolved = await promise;
+    expect(resolved).toBe(existingScript);
+    expect(existingScript.setAttribute).toHaveBeenCalledWith('data-load-script-loaded', 'true');
+    expect(existingScript.removeAttribute).toHaveBeenCalledWith('data-load-script-error');
+  });
+
+  it('reinserts a script when a previous attempt errored', async () => {
+    const createdListeners = {};
+    const existingScript = {
+      src: 'https://cdn.example.com/three.min.js',
+      setAttribute: vi.fn(),
+      removeAttribute: vi.fn(),
+      getAttribute: vi.fn((name) => {
+        if (name === 'src') {
+          return existingScript.src;
+        }
+        if (name === 'data-load-script-error') {
+          return 'true';
+        }
+        return null;
+      }),
+      addEventListener: vi.fn(),
+      remove: vi.fn(),
+    };
+
+    const createdScript = {
+      setAttribute: vi.fn(),
+      removeAttribute: vi.fn(),
+      addEventListener: vi.fn((event, handler) => {
+        createdListeners[event] = handler;
+      }),
+      remove: vi.fn(),
+    };
+
+    const documentStub = {
+      baseURI: 'https://game.example/',
+      querySelectorAll: vi.fn(() => [existingScript]),
+      createElement: vi.fn(() => createdScript),
+      head: { appendChild: vi.fn() },
+      body: null,
+      documentElement: null,
+    };
+
+    const globalScopeStub = { location: { href: 'https://game.example/' } };
+    const loadScript = instantiateLoadScript({
+      documentStub,
+      documentRef: documentStub,
+      globalScopeStub,
+    });
+
+    global.document = documentStub;
+
+    documentStub.head.appendChild = vi.fn();
+
+    const promise = loadScript('https://cdn.example.com/three.min.js');
+
+    expect(existingScript.remove).toHaveBeenCalledTimes(1);
+    expect(documentStub.createElement).toHaveBeenCalledTimes(1);
+    expect(documentStub.head.appendChild).toHaveBeenCalledWith(createdScript);
+
+    createdListeners.load?.();
+
+    const resolved = await promise;
+    expect(resolved).toBe(createdScript);
+    expect(createdScript.setAttribute).toHaveBeenCalledWith('data-load-script-loaded', 'true');
+    expect(createdScript.removeAttribute).toHaveBeenCalledWith('data-load-script-error');
+  });
+});
 
 describe('default renderer Three.js bootstrap', () => {
   let originalWindow;
