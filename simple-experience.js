@@ -1096,6 +1096,7 @@
       this.victoryShareBusy = false;
       this.victoryEffectTimers = [];
       this.started = false;
+      this.lastStatePublish = 0;
       this.prevTime = null;
       this.mobileControlsRoot = this.ui.mobileControls || null;
       this.virtualJoystickEl = this.ui.virtualJoystick || null;
@@ -1257,11 +1258,14 @@
         this.exposeDebugInterface();
         this.renderFrame(performance.now());
         this.emitGameEvent('started', { summary: this.createRunSummary('start') });
+        this.publishStateSnapshot('started');
+        this.lastStatePublish = 0;
       } catch (error) {
         this.presentRendererFailure('Renderer initialisation failed. Check your browser console for details.', {
           error,
         });
         this.started = false;
+        this.publishStateSnapshot('start-error');
       }
     }
 
@@ -5862,6 +5866,7 @@
         index: this.currentDimensionIndex,
         summary: this.createRunSummary('dimension-advanced'),
       });
+      this.publishStateSnapshot('dimension-advanced');
     }
 
     triggerVictory() {
@@ -6836,6 +6841,13 @@
         this.handleRenderLoopError('render', error);
         return;
       }
+      if (!Number.isFinite(this.lastStatePublish) || this.lastStatePublish === null) {
+        this.lastStatePublish = 0;
+      }
+      if (timestamp - this.lastStatePublish >= 250) {
+        this.publishStateSnapshot('frame');
+        this.lastStatePublish = timestamp;
+      }
       this.scheduleNextFrame();
     }
 
@@ -6955,6 +6967,7 @@
         this.pointerHintEl.hidden = true;
         this.pointerHintEl.classList.remove('is-visible');
       }
+      this.publishStateSnapshot('renderer-failure');
     }
 
     bindWebglContextEvents() {
@@ -9841,6 +9854,39 @@
       } catch (error) {
         console.debug('Debug event dispatch failed', error);
       }
+    }
+
+    createWorldSnapshot() {
+      if (!Array.isArray(this.heightMap)) {
+        return [];
+      }
+      return this.heightMap.map((row) => (Array.isArray(row) ? row.slice() : []));
+    }
+
+    publishStateSnapshot(reason = 'update') {
+      if (typeof window === 'undefined') {
+        return;
+      }
+      const scope = window;
+      const world = this.createWorldSnapshot();
+      const score = {
+        total: Math.round(this.score ?? 0),
+        recipes: this.craftedRecipes?.size ?? 0,
+        dimensions: Math.max(0, this.currentDimensionIndex + 1),
+      };
+      scope.__INFINITE_RAILS_STATE__ = {
+        isRunning: Boolean(this.started && !this.rendererUnavailable),
+        rendererMode: scope.__INFINITE_RAILS_RENDERER_MODE__ || null,
+        world,
+        dimension: { name: this.dimensionSettings?.name ?? null },
+        portal: {
+          ready: Boolean(this.portalReady),
+          activated: Boolean(this.portalActivated),
+        },
+        score,
+        reason,
+        updatedAt: Date.now(),
+      };
     }
 
     getDebugSnapshot() {
