@@ -1359,6 +1359,10 @@
       this.portalHintShown = false;
       this.portalState = null;
       this.portalIgnitionLog = [];
+      this.dimensionLifecycleHooks = {
+        exit: new Set(),
+        enter: new Set(),
+      };
       this.portalStatusState = 'inactive';
       this.portalStatusMessage = '';
       this.portalStatusLabel = '';
@@ -7929,6 +7933,87 @@
       this.updatePortalProgress();
     }
 
+    registerDimensionLifecycleHook(phase, handler) {
+      if (typeof handler !== 'function') {
+        return () => {};
+      }
+      const key = phase === 'enter' ? 'enter' : 'exit';
+      const registry = this.dimensionLifecycleHooks?.[key];
+      if (!registry || typeof registry.add !== 'function') {
+        return () => {};
+      }
+      registry.add(handler);
+      return () => {
+        registry.delete(handler);
+      };
+    }
+
+    onDimensionExit(handler) {
+      return this.registerDimensionLifecycleHook('exit', handler);
+    }
+
+    onDimensionEnter(handler) {
+      return this.registerDimensionLifecycleHook('enter', handler);
+    }
+
+    runDimensionExitHooks(context = {}) {
+      const payload = this.createDimensionTransitionPayload(context);
+      this.clearZombies();
+      this.clearGolems();
+      this.clearChests();
+      this.invokeDimensionLifecycleHooks('exit', payload);
+    }
+
+    runDimensionEnterHooks(context = {}) {
+      const payload = this.createDimensionTransitionPayload(context);
+      this.positionPlayer();
+      this.evaluateBossChallenge();
+      this.lastGolemSpawn = this.elapsed;
+      this.invokeDimensionLifecycleHooks('enter', payload);
+    }
+
+    createDimensionTransitionPayload(context = {}) {
+      const hasPrevious = Object.prototype.hasOwnProperty.call(context, 'previousDimension');
+      const hasNext = Object.prototype.hasOwnProperty.call(context, 'nextDimension');
+      const hasTransition =
+        Object.prototype.hasOwnProperty.call(context, 'transition') ||
+        Object.prototype.hasOwnProperty.call(context, 'transitionResult');
+      const previousDimension = hasPrevious ? context.previousDimension : context.from ?? null;
+      const nextDimension = hasNext
+        ? context.nextDimension
+        : Object.prototype.hasOwnProperty.call(context, 'to')
+        ? context.to
+        : this.dimensionSettings ?? null;
+      const transition = hasTransition
+        ? Object.prototype.hasOwnProperty.call(context, 'transition')
+          ? context.transition
+          : context.transitionResult
+        : null;
+      return {
+        experience: this,
+        previousDimension,
+        nextDimension,
+        transition,
+      };
+    }
+
+    invokeDimensionLifecycleHooks(phase, payload) {
+      const registry = this.dimensionLifecycleHooks?.[phase];
+      if (!registry || typeof registry.forEach !== 'function') {
+        return;
+      }
+      const hooks = Array.from(registry);
+      for (const hook of hooks) {
+        try {
+          hook(payload);
+        } catch (error) {
+          if (typeof console !== 'undefined' && typeof console.warn === 'function') {
+            console.warn(`Dimension ${phase} hook failed`, error);
+          }
+        }
+      }
+    }
+
     advanceDimension() {
       if (!this.portalActivated || this.victoryAchieved) return;
       this.portalActivations += 1;
@@ -7941,6 +8026,7 @@
       let pointsAwarded = 5;
       let portalLog = '';
       let transitionResult = null;
+      const previousSettings = this.dimensionSettings;
       const rulesSummary = this.buildDimensionRuleSummary(nextSettings);
       if (this.portalMechanics?.enterPortal) {
         try {
@@ -7963,6 +8049,11 @@
           console.warn('Portal transition mechanics failed', error);
         }
       }
+      this.runDimensionExitHooks({
+        previousDimension: previousSettings,
+        nextDimension: nextSettings,
+        transition: transitionResult,
+      });
       this.applyDimensionSettings(nextIndex);
       if (transitionResult?.physics?.gravity !== undefined) {
         this.gravityScale = transitionResult.physics.gravity;
@@ -7984,11 +8075,11 @@
         intent: 'arrival',
         rulesOverride: arrivalRules,
       });
-      this.positionPlayer();
-      this.evaluateBossChallenge();
-      this.clearZombies();
-      this.clearGolems();
-      this.lastGolemSpawn = this.elapsed;
+      this.runDimensionEnterHooks({
+        previousDimension: previousSettings,
+        nextDimension: this.dimensionSettings,
+        transition: transitionResult,
+      });
       if (Number.isFinite(pointsAwarded)) {
         this.score += pointsAwarded;
         this.addScoreBreakdown('dimensions', pointsAwarded);
