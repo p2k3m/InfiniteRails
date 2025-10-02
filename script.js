@@ -374,6 +374,12 @@
 
   const bootstrapOverlay = (() => {
     const state = { mode: 'idle', visible: false };
+    const diagnosticsState = {
+      renderer: { status: 'pending', message: 'Initialising renderer…' },
+      assets: { status: 'pending', message: 'Streaming core assets…' },
+      backend: { status: 'pending', message: 'Checking leaderboard service…' },
+    };
+    const DIAGNOSTIC_TYPES = Object.keys(diagnosticsState);
 
     function getDocument() {
       if (documentRef) {
@@ -393,12 +399,27 @@
       if (!overlay) {
         return null;
       }
+      const diagnosticsRoot = doc.getElementById('globalOverlayDiagnostics');
+      const supportLink = doc.getElementById('globalOverlaySupportLink');
+      const downloadButton = doc.getElementById('globalOverlayDownloadLogs');
+      const diagnosticItems = DIAGNOSTIC_TYPES.reduce((acc, type) => {
+        const container = diagnosticsRoot?.querySelector(`[data-diagnostic="${type}"]`) ?? null;
+        const statusEl = doc.getElementById(
+          `globalOverlay${type.charAt(0).toUpperCase()}${type.slice(1)}Status`,
+        );
+        acc[type] = { container, statusEl };
+        return acc;
+      }, {});
       return {
         overlay,
         dialog: doc.getElementById('globalOverlayDialog'),
         spinner: doc.getElementById('globalOverlaySpinner'),
         title: doc.getElementById('globalOverlayTitle'),
         message: doc.getElementById('globalOverlayMessage'),
+        diagnosticsRoot,
+        diagnosticItems,
+        supportLink,
+        downloadButton,
       };
     }
 
@@ -424,6 +445,42 @@
       if (basicFallback?.parentNode) {
         basicFallback.parentNode.removeChild(basicFallback);
       }
+    }
+
+    function updateDiagnosticsElements(elements = null) {
+      const doc = elements ? null : getDocument();
+      const refs = elements || getElements(doc);
+      if (!refs?.diagnosticsRoot) {
+        return;
+      }
+      DIAGNOSTIC_TYPES.forEach((type) => {
+        const current = diagnosticsState[type] || {};
+        const container = refs.diagnosticItems?.[type]?.container || null;
+        const statusEl = refs.diagnosticItems?.[type]?.statusEl || null;
+        if (container) {
+          container.setAttribute('data-status', current.status || 'pending');
+        }
+        if (statusEl) {
+          statusEl.textContent = current.message || '';
+        }
+      });
+    }
+
+    function setDiagnostic(type, update = {}) {
+      if (!type || !DIAGNOSTIC_TYPES.includes(type)) {
+        return diagnosticsState;
+      }
+      const existing = diagnosticsState[type] || {};
+      const next = {
+        status: typeof update.status === 'string' && update.status.trim().length ? update.status.trim() : existing.status,
+        message:
+          typeof update.message === 'string' && update.message.trim().length
+            ? update.message.trim()
+            : existing.message,
+      };
+      diagnosticsState[type] = next;
+      updateDiagnosticsElements();
+      return next;
     }
 
     function show(mode, options = {}) {
@@ -459,6 +516,7 @@
       if (message && typeof options.message === 'string') {
         message.textContent = options.message;
       }
+      updateDiagnosticsElements(elements);
       state.mode = mode;
       state.visible = true;
     }
@@ -493,20 +551,27 @@
       showLoading(options = {}) {
         const defaults = {
           title: 'Preparing experience…',
-          message: 'Loading world assets. Hang tight while the realm forms.',
+          message: 'Loading world assets. Diagnostics will update below if anything stalls.',
         };
         show('loading', { ...defaults, ...options });
       },
       showError(options = {}) {
         const defaults = {
           title: 'Renderer unavailable',
-          message: 'Unable to load the experience. Check your connection and reload.',
+          message: 'Unable to load the experience. Review the diagnostics below or download logs for support.',
         };
         show('error', { ...defaults, ...options });
       },
       hide,
       get state() {
         return { ...state };
+      },
+      setDiagnostic,
+      refreshDiagnostics() {
+        updateDiagnosticsElements();
+      },
+      get diagnostics() {
+        return { ...diagnosticsState };
       },
     };
   })();
@@ -517,6 +582,14 @@
 
   if (typeof globalScope?.addEventListener === 'function') {
     globalScope.addEventListener('infinite-rails:started', () => {
+      bootstrapOverlay.setDiagnostic('renderer', {
+        status: 'ok',
+        message: 'Renderer initialised successfully.',
+      });
+      bootstrapOverlay.setDiagnostic('assets', {
+        status: 'ok',
+        message: 'World assets loaded.',
+      });
       bootstrapOverlay.hide({ force: true });
     });
     globalScope.addEventListener('infinite-rails:renderer-failure', (event) => {
@@ -529,6 +602,112 @@
       bootstrapOverlay.showError({
         title: 'Renderer unavailable',
         message: formatRendererFailureMessage(detail),
+      });
+      bootstrapOverlay.setDiagnostic('renderer', {
+        status: 'error',
+        message: formatRendererFailureMessage(detail),
+      });
+    });
+    globalScope.addEventListener('infinite-rails:asset-fallback', (event) => {
+      const detail = event?.detail && typeof event.detail === 'object' ? event.detail : {};
+      const message =
+        typeof detail?.message === 'string' && detail.message.trim().length
+          ? detail.message.trim()
+          : 'Asset fallback active — visual polish may be reduced.';
+      bootstrapOverlay.setDiagnostic('assets', {
+        status: 'warning',
+        message,
+      });
+    });
+    globalScope.addEventListener('infinite-rails:asset-load-failure', (event) => {
+      const detail = event?.detail && typeof event.detail === 'object' ? event.detail : {};
+      const keyLabel = typeof detail?.key === 'string' && detail.key.trim().length ? detail.key.trim() : null;
+      const friendly =
+        typeof detail?.fallbackMessage === 'string' && detail.fallbackMessage.trim().length
+          ? detail.fallbackMessage.trim()
+          : keyLabel
+            ? `Asset load failure detected for ${keyLabel}.`
+            : 'Critical asset failed to load.';
+      bootstrapOverlay.setDiagnostic('assets', {
+        status: 'warning',
+        message: friendly,
+      });
+    });
+    globalScope.addEventListener('infinite-rails:asset-recovery-prompt', (event) => {
+      const detail = event?.detail && typeof event.detail === 'object' ? event.detail : {};
+      const message =
+        typeof detail?.message === 'string' && detail.message.trim().length
+          ? detail.message.trim()
+          : 'Critical assets failed to load after multiple attempts. Reload or retry to continue.';
+      bootstrapOverlay.setDiagnostic('assets', {
+        status: 'error',
+        message,
+      });
+    });
+    globalScope.addEventListener('infinite-rails:asset-recovery-prompt-update', (event) => {
+      const detail = event?.detail && typeof event.detail === 'object' ? event.detail : {};
+      const message =
+        typeof detail?.message === 'string' && detail.message.trim().length
+          ? detail.message.trim()
+          : 'Retrying missing assets — results pending.';
+      bootstrapOverlay.setDiagnostic('assets', {
+        status: 'error',
+        message,
+      });
+    });
+    globalScope.addEventListener('infinite-rails:asset-retry-requested', () => {
+      bootstrapOverlay.setDiagnostic('assets', {
+        status: 'pending',
+        message: 'Retrying missing assets…',
+      });
+    });
+    globalScope.addEventListener('infinite-rails:asset-retry-queued', (event) => {
+      const detail = event?.detail && typeof event.detail === 'object' ? event.detail : {};
+      const keys = Array.isArray(detail?.keys) ? detail.keys : [];
+      const label = keys.length ? keys.join(', ') : 'assets';
+      bootstrapOverlay.setDiagnostic('assets', {
+        status: 'pending',
+        message: `Retry queued for ${label}.`,
+      });
+    });
+    globalScope.addEventListener('infinite-rails:asset-retry-success', (event) => {
+      const detail = event?.detail && typeof event.detail === 'object' ? event.detail : {};
+      const keyLabel = typeof detail?.key === 'string' && detail.key.trim().length ? detail.key.trim() : 'assets';
+      const attempts = Number.isFinite(detail?.attempts) ? detail.attempts : null;
+      const message = attempts && attempts > 1
+        ? `Recovered ${keyLabel} after ${attempts} attempts.`
+        : `Recovered ${keyLabel} successfully.`;
+      bootstrapOverlay.setDiagnostic('assets', {
+        status: 'ok',
+        message,
+      });
+    });
+    globalScope.addEventListener('infinite-rails:asset-recovery-reload-requested', () => {
+      bootstrapOverlay.setDiagnostic('assets', {
+        status: 'error',
+        message: 'Reload requested to restore missing assets.',
+      });
+    });
+    globalScope.addEventListener('infinite-rails:score-sync-offline', (event) => {
+      const detail = event?.detail && typeof event.detail === 'object' ? event.detail : {};
+      const message =
+        typeof detail?.message === 'string' && detail.message.trim().length
+          ? detail.message.trim()
+          : 'Leaderboard offline — progress saved locally.';
+      bootstrapOverlay.setDiagnostic('backend', {
+        status: 'error',
+        message,
+      });
+    });
+    globalScope.addEventListener('infinite-rails:score-sync-restored', (event) => {
+      const detail = event?.detail && typeof event.detail === 'object' ? event.detail : {};
+      const message =
+        typeof detail?.message === 'string' && detail.message.trim().length
+          ? detail.message.trim()
+          : 'Leaderboard connection restored.';
+      bootstrapOverlay.setDiagnostic('backend', {
+        status: 'ok',
+        message,
       });
     });
   }
@@ -650,6 +829,25 @@
     },
   };
 
+  if (!identityState.apiBaseUrl) {
+    if (apiBaseInvalid) {
+      bootstrapOverlay.setDiagnostic('backend', {
+        status: 'error',
+        message: 'Invalid backend configuration — update APP_CONFIG.apiBaseUrl to restore sync.',
+      });
+    } else {
+      bootstrapOverlay.setDiagnostic('backend', {
+        status: 'warning',
+        message: 'No backend configured — runs will remain on this device.',
+      });
+    }
+  } else {
+    bootstrapOverlay.setDiagnostic('backend', {
+      status: 'pending',
+      message: 'Connecting to the leaderboard service…',
+    });
+  }
+
   const identityStorageKey = 'infinite-rails-simple-identity';
   const GOOGLE_ACCOUNTS_ID_NAMESPACE = 'google.accounts.id';
   const GOOGLE_IDENTITY_SCRIPT_URLS = (() => {
@@ -678,6 +876,7 @@
     element: null,
     listenersBound: false,
     maxEntries: 40,
+    history: [],
   };
 
   function getEventLogElement() {
@@ -747,6 +946,33 @@
       return pickLabel(detail.dimension.name) || pickLabel(detail.dimension.label);
     }
     return null;
+  }
+
+  function serialiseEventDetail(detail) {
+    if (!detail || typeof detail !== 'object') {
+      return detail ?? null;
+    }
+    try {
+      return JSON.parse(JSON.stringify(detail));
+    } catch (error) {
+      const copy = {};
+      Object.keys(detail).forEach((key) => {
+        const value = detail[key];
+        if (typeof value === 'undefined') {
+          return;
+        }
+        if (value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+          copy[key] = value;
+          return;
+        }
+        try {
+          copy[key] = JSON.parse(JSON.stringify(value));
+        } catch (nestedError) {
+          copy[key] = String(value);
+        }
+      });
+      return copy;
+    }
   }
 
   function describeEventLogMessage(type, detail) {
@@ -910,6 +1136,16 @@
       item.dataset.debugDetail = debugDetail;
       updateEventLogItemDebugBlock(item, debugDetail);
     }
+    const serialisedDetail = serialiseEventDetail(detail);
+    eventLogState.history.push({
+      type,
+      timestamp,
+      message,
+      detail: serialisedDetail,
+    });
+    while (eventLogState.history.length > eventLogState.maxEntries) {
+      eventLogState.history.shift();
+    }
     container.appendChild(item);
     while (container.children.length > eventLogState.maxEntries) {
       const first = container.firstElementChild || container.firstChild;
@@ -964,6 +1200,128 @@
     ensureEventLogListeners();
     refreshEventLogDebugDetails();
   }
+
+  function getEventLogHistorySnapshot() {
+    return eventLogState.history.map((entry) => ({
+      type: entry.type,
+      timestamp: entry.timestamp,
+      message: entry.message,
+      detail: entry.detail ?? null,
+    }));
+  }
+
+  function buildDiagnosticsReport() {
+    const scope = typeof globalScope !== 'undefined' ? globalScope : globalThis;
+    const diagnostics = typeof bootstrapOverlay?.diagnostics === 'object' ? bootstrapOverlay.diagnostics : {};
+    const history = getEventLogHistorySnapshot();
+    const lastFailure = lastRendererFailureDetail ? { ...lastRendererFailureDetail } : null;
+    return {
+      generatedAt: new Date().toISOString(),
+      rendererMode: scope?.InfiniteRails?.rendererMode ?? null,
+      diagnostics,
+      lastRendererFailure: lastFailure,
+      backend: {
+        configured: Boolean(identityState.apiBaseUrl),
+        apiBaseUrl: identityState.apiBaseUrl ?? null,
+        endpoints: identityState.endpoints ?? null,
+      },
+      debugMode: isDebugModeEnabled(),
+      userAgent: scope?.navigator?.userAgent ?? null,
+      eventLog: history,
+    };
+  }
+
+  function downloadDiagnosticsReport() {
+    const scope = typeof globalScope !== 'undefined' ? globalScope : globalThis;
+    let payload;
+    try {
+      payload = JSON.stringify(buildDiagnosticsReport(), null, 2);
+    } catch (error) {
+      payload = JSON.stringify(
+        {
+          generatedAt: new Date().toISOString(),
+          error: 'Failed to serialise diagnostics report',
+          message: error?.message ?? String(error),
+        },
+        null,
+        2,
+      );
+    }
+    const timestampLabel = new Date().toISOString().replace(/[:.]/g, '-');
+    const filename = `infinite-rails-diagnostics-${timestampLabel}.json`;
+    const doc = documentRef || scope.document || null;
+    const triggerDownload = (href, useBlob = false) => {
+      const anchor = doc?.createElement?.('a');
+      if (!anchor) {
+        return false;
+      }
+      if (!doc?.body) {
+        return false;
+      }
+      anchor.href = href;
+      anchor.download = filename;
+      anchor.rel = 'noopener';
+      anchor.style.display = 'none';
+      doc.body.appendChild(anchor);
+      try {
+        anchor.click();
+      } catch (clickError) {
+        doc.body.removeChild(anchor);
+        return false;
+      }
+      doc.body.removeChild(anchor);
+      if (useBlob && scope?.URL?.revokeObjectURL) {
+        scope.URL.revokeObjectURL(href);
+      }
+      return true;
+    };
+    if (typeof Blob !== 'undefined' && scope?.URL?.createObjectURL) {
+      try {
+        const blob = new Blob([payload], { type: 'application/json' });
+        const url = scope.URL.createObjectURL(blob);
+        if (triggerDownload(url, true)) {
+          return true;
+        }
+        scope.URL.revokeObjectURL(url);
+      } catch (error) {
+        if (scope.console?.debug) {
+          scope.console.debug('Falling back to data URL for diagnostics download.', error);
+        }
+      }
+    }
+    const dataUrl = `data:application/json;charset=utf-8,${encodeURIComponent(payload)}`;
+    if (triggerDownload(dataUrl)) {
+      return true;
+    }
+    if (scope?.navigator?.clipboard?.writeText) {
+      scope.navigator.clipboard.writeText(payload).catch(() => {});
+      return false;
+    }
+    if (scope.console?.warn) {
+      scope.console.warn('Unable to trigger diagnostics download in this environment.');
+    }
+    return false;
+  }
+
+  function bindDiagnosticsActions() {
+    const scope = typeof globalScope !== 'undefined' ? globalScope : globalThis;
+    const doc = documentRef || scope.document || null;
+    if (!doc) {
+      return;
+    }
+    const downloadButton = doc.getElementById('globalOverlayDownloadLogs');
+    if (downloadButton && !downloadButton.dataset.diagnosticsBound) {
+      downloadButton.addEventListener('click', (event) => {
+        if (event?.preventDefault) {
+          event.preventDefault();
+        }
+        downloadDiagnosticsReport();
+      });
+      downloadButton.dataset.diagnosticsBound = 'true';
+    }
+  }
+
+  bindDiagnosticsActions();
 
   function persistDebugModePreference(enabled) {
     if (!globalScope?.localStorage) {
@@ -1068,6 +1426,10 @@
     }
     bootstrapOverlay.showError({
       title: 'Renderer unavailable',
+      message: formatRendererFailureMessage(lastRendererFailureDetail),
+    });
+    bootstrapOverlay.setDiagnostic('renderer', {
+      status: 'error',
       message: formatRendererFailureMessage(lastRendererFailureDetail),
     });
   }
@@ -2098,6 +2460,10 @@
           title: 'Renderer unavailable',
           message: 'Fallback renderer is unavailable. Check your extensions or reload the page.',
         });
+        bootstrapOverlay.setDiagnostic('renderer', {
+          status: 'error',
+          message: 'Fallback renderer is unavailable. Check extensions or reload.',
+        });
       }
       return false;
     }
@@ -2265,6 +2631,10 @@
           title: 'Renderer unavailable',
           message: 'Simplified renderer is missing from the build output.',
         });
+        bootstrapOverlay.setDiagnostic('renderer', {
+          status: 'error',
+          message: 'Simplified renderer is missing from the build output.',
+        });
       }
       return null;
     }
@@ -2275,6 +2645,10 @@
         bootstrapOverlay.showError({
           title: 'Renderer unavailable',
           message: 'Game canvas could not be located. Reload the page to retry.',
+        });
+        bootstrapOverlay.setDiagnostic('renderer', {
+          status: 'error',
+          message: 'Game canvas could not be located. Reload to retry.',
         });
       }
       return null;
@@ -2298,6 +2672,10 @@
       if (typeof bootstrapOverlay !== 'undefined') {
         bootstrapOverlay.showError({
           title: 'Renderer unavailable',
+          message: 'Failed to initialise the renderer. Check your connection and reload.',
+        });
+        bootstrapOverlay.setDiagnostic('renderer', {
+          status: 'error',
           message: 'Failed to initialise the renderer. Check your connection and reload.',
         });
       }
