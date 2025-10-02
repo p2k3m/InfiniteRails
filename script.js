@@ -104,32 +104,52 @@
     }
   }
 
-  function bindColorSchemeListener() {
-    if (colorModeState.mediaQuery || typeof globalScope?.matchMedia !== 'function') {
-      return;
-    }
-    try {
-      colorModeState.mediaQuery = globalScope.matchMedia('(prefers-color-scheme: dark)');
-    } catch (error) {
-      colorModeState.mediaQuery = null;
-      if (globalScope.console?.debug) {
-        globalScope.console.debug('Unable to create prefers-color-scheme media query.', error);
+  function bindColorSchemeListener(onChange) {
+    const changeHandler = typeof onChange === 'function' ? onChange : null;
+    const attachListener = () => {
+      if (!colorModeState.mediaQuery) {
+        return;
+      }
+      const existing = colorModeState.mediaListener;
+      if (existing) {
+        if (typeof colorModeState.mediaQuery.removeEventListener === 'function') {
+          colorModeState.mediaQuery.removeEventListener('change', existing);
+        } else if (typeof colorModeState.mediaQuery.removeListener === 'function') {
+          colorModeState.mediaQuery.removeListener(existing);
+        }
+      }
+      const listener = (event) => {
+        if (changeHandler) {
+          changeHandler(event);
+        }
+      };
+      colorModeState.mediaListener = listener;
+      if (typeof colorModeState.mediaQuery.addEventListener === 'function') {
+        colorModeState.mediaQuery.addEventListener('change', listener);
+      } else if (typeof colorModeState.mediaQuery.addListener === 'function') {
+        colorModeState.mediaQuery.addListener(listener);
+      }
+    };
+
+    if (!colorModeState.mediaQuery) {
+      if (typeof globalScope?.matchMedia !== 'function') {
+        return;
+      }
+      try {
+        colorModeState.mediaQuery = globalScope.matchMedia('(prefers-color-scheme: dark)');
+      } catch (error) {
+        colorModeState.mediaQuery = null;
+        if (globalScope.console?.debug) {
+          globalScope.console.debug('Unable to create prefers-color-scheme media query.', error);
+        }
       }
     }
+
     if (!colorModeState.mediaQuery) {
       return;
     }
-    const listener = (event) => {
-      if (colorModeState.preference === 'auto') {
-        applyColorMode('auto', { syncStorage: false, reason: 'media-change', event });
-      }
-    };
-    colorModeState.mediaListener = listener;
-    if (typeof colorModeState.mediaQuery.addEventListener === 'function') {
-      colorModeState.mediaQuery.addEventListener('change', listener);
-    } else if (typeof colorModeState.mediaQuery.addListener === 'function') {
-      colorModeState.mediaQuery.addListener(listener);
-    }
+
+    attachListener();
   }
 
   function resolveEffectiveColorMode(preference) {
@@ -160,7 +180,11 @@
     const normalised = normaliseColorMode(preference);
     colorModeState.preference = normalised;
     if (normalised === 'auto') {
-      bindColorSchemeListener();
+      bindColorSchemeListener((event) => {
+        if (colorModeState.preference === 'auto') {
+          applyColorMode('auto', { syncStorage: false, reason: 'media-change', event });
+        }
+      });
     }
     const body = getBodyElement();
     if (body) {
@@ -807,6 +831,42 @@
   }
 
   let lastRendererFailureDetail = null;
+
+  function formatRendererFailureMessage(detail) {
+    const baseMessage =
+      typeof detail?.message === 'string' && detail.message.trim().length
+        ? detail.message.trim()
+        : 'Renderer unavailable. Reload to try again.';
+    const stage =
+      typeof detail?.stage === 'string' && detail.stage.trim().length ? detail.stage.trim() : null;
+    if (!isDebugModeEnabled()) {
+      return stage ? `${baseMessage} (${stage})` : baseMessage;
+    }
+    const extras = [];
+    if (stage) {
+      extras.push(`Stage: ${stage}`);
+    }
+    const errorName =
+      typeof detail?.errorName === 'string' && detail.errorName.trim().length
+        ? detail.errorName.trim()
+        : null;
+    const errorMessage =
+      typeof detail?.error === 'string' && detail.error.trim().length ? detail.error.trim() : null;
+    if (errorName && errorMessage) {
+      extras.push(`${errorName}: ${errorMessage}`);
+    } else if (errorMessage) {
+      extras.push(`Error: ${errorMessage}`);
+    }
+    const stack =
+      typeof detail?.stack === 'string' && detail.stack.trim().length ? detail.stack.trim() : null;
+    if (stack) {
+      extras.push(stack);
+    }
+    if (extras.length) {
+      return `${baseMessage}\n\n${extras.join('\n')}`;
+    }
+    return baseMessage;
+  }
 
   if (typeof globalScope?.addEventListener === 'function') {
     globalScope.addEventListener('infinite-rails:started', (event) => {
@@ -1759,42 +1819,6 @@
     }
   }
 
-  function formatRendererFailureMessage(detail) {
-    const baseMessage =
-      typeof detail?.message === 'string' && detail.message.trim().length
-        ? detail.message.trim()
-        : 'Renderer unavailable. Reload to try again.';
-    const stage =
-      typeof detail?.stage === 'string' && detail.stage.trim().length ? detail.stage.trim() : null;
-    if (!isDebugModeEnabled()) {
-      return stage ? `${baseMessage} (${stage})` : baseMessage;
-    }
-    const extras = [];
-    if (stage) {
-      extras.push(`Stage: ${stage}`);
-    }
-    const errorName =
-      typeof detail?.errorName === 'string' && detail.errorName.trim().length
-        ? detail.errorName.trim()
-        : null;
-    const errorMessage =
-      typeof detail?.error === 'string' && detail.error.trim().length ? detail.error.trim() : null;
-    if (errorName && errorMessage) {
-      extras.push(`${errorName}: ${errorMessage}`);
-    } else if (errorMessage) {
-      extras.push(`Error: ${errorMessage}`);
-    }
-    const stack =
-      typeof detail?.stack === 'string' && detail.stack.trim().length ? detail.stack.trim() : null;
-    if (stack) {
-      extras.push(stack);
-    }
-    if (extras.length) {
-      return `${baseMessage}\n\n${extras.join('\n')}`;
-    }
-    return baseMessage;
-  }
-
   function refreshRendererFailureOverlay() {
     if (!lastRendererFailureDetail) {
       return;
@@ -2103,6 +2127,83 @@
     if (scoreboardStatusEl) {
       scoreboardStatusEl.textContent = identityState.scoreboardMessage;
     }
+  }
+
+  function buildIdentityPayload(identity) {
+    const payload = {
+      googleId: identity.googleId,
+      name: identity.name,
+    };
+    if (identity.email) {
+      payload.email = identity.email;
+    }
+    if (identity.avatar) {
+      payload.avatar = identity.avatar;
+    }
+    if (identity.location && typeof identity.location === 'object') {
+      payload.location = { ...identity.location };
+    }
+    if (identity.locationLabel) {
+      payload.locationLabel = identity.locationLabel;
+    }
+    return payload;
+  }
+
+  async function syncIdentityToApi(identity) {
+    if (!identity || typeof identity !== 'object') {
+      return;
+    }
+    if (!identity.googleId || !identityState.apiBaseUrl || !identityState.endpoints.users) {
+      return;
+    }
+    if (typeof globalScope.fetch !== 'function') {
+      return;
+    }
+    const url = identityState.endpoints.users;
+    const payload = buildIdentityPayload(identity);
+    try {
+      const response = await globalScope.fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+      });
+      if (!response.ok) {
+        throw new Error(`Request failed with status ${response.status}`);
+      }
+      updateScoreboardStatus(`Signed in as ${identity.name}. Leaderboard sync active.`);
+    } catch (error) {
+      console.warn('Failed to sync identity with leaderboard', error);
+      updateScoreboardStatus(`Signed in as ${identity.name}. Sync failed — storing locally.`);
+    }
+  }
+
+  function showGoogleSigninUi() {
+    identityState.googleReady = true;
+    googleButtonContainers.forEach((container) => {
+      container.hidden = false;
+    });
+    fallbackSigninButtons.forEach((btn) => {
+      btn.hidden = true;
+    });
+    const signedIn = Boolean(identityState.identity?.googleId);
+    signOutButtons.forEach((btn) => {
+      btn.hidden = !signedIn;
+    });
+  }
+
+  function showFallbackSignin(options = {}) {
+    if (!options.keepGoogleVisible) {
+      identityState.googleReady = false;
+      googleButtonContainers.forEach((container) => {
+        container.hidden = true;
+      });
+      identityState.googleButtonsRendered = false;
+    }
+    fallbackSigninButtons.forEach((btn) => {
+      btn.hidden = false;
+    });
   }
 
   if (typeof globalScope.addEventListener === 'function') {
@@ -2552,33 +2653,6 @@
     showGoogleSigninUi();
   }
 
-  function showGoogleSigninUi() {
-    identityState.googleReady = true;
-    googleButtonContainers.forEach((container) => {
-      container.hidden = false;
-    });
-    fallbackSigninButtons.forEach((btn) => {
-      btn.hidden = true;
-    });
-    const signedIn = Boolean(identityState.identity?.googleId);
-    signOutButtons.forEach((btn) => {
-      btn.hidden = !signedIn;
-    });
-  }
-
-  function showFallbackSignin(options = {}) {
-    if (!options.keepGoogleVisible) {
-      identityState.googleReady = false;
-      googleButtonContainers.forEach((container) => {
-        container.hidden = true;
-      });
-      identityState.googleButtonsRendered = false;
-    }
-    fallbackSigninButtons.forEach((btn) => {
-      btn.hidden = false;
-    });
-  }
-
   function initialiseGoogleSignIn() {
     if (!documentRef) {
       return null;
@@ -2634,56 +2708,6 @@
         throw error;
       });
     return googleInitPromise;
-  }
-
-  async function syncIdentityToApi(identity) {
-    if (!identity || typeof identity !== 'object') {
-      return;
-    }
-    if (!identity.googleId || !identityState.apiBaseUrl || !identityState.endpoints.users) {
-      return;
-    }
-    if (typeof globalScope.fetch !== 'function') {
-      return;
-    }
-    const url = identityState.endpoints.users;
-    const payload = buildIdentityPayload(identity);
-    try {
-      const response = await globalScope.fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(payload),
-      });
-      if (!response.ok) {
-        throw new Error(`Request failed with status ${response.status}`);
-      }
-      updateScoreboardStatus(`Signed in as ${identity.name}. Leaderboard sync active.`);
-    } catch (error) {
-      console.warn('Failed to sync identity with leaderboard', error);
-      updateScoreboardStatus(`Signed in as ${identity.name}. Sync failed — storing locally.`);
-    }
-  }
-
-  function buildIdentityPayload(identity) {
-    const payload = {
-      googleId: identity.googleId,
-      name: identity.name,
-    };
-    if (identity.email) {
-      payload.email = identity.email;
-    }
-    if (identity.avatar) {
-      payload.avatar = identity.avatar;
-    }
-    if (identity.location && typeof identity.location === 'object') {
-      payload.location = { ...identity.location };
-    }
-    if (identity.locationLabel) {
-      payload.locationLabel = identity.locationLabel;
-    }
-    return payload;
   }
 
   function hasCoarsePointer(scope) {
@@ -2792,113 +2816,7 @@
     return !config.preferAdvanced;
   }
 
-  let simpleFallbackAttempted = false;
-
-  function tryStartSimpleFallback(error, context = {}) {
-    if (simpleFallbackAttempted) {
-      return false;
-    }
-    if (typeof bootstrapOverlay !== 'undefined' && bootstrapOverlay.state.mode !== 'error') {
-      bootstrapOverlay.showLoading({
-        message: 'Attempting simplified renderer fallback…',
-      });
-    }
-    const scope =
-      typeof globalScope !== 'undefined'
-        ? globalScope
-        : typeof window !== 'undefined'
-          ? window
-          : globalThis;
-    scope.__LAST_FALLBACK_CONTEXT__ = { error: error?.message ?? null, context };
-    if (context?.reason === 'ensureThree-failure') {
-      const config = scope.APP_CONFIG || (scope.APP_CONFIG = {});
-      config.forceSimpleMode = false;
-      config.enableAdvancedExperience = true;
-      config.preferAdvanced = true;
-      if (!scope.THREE && scope.THREE_GLOBAL) {
-        scope.THREE = scope.THREE_GLOBAL;
-      }
-      try {
-        setRendererModeIndicator('advanced');
-        ensureSimpleExperience('advanced');
-      } catch (recoverError) {
-        if (scope.console?.error) {
-          scope.console.error('Failed to recover Three.js bootstrap', recoverError);
-        }
-      }
-      return false;
-    }
-    const hasSimpleExperience = Boolean(scope.SimpleExperience?.create);
-    if (!hasSimpleExperience) {
-      if (scope.console?.error) {
-        scope.console.error('Simple experience unavailable; cannot start fallback renderer.', {
-          error,
-          context,
-        });
-      }
-      if (typeof logDiagnosticsEvent === 'function') {
-        logDiagnosticsEvent('startup', 'Simple experience unavailable; cannot start fallback renderer.', {
-          level: 'error',
-          detail: context && typeof context === 'object' ? { ...context } : undefined,
-        });
-      }
-      if (typeof bootstrapOverlay !== 'undefined') {
-        bootstrapOverlay.showError({
-          title: 'Renderer unavailable',
-          message: 'Fallback renderer is unavailable. Check your extensions or reload the page.',
-        });
-        bootstrapOverlay.setDiagnostic('renderer', {
-          status: 'error',
-          message: 'Fallback renderer is unavailable. Check extensions or reload.',
-        });
-      }
-      return false;
-    }
-    simpleFallbackAttempted = true;
-    const config = scope.APP_CONFIG || (scope.APP_CONFIG = {});
-    config.forceSimpleMode = true;
-    config.enableAdvancedExperience = false;
-    config.preferAdvanced = false;
-    config.defaultMode = 'simple';
-    if (typeof queueBootstrapFallbackNotice === 'function') {
-      queueBootstrapFallbackNotice(
-        'forced-simple-mode',
-        'Falling back to the simple renderer after a bootstrap failure.',
-      );
-    }
-    if (typeof logDiagnosticsEvent === 'function') {
-      logDiagnosticsEvent('startup', 'Falling back to the simple renderer after a bootstrap failure.', {
-        level: 'warning',
-      });
-    }
-    try {
-      if (typeof scope.bootstrap === 'function') {
-        scope.bootstrap();
-      }
-    } catch (bootstrapError) {
-      if (scope.console?.error) {
-        scope.console.error('Simple fallback bootstrap failed.', bootstrapError);
-      }
-      if (typeof logDiagnosticsEvent === 'function') {
-        logDiagnosticsEvent('startup', 'Simple fallback bootstrap failed.', {
-          level: 'error',
-          detail: {
-            errorMessage:
-              typeof bootstrapError?.message === 'string' && bootstrapError.message.trim().length
-                ? bootstrapError.message.trim()
-                : undefined,
-            errorName:
-              typeof bootstrapError?.name === 'string' && bootstrapError.name.trim().length
-                ? bootstrapError.name.trim()
-                : undefined,
-          },
-        });
-      }
-    }
-    return true;
-  }
-
-  function createScoreboardUtilsFallback() {
+  function internalCreateScoreboardUtilsFallback() {
     return {
       hydrate() {
         return [];
@@ -3161,6 +3079,116 @@
       bootstrapOverlay.hide({ force: true });
     }
     return experience;
+  }
+
+  let simpleFallbackAttempted = false;
+
+  function tryStartSimpleFallback(error, context = {}) {
+    if (simpleFallbackAttempted) {
+      return false;
+    }
+    if (typeof bootstrapOverlay !== 'undefined' && bootstrapOverlay.state.mode !== 'error') {
+      bootstrapOverlay.showLoading({
+        message: 'Attempting simplified renderer fallback…',
+      });
+    }
+    const scope =
+      typeof globalScope !== 'undefined'
+        ? globalScope
+        : typeof window !== 'undefined'
+          ? window
+          : globalThis;
+    scope.__LAST_FALLBACK_CONTEXT__ = { error: error?.message ?? null, context };
+    if (context?.reason === 'ensureThree-failure') {
+      const config = scope.APP_CONFIG || (scope.APP_CONFIG = {});
+      config.forceSimpleMode = false;
+      config.enableAdvancedExperience = true;
+      config.preferAdvanced = true;
+      if (!scope.THREE && scope.THREE_GLOBAL) {
+        scope.THREE = scope.THREE_GLOBAL;
+      }
+      try {
+        setRendererModeIndicator('advanced');
+        ensureSimpleExperience('advanced');
+      } catch (recoverError) {
+        if (scope.console?.error) {
+          scope.console.error('Failed to recover Three.js bootstrap', recoverError);
+        }
+      }
+      return false;
+    }
+    const hasSimpleExperience = Boolean(scope.SimpleExperience?.create);
+    if (!hasSimpleExperience) {
+      if (scope.console?.error) {
+        scope.console.error('Simple experience unavailable; cannot start fallback renderer.', {
+          error,
+          context,
+        });
+      }
+      if (typeof logDiagnosticsEvent === 'function') {
+        logDiagnosticsEvent('startup', 'Simple experience unavailable; cannot start fallback renderer.', {
+          level: 'error',
+          detail: context && typeof context === 'object' ? { ...context } : undefined,
+        });
+      }
+      if (typeof bootstrapOverlay !== 'undefined') {
+        bootstrapOverlay.showError({
+          title: 'Renderer unavailable',
+          message: 'Fallback renderer is unavailable. Check your extensions or reload the page.',
+        });
+        bootstrapOverlay.setDiagnostic('renderer', {
+          status: 'error',
+          message: 'Fallback renderer is unavailable. Check extensions or reload.',
+        });
+      }
+      return false;
+    }
+    simpleFallbackAttempted = true;
+    const config = scope.APP_CONFIG || (scope.APP_CONFIG = {});
+    config.forceSimpleMode = true;
+    config.enableAdvancedExperience = false;
+    config.preferAdvanced = false;
+    config.defaultMode = 'simple';
+    if (typeof queueBootstrapFallbackNotice === 'function') {
+      queueBootstrapFallbackNotice(
+        'forced-simple-mode',
+        'Falling back to the simple renderer after a bootstrap failure.',
+      );
+    }
+    if (typeof logDiagnosticsEvent === 'function') {
+      logDiagnosticsEvent('startup', 'Falling back to the simple renderer after a bootstrap failure.', {
+        level: 'warning',
+      });
+    }
+    try {
+      if (typeof scope.bootstrap === 'function') {
+        scope.bootstrap();
+      }
+    } catch (bootstrapError) {
+      if (scope.console?.error) {
+        scope.console.error('Simple fallback bootstrap failed.', bootstrapError);
+      }
+      if (typeof logDiagnosticsEvent === 'function') {
+        logDiagnosticsEvent('startup', 'Simple fallback bootstrap failed.', {
+          level: 'error',
+          detail: {
+            errorMessage:
+              typeof bootstrapError?.message === 'string' && bootstrapError.message.trim().length
+                ? bootstrapError.message.trim()
+                : undefined,
+            errorName:
+              typeof bootstrapError?.name === 'string' && bootstrapError.name.trim().length
+                ? bootstrapError.name.trim()
+                : undefined,
+          },
+        });
+      }
+    }
+    return true;
+  }
+
+  function createScoreboardUtilsFallback() {
+    return internalCreateScoreboardUtilsFallback();
   }
 
   function bootstrap() {
