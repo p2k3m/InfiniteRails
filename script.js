@@ -1943,6 +1943,42 @@
     return payload;
   }
 
+  function hasCoarsePointer(scope) {
+    if (typeof scope?.matchMedia === 'function') {
+      try {
+        const result = scope.matchMedia('(pointer: coarse)');
+        if (result && typeof result.matches === 'boolean') {
+          return result.matches;
+        }
+      } catch (error) {
+        if (globalScope.console?.debug) {
+          globalScope.console.debug('Failed to evaluate coarse pointer media query.', error);
+        }
+      }
+    }
+    const navigatorRef = scope?.navigator || globalScope?.navigator || null;
+    if (navigatorRef && typeof navigatorRef.maxTouchPoints === 'number') {
+      return navigatorRef.maxTouchPoints > 1;
+    }
+    return false;
+  }
+
+  function detectMobileEnvironment(scope) {
+    const navigatorRef = scope?.navigator || globalScope?.navigator || null;
+    const userAgent = typeof navigatorRef?.userAgent === 'string' ? navigatorRef.userAgent : '';
+    const maxTouchPoints = typeof navigatorRef?.maxTouchPoints === 'number' ? navigatorRef.maxTouchPoints : 0;
+    const coarsePointer = hasCoarsePointer(scope);
+    const touchCapable = maxTouchPoints > 1;
+    const mobileRegex = /Mobi|Android|iPhone|iPad|iPod|Windows Phone|webOS|BlackBerry/i;
+    const userAgentMobile = mobileRegex.test(userAgent);
+    return {
+      coarsePointer,
+      touchCapable,
+      userAgentMobile,
+      isMobile: Boolean(coarsePointer || touchCapable || userAgentMobile),
+    };
+  }
+
   function shouldStartSimpleMode() {
     const scope =
       typeof globalScope !== 'undefined'
@@ -1961,6 +1997,23 @@
       return false;
     }
     if (config.forceSimpleMode) {
+      return true;
+    }
+    const mobileEnvironment = detectMobileEnvironment(scope);
+    if (mobileEnvironment.isMobile) {
+      config.isMobileEnvironment = true;
+    }
+    const mobileAdvancedSupported =
+      config.supportsAdvancedMobile ?? config.allowAdvancedOnMobile ?? config.enableAdvancedOnMobile ?? false;
+    if (mobileEnvironment.isMobile && !mobileAdvancedSupported) {
+      config.forceAdvanced = false;
+      config.enableAdvancedExperience = false;
+      config.preferAdvanced = false;
+      config.defaultMode = 'simple';
+      queueBootstrapFallbackNotice(
+        'mobile-simple-mode',
+        'Advanced renderer is unavailable on mobile devices — loading the simplified sandbox instead.',
+      );
       return true;
     }
     if (config.forceAdvanced) {

@@ -83,10 +83,12 @@ Use the following switches to control which experience loads:
 
 | Mode | How to activate |
 | --- | --- |
-| Advanced renderer (default) | Load the page normally. The bundled `APP_CONFIG` now enables and prefers the advanced renderer so the fully interactive 3D experience starts immediately. |
+| Advanced renderer (default) | Load the page normally. The bundled `APP_CONFIG` now enables and prefers the advanced renderer so the fully interactive 3D experience starts immediately on desktop devices. |
 | Sandbox renderer (fallback) | Append `?mode=simple` (or `?simple=1`), or set `APP_CONFIG.forceSimpleMode = true`. This mirrors the previous default for devices that need the lighter sandbox. |
 
 The active renderer mode is surfaced for quick verification: inspect `data-renderer-mode` on `<html>`/`<body>` or read `window.InfiniteRails.rendererMode`. These indicators flip immediately when query params or `APP_CONFIG` overrides change the active experience.
+
+Touch-first devices automatically fall back to the sandbox renderer unless you explicitly opt in by setting `APP_CONFIG.supportsAdvancedMobile = true`. This keeps the onboarding flow stable on phones and tablets while the advanced build matures. When the flag remains `false`, `script.js` records the detected mobile environment on `APP_CONFIG.isMobileEnvironment` and emits a bootstrap notice explaining that the simplified renderer was selected for mobile safety.
 
 The sandbox keeps the portal-building brief front-and-centre while the production renderer continues to mature. Flip the flags
 above whenever you want to regression-test the work-in-progress advanced build without losing the reliable sandbox.
