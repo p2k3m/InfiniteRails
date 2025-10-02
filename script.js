@@ -2512,6 +2512,85 @@
     }
   }
 
+  function formatBackendEndpointSummary(context = {}) {
+    if (context && typeof context.summary === 'string' && context.summary.trim().length) {
+      return context.summary.trim();
+    }
+    const endpoint =
+      context && typeof context.endpoint === 'string' && context.endpoint.trim().length
+        ? context.endpoint.trim()
+        : context && typeof context.url === 'string' && context.url.trim().length
+          ? context.url.trim()
+          : '';
+    const method =
+      context && typeof context.method === 'string' && context.method.trim().length
+        ? context.method.trim().toUpperCase()
+        : '';
+    const status =
+      context && Number.isFinite(context.status)
+        ? context.status
+        : undefined;
+    const location = endpoint ? (method ? `${method} ${endpoint}` : endpoint) : '';
+    if (location && status !== undefined) {
+      return `${location} → status ${status}`;
+    }
+    if (location) {
+      return location;
+    }
+    if (status !== undefined) {
+      return `status ${status}`;
+    }
+    return '';
+  }
+
+  function deriveBackendMessageFromDetail(detail, fallbackMessage) {
+    const fallback = typeof fallbackMessage === 'string' && fallbackMessage.trim().length ? fallbackMessage.trim() : '';
+    if (detail && typeof detail.message === 'string' && detail.message.trim().length) {
+      return detail.message.trim();
+    }
+    const summary = formatBackendEndpointSummary({
+      summary: detail && typeof detail.summary === 'string' ? detail.summary : undefined,
+      method: detail?.method,
+      endpoint: detail?.endpoint,
+      status: Number.isFinite(detail?.status) ? detail.status : undefined,
+    });
+    const errorText = detail && typeof detail.error === 'string' && detail.error.trim().length ? detail.error.trim() : '';
+    const extras = [];
+    if (summary) {
+      extras.push(summary);
+    }
+    if (errorText && (!summary || errorText !== summary)) {
+      extras.push(errorText);
+    }
+    if (!extras.length) {
+      return fallback;
+    }
+    if (!fallback) {
+      return extras.join(' — ');
+    }
+    return `${fallback} (${extras.join(' — ')})`;
+  }
+
+  function dispatchScoreSyncEvent(type, detail = {}) {
+    if (typeof globalScope.dispatchEvent !== 'function') {
+      return;
+    }
+    const eventName = `infinite-rails:${type}`;
+    if (typeof globalScope.CustomEvent === 'function') {
+      globalScope.dispatchEvent(new globalScope.CustomEvent(eventName, { detail }));
+      return;
+    }
+    if (typeof globalScope.Event === 'function') {
+      const event = new globalScope.Event(eventName);
+      try {
+        Object.defineProperty(event, 'detail', { value: detail, enumerable: true });
+      } catch (error) {
+        event.detail = detail; // eslint-disable-line no-param-reassign
+      }
+      globalScope.dispatchEvent(event);
+    }
+  }
+
   function buildIdentityPayload(identity) {
     const payload = {
       googleId: identity.googleId,
@@ -2553,12 +2632,38 @@
         body: JSON.stringify(payload),
       });
       if (!response.ok) {
-        throw new Error(`Request failed with status ${response.status}`);
+        const failure = new Error(`Request failed with status ${response.status}`);
+        failure.status = response.status;
+        failure.endpoint = url;
+        failure.method = 'POST';
+        throw failure;
       }
-      updateScoreboardStatus(`Signed in as ${identity.name}. Leaderboard sync active.`);
+      const successMessage = `Signed in as ${identity.name}. Leaderboard sync active.`;
+      updateScoreboardStatus(successMessage, { offline: false });
+      dispatchScoreSyncEvent('score-sync-restored', {
+        source: 'identity',
+        message: successMessage,
+      });
     } catch (error) {
       console.warn('Failed to sync identity with leaderboard', error);
-      updateScoreboardStatus(`Signed in as ${identity.name}. Sync failed — storing locally.`);
+      const statusCode = Number.isFinite(error?.status) ? error.status : undefined;
+      const endpoint = typeof error?.endpoint === 'string' && error.endpoint.trim().length ? error.endpoint.trim() : url;
+      const method = typeof error?.method === 'string' && error.method.trim().length ? error.method.trim() : 'POST';
+      const summary = formatBackendEndpointSummary({ method, endpoint, status: statusCode });
+      const failureMessageBase = `Signed in as ${identity.name}. Leaderboard user sync failed`;
+      const failureMessage = summary
+        ? `${failureMessageBase} — ${summary}. Storing locally.`
+        : `${failureMessageBase}. Storing locally.`;
+      updateScoreboardStatus(failureMessage, { offline: true });
+      dispatchScoreSyncEvent('score-sync-offline', {
+        source: 'identity',
+        reason: 'user-sync',
+        message: failureMessage,
+        method: method.toUpperCase(),
+        endpoint,
+        status: statusCode,
+        error: typeof error?.message === 'string' ? error.message : undefined,
+      });
     }
   }
 
@@ -2593,26 +2698,29 @@
     globalScope.addEventListener('infinite-rails:score-sync-offline', (event) => {
       const detail = event?.detail ?? {};
       const fallback = 'Leaderboard offline — runs stored locally until connection returns.';
-      const message =
-        typeof detail.message === 'string' && detail.message.trim().length ? detail.message.trim() : fallback;
-      updateScoreboardStatus(message);
+      const message = deriveBackendMessageFromDetail(detail, fallback);
+      updateScoreboardStatus(message, { offline: true });
+      bootstrapOverlay.setDiagnostic('backend', {
+        status: 'error',
+        message,
+      });
     });
 
     globalScope.addEventListener('infinite-rails:score-sync-restored', (event) => {
       const detail = event?.detail ?? {};
-      if (typeof detail.message === 'string' && detail.message.trim().length) {
-        updateScoreboardStatus(detail.message.trim());
-        return;
+      let fallback = 'Leaderboard connection restored.';
+      if (identityState.apiBaseUrl) {
+        const activeIdentity = identityState.identity ?? null;
+        fallback = activeIdentity?.googleId
+          ? `Signed in as ${activeIdentity.name}. Leaderboard sync active.`
+          : 'Leaderboard connected — sign in to publish your run.';
       }
-      if (!identityState.apiBaseUrl) {
-        return;
-      }
-      const activeIdentity = identityState.identity ?? null;
-      if (activeIdentity?.googleId) {
-        updateScoreboardStatus(`Signed in as ${activeIdentity.name}. Leaderboard sync active.`);
-      } else {
-        updateScoreboardStatus('Leaderboard connected — sign in to publish your run.');
-      }
+      const message = deriveBackendMessageFromDetail(detail, fallback);
+      updateScoreboardStatus(message, { offline: false });
+      bootstrapOverlay.setDiagnostic('backend', {
+        status: 'ok',
+        message,
+      });
     });
   }
 
