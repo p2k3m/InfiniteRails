@@ -2806,8 +2806,14 @@
     });
   }
 
-  const THREE_SCRIPT_URLS = [...createAssetUrlCandidates('vendor/three.min.js')];
-  const GLTF_LOADER_URLS = [...createAssetUrlCandidates('vendor/GLTFLoader.js')];
+  const THREE_SCRIPT_URL = (() => {
+    const candidates = createAssetUrlCandidates('vendor/three.min.js');
+    return candidates.length ? candidates[0] : null;
+  })();
+  const GLTF_LOADER_URL = (() => {
+    const candidates = createAssetUrlCandidates('vendor/GLTFLoader.js');
+    return candidates.length ? candidates[0] : null;
+  })();
 
   let hasReportedThreeLoadFailure = false;
 
@@ -2893,6 +2899,19 @@
       }
       return null;
     }
+
+    function reportThreeFailure(error, context = {}) {
+      try {
+        if (typeof reportThreeLoadFailure === 'function') {
+          reportThreeLoadFailure(error, context);
+        }
+      } catch (reportError) {
+        if (scope?.console?.warn) {
+          scope.console.warn('Failed to report Three.js load failure.', reportError);
+        }
+      }
+    }
+
     try {
       const existingThree = resolveThreeFromScope();
       if (existingThree) {
@@ -2903,21 +2922,6 @@
     }
     if (threeLoaderPromise) {
       return threeLoaderPromise;
-    }
-
-    function normaliseUrlForComparison(url) {
-      if (!url) {
-        return '';
-      }
-      try {
-        const base = scope?.location?.href
-          || (typeof document !== 'undefined' && document.baseURI)
-          || documentRef?.baseURI
-          || undefined;
-        return new URL(url, base).href;
-      } catch (error) {
-        return url;
-      }
     }
 
     function getPreloadedThreeScript() {
@@ -2932,76 +2936,44 @@
       }
     }
 
-    function loadThreeFromCandidates({ startIndex = 0, exclude = [] } = {}) {
-      return new Promise((resolve, reject) => {
-        const attemptedUrls = [];
-        const encounteredErrors = [];
-        const attempt = (index) => {
-          let resolvedThree = null;
+    function loadThreeScript() {
+      if (!THREE_SCRIPT_URL) {
+        const missingUrlError = new Error('Three.js asset URL is not configured.');
+        reportThreeFailure(missingUrlError, { reason: 'missing-url' });
+        return Promise.reject(missingUrlError);
+      }
+      return loadScript(THREE_SCRIPT_URL, {
+        'data-three-bootstrap': 'true',
+      })
+        .then(() => {
+          let resolvedThreeAfterLoad = null;
           try {
-            resolvedThree = resolveThreeFromScope();
+            resolvedThreeAfterLoad = resolveThreeFromScope();
           } catch (error) {
-            reject(error);
-            return;
+            throw error;
           }
-          if (resolvedThree) {
-            resolve(resolvedThree);
-            return;
+          if (resolvedThreeAfterLoad) {
+            return resolvedThreeAfterLoad;
           }
-          if (index >= THREE_SCRIPT_URLS.length) {
-            const failureError = new Error('Unable to load Three.js from bundled sources.');
-            if (encounteredErrors.length > 0) {
-              failureError.cause = encounteredErrors[encounteredErrors.length - 1];
-              failureError.errors = [...encounteredErrors];
-            }
-            failureError.attemptedUrls = [...attemptedUrls];
-            reportThreeLoadFailure(failureError, {
-              attemptedUrls: failureError.attemptedUrls,
-              errors: encounteredErrors.map((err) => err?.message ?? String(err)),
-            });
-            reject(failureError);
-            return;
+          const exposureError = new Error('Three.js script loaded without exposing THREE.');
+          reportThreeFailure(exposureError, { reason: 'no-global', url: THREE_SCRIPT_URL });
+          throw exposureError;
+        })
+        .catch((error) => {
+          if (error?.code === 'duplicate-three-global' || error?.message === 'Three.js script loaded without exposing THREE.') {
+            throw error;
           }
-          const candidate = THREE_SCRIPT_URLS[index];
-          const normalisedCandidate = normaliseUrlForComparison(candidate);
-          if (exclude.includes(normalisedCandidate)) {
-            attempt(index + 1);
-            return;
+          const failureError = new Error(`Unable to load Three.js from ${THREE_SCRIPT_URL}.`);
+          if (error && failureError !== error) {
+            failureError.cause = error;
           }
-          attemptedUrls.push(normalisedCandidate);
-          const attrs = {
-            'data-three-fallback': 'true',
-            'data-three-fallback-index': String(index),
-          };
-          loadScript(candidate, attrs)
-            .then(() => {
-              let resolvedThreeAfterLoad = null;
-              try {
-                resolvedThreeAfterLoad = resolveThreeFromScope();
-              } catch (error) {
-                reject(error);
-                return;
-              }
-              if (resolvedThreeAfterLoad) {
-                resolve(resolvedThreeAfterLoad);
-              } else {
-                const exposureError = new Error('Three.js script loaded without exposing THREE.');
-                encounteredErrors.push(exposureError);
-                attempt(index + 1);
-              }
-            })
-            .catch((error) => {
-              const doc = typeof document !== 'undefined' ? document : scope.document || documentRef;
-              const failingElement = doc?.querySelector?.(`script[data-three-fallback-index="${index}"]`);
-              if (failingElement?.setAttribute) {
-                failingElement.setAttribute('data-three-fallback-error', 'true');
-              }
-              encounteredErrors.push(error);
-              attempt(index + 1);
-            });
-        };
-        attempt(startIndex);
-      });
+          const context = { reason: 'load-failed', url: THREE_SCRIPT_URL };
+          if (error?.message && failureError !== error) {
+            context.error = error.message;
+          }
+          reportThreeFailure(failureError, context);
+          throw failureError;
+        });
     }
 
     function waitForPreloadedThree() {
@@ -3053,12 +3025,7 @@
     try {
       const preloadPromise = waitForPreloadedThree();
       if (preloadPromise) {
-        const excluded = [];
-        const preloadedScript = getPreloadedThreeScript();
-        if (preloadedScript?.src) {
-          excluded.push(normaliseUrlForComparison(preloadedScript.src));
-        }
-        threeLoaderPromise = preloadPromise.catch(() => loadThreeFromCandidates({ startIndex: 0, exclude: excluded }));
+        threeLoaderPromise = preloadPromise.catch(() => loadThreeScript());
         return threeLoaderPromise;
       }
     } catch (error) {
@@ -3066,7 +3033,7 @@
       return threeLoaderPromise;
     }
 
-    threeLoaderPromise = loadThreeFromCandidates();
+    threeLoaderPromise = loadThreeScript();
     return threeLoaderPromise;
   }
 
@@ -3083,34 +3050,29 @@
     if (gltfLoaderPromise) {
       return gltfLoaderPromise;
     }
-    gltfLoaderPromise = new Promise((resolve, reject) => {
-      const attempt = (index) => {
+    if (!GLTF_LOADER_URL) {
+      return Promise.reject(new Error('GLTFLoader asset URL is not configured.'));
+    }
+    gltfLoaderPromise = loadScript(GLTF_LOADER_URL, {
+      'data-gltfloader': 'true',
+    })
+      .then(() => {
         if (scope.THREE?.GLTFLoader) {
-          resolve(scope.THREE.GLTFLoader);
-          return;
+          return scope.THREE.GLTFLoader;
         }
-        if (index >= GLTF_LOADER_URLS.length) {
-          reject(new Error('Unable to load GLTFLoader sources.'));
-          return;
+        throw new Error('GLTFLoader script loaded but did not register the loader.');
+      })
+      .catch((error) => {
+        gltfLoaderPromise = null;
+        if (error?.message === 'GLTFLoader script loaded but did not register the loader.') {
+          throw error;
         }
-        const url = GLTF_LOADER_URLS[index];
-        loadScript(url, {
-          'data-gltfloader-fallback': 'true',
-          'data-gltfloader-index': String(index),
-        })
-          .then(() => {
-            if (scope.THREE?.GLTFLoader) {
-              resolve(scope.THREE.GLTFLoader);
-            } else {
-              attempt(index + 1);
-            }
-          })
-          .catch(() => {
-            attempt(index + 1);
-          });
-      };
-      attempt(0);
-    });
+        const failureError = new Error(`Unable to load GLTFLoader from ${GLTF_LOADER_URL}.`);
+        if (error && failureError !== error) {
+          failureError.cause = error;
+        }
+        throw failureError;
+      });
     return gltfLoaderPromise;
   }
   const nameDisplayEl = documentRef?.getElementById('userNameDisplay') ?? null;

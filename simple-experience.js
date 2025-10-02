@@ -638,7 +638,6 @@
 
   const DIMENSION_LOOT_TABLES = freezeDimensionLootTables(DIMENSION_LOOT_TABLE_SOURCE);
 
-  const GLTF_LOADER_URLS = ['vendor/GLTFLoader.js'];
 
   const assetResolver =
     (typeof window !== 'undefined' && window.InfiniteRailsAssetResolver) ||
@@ -669,6 +668,8 @@
       const candidates = createAssetUrlCandidates(relativePath);
       return candidates.length ? candidates[0] : relativePath;
     });
+
+  const GLTF_LOADER_URL = resolveAssetUrl('vendor/GLTFLoader.js');
 
   const RECIPE_UNLOCK_STORAGE_KEY = 'infinite-rails-recipe-unlocks';
 
@@ -958,14 +959,6 @@
     });
   }
 
-  function tryLoadGltfLoader(index = 0) {
-    if (index >= GLTF_LOADER_URLS.length) {
-      return Promise.reject(new Error('Unable to load any GLTFLoader sources.'));
-    }
-    const url = GLTF_LOADER_URLS[index];
-    return loadExternalScript(url).catch(() => tryLoadGltfLoader(index + 1));
-  }
-
   function ensureGltfLoader(THREE) {
     if (!THREE) {
       return Promise.reject(new Error('Three.js is unavailable; cannot initialise GLTFLoader.'));
@@ -975,7 +968,10 @@
     }
     if (!cachedGltfLoaderPromise) {
       const scope = typeof window !== 'undefined' ? window : globalThis;
-      cachedGltfLoaderPromise = tryLoadGltfLoader()
+      if (!GLTF_LOADER_URL) {
+        return Promise.reject(new Error('GLTFLoader asset URL is not configured.'));
+      }
+      cachedGltfLoaderPromise = loadExternalScript(GLTF_LOADER_URL)
         .then(() => {
           if (!THREE.GLTFLoader && scope?.GLTFLoaderModule?.GLTFLoader) {
             THREE.GLTFLoader = scope.GLTFLoaderModule.GLTFLoader;
@@ -987,7 +983,14 @@
         })
         .catch((error) => {
           cachedGltfLoaderPromise = null;
-          throw error;
+          if (error?.message === 'GLTFLoader script loaded but did not register the loader.') {
+            throw error;
+          }
+          const failureError = new Error(`Unable to load GLTFLoader from ${GLTF_LOADER_URL}.`);
+          if (error && failureError !== error) {
+            failureError.cause = error;
+          }
+          throw failureError;
         });
     }
     return cachedGltfLoaderPromise;

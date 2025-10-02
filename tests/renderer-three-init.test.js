@@ -17,7 +17,7 @@ if (ensureThreeStart === -1 || ensureThreeEnd === -1 || ensureThreeEnd <= ensure
 const ensureThreeSource = scriptSource.slice(ensureThreeStart, ensureThreeEnd);
 
 const loadScriptStart = scriptSource.indexOf('function loadScript(');
-const loadScriptEnd = scriptSource.indexOf('const THREE_SCRIPT_URLS', loadScriptStart);
+const loadScriptEnd = scriptSource.indexOf('const THREE_SCRIPT_URL', loadScriptStart);
 if (loadScriptStart === -1 || loadScriptEnd === -1 || loadScriptEnd <= loadScriptStart) {
   throw new Error('Failed to locate loadScript definition in script.js');
 }
@@ -25,20 +25,20 @@ const loadScriptSource = scriptSource.slice(loadScriptStart, loadScriptEnd);
 
 function instantiateEnsureThree({
   loadScript,
-  scriptUrls = [],
+  scriptUrl = 'vendor/three.min.js',
   documentStub,
   reportThreeLoadFailure = () => {},
 }) {
   const factory = new Function(
     'loadScript',
-    'THREE_SCRIPT_URLS',
+    'THREE_SCRIPT_URL',
     'document',
     'reportThreeLoadFailure',
     "'use strict'; let threeLoaderPromise = null;" +
       ensureThreeSource +
       '\n  return { ensureThree, resetLoader: () => { threeLoaderPromise = null; } };'
   );
-  return factory(loadScript, scriptUrls, documentStub, reportThreeLoadFailure);
+  return factory(loadScript, scriptUrl, documentStub, reportThreeLoadFailure);
 }
 
 function instantiateLoadScript({ documentStub, documentRef = null, globalScopeStub = {} } = {}) {
@@ -210,7 +210,7 @@ describe('default renderer Three.js bootstrap', () => {
     const loadScript = vi.fn();
     const { ensureThree, resetLoader } = instantiateEnsureThree({
       loadScript,
-      scriptUrls: ['local.js', 'cdn-one.js'],
+      scriptUrl: 'vendor/three.min.js',
       documentStub,
     });
 
@@ -237,7 +237,7 @@ describe('default renderer Three.js bootstrap', () => {
 
     const { ensureThree, resetLoader } = instantiateEnsureThree({
       loadScript,
-      scriptUrls: ['vendor/three.min.js'],
+      scriptUrl: 'vendor/three.min.js',
       documentStub,
       reportThreeLoadFailure,
     });
@@ -255,56 +255,35 @@ describe('default renderer Three.js bootstrap', () => {
     resetLoader();
   });
 
-  it('attempts bundled sources sequentially and annotates failures', async () => {
+  it('loads the configured Three.js bundle once and exposes the global THREE', async () => {
     const scope = {};
     global.window = scope;
 
-    const failingScriptElement = { setAttribute: vi.fn() };
     const documentStub = {
       querySelectorAll: () => [],
-      querySelector: () => failingScriptElement,
+      querySelector: () => null,
     };
 
-    const loadScript = vi
-      .fn()
-      .mockImplementationOnce(() => Promise.reject(new Error('network error')))
-      .mockImplementationOnce(() => {
-        scope.THREE = { marker: 'loaded' };
-        return Promise.resolve({});
-      });
+    const loadScript = vi.fn(() => {
+      scope.THREE = { marker: 'loaded' };
+      return Promise.resolve({});
+    });
 
-    const scriptUrls = ['vendor/three.min.js', 'vendor/three-alt.min.js'];
     const { ensureThree, resetLoader } = instantiateEnsureThree({
       loadScript,
-      scriptUrls,
+      scriptUrl: 'vendor/three.min.js',
       documentStub,
     });
 
     const result = await ensureThree();
 
-    expect(loadScript).toHaveBeenCalledTimes(2);
-    expect(loadScript).toHaveBeenNthCalledWith(
-      1,
-      scriptUrls[0],
-      expect.objectContaining({
-        'data-three-fallback': 'true',
-        'data-three-fallback-index': '0',
-      })
-    );
-    expect(loadScript).toHaveBeenNthCalledWith(
-      2,
-      scriptUrls[1],
-      expect.objectContaining({
-        'data-three-fallback': 'true',
-        'data-three-fallback-index': '1',
-      })
+    expect(loadScript).toHaveBeenCalledTimes(1);
+    expect(loadScript).toHaveBeenCalledWith(
+      'vendor/three.min.js',
+      expect.objectContaining({ 'data-three-bootstrap': 'true' })
     );
     expect(result).toEqual(scope.THREE);
     expect(scope.THREE_GLOBAL).toBe(scope.THREE);
-    expect(failingScriptElement.setAttribute).toHaveBeenCalledWith(
-      'data-three-fallback-error',
-      'true'
-    );
     resetLoader();
   });
 
@@ -322,17 +301,17 @@ describe('default renderer Three.js bootstrap', () => {
 
     const { ensureThree, resetLoader } = instantiateEnsureThree({
       loadScript,
-      scriptUrls: ['vendor/three.min.js'],
+      scriptUrl: 'vendor/three.min.js',
       documentStub,
       reportThreeLoadFailure,
     });
 
-    await expect(ensureThree()).rejects.toThrow('Unable to load Three.js from bundled sources.');
+    await expect(ensureThree()).rejects.toThrow('Unable to load Three.js from vendor/three.min.js.');
     expect(reportThreeLoadFailure).toHaveBeenCalledTimes(1);
     const [errorArg, contextArg] = reportThreeLoadFailure.mock.calls[0];
     expect(errorArg).toBeInstanceOf(Error);
-    expect(contextArg.attemptedUrls).toEqual(['vendor/three.min.js']);
-    expect(Array.isArray(contextArg.errors)).toBe(true);
+    expect(errorArg.message).toBe('Unable to load Three.js from vendor/three.min.js.');
+    expect(contextArg).toMatchObject({ reason: 'load-failed', url: 'vendor/three.min.js', error: 'offline' });
     resetLoader();
   });
 
