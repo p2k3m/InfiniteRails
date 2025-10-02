@@ -7,6 +7,7 @@
     accent: '#b5b5b5',
   };
   const BLOCK_SIZE = 1;
+  const TEXTURE_PACK_ERROR_NOTICE_THRESHOLD = 3;
   const MIN_COLUMN_HEIGHT = 1;
   const MAX_COLUMN_HEIGHT = 6;
   const MAX_TERRAIN_VOXELS = WORLD_SIZE * WORLD_SIZE * MAX_COLUMN_HEIGHT;
@@ -1212,6 +1213,14 @@
       this.defaultVoxelTexturePalettes = new Map();
       this.textureLoader = null;
       this.pendingTextureLoads = new Map();
+      this.texturePackErrorCount = 0;
+      this.texturePackNoticeShown = false;
+      this.texturePackErrorNoticeThreshold = Math.max(
+        1,
+        Number.isFinite(options.texturePackErrorNoticeThreshold)
+          ? Math.floor(options.texturePackErrorNoticeThreshold)
+          : TEXTURE_PACK_ERROR_NOTICE_THRESHOLD,
+      );
       this.minColumnHeight = MIN_COLUMN_HEIGHT;
       const requestedMaxColumnHeight = Number.isFinite(options.maxColumnHeight)
         ? Math.floor(options.maxColumnHeight)
@@ -3896,10 +3905,51 @@
       texture.needsUpdate = true;
     }
 
+    noteTexturePackFallback(reason = 'unknown', context = {}) {
+      this.texturePackErrorCount = (this.texturePackErrorCount || 0) + 1;
+      this.emitGameEvent('texture-pack-fallback', {
+        reason,
+        failures: this.texturePackErrorCount,
+        key: context.key || null,
+        url: context.url || null,
+      });
+      if (
+        this.texturePackNoticeShown ||
+        this.texturePackErrorCount < this.texturePackErrorNoticeThreshold
+      ) {
+        return;
+      }
+      const message =
+        'Texture pack offline — using procedural colours until streaming recovers.';
+      if (typeof console !== 'undefined' && typeof console.error === 'function') {
+        console.error(message, {
+          failures: this.texturePackErrorCount,
+          reason,
+          key: context.key || null,
+          url: context.url || null,
+        });
+      }
+      if (this.playerHintEl) {
+        this.playerHintEl.textContent = message;
+        this.playerHintEl.classList?.add?.('visible');
+        this.playerHintEl.setAttribute?.('data-variant', 'warning');
+      }
+      if (this.footerStatusEl) {
+        this.footerStatusEl.textContent = message;
+      }
+      if (this.footerEl) {
+        this.footerEl.dataset.state = 'warning';
+      }
+      this.lastHintMessage = message;
+      this.texturePackNoticeShown = true;
+    }
+
     loadExternalVoxelTexture(key) {
       const sources = this.getExternalTextureSources(key);
       if (!sources.length) {
-        return null;
+        const fallback = this.ensureProceduralTexture(key);
+        this.noteTexturePackFallback('missing-sources', { key });
+        return Promise.resolve(fallback);
       }
       if (this.pendingTextureLoads.has(key)) {
         return this.pendingTextureLoads.get(key);
@@ -3922,6 +3972,10 @@
               `Falling back to default ${key} texture${lastUrl} because external sources failed.`,
             );
           }
+          this.noteTexturePackFallback('fallback-texture', {
+            key,
+            url: options.url || null,
+          });
         } else if (!options.silent) {
           console.warn(`No procedural fallback texture is available for ${key}.`);
         }
