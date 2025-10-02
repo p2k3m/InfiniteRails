@@ -982,6 +982,51 @@
     bootstrapOverlay.logEvent(scope, message, payload);
   }
 
+  function presentCriticalErrorOverlay({
+    title = 'Something went wrong',
+    message = 'An unexpected error occurred. Reload to try again.',
+    diagnosticScope = 'renderer',
+    diagnosticStatus = 'error',
+    diagnosticMessage = message,
+    logScope = diagnosticScope,
+    logMessage = diagnosticMessage,
+    logLevel = 'error',
+    detail = null,
+    timestamp = null,
+  } = {}) {
+    if (typeof bootstrapOverlay?.showError === 'function') {
+      try {
+        bootstrapOverlay.showError({ title, message });
+      } catch (overlayError) {
+        if (globalScope?.console?.warn) {
+          globalScope.console.warn('Unable to display critical error overlay.', overlayError);
+        }
+      }
+    }
+    if (
+      diagnosticScope &&
+      typeof bootstrapOverlay?.setDiagnostic === 'function'
+    ) {
+      try {
+        bootstrapOverlay.setDiagnostic(diagnosticScope, {
+          status: diagnosticStatus,
+          message: diagnosticMessage,
+        });
+      } catch (diagnosticError) {
+        if (globalScope?.console?.warn) {
+          globalScope.console.warn('Unable to update diagnostic status for critical error.', diagnosticError);
+        }
+      }
+    }
+    if (logScope && typeof logDiagnosticsEvent === 'function') {
+      logDiagnosticsEvent(logScope, logMessage, {
+        level: logLevel,
+        detail,
+        timestamp: Number.isFinite(timestamp) ? timestamp : undefined,
+      });
+    }
+  }
+
   function formatAssetLogLabel(detail) {
     const kind = typeof detail?.kind === 'string' && detail.kind.trim().length ? detail.kind.trim() : 'asset';
     const key = typeof detail?.key === 'string' && detail.key.trim().length ? detail.key.trim() : null;
@@ -1166,17 +1211,30 @@
           : keyLabel
             ? `Asset load failure detected for ${keyLabel}.`
             : 'Critical asset failed to load.';
-      bootstrapOverlay.setDiagnostic('assets', {
-        status: 'warning',
-        message: friendly,
-      });
-      if (typeof logDiagnosticsEvent === 'function') {
-        logDiagnosticsEvent('assets', friendly, {
-          level: 'error',
-          detail,
-          timestamp: Number.isFinite(detail?.timestamp) ? detail.timestamp : undefined,
-        });
+      const failureCount = Number.isFinite(detail?.failureCount) ? detail.failureCount : null;
+      const errorMessage =
+        typeof detail?.errorMessage === 'string' && detail.errorMessage.trim().length
+          ? detail.errorMessage.trim()
+          : null;
+      const extraParts = [];
+      if (failureCount && failureCount > 1) {
+        extraParts.push(`Attempts: ${failureCount}`);
       }
+      if (errorMessage && errorMessage !== friendly) {
+        extraParts.push(errorMessage);
+      }
+      const overlayMessage = extraParts.length ? `${friendly} — ${extraParts.join(' — ')}` : friendly;
+      presentCriticalErrorOverlay({
+        title: 'Assets failed to load',
+        message: overlayMessage,
+        diagnosticScope: 'assets',
+        diagnosticStatus: 'error',
+        diagnosticMessage: friendly,
+        logScope: 'assets',
+        logMessage: friendly,
+        detail,
+        timestamp: Number.isFinite(detail?.timestamp) ? detail.timestamp : undefined,
+      });
       clearAssetLoadingIndicatorByKey(detail?.key ?? detail?.originalKey);
     });
     globalScope.addEventListener('infinite-rails:asset-recovery-prompt', (event) => {
@@ -1185,17 +1243,17 @@
         typeof detail?.message === 'string' && detail.message.trim().length
           ? detail.message.trim()
           : 'Critical assets failed to load after multiple attempts. Reload or retry to continue.';
-      bootstrapOverlay.setDiagnostic('assets', {
-        status: 'error',
+      presentCriticalErrorOverlay({
+        title: 'Restore missing assets',
         message,
+        diagnosticScope: 'assets',
+        diagnosticStatus: 'error',
+        diagnosticMessage: message,
+        logScope: 'assets',
+        logMessage: message,
+        detail,
+        timestamp: Number.isFinite(detail?.timestamp) ? detail.timestamp : undefined,
       });
-      if (typeof logDiagnosticsEvent === 'function') {
-        logDiagnosticsEvent('assets', message, {
-          level: 'error',
-          detail,
-          timestamp: Number.isFinite(detail?.timestamp) ? detail.timestamp : undefined,
-        });
-      }
     });
     globalScope.addEventListener('infinite-rails:asset-recovery-prompt-update', (event) => {
       const detail = event?.detail && typeof event.detail === 'object' ? event.detail : {};
@@ -1203,17 +1261,17 @@
         typeof detail?.message === 'string' && detail.message.trim().length
           ? detail.message.trim()
           : 'Retrying missing assets — results pending.';
-      bootstrapOverlay.setDiagnostic('assets', {
-        status: 'error',
+      presentCriticalErrorOverlay({
+        title: 'Asset recovery in progress',
         message,
+        diagnosticScope: 'assets',
+        diagnosticStatus: 'error',
+        diagnosticMessage: message,
+        logScope: 'assets',
+        logMessage: message,
+        detail,
+        timestamp: Number.isFinite(detail?.timestamp) ? detail.timestamp : undefined,
       });
-      if (typeof logDiagnosticsEvent === 'function') {
-        logDiagnosticsEvent('assets', message, {
-          level: 'error',
-          detail,
-          timestamp: Number.isFinite(detail?.timestamp) ? detail.timestamp : undefined,
-        });
-      }
     });
     globalScope.addEventListener('infinite-rails:asset-retry-requested', () => {
       bootstrapOverlay.setDiagnostic('assets', {
@@ -1310,35 +1368,127 @@
       }
       clearAssetLoadingIndicator(detail?.kind, detail?.key);
     });
+    globalScope.addEventListener('infinite-rails:audio-error', (event) => {
+      const detail = event?.detail && typeof event.detail === 'object' ? event.detail : {};
+      const fallbackName =
+        typeof detail?.resolvedName === 'string' && detail.resolvedName.trim().length
+          ? detail.resolvedName.trim()
+          : typeof detail?.requestedName === 'string' && detail.requestedName.trim().length
+            ? detail.requestedName.trim()
+            : null;
+      const fallbackMessage = fallbackName
+        ? `Audio sample "${fallbackName}" failed to play.`
+        : 'Audio playback issue detected.';
+      const baseMessage =
+        typeof detail?.message === 'string' && detail.message.trim().length
+          ? detail.message.trim()
+          : fallbackMessage;
+      const errorName =
+        typeof detail?.errorName === 'string' && detail.errorName.trim().length ? detail.errorName.trim() : null;
+      const errorMessage =
+        typeof detail?.errorMessage === 'string' && detail.errorMessage.trim().length
+          ? detail.errorMessage.trim()
+          : null;
+      const errorCode = typeof detail?.code === 'string' && detail.code.trim().length ? detail.code.trim() : null;
+      const extraParts = [];
+      if (errorName && errorMessage) {
+        extraParts.push(`${errorName}: ${errorMessage}`);
+      } else if (errorMessage) {
+        extraParts.push(errorMessage);
+      } else if (errorName) {
+        extraParts.push(errorName);
+      }
+      if (errorCode) {
+        extraParts.push(`Code: ${errorCode}`);
+      }
+      const overlayMessage = extraParts.length
+        ? `${baseMessage} — ${extraParts.join(' — ')}`
+        : baseMessage;
+      presentCriticalErrorOverlay({
+        title: 'Audio playback failed',
+        message: overlayMessage,
+        diagnosticScope: 'assets',
+        diagnosticStatus: 'error',
+        diagnosticMessage: baseMessage,
+        logScope: 'assets',
+        logMessage: baseMessage,
+        detail,
+        timestamp: Number.isFinite(detail?.timestamp) ? detail.timestamp : undefined,
+      });
+    });
     globalScope.addEventListener('infinite-rails:start-error', (event) => {
       const detail = event?.detail && typeof event.detail === 'object' ? event.detail : {};
-      const message =
+      const stage = typeof detail?.stage === 'string' && detail.stage.trim().length ? detail.stage.trim() : null;
+      const baseMessage =
         typeof detail?.message === 'string' && detail.message.trim().length
           ? detail.message.trim()
           : 'Renderer initialisation failed.';
-      if (typeof logDiagnosticsEvent === 'function') {
-        logDiagnosticsEvent('startup', message, {
-          level: 'error',
-          detail,
-          timestamp: Number.isFinite(detail?.timestamp) ? detail.timestamp : undefined,
-        });
+      const diagnosticMessage = stage && stage !== 'startup' ? `${baseMessage} (${stage})` : baseMessage;
+      const errorName =
+        typeof detail?.errorName === 'string' && detail.errorName.trim().length ? detail.errorName.trim() : null;
+      const errorMessage =
+        typeof detail?.errorMessage === 'string' && detail.errorMessage.trim().length
+          ? detail.errorMessage.trim()
+          : null;
+      const extraParts = [];
+      if (errorName && errorMessage) {
+        extraParts.push(`${errorName}: ${errorMessage}`);
+      } else if (errorMessage) {
+        extraParts.push(errorMessage);
       }
+      const overlayMessage = extraParts.length
+        ? `${diagnosticMessage} — ${extraParts.join(' — ')}`
+        : diagnosticMessage;
+      presentCriticalErrorOverlay({
+        title: 'Unable to start expedition',
+        message: overlayMessage,
+        diagnosticScope: 'renderer',
+        diagnosticStatus: 'error',
+        diagnosticMessage,
+        logScope: 'startup',
+        logMessage: diagnosticMessage,
+        detail,
+        timestamp: Number.isFinite(detail?.timestamp) ? detail.timestamp : undefined,
+      });
     });
     globalScope.addEventListener('infinite-rails:initialisation-error', (event) => {
       const detail = event?.detail && typeof event.detail === 'object' ? event.detail : {};
-      const stage = typeof detail?.stage === 'string' && detail.stage.trim().length ? detail.stage.trim() : 'startup';
+      const stage = typeof detail?.stage === 'string' && detail.stage.trim().length ? detail.stage.trim() : null;
       const baseMessage =
         typeof detail?.message === 'string' && detail.message.trim().length
           ? detail.message.trim()
           : 'Initialisation error encountered.';
-      const message = stage && stage !== 'startup' ? `${baseMessage} (${stage}).` : baseMessage;
-      if (typeof logDiagnosticsEvent === 'function') {
-        logDiagnosticsEvent('startup', message, {
-          level: 'error',
-          detail,
-          timestamp: Number.isFinite(detail?.timestamp) ? detail.timestamp : undefined,
-        });
+      const diagnosticMessage = stage && stage !== 'startup' ? `${baseMessage} (${stage})` : baseMessage;
+      const errorName =
+        typeof detail?.errorName === 'string' && detail.errorName.trim().length ? detail.errorName.trim() : null;
+      const reportedErrorMessage =
+        typeof detail?.errorMessage === 'string' && detail.errorMessage.trim().length
+          ? detail.errorMessage.trim()
+          : typeof detail?.error === 'string' && detail.error.trim().length
+            ? detail.error.trim()
+            : null;
+      const extraParts = [];
+      if (errorName && reportedErrorMessage) {
+        extraParts.push(`${errorName}: ${reportedErrorMessage}`);
+      } else if (reportedErrorMessage) {
+        extraParts.push(reportedErrorMessage);
+      } else if (errorName) {
+        extraParts.push(errorName);
       }
+      const overlayMessage = extraParts.length
+        ? `${diagnosticMessage} — ${extraParts.join(' — ')}`
+        : diagnosticMessage;
+      presentCriticalErrorOverlay({
+        title: 'Initialisation error detected',
+        message: overlayMessage,
+        diagnosticScope: 'renderer',
+        diagnosticStatus: 'error',
+        diagnosticMessage,
+        logScope: 'startup',
+        logMessage: diagnosticMessage,
+        detail,
+        timestamp: Number.isFinite(detail?.timestamp) ? detail.timestamp : undefined,
+      });
     });
     globalScope.addEventListener('infinite-rails:score-sync-offline', (event) => {
       const detail = event?.detail && typeof event.detail === 'object' ? event.detail : {};
