@@ -88,17 +88,27 @@ const DEFAULT_RECIPES = [
   },
 ];
 
+function normaliseItemKey(value) {
+  if (value === undefined || value === null) {
+    return '';
+  }
+  return String(value).trim().toLowerCase();
+}
+
 function normaliseSequence(sequence) {
   if (!Array.isArray(sequence)) {
     throw new TypeError('Crafting sequence must be an array.');
   }
-  return sequence.map((item) => String(item).trim().toLowerCase()).join('|');
+  return sequence.map((item) => normaliseItemKey(item)).join('|');
 }
 
 function buildIngredientCount(sequence = []) {
   const tally = new Map();
   sequence.forEach((itemId) => {
-    const key = String(itemId).trim().toLowerCase();
+    const key = normaliseItemKey(itemId);
+    if (!key) {
+      return;
+    }
     tally.set(key, (tally.get(key) || 0) + 1);
   });
   return tally;
@@ -114,9 +124,20 @@ function createOrderValidationMap(recipes = DEFAULT_RECIPES) {
 }
 
 function mapFromObject(source = {}) {
-  return new Map(
-    Object.entries(source).map(([key, value]) => [key, Number.isFinite(value) ? value : 0])
-  );
+  const map = new Map();
+  if (!source || typeof source !== 'object') {
+    return map;
+  }
+  Object.entries(source).forEach(([rawKey, rawValue]) => {
+    const key = normaliseItemKey(rawKey);
+    if (!key) {
+      return;
+    }
+    const parsed = Number(rawValue);
+    const quantity = Number.isFinite(parsed) ? Math.max(0, Math.floor(parsed)) : 0;
+    map.set(key, quantity);
+  });
+  return map;
 }
 
 function mapToObject(map) {
@@ -153,15 +174,19 @@ function stackHotbarItem(state, itemId, quantity) {
   if (!state || !state.hotbar) {
     throw new TypeError('A crafting state with a hotbar map is required.');
   }
+  const key = normaliseItemKey(itemId);
+  if (!key) {
+    return 0;
+  }
   const amount = Number(quantity);
   if (!Number.isFinite(amount) || amount <= 0) {
-    return state.hotbar.get(itemId) || 0;
+    return state.hotbar.get(key) || 0;
   }
-  const itemDef = ITEM_LIBRARY[itemId];
+  const itemDef = ITEM_LIBRARY[key];
   const itemLimit = itemDef ? Math.min(itemDef.stack, HOTBAR_STACK_LIMIT) : HOTBAR_STACK_LIMIT;
-  const existing = state.hotbar.get(itemId) || 0;
+  const existing = state.hotbar.get(key) || 0;
   const updated = Math.min(itemLimit, existing + amount);
-  state.hotbar.set(itemId, updated);
+  state.hotbar.set(key, updated);
   return updated;
 }
 
@@ -187,16 +212,24 @@ function evaluateIngredientAvailability(state, recipe) {
 
 function consumeIngredients(state, recipe) {
   recipe.sequence.forEach((itemId) => {
-    const available = state.inventory.get(itemId) || 0;
-    state.inventory.set(itemId, Math.max(0, available - 1));
+    const key = normaliseItemKey(itemId);
+    if (!key) {
+      return;
+    }
+    const available = state.inventory.get(key) || 0;
+    state.inventory.set(key, Math.max(0, available - 1));
   });
 }
 
 function addOutputToInventory(state, recipe) {
   const { item, quantity } = recipe.output;
-  const existing = state.inventory.get(item) || 0;
-  state.inventory.set(item, existing + quantity);
-  stackHotbarItem(state, item, quantity);
+  const key = normaliseItemKey(item);
+  if (!key) {
+    return;
+  }
+  const existing = state.inventory.get(key) || 0;
+  state.inventory.set(key, existing + quantity);
+  stackHotbarItem(state, key, quantity);
 }
 
 function sequencesShareIngredients(a = [], b = []) {

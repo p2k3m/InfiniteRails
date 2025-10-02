@@ -7429,13 +7429,19 @@
     }
 
     ensureEntityGroup(kind) {
-      const THREE = this.THREE;
-      if (!THREE || !kind) {
+      if (!kind) {
+        return null;
+      }
+      const THREE =
+        this.THREE ||
+        (typeof globalThis !== 'undefined' && globalThis.THREE ? globalThis.THREE : null) ||
+        (typeof window !== 'undefined' && window.THREE ? window.THREE : null);
+      if (!THREE || typeof THREE.Group !== 'function') {
         return null;
       }
       const property = `${kind}Group`;
       let group = this[property];
-      if (!group || typeof group.add !== 'function') {
+      if (!(group instanceof THREE.Group)) {
         group = new THREE.Group();
         group.name = `${kind.charAt(0).toUpperCase() + kind.slice(1)}Group`;
         this[property] = group;

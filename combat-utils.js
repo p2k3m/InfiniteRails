@@ -36,8 +36,11 @@
       const heightAccessor = normaliseDimensionAccessor(options.height ?? options.getHeight ?? 0);
       const chunkSize = Math.max(1, Math.floor(options.chunkSize ?? DEFAULT_CHUNK_SIZE));
       const perChunk = Math.max(1, Math.floor(options.perChunk ?? DEFAULT_PER_CHUNK));
-      const width = Math.max(1, Math.floor(widthAccessor()));
-      const height = Math.max(1, Math.floor(heightAccessor()));
+      const width = Math.max(0, Math.floor(widthAccessor()));
+      const height = Math.max(0, Math.floor(heightAccessor()));
+      if (width === 0 || height === 0) {
+        return 0;
+      }
       const chunkX = Math.max(1, Math.ceil(width / chunkSize));
       const chunkY = Math.max(1, Math.ceil(height / chunkSize));
       return chunkX * chunkY * perChunk;
