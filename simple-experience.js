@@ -1086,6 +1086,9 @@
       this.handMaterials = [];
       this.handMaterialsDynamic = true;
       this.handModelLoaded = false;
+      this.portalShaderFallbackActive = false;
+      this.lightingFallbackPending = false;
+      this.lightingFallbackActive = false;
       this.playerAvatar = null;
       this.playerMixer = null;
       this.playerIdleAction = null;
@@ -2887,30 +2890,8 @@
       this.camera.position.set(0, 0, 0);
       this.updateCameraFrustum(width, height);
 
-      this.hemiLight = new THREE.HemisphereLight(0xbddcff, 0x34502d, 0.9);
-      this.worldRoot.add(this.hemiLight);
-
-      this.sunLight = new THREE.DirectionalLight(0xffffff, 1.1);
-      this.sunLight.position.set(18, 32, 12);
-      this.sunLight.castShadow = true;
-      this.sunLight.shadow.mapSize.set(2048, 2048);
-      this.sunLight.shadow.camera.near = 0.5;
-      this.sunLight.shadow.camera.far = 160;
-      this.sunLight.shadow.camera.left = -60;
-      this.sunLight.shadow.camera.right = 60;
-      this.sunLight.shadow.camera.top = 60;
-      this.sunLight.shadow.camera.bottom = -60;
-      this.worldRoot.add(this.sunLight);
-      this.worldRoot.add(this.sunLight.target);
-
-      this.moonLight = new THREE.DirectionalLight(0x8ea2ff, 0.4);
-      this.moonLight.position.set(-32, 18, -20);
-      this.moonLight.castShadow = false;
-      this.worldRoot.add(this.moonLight);
-      this.worldRoot.add(this.moonLight.target);
-
-      this.ambientLight = new THREE.AmbientLight(0xffffff, 0.18);
-      this.worldRoot.add(this.ambientLight);
+      this.ensurePrimaryLights();
+      this.applyPendingLightingFallback();
 
       this.terrainGroup = new THREE.Group();
       this.railsGroup = new THREE.Group();
@@ -3262,6 +3243,119 @@
       return this.assetLoadLog.slice(-size);
     }
 
+    handlePortalShaderInitialisationFailure(error) {
+      if (this.portalShaderFallbackActive) {
+        return;
+      }
+      this.portalShaderFallbackActive = true;
+      this.lightingFallbackPending = true;
+      const consoleRef = typeof console !== 'undefined' ? console : null;
+      const warningMessage =
+        'Portal shader initialisation failed; falling back to a standard material and default lighting.';
+      if (consoleRef?.warn) {
+        consoleRef.warn(warningMessage, error);
+      } else if (consoleRef?.error) {
+        consoleRef.error(warningMessage, error);
+      }
+      const errorMessage =
+        typeof error?.message === 'string' && error.message.trim().length ? error.message.trim() : undefined;
+      this.emitGameEvent('shader-fallback', {
+        shader: 'portal',
+        reason: 'initialisation-error',
+        errorMessage,
+      });
+    }
+
+    applyPendingLightingFallback() {
+      if (!this.lightingFallbackPending || this.lightingFallbackActive) {
+        return;
+      }
+      this.ensurePrimaryLights();
+      const consoleRef = typeof console !== 'undefined' ? console : null;
+      if (consoleRef?.info) {
+        consoleRef.info('Activating simplified lighting fallback to preserve scene visibility.');
+      }
+      if (this.ambientLight) {
+        this.ambientLight.intensity = Math.max(0.35, this.ambientLight.intensity || 0);
+        if (typeof this.ambientLight.color?.set === 'function') {
+          this.ambientLight.color.set('#cfd8dc');
+        } else if (this.THREE?.Color) {
+          this.ambientLight.color = new this.THREE.Color('#cfd8dc');
+        }
+      }
+      if (this.hemiLight) {
+        this.hemiLight.intensity = Math.max(0.65, this.hemiLight.intensity || 0);
+      }
+      if (this.sunLight) {
+        this.sunLight.intensity = Math.max(0.85, this.sunLight.intensity || 0);
+      }
+      this.lightingFallbackActive = true;
+      this.lightingFallbackPending = false;
+      this.emitGameEvent('lighting-fallback-applied', { reason: 'shader-failure' });
+    }
+
+    ensurePrimaryLights() {
+      const THREE = this.THREE;
+      if (!THREE) {
+        return;
+      }
+      const root = this.worldRoot || this.scene;
+      if (!root || typeof root.add !== 'function') {
+        return;
+      }
+
+      if (!this.hemiLight) {
+        this.hemiLight = new THREE.HemisphereLight(0xbddcff, 0x34502d, 0.9);
+        this.hemiLight.name = 'SkyLight';
+      }
+      if (!this.hemiLight.parent) {
+        root.add(this.hemiLight);
+      }
+
+      if (!this.sunLight) {
+        this.sunLight = new THREE.DirectionalLight(0xffffff, 1.1);
+        this.sunLight.name = 'SunLight';
+        this.sunLight.castShadow = true;
+      }
+      this.sunLight.position.set(18, 32, 12);
+      this.sunLight.shadow.mapSize.set(2048, 2048);
+      this.sunLight.shadow.camera.near = 0.5;
+      this.sunLight.shadow.camera.far = 160;
+      this.sunLight.shadow.camera.left = -60;
+      this.sunLight.shadow.camera.right = 60;
+      this.sunLight.shadow.camera.top = 60;
+      this.sunLight.shadow.camera.bottom = -60;
+      if (!this.sunLight.parent) {
+        root.add(this.sunLight);
+      }
+      if (this.sunLight.target && this.sunLight.target.parent !== root) {
+        this.sunLight.target.position.set(0, 0, 0);
+        root.add(this.sunLight.target);
+      }
+
+      if (!this.moonLight) {
+        this.moonLight = new THREE.DirectionalLight(0x8ea2ff, 0.4);
+        this.moonLight.name = 'MoonLight';
+        this.moonLight.castShadow = false;
+      }
+      this.moonLight.position.set(-32, 18, -20);
+      if (!this.moonLight.parent) {
+        root.add(this.moonLight);
+      }
+      if (this.moonLight.target && this.moonLight.target.parent !== root) {
+        this.moonLight.target.position.set(0, 0, 0);
+        root.add(this.moonLight.target);
+      }
+
+      if (!this.ambientLight) {
+        this.ambientLight = new THREE.AmbientLight(0xffffff, 0.18);
+        this.ambientLight.name = 'AmbientFillLight';
+      }
+      if (!this.ambientLight.parent) {
+        root.add(this.ambientLight);
+      }
+    }
+
     createMaterials() {
       const THREE = this.THREE;
       const grassTexture = this.createVoxelTexture('grass', {
@@ -3303,34 +3397,49 @@
           roughness: 0.8,
           metalness: 0.1,
         }),
-        portal: new THREE.ShaderMaterial({
-          transparent: true,
-          depthWrite: false,
-          uniforms: {
-            uTime: { value: 0 },
-            uColorA: { value: new THREE.Color('#7f5af0') },
-            uColorB: { value: new THREE.Color('#2cb67d') },
-          },
-          vertexShader: `
-            varying vec2 vUv;
-            void main() {
-              vUv = uv;
-              gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-            }
-          `,
-          fragmentShader: `
-            uniform float uTime;
-            uniform vec3 uColorA;
-            uniform vec3 uColorB;
-            varying vec2 vUv;
-            void main() {
-              float swirl = sin((vUv.x + vUv.y + uTime * 0.7) * 6.2831) * 0.5 + 0.5;
-              float vignette = smoothstep(0.95, 0.35, distance(vUv, vec2(0.5)));
-              vec3 color = mix(uColorA, uColorB, swirl) * vignette;
-              gl_FragColor = vec4(color, vignette);
-            }
-          `,
-        }),
+        portal: (() => {
+          try {
+            return new THREE.ShaderMaterial({
+              transparent: true,
+              depthWrite: false,
+              uniforms: {
+                uTime: { value: 0 },
+                uColorA: { value: new THREE.Color('#7f5af0') },
+                uColorB: { value: new THREE.Color('#2cb67d') },
+              },
+              vertexShader: `
+                varying vec2 vUv;
+                void main() {
+                  vUv = uv;
+                  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                }
+              `,
+              fragmentShader: `
+                uniform float uTime;
+                uniform vec3 uColorA;
+                uniform vec3 uColorB;
+                varying vec2 vUv;
+                void main() {
+                  float swirl = sin((vUv.x + vUv.y + uTime * 0.7) * 6.2831) * 0.5 + 0.5;
+                  float vignette = smoothstep(0.95, 0.35, distance(vUv, vec2(0.5)));
+                  vec3 color = mix(uColorA, uColorB, swirl) * vignette;
+                  gl_FragColor = vec4(color, vignette);
+                }
+              `,
+            });
+          } catch (error) {
+            this.handlePortalShaderInitialisationFailure(error);
+            return new THREE.MeshStandardMaterial({
+              color: new THREE.Color('#7f5af0'),
+              emissive: new THREE.Color('#2cb67d'),
+              emissiveIntensity: 0.65,
+              roughness: 0.35,
+              metalness: 0.55,
+              transparent: true,
+              opacity: 0.85,
+            });
+          }
+        })(),
       };
       this.queueExternalTextureUpgrade('grass', materials.grass);
       this.queueExternalTextureUpgrade('dirt', materials.dirt);
@@ -9226,6 +9335,8 @@
 
     updateDayNightCycle() {
       const THREE = this.THREE;
+      this.ensurePrimaryLights();
+      this.applyPendingLightingFallback();
       if (!this.sunLight || !this.hemiLight || !THREE?.MathUtils) return;
       const cycle = (this.elapsed % DAY_LENGTH_SECONDS) / DAY_LENGTH_SECONDS;
       const sunAngle = cycle * Math.PI * 2;
@@ -9284,6 +9395,18 @@
       if (this.hemiLight.groundColor) {
         this.tmpColorB.copy(this.nightGroundColor).lerp(this.dayGroundColor, dayStrength);
         this.hemiLight.groundColor.copy(this.tmpColorB);
+      }
+
+      if (this.lightingFallbackActive) {
+        if (this.sunLight) {
+          this.sunLight.intensity = Math.max(this.sunLight.intensity, 0.85);
+        }
+        if (this.ambientLight) {
+          this.ambientLight.intensity = Math.max(this.ambientLight.intensity, 0.35);
+        }
+        if (this.hemiLight) {
+          this.hemiLight.intensity = Math.max(this.hemiLight.intensity, 0.65);
+        }
       }
 
       const horizonGlow = THREE.MathUtils.clamp(1 - Math.abs(sunElevation) * 1.6, 0, 1);

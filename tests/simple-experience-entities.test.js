@@ -95,7 +95,11 @@ function ensureSimpleExperienceLoaded() {
   simpleExperienceLoaded = true;
 }
 
-function createExperienceForTest() {
+function createExperienceForTest(options = {}) {
+  ensureSimpleExperienceLoaded();
+  if (typeof options.beforeCreate === 'function') {
+    options.beforeCreate();
+  }
   const canvas = createCanvasStub();
   const experience = window.SimpleExperience.create({ canvas, ui: {} });
   experience.canvas = canvas;
@@ -175,6 +179,65 @@ function createExperienceForTest() {
 
   return { experience, spawnTop };
 }
+
+describe('SimpleExperience lighting safeguards', () => {
+  it('ensures primary sunlight exists when missing', () => {
+    const { experience } = createExperienceForTest();
+    const root = new window.THREE.Group();
+    experience.scene = new window.THREE.Scene();
+    experience.scene.add(root);
+    experience.worldRoot = root;
+    experience.sunLight = null;
+    experience.hemiLight = null;
+    experience.moonLight = null;
+    experience.ambientLight = null;
+
+    experience.ensurePrimaryLights();
+
+    expect(experience.sunLight).toBeInstanceOf(window.THREE.DirectionalLight);
+    expect(root.children.includes(experience.sunLight)).toBe(true);
+    expect(experience.ambientLight).toBeInstanceOf(window.THREE.AmbientLight);
+  });
+
+  it('activates lighting fallback when portal shader creation fails', () => {
+    const failure = new Error('Shader failure for test');
+    const originalThreeGlobal = window.THREE_GLOBAL;
+    const failingThree = {
+      ...window.THREE,
+      ShaderMaterial: class FailingShaderMaterial {
+        constructor() {
+          throw failure;
+        }
+      },
+    };
+
+    let experience;
+    try {
+      ({ experience } = createExperienceForTest({
+        beforeCreate: () => {
+          window.THREE_GLOBAL = failingThree;
+        },
+      }));
+    } finally {
+      window.THREE_GLOBAL = originalThreeGlobal;
+    }
+
+    expect(experience.portalShaderFallbackActive).toBe(true);
+    expect(experience.materials.portal).toBeInstanceOf(window.THREE.MeshStandardMaterial);
+    expect(experience.lightingFallbackPending).toBe(true);
+
+    const root = new window.THREE.Group();
+    experience.scene = new window.THREE.Scene();
+    experience.scene.add(root);
+    experience.worldRoot = root;
+    experience.ensurePrimaryLights();
+    experience.applyPendingLightingFallback();
+
+    expect(experience.lightingFallbackActive).toBe(true);
+    expect(experience.ambientLight.intensity).toBeGreaterThanOrEqual(0.35);
+    expect(experience.sunLight.intensity).toBeGreaterThanOrEqual(0.85);
+  });
+});
 
 beforeAll(() => {
   ensureSimpleExperienceLoaded();
