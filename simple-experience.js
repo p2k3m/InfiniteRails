@@ -1255,6 +1255,7 @@
       this.firstRunTutorialShowBriefingOnDismiss = false;
       this.firstRunTutorialSeenCache = null;
       this.onFirstRunTutorialClose = this.handleFirstRunTutorialClose.bind(this);
+      this.onFirstRunTutorialKeyDown = this.handleFirstRunTutorialKeyDown.bind(this);
       this.assetFailureNotices = new Set();
       this.eventFailureNotices = new Set();
       this.boundEventDisposers = [];
@@ -2154,6 +2155,9 @@
       if (this.firstRunTutorialPrimaryButton) {
         this.firstRunTutorialPrimaryButton.addEventListener('click', this.onFirstRunTutorialClose);
       }
+      if (this.firstRunTutorialEl) {
+        this.firstRunTutorialEl.addEventListener('keydown', this.onFirstRunTutorialKeyDown);
+      }
       if (this.firstRunTutorialBackdrop) {
         this.firstRunTutorialBackdrop.addEventListener('click', this.onFirstRunTutorialClose);
       }
@@ -2320,6 +2324,21 @@
       const markSeen = this.firstRunTutorialMarkOnDismiss;
       const showBriefingAfter = this.firstRunTutorialShowBriefingOnDismiss;
       this.hideFirstRunTutorial({ markSeen, showBriefingAfter });
+    }
+
+    handleFirstRunTutorialKeyDown(event) {
+      if (!event) {
+        return;
+      }
+      const { key } = event;
+      if (key === 'Escape' || key === 'Esc') {
+        if (event.preventDefault) {
+          event.preventDefault();
+        }
+        const markSeen = this.firstRunTutorialMarkOnDismiss;
+        const showBriefingAfter = this.firstRunTutorialShowBriefingOnDismiss;
+        this.hideFirstRunTutorial({ markSeen, showBriefingAfter });
+      }
     }
 
     showBriefingOverlay() {
