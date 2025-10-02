@@ -1216,6 +1216,35 @@
 
     <div
       class="compose-overlay compose-overlay--global"
+      id="assetRecoveryOverlay"
+      hidden
+      aria-hidden="true"
+      data-mode="error"
+    >
+      <div
+        class="compose-overlay__dialog"
+        id="assetRecoveryDialog"
+        tabindex="-1"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="assetRecoveryTitle"
+        aria-describedby="assetRecoveryMessage"
+      >
+        <div class="compose-overlay__body">
+          <h3 class="compose-overlay__title" id="assetRecoveryTitle">Assets unavailable</h3>
+          <p class="compose-overlay__message" id="assetRecoveryMessage">
+            Critical models failed to stream in. Reload the page or retry the asset download to restore missing details.
+          </p>
+          <div class="compose-overlay__actions" id="assetRecoveryActions">
+            <button type="button" class="ghost compose-overlay__action" id="assetRecoveryRetry">Retry Assets</button>
+            <button type="button" class="ghost compose-overlay__action" id="assetRecoveryReload">Reload Page</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div
+      class="compose-overlay compose-overlay--global"
       id="globalOverlay"
       hidden
       aria-hidden="true"
