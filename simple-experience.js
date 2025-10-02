@@ -13438,7 +13438,7 @@
       };
       try {
         scope.dispatchEvent(
-          new CustomEvent('infinite-rails:start', {
+          new CustomEvent('infinite-rails:started', {
             detail: {
               mode: 'simple',
               timestamp: Date.now(),
