@@ -48,6 +48,304 @@
 
   loadInitialDebugModePreference();
 
+  const COLOR_MODE_STORAGE_KEY = 'infinite-rails-color-mode';
+  const colorModeState = {
+    preference: 'auto',
+    controls: [],
+    mediaQuery: null,
+    mediaListener: null,
+  };
+
+  function normaliseColorMode(value) {
+    if (value === 'light' || value === 'dark') {
+      return value;
+    }
+    return 'auto';
+  }
+
+  function getBodyElement() {
+    if (documentRef?.body) {
+      return documentRef.body;
+    }
+    if (typeof document !== 'undefined' && document.body) {
+      return document.body;
+    }
+    return null;
+  }
+
+  function loadStoredColorMode() {
+    if (!globalScope?.localStorage) {
+      return 'auto';
+    }
+    try {
+      const stored = globalScope.localStorage.getItem(COLOR_MODE_STORAGE_KEY);
+      if (!stored) {
+        return 'auto';
+      }
+      return normaliseColorMode(stored);
+    } catch (error) {
+      if (globalScope.console?.debug) {
+        globalScope.console.debug('Unable to load colour mode preference from storage.', error);
+      }
+      return 'auto';
+    }
+  }
+
+  function saveColorMode(preference) {
+    if (!globalScope?.localStorage) {
+      return;
+    }
+    try {
+      globalScope.localStorage.setItem(COLOR_MODE_STORAGE_KEY, preference);
+    } catch (error) {
+      if (globalScope.console?.debug) {
+        globalScope.console.debug('Unable to persist colour mode preference.', error);
+      }
+    }
+  }
+
+  function bindColorSchemeListener() {
+    if (colorModeState.mediaQuery || typeof globalScope?.matchMedia !== 'function') {
+      return;
+    }
+    try {
+      colorModeState.mediaQuery = globalScope.matchMedia('(prefers-color-scheme: dark)');
+    } catch (error) {
+      colorModeState.mediaQuery = null;
+      if (globalScope.console?.debug) {
+        globalScope.console.debug('Unable to create prefers-color-scheme media query.', error);
+      }
+    }
+    if (!colorModeState.mediaQuery) {
+      return;
+    }
+    const listener = (event) => {
+      if (colorModeState.preference === 'auto') {
+        applyColorMode('auto', { syncStorage: false, reason: 'media-change', event });
+      }
+    };
+    colorModeState.mediaListener = listener;
+    if (typeof colorModeState.mediaQuery.addEventListener === 'function') {
+      colorModeState.mediaQuery.addEventListener('change', listener);
+    } else if (typeof colorModeState.mediaQuery.addListener === 'function') {
+      colorModeState.mediaQuery.addListener(listener);
+    }
+  }
+
+  function resolveEffectiveColorMode(preference) {
+    if (preference !== 'auto') {
+      return preference;
+    }
+    const query = colorModeState.mediaQuery;
+    if (query) {
+      return query.matches ? 'dark' : 'light';
+    }
+    return 'dark';
+  }
+
+  function updateColorModeControls() {
+    const { controls, preference } = colorModeState;
+    if (!controls || !controls.length) {
+      return;
+    }
+    controls.forEach((input) => {
+      if (!input) {
+        return;
+      }
+      input.checked = input.value === preference;
+    });
+  }
+
+  function applyColorMode(preference, { syncStorage = true } = {}) {
+    const normalised = normaliseColorMode(preference);
+    colorModeState.preference = normalised;
+    if (normalised === 'auto') {
+      bindColorSchemeListener();
+    }
+    const body = getBodyElement();
+    if (body) {
+      body.setAttribute('data-color-mode-preference', normalised);
+      const effective = resolveEffectiveColorMode(normalised);
+      body.setAttribute('data-color-mode', effective);
+    }
+    updateColorModeControls();
+    if (syncStorage) {
+      saveColorMode(normalised);
+    }
+  }
+
+  function initColorModeControls() {
+    const body = getBodyElement();
+    if (body) {
+      const storedPreference = loadStoredColorMode();
+      applyColorMode(storedPreference, { syncStorage: false });
+    }
+    if (!documentRef) {
+      return;
+    }
+    const inputs = Array.from(documentRef.querySelectorAll('input[name="colorMode"]'));
+    colorModeState.controls = inputs;
+    if (!inputs.length) {
+      return;
+    }
+    inputs.forEach((input) => {
+      if (!input) {
+        return;
+      }
+      input.checked = input.value === colorModeState.preference;
+      input.addEventListener('change', (event) => {
+        if (!event?.target?.value) {
+          return;
+        }
+        applyColorMode(event.target.value);
+      });
+    });
+  }
+
+  const CAPTION_STORAGE_KEY = 'infinite-rails-subtitles-enabled';
+  const captionState = {
+    enabled: false,
+    overlay: null,
+    overlayText: null,
+    srRegion: null,
+    hideTimer: null,
+  };
+
+  function loadCaptionPreference() {
+    if (!globalScope?.localStorage) {
+      return false;
+    }
+    try {
+      const stored = globalScope.localStorage.getItem(CAPTION_STORAGE_KEY);
+      return stored === '1' || stored === 'true';
+    } catch (error) {
+      if (globalScope.console?.debug) {
+        globalScope.console.debug('Unable to load subtitle preference from storage.', error);
+      }
+      return false;
+    }
+  }
+
+  function saveCaptionPreference(enabled) {
+    if (!globalScope?.localStorage) {
+      return;
+    }
+    try {
+      globalScope.localStorage.setItem(CAPTION_STORAGE_KEY, enabled ? '1' : '0');
+    } catch (error) {
+      if (globalScope.console?.debug) {
+        globalScope.console.debug('Unable to persist subtitle preference.', error);
+      }
+    }
+  }
+
+  function ensureCaptionElements() {
+    if (!documentRef) {
+      return;
+    }
+    if (!captionState.overlay) {
+      captionState.overlay = documentRef.getElementById('captionOverlay');
+    }
+    if (!captionState.overlayText && captionState.overlay) {
+      captionState.overlayText = documentRef.getElementById('captionOverlayText');
+    }
+    if (!captionState.srRegion) {
+      captionState.srRegion = documentRef.getElementById('captionLiveRegion');
+    }
+    if (captionState.overlay) {
+      captionState.overlay.setAttribute('data-state', 'hidden');
+      captionState.overlay.setAttribute('aria-hidden', 'true');
+    }
+  }
+
+  function hideCaptionOverlay() {
+    if (captionState.hideTimer && typeof globalScope.clearTimeout === 'function') {
+      globalScope.clearTimeout(captionState.hideTimer);
+      captionState.hideTimer = null;
+    }
+    if (captionState.overlay) {
+      captionState.overlay.setAttribute('data-state', 'hidden');
+      captionState.overlay.setAttribute('aria-hidden', 'true');
+      captionState.overlay.hidden = !captionState.enabled;
+    }
+    if (captionState.overlayText) {
+      captionState.overlayText.textContent = '';
+    }
+  }
+
+  function applyCaptionPreference(enabled, { syncStorage = true } = {}) {
+    captionState.enabled = Boolean(enabled);
+    ensureCaptionElements();
+    if (captionState.overlay) {
+      if (captionState.enabled) {
+        captionState.overlay.hidden = false;
+        captionState.overlay.setAttribute('aria-hidden', 'true');
+        captionState.overlay.setAttribute('data-state', 'hidden');
+      } else {
+        hideCaptionOverlay();
+      }
+    }
+    if (syncStorage) {
+      saveCaptionPreference(captionState.enabled);
+    }
+    const toggle = documentRef?.getElementById('subtitleToggle');
+    if (toggle) {
+      toggle.checked = captionState.enabled;
+    }
+  }
+
+  function showCaptionOverlay(text) {
+    ensureCaptionElements();
+    if (!captionState.overlay || !captionState.overlayText || !captionState.enabled) {
+      return;
+    }
+    captionState.overlayText.textContent = text;
+    captionState.overlay.hidden = false;
+    captionState.overlay.setAttribute('data-state', 'visible');
+    captionState.overlay.setAttribute('aria-hidden', 'false');
+    if (captionState.hideTimer && typeof globalScope.clearTimeout === 'function') {
+      globalScope.clearTimeout(captionState.hideTimer);
+    }
+    captionState.hideTimer = globalScope.setTimeout(() => {
+      captionState.hideTimer = null;
+      if (captionState.overlay) {
+        captionState.overlay.setAttribute('data-state', 'hidden');
+        captionState.overlay.setAttribute('aria-hidden', 'true');
+      }
+    }, 5200);
+  }
+
+  function handleAudioCaptionEvent(event) {
+    const detail = event?.detail || {};
+    const caption = typeof detail.caption === 'string' ? detail.caption.trim() : '';
+    if (!caption) {
+      return;
+    }
+    ensureCaptionElements();
+    if (captionState.srRegion) {
+      captionState.srRegion.textContent = caption;
+    }
+    showCaptionOverlay(caption);
+  }
+
+  function initCaptionControls() {
+    ensureCaptionElements();
+    const toggle = documentRef?.getElementById('subtitleToggle');
+    if (toggle) {
+      toggle.addEventListener('change', (event) => {
+        applyCaptionPreference(Boolean(event?.target?.checked));
+      });
+    }
+    if (typeof globalScope?.addEventListener === 'function') {
+      globalScope.addEventListener('infinite-rails:audio-caption', handleAudioCaptionEvent);
+    }
+    const initial = loadCaptionPreference();
+    applyCaptionPreference(initial, { syncStorage: false });
+  }
+
+  initColorModeControls();
+  initCaptionControls();
+
   const configWarningDeduper = new Set();
 
   function logConfigWarning(message, context = {}) {
