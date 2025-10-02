@@ -380,6 +380,11 @@
       backend: { status: 'pending', message: 'Checking leaderboard service…' },
     };
     const DIAGNOSTIC_TYPES = Object.keys(diagnosticsState);
+    const diagnosticsLogState = {
+      entries: [],
+      limit: 60,
+      counter: 0,
+    };
 
     function getDocument() {
       if (documentRef) {
@@ -400,6 +405,9 @@
         return null;
       }
       const diagnosticsRoot = doc.getElementById('globalOverlayDiagnostics');
+      const logContainer = doc.getElementById('globalOverlayLog');
+      const logList = doc.getElementById('globalOverlayLogList');
+      const logEmpty = doc.getElementById('globalOverlayLogEmpty');
       const supportLink = doc.getElementById('globalOverlaySupportLink');
       const downloadButton = doc.getElementById('globalOverlayDownloadLogs');
       const diagnosticItems = DIAGNOSTIC_TYPES.reduce((acc, type) => {
@@ -418,6 +426,9 @@
         message: doc.getElementById('globalOverlayMessage'),
         diagnosticsRoot,
         diagnosticItems,
+        logContainer,
+        logList,
+        logEmpty,
         supportLink,
         downloadButton,
       };
@@ -464,6 +475,157 @@
           statusEl.textContent = current.message || '';
         }
       });
+    }
+
+    function normaliseLogScope(scope) {
+      if (typeof scope === 'string' && scope.trim().length) {
+        return scope.trim().toLowerCase();
+      }
+      return 'general';
+    }
+
+    function normaliseLogLevel(level) {
+      if (typeof level !== 'string') {
+        return 'info';
+      }
+      const trimmed = level.trim().toLowerCase();
+      if (trimmed === 'warning' || trimmed === 'error' || trimmed === 'success') {
+        return trimmed;
+      }
+      return 'info';
+    }
+
+    function formatLogScopeLabel(scope) {
+      const value = typeof scope === 'string' ? scope.trim() : '';
+      if (!value) {
+        return 'General';
+      }
+      const cleaned = value.replace(/[-_]+/g, ' ');
+      return cleaned.replace(/\b([a-z])/gi, (match) => match.toUpperCase());
+    }
+
+    function formatLogTimestamp(timestamp) {
+      const time = Number.isFinite(timestamp) ? timestamp : Date.now();
+      const date = new Date(time);
+      const hours = String(date.getHours()).padStart(2, '0');
+      const minutes = String(date.getMinutes()).padStart(2, '0');
+      const seconds = String(date.getSeconds()).padStart(2, '0');
+      const milliseconds = String(date.getMilliseconds()).padStart(3, '0');
+      return `${hours}:${minutes}:${seconds}.${milliseconds}`;
+    }
+
+    function sanitiseLogDetail(detail) {
+      if (!detail || typeof detail !== 'object') {
+        return null;
+      }
+      try {
+        return JSON.parse(JSON.stringify(detail));
+      } catch (error) {
+        const fallback = {};
+        Object.keys(detail).forEach((key) => {
+          const value = detail[key];
+          if (typeof value === 'undefined') {
+            return;
+          }
+          if (value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+            fallback[key] = value;
+            return;
+          }
+          if (value instanceof Date) {
+            fallback[key] = value.toISOString();
+            return;
+          }
+          try {
+            fallback[key] = JSON.parse(JSON.stringify(value));
+          } catch (nestedError) {
+            if (typeof value?.toString === 'function') {
+              fallback[key] = value.toString();
+            }
+          }
+        });
+        return Object.keys(fallback).length ? fallback : null;
+      }
+    }
+
+    function updateLogElements(elements = null) {
+      const doc = elements ? null : getDocument();
+      const refs = elements || getElements(doc);
+      if (!refs?.logList || !refs.logContainer) {
+        return;
+      }
+      const logList = refs.logList;
+      const entries = diagnosticsLogState.entries;
+      while (logList.firstChild) {
+        logList.removeChild(logList.firstChild);
+      }
+      const targetDoc = logList.ownerDocument || doc;
+      if (!targetDoc) {
+        return;
+      }
+      entries.forEach((entry) => {
+        const item = targetDoc.createElement('li');
+        item.className = 'compose-overlay__log-item';
+        item.dataset.level = entry.level;
+        item.dataset.scope = entry.scope;
+        const timeEl = targetDoc.createElement('span');
+        timeEl.className = 'compose-overlay__log-time';
+        timeEl.textContent = formatLogTimestamp(entry.timestamp);
+        const scopeEl = targetDoc.createElement('span');
+        scopeEl.className = 'compose-overlay__log-scope';
+        scopeEl.textContent = formatLogScopeLabel(entry.scope);
+        const messageEl = targetDoc.createElement('span');
+        messageEl.className = 'compose-overlay__log-message';
+        messageEl.textContent = entry.message;
+        item.appendChild(timeEl);
+        item.appendChild(scopeEl);
+        item.appendChild(messageEl);
+        if (entry.detail) {
+          try {
+            item.dataset.detail = JSON.stringify(entry.detail);
+          } catch (error) {
+            item.dataset.detail = '';
+          }
+        } else {
+          item.removeAttribute('data-detail');
+        }
+        logList.appendChild(item);
+      });
+      if (refs.logEmpty) {
+        refs.logEmpty.hidden = entries.length > 0;
+      }
+      refs.logContainer.dataset.populated = entries.length ? 'true' : 'false';
+      if (entries.length) {
+        refs.logContainer.scrollTop = refs.logContainer.scrollHeight;
+      }
+    }
+
+    function appendLogEntry(entry = {}) {
+      if (typeof entry.message !== 'string' || !entry.message.trim().length) {
+        return null;
+      }
+      const scope = normaliseLogScope(entry.scope);
+      const level = normaliseLogLevel(entry.level);
+      const timestamp = Number.isFinite(entry.timestamp) ? entry.timestamp : Date.now();
+      diagnosticsLogState.counter += 1;
+      const normalised = {
+        id: `log-${timestamp}-${diagnosticsLogState.counter}`,
+        scope,
+        level,
+        message: entry.message.trim(),
+        timestamp,
+        detail: sanitiseLogDetail(entry.detail),
+      };
+      diagnosticsLogState.entries.push(normalised);
+      if (diagnosticsLogState.entries.length > diagnosticsLogState.limit) {
+        diagnosticsLogState.entries.splice(0, diagnosticsLogState.entries.length - diagnosticsLogState.limit);
+      }
+      updateLogElements();
+      return normalised;
+    }
+
+    function clearLogEntries() {
+      diagnosticsLogState.entries.splice(0, diagnosticsLogState.entries.length);
+      updateLogElements();
     }
 
     function setDiagnostic(type, update = {}) {
@@ -517,6 +679,7 @@
         message.textContent = options.message;
       }
       updateDiagnosticsElements(elements);
+      updateLogElements(elements);
       state.mode = mode;
       state.visible = true;
     }
@@ -569,19 +732,84 @@
       setDiagnostic,
       refreshDiagnostics() {
         updateDiagnosticsElements();
+        updateLogElements();
       },
       get diagnostics() {
         return { ...diagnosticsState };
+      },
+      logEvent(scope, message, options = {}) {
+        appendLogEntry({
+          scope,
+          message,
+          level: options.level,
+          detail: options.detail,
+          timestamp: options.timestamp,
+        });
+      },
+      clearLog() {
+        clearLogEntries();
+      },
+      getLogEntries() {
+        return diagnosticsLogState.entries.map((entry) => ({
+          scope: entry.scope,
+          level: entry.level,
+          message: entry.message,
+          timestamp: entry.timestamp,
+          detail: entry.detail ?? null,
+        }));
+      },
+      get logEntries() {
+        return this.getLogEntries();
       },
     };
   })();
 
   bootstrapOverlay.showLoading();
 
+  function logDiagnosticsEvent(scope, message, { level = 'info', detail = null, timestamp = null } = {}) {
+    if (!bootstrapOverlay || typeof bootstrapOverlay.logEvent !== 'function') {
+      return;
+    }
+    const payload = {};
+    if (typeof level === 'string') {
+      payload.level = level;
+    }
+    if (detail && typeof detail === 'object') {
+      payload.detail = { ...detail };
+    }
+    if (Number.isFinite(timestamp)) {
+      payload.timestamp = timestamp;
+    }
+    bootstrapOverlay.logEvent(scope, message, payload);
+  }
+
+  function formatAssetLogLabel(detail) {
+    const kind = typeof detail?.kind === 'string' && detail.kind.trim().length ? detail.kind.trim() : 'asset';
+    const key = typeof detail?.key === 'string' && detail.key.trim().length ? detail.key.trim() : null;
+    return key ? `${kind}:${key}` : kind;
+  }
+
+  function summariseAssetUrl(url) {
+    if (typeof url !== 'string' || !url.trim().length) {
+      return null;
+    }
+    const trimmed = url.trim();
+    try {
+      const parsed = new URL(trimmed, globalScope?.location?.href ?? undefined);
+      if (parsed.origin && parsed.pathname) {
+        const shortPath = parsed.pathname.replace(/\/+/, '/');
+        return `${parsed.origin}${shortPath}`;
+      }
+      return parsed.href;
+    } catch (error) {
+      return trimmed;
+    }
+  }
+
   let lastRendererFailureDetail = null;
 
   if (typeof globalScope?.addEventListener === 'function') {
-    globalScope.addEventListener('infinite-rails:started', () => {
+    globalScope.addEventListener('infinite-rails:started', (event) => {
       bootstrapOverlay.setDiagnostic('renderer', {
         status: 'ok',
         message: 'Renderer initialised successfully.',
@@ -591,6 +819,13 @@
         message: 'World assets loaded.',
       });
       bootstrapOverlay.hide({ force: true });
+      if (typeof logDiagnosticsEvent === 'function') {
+        logDiagnosticsEvent('startup', 'Renderer initialised successfully.', {
+          level: 'success',
+          detail: event?.detail && typeof event.detail === 'object' ? event.detail : null,
+          timestamp: Number.isFinite(event?.detail?.timestamp) ? event.detail.timestamp : undefined,
+        });
+      }
     });
     globalScope.addEventListener('infinite-rails:renderer-failure', (event) => {
       const detail =
@@ -607,6 +842,13 @@
         status: 'error',
         message: formatRendererFailureMessage(detail),
       });
+      if (typeof logDiagnosticsEvent === 'function') {
+        logDiagnosticsEvent('startup', formatRendererFailureMessage(detail), {
+          level: 'error',
+          detail,
+          timestamp: Number.isFinite(detail?.timestamp) ? detail.timestamp : undefined,
+        });
+      }
     });
     globalScope.addEventListener('infinite-rails:asset-fallback', (event) => {
       const detail = event?.detail && typeof event.detail === 'object' ? event.detail : {};
@@ -618,6 +860,13 @@
         status: 'warning',
         message,
       });
+      if (typeof logDiagnosticsEvent === 'function') {
+        logDiagnosticsEvent('assets', message, {
+          level: 'warning',
+          detail,
+          timestamp: Number.isFinite(detail?.timestamp) ? detail.timestamp : undefined,
+        });
+      }
     });
     globalScope.addEventListener('infinite-rails:asset-load-failure', (event) => {
       const detail = event?.detail && typeof event.detail === 'object' ? event.detail : {};
@@ -632,6 +881,13 @@
         status: 'warning',
         message: friendly,
       });
+      if (typeof logDiagnosticsEvent === 'function') {
+        logDiagnosticsEvent('assets', friendly, {
+          level: 'error',
+          detail,
+          timestamp: Number.isFinite(detail?.timestamp) ? detail.timestamp : undefined,
+        });
+      }
     });
     globalScope.addEventListener('infinite-rails:asset-recovery-prompt', (event) => {
       const detail = event?.detail && typeof event.detail === 'object' ? event.detail : {};
@@ -643,6 +899,13 @@
         status: 'error',
         message,
       });
+      if (typeof logDiagnosticsEvent === 'function') {
+        logDiagnosticsEvent('assets', message, {
+          level: 'error',
+          detail,
+          timestamp: Number.isFinite(detail?.timestamp) ? detail.timestamp : undefined,
+        });
+      }
     });
     globalScope.addEventListener('infinite-rails:asset-recovery-prompt-update', (event) => {
       const detail = event?.detail && typeof event.detail === 'object' ? event.detail : {};
@@ -654,12 +917,24 @@
         status: 'error',
         message,
       });
+      if (typeof logDiagnosticsEvent === 'function') {
+        logDiagnosticsEvent('assets', message, {
+          level: 'error',
+          detail,
+          timestamp: Number.isFinite(detail?.timestamp) ? detail.timestamp : undefined,
+        });
+      }
     });
     globalScope.addEventListener('infinite-rails:asset-retry-requested', () => {
       bootstrapOverlay.setDiagnostic('assets', {
         status: 'pending',
         message: 'Retrying missing assets…',
       });
+      if (typeof logDiagnosticsEvent === 'function') {
+        logDiagnosticsEvent('assets', 'Retrying missing assets…', {
+          level: 'info',
+        });
+      }
     });
     globalScope.addEventListener('infinite-rails:asset-retry-queued', (event) => {
       const detail = event?.detail && typeof event.detail === 'object' ? event.detail : {};
@@ -669,6 +944,13 @@
         status: 'pending',
         message: `Retry queued for ${label}.`,
       });
+      if (typeof logDiagnosticsEvent === 'function') {
+        logDiagnosticsEvent('assets', `Retry queued for ${label}.`, {
+          level: 'info',
+          detail,
+          timestamp: Number.isFinite(detail?.timestamp) ? detail.timestamp : undefined,
+        });
+      }
     });
     globalScope.addEventListener('infinite-rails:asset-retry-success', (event) => {
       const detail = event?.detail && typeof event.detail === 'object' ? event.detail : {};
@@ -681,12 +963,87 @@
         status: 'ok',
         message,
       });
+      if (typeof logDiagnosticsEvent === 'function') {
+        logDiagnosticsEvent('assets', message, {
+          level: 'success',
+          detail,
+          timestamp: Number.isFinite(detail?.timestamp) ? detail.timestamp : undefined,
+        });
+      }
     });
     globalScope.addEventListener('infinite-rails:asset-recovery-reload-requested', () => {
       bootstrapOverlay.setDiagnostic('assets', {
         status: 'error',
         message: 'Reload requested to restore missing assets.',
       });
+      if (typeof logDiagnosticsEvent === 'function') {
+        logDiagnosticsEvent('assets', 'Reload requested to restore missing assets.', {
+          level: 'error',
+        });
+      }
+    });
+    globalScope.addEventListener('infinite-rails:asset-fetch-start', (event) => {
+      const detail = event?.detail && typeof event.detail === 'object' ? event.detail : {};
+      const label = formatAssetLogLabel(detail);
+      const message = `Fetching ${label}…`;
+      if (typeof logDiagnosticsEvent === 'function') {
+        logDiagnosticsEvent('assets', message, {
+          level: 'info',
+          detail,
+          timestamp: Number.isFinite(detail?.timestamp) ? detail.timestamp : undefined,
+        });
+      }
+    });
+    globalScope.addEventListener('infinite-rails:asset-fetch-complete', (event) => {
+      const detail = event?.detail && typeof event.detail === 'object' ? event.detail : {};
+      const label = formatAssetLogLabel(detail);
+      const duration = Number.isFinite(detail?.duration) ? Math.round(detail.duration) : null;
+      const status = detail?.status === 'fulfilled' ? 'fulfilled' : 'failed';
+      const urlSummary = summariseAssetUrl(detail?.url);
+      const suffix = duration ? (status === 'fulfilled' ? ` in ${duration}ms` : ` after ${duration}ms`) : '';
+      let message = status === 'fulfilled'
+        ? `Loaded ${label}${suffix}.`
+        : `Failed to load ${label}${suffix}.`;
+      if (urlSummary) {
+        message += status === 'fulfilled' ? ` via ${urlSummary}` : ` (last URL ${urlSummary})`;
+      }
+      if (typeof logDiagnosticsEvent === 'function') {
+        logDiagnosticsEvent('assets', message, {
+          level: status === 'fulfilled' ? 'success' : 'error',
+          detail,
+          timestamp: Number.isFinite(detail?.timestamp) ? detail.timestamp : undefined,
+        });
+      }
+    });
+    globalScope.addEventListener('infinite-rails:start-error', (event) => {
+      const detail = event?.detail && typeof event.detail === 'object' ? event.detail : {};
+      const message =
+        typeof detail?.message === 'string' && detail.message.trim().length
+          ? detail.message.trim()
+          : 'Renderer initialisation failed.';
+      if (typeof logDiagnosticsEvent === 'function') {
+        logDiagnosticsEvent('startup', message, {
+          level: 'error',
+          detail,
+          timestamp: Number.isFinite(detail?.timestamp) ? detail.timestamp : undefined,
+        });
+      }
+    });
+    globalScope.addEventListener('infinite-rails:initialisation-error', (event) => {
+      const detail = event?.detail && typeof event.detail === 'object' ? event.detail : {};
+      const stage = typeof detail?.stage === 'string' && detail.stage.trim().length ? detail.stage.trim() : 'startup';
+      const baseMessage =
+        typeof detail?.message === 'string' && detail.message.trim().length
+          ? detail.message.trim()
+          : 'Initialisation error encountered.';
+      const message = stage && stage !== 'startup' ? `${baseMessage} (${stage}).` : baseMessage;
+      if (typeof logDiagnosticsEvent === 'function') {
+        logDiagnosticsEvent('startup', message, {
+          level: 'error',
+          detail,
+          timestamp: Number.isFinite(detail?.timestamp) ? detail.timestamp : undefined,
+        });
+      }
     });
     globalScope.addEventListener('infinite-rails:score-sync-offline', (event) => {
       const detail = event?.detail && typeof event.detail === 'object' ? event.detail : {};
@@ -1034,6 +1391,23 @@
         }
         return reason;
       }
+      case 'start-error':
+        return summaryMessage(detail?.message, 'Renderer initialisation failed.');
+      case 'initialisation-error': {
+        const base = summaryMessage(detail?.message, 'Initialisation error encountered.');
+        const stage = typeof detail?.stage === 'string' && detail.stage.trim().length ? detail.stage.trim() : null;
+        return stage ? `${base} (${stage}).` : base;
+      }
+      case 'asset-fetch-start':
+        return `Fetching ${formatAssetLogLabel(detail)}…`;
+      case 'asset-fetch-complete': {
+        const label = formatAssetLogLabel(detail);
+        const duration = Number.isFinite(detail?.duration) ? Math.round(detail.duration) : null;
+        const suffix = duration ? (detail?.status === 'fulfilled' ? ` in ${duration}ms` : ` after ${duration}ms`) : '';
+        return detail?.status === 'fulfilled'
+          ? `Loaded ${label}${suffix}.`
+          : `Failed to load ${label}${suffix}.`;
+      }
       case 'debug-mode':
         return detail?.enabled
           ? 'Verbose debug mode enabled.'
@@ -1179,11 +1553,14 @@
     [
       'started',
       'start-error',
+      'initialisation-error',
       'dimension-advanced',
       'portal-ready',
       'portal-activated',
       'victory',
       'asset-fallback',
+      'asset-fetch-start',
+      'asset-fetch-complete',
       'recipe-crafted',
       'pointer-lock-fallback',
       'score-sync-offline',
@@ -1228,6 +1605,10 @@
       debugMode: isDebugModeEnabled(),
       userAgent: scope?.navigator?.userAgent ?? null,
       eventLog: history,
+      diagnosticLog:
+        typeof bootstrapOverlay?.getLogEntries === 'function'
+          ? bootstrapOverlay.getLogEntries()
+          : [],
     };
   }
 
@@ -2455,6 +2836,12 @@
           context,
         });
       }
+      if (typeof logDiagnosticsEvent === 'function') {
+        logDiagnosticsEvent('startup', 'Simple experience unavailable; cannot start fallback renderer.', {
+          level: 'error',
+          detail: context && typeof context === 'object' ? { ...context } : undefined,
+        });
+      }
       if (typeof bootstrapOverlay !== 'undefined') {
         bootstrapOverlay.showError({
           title: 'Renderer unavailable',
@@ -2479,6 +2866,11 @@
         'Falling back to the simple renderer after a bootstrap failure.',
       );
     }
+    if (typeof logDiagnosticsEvent === 'function') {
+      logDiagnosticsEvent('startup', 'Falling back to the simple renderer after a bootstrap failure.', {
+        level: 'warning',
+      });
+    }
     try {
       if (typeof scope.bootstrap === 'function') {
         scope.bootstrap();
@@ -2486,6 +2878,21 @@
     } catch (bootstrapError) {
       if (scope.console?.error) {
         scope.console.error('Simple fallback bootstrap failed.', bootstrapError);
+      }
+      if (typeof logDiagnosticsEvent === 'function') {
+        logDiagnosticsEvent('startup', 'Simple fallback bootstrap failed.', {
+          level: 'error',
+          detail: {
+            errorMessage:
+              typeof bootstrapError?.message === 'string' && bootstrapError.message.trim().length
+                ? bootstrapError.message.trim()
+                : undefined,
+            errorName:
+              typeof bootstrapError?.name === 'string' && bootstrapError.name.trim().length
+                ? bootstrapError.name.trim()
+                : undefined,
+          },
+        });
       }
     }
     return true;
@@ -2641,6 +3048,11 @@
           message: 'Simplified renderer is missing from the build output.',
         });
       }
+      if (typeof logDiagnosticsEvent === 'function') {
+        logDiagnosticsEvent('startup', 'Simplified renderer is missing from the build output.', {
+          level: 'error',
+        });
+      }
       return null;
     }
     const doc = documentRef || globalScope.document || null;
@@ -2654,6 +3066,11 @@
         bootstrapOverlay.setDiagnostic('renderer', {
           status: 'error',
           message: 'Game canvas could not be located. Reload to retry.',
+        });
+      }
+      if (typeof logDiagnosticsEvent === 'function') {
+        logDiagnosticsEvent('startup', 'Game canvas could not be located. Reload the page to retry.', {
+          level: 'error',
         });
       }
       return null;
@@ -2682,6 +3099,19 @@
         bootstrapOverlay.setDiagnostic('renderer', {
           status: 'error',
           message: 'Failed to initialise the renderer. Check your connection and reload.',
+        });
+      }
+      if (typeof logDiagnosticsEvent === 'function') {
+        logDiagnosticsEvent('startup', 'Failed to initialise the renderer. Check your connection and reload.', {
+          level: 'error',
+          detail: {
+            errorMessage:
+              typeof error?.message === 'string' && error.message.trim().length
+                ? error.message.trim()
+                : undefined,
+            errorName:
+              typeof error?.name === 'string' && error.name.trim().length ? error.name.trim() : undefined,
+          },
         });
       }
       throw error;

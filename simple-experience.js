@@ -1331,10 +1331,22 @@
         this.publishStateSnapshot('started');
         this.lastStatePublish = 0;
       } catch (error) {
-        this.presentRendererFailure('Renderer initialisation failed. Check your browser console for details.', {
+        const failureMessage = 'Renderer initialisation failed. Check your browser console for details.';
+        this.presentRendererFailure(failureMessage, {
           error,
         });
         this.started = false;
+        const errorMessage =
+          typeof error?.message === 'string' && error.message.trim().length
+            ? error.message.trim()
+            : failureMessage;
+        this.emitGameEvent('start-error', {
+          message: failureMessage,
+          errorMessage,
+          errorName: typeof error?.name === 'string' && error.name.trim().length ? error.name.trim() : undefined,
+          stack: typeof error?.stack === 'string' && error.stack.trim().length ? error.stack.trim() : undefined,
+          stage: 'startup',
+        });
         this.publishStateSnapshot('start-error');
       }
     }
@@ -2537,6 +2549,17 @@
       try {
         renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: true });
       } catch (error) {
+        const errorMessage =
+          typeof error?.message === 'string' && error.message.trim().length
+            ? error.message.trim()
+            : 'Failed to initialise Three.js renderer.';
+        this.emitGameEvent('initialisation-error', {
+          stage: 'renderer',
+          message: 'Failed to initialise Three.js renderer.',
+          errorMessage,
+          errorName: typeof error?.name === 'string' && error.name.trim().length ? error.name.trim() : undefined,
+          stack: typeof error?.stack === 'string' && error.stack.trim().length ? error.stack.trim() : undefined,
+        });
         console.error('Failed to initialise Three.js renderer.', error);
         if (error && error.stack) {
           console.error('Renderer initialisation stack trace:', error.stack);
@@ -2743,6 +2766,7 @@
         return;
       }
       timers.set(key, this.getHighResTimestamp());
+      this.emitGameEvent('asset-fetch-start', { kind, key });
     }
 
     completeAssetTimer(kind, key, details = {}) {
@@ -2768,6 +2792,7 @@
       if (this.assetLoadLog.length > 40) {
         this.assetLoadLog.splice(0, this.assetLoadLog.length - 40);
       }
+      this.emitGameEvent('asset-fetch-complete', entry);
       const budget = Number.isFinite(this.assetLoadBudgetMs) ? this.assetLoadBudgetMs : 3000;
       const formattedDuration = duration.toFixed(0);
       const sourceLabel = details.url ? ` from ${details.url}` : '';
@@ -7265,6 +7290,11 @@
           }
         }
         if (!context) {
+          this.emitGameEvent('initialisation-error', {
+            stage: 'webgl-probe',
+            message:
+              'WebGL is unavailable. Enable hardware acceleration or switch to a compatible browser to explore the realms.',
+          });
           this.presentRendererFailure(
             'WebGL is unavailable. Enable hardware acceleration or switch to a compatible browser to explore the realms.',
           );
@@ -7282,6 +7312,17 @@
         }
         return true;
       } catch (error) {
+        const errorMessage =
+          typeof error?.message === 'string' && error.message.trim().length
+            ? error.message.trim()
+            : 'Unable to initialise WebGL.';
+        this.emitGameEvent('initialisation-error', {
+          stage: 'webgl-probe',
+          message: 'Unable to initialise WebGL.',
+          errorMessage,
+          errorName: typeof error?.name === 'string' && error.name.trim().length ? error.name.trim() : undefined,
+          stack: typeof error?.stack === 'string' && error.stack.trim().length ? error.stack.trim() : undefined,
+        });
         this.presentRendererFailure('Unable to initialise WebGL. See console output for troubleshooting steps.', {
           error,
         });

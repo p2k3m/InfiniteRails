@@ -3537,6 +3537,80 @@ body.sidebar-open .player-hint {
   width: 100%;
 }
 
+.compose-overlay__log {
+  width: 100%;
+  max-height: 180px;
+  overflow-y: auto;
+  border-radius: 12px;
+  border: 1px solid rgba(143, 187, 255, 0.18);
+  background: rgba(7, 14, 28, 0.65);
+  padding: 0.5rem 0.75rem;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.compose-overlay__log[hidden] {
+  display: none;
+}
+
+.compose-overlay__log-empty {
+  margin: 0;
+  font-size: 0.85rem;
+  color: rgba(199, 222, 255, 0.72);
+  text-align: left;
+}
+
+.compose-overlay__log-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.compose-overlay__log-item {
+  display: grid;
+  grid-template-columns: auto auto 1fr;
+  gap: 0.5rem;
+  align-items: flex-start;
+  font-size: 0.82rem;
+  color: rgba(229, 237, 255, 0.86);
+  word-break: break-word;
+}
+
+.compose-overlay__log-time {
+  font-family: 'JetBrains Mono', 'Fira Mono', 'SFMono-Regular', ui-monospace, monospace;
+  font-size: 0.78rem;
+  color: rgba(148, 184, 255, 0.82);
+}
+
+.compose-overlay__log-scope {
+  font-weight: 600;
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(163, 208, 255, 0.85);
+}
+
+.compose-overlay__log-message {
+  margin: 0;
+  font-size: 0.82rem;
+  line-height: 1.35;
+  color: rgba(229, 237, 255, 0.9);
+}
+
+.compose-overlay__log-item[data-level='warning'] .compose-overlay__log-message {
+  color: rgba(255, 206, 130, 0.92);
+}
+
+.compose-overlay__log-item[data-level='error'] .compose-overlay__log-message {
+  color: rgba(255, 164, 164, 0.95);
+}
+
+.compose-overlay__log-item[data-level='success'] .compose-overlay__log-message {
+  color: rgba(158, 248, 188, 0.94);
+}
+
 .diagnostic-list {
   list-style: none;
   margin: 0;
