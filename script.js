@@ -2545,10 +2545,15 @@
       assetRecoveryRetryButton: byId('assetRecoveryRetry'),
       assetRecoveryReloadButton: byId('assetRecoveryReload'),
       startButton: byId('startButton'),
+      landingGuideButton: byId('landingGuideButton'),
       introModal: byId('introModal'),
       hudRootEl: byId('gameHud'),
       gameBriefing: byId('gameBriefing'),
       dismissBriefingButton: byId('dismissBriefing'),
+      firstRunTutorial: byId('firstRunTutorial'),
+      firstRunTutorialBackdrop: byId('firstRunTutorialBackdrop'),
+      firstRunTutorialCloseButton: byId('firstRunTutorialClose'),
+      firstRunTutorialPrimaryButton: byId('firstRunTutorialBegin'),
       craftLauncherButton: byId('openCrafting'),
       craftingModal: byId('craftingModal'),
       craftSequenceEl: byId('craftSequence'),
@@ -2705,6 +2710,22 @@
         }
       });
       ui.startButton.dataset.simpleExperienceBound = 'true';
+    }
+    if (ui.landingGuideButton && !ui.landingGuideButton.dataset.simpleExperienceGuideBound) {
+      ui.landingGuideButton.addEventListener('click', (event) => {
+        if (event?.preventDefault) {
+          event.preventDefault();
+        }
+        if (!experience || typeof experience.showFirstRunTutorial !== 'function') {
+          return;
+        }
+        try {
+          experience.showFirstRunTutorial({ markSeenOnDismiss: true, autoFocus: true });
+        } catch (error) {
+          console.error('Failed to display tutorial overlay', error);
+        }
+      });
+      ui.landingGuideButton.dataset.simpleExperienceGuideBound = 'true';
     }
     if (typeof bootstrapOverlay !== 'undefined') {
       bootstrapOverlay.hide({ force: true });

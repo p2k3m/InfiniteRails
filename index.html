@@ -204,6 +204,60 @@
             <button type="button" class="game-briefing__dismiss" id="dismissBriefing">Begin the run</button>
           </div>
         </div>
+        <div
+          class="first-run-tutorial"
+          id="firstRunTutorial"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="firstRunTutorialTitle"
+          hidden
+        >
+          <div class="first-run-tutorial__backdrop" id="firstRunTutorialBackdrop" aria-hidden="true"></div>
+          <div class="first-run-tutorial__panel" role="document">
+            <button
+              type="button"
+              class="first-run-tutorial__close"
+              id="firstRunTutorialClose"
+              aria-label="Dismiss tutorial"
+            >
+              <span aria-hidden="true">×</span>
+            </button>
+            <p class="first-run-tutorial__eyebrow">First Run Briefing</p>
+            <h2 class="first-run-tutorial__title" id="firstRunTutorialTitle">Welcome to Infinite Rails</h2>
+            <p class="first-run-tutorial__summary">
+              Every expedition begins on a fractured rail. Master the basics, then watch for new systems coming online as the
+              network stabilises.
+            </p>
+            <ul class="first-run-tutorial__list" aria-label="Tutorial steps">
+              <li>
+                <span class="first-run-tutorial__step-label">Move &amp; Look</span>
+                <span class="first-run-tutorial__step-detail">Use <strong>WASD</strong> or swipe to travel, and drag or move the mouse to survey the realm.</span>
+              </li>
+              <li>
+                <span class="first-run-tutorial__step-label">Gather &amp; Interact</span>
+                <span class="first-run-tutorial__step-detail">
+                  Face a resource tile, then press <strong>Space</strong>, <strong>Click</strong>, or <strong>F</strong> to harvest, open chests, and trigger switches.
+                </span>
+              </li>
+              <li>
+                <span class="first-run-tutorial__step-label">Craft &amp; Build</span>
+                <span class="first-run-tutorial__step-detail">
+                  Tap the <strong>hammer</strong> icon or press <strong>E</strong> to craft. Place blocks with <strong>Q</strong> and ignite portals with <strong>R</strong> to stabilise the exit.
+                </span>
+              </li>
+              <li>
+                <span class="first-run-tutorial__step-label">Coming Online</span>
+                <span class="first-run-tutorial__step-detail">
+                  Live score sync, co-op expeditions, and seasonal rails are rolling out soon—watch the log for system updates.
+                </span>
+              </li>
+            </ul>
+            <p class="first-run-tutorial__note">Need a refresher later? Use the <strong>How to Play</strong> button on the landing screen.</p>
+            <div class="first-run-tutorial__actions">
+              <button type="button" class="primary" id="firstRunTutorialBegin">Let's explore</button>
+            </div>
+          </div>
+        </div>
         <div class="hud-layer" id="gameHud">
           <div class="hud-layer__corner hud-layer__corner--top-left">
             <div class="hud-card hud-card--status" data-hint="Monitor vitals and access crafting tools.">
