@@ -1358,6 +1358,9 @@
         textures: new Map(),
         models: new Map(),
       };
+      this.assetDelayIndicatorThresholdMs = Number.isFinite(options.assetDelayIndicatorThresholdMs)
+        ? Math.max(1000, options.assetDelayIndicatorThresholdMs)
+        : 1000;
       this.assetLoadLog = [];
       this.assetFailureCounts = new Map();
       this.assetRetryState = new Map();
@@ -3816,7 +3819,9 @@
       if (!handles || handles.has(key)) {
         return;
       }
-      const budget = Number.isFinite(this.assetLoadBudgetMs) ? Math.max(500, this.assetLoadBudgetMs) : 3000;
+      const budget = Number.isFinite(this.assetDelayIndicatorThresholdMs)
+        ? Math.max(1000, this.assetDelayIndicatorThresholdMs)
+        : 1000;
       const scope =
         typeof window !== 'undefined'
           ? window
@@ -3899,14 +3904,25 @@
           this.ensurePlayerArmsVisible();
         }
       }
+      const indicator = this.buildAssetDelayIndicator(key, {
+        kind: kind || 'asset',
+        delayMs: this.assetDelayIndicatorThresholdMs,
+      });
       const messageMap = {
-        arm: 'Explorer hands streaming slowly — simplified overlay active.',
-        steve: 'Explorer avatar streaming slowly — placeholder rig active.',
-        zombie: 'Hostile models streaming slowly — husk stand-ins deployed.',
-        golem: 'Golem armour streaming slowly — placeholder guardian active.',
+        arm: 'Loading the first-person hands — simplified overlay active until streaming completes.',
+        steve: 'Loading the explorer avatar — placeholder rig active until streaming completes.',
+        zombie: 'Loading the zombie models — husk stand-ins deployed until streaming completes.',
+        golem: 'Loading the golem armour — placeholder guardian active until streaming completes.',
       };
-      const fallbackMessage = messageMap[key] || 'Asset stream delayed — placeholder visuals active.';
-      this.announceAssetStreamIssue(key, fallbackMessage, { kind: 'delay', variant: 'warning' });
+      const fallbackMessage = messageMap[key] || indicator.hint || 'Loading critical assets — placeholder visuals active.';
+      indicator.message = fallbackMessage;
+      indicator.hint = fallbackMessage;
+      this.announceAssetStreamIssue(key, fallbackMessage, {
+        kind: 'delay',
+        variant: 'warning',
+        indicator,
+        assetKind: kind || 'asset',
+      });
     }
 
     announceAssetStreamIssue(key, message, options = {}) {
@@ -3915,6 +3931,8 @@
         return;
       }
       const kind = options.kind || 'delay';
+      const assetKind = options.assetKind || null;
+      const indicatorOptions = options.indicator || null;
       const normalisedKey = typeof key === 'string' && key.trim().length ? key.trim() : 'asset';
       const dedupeKey = `${kind}:${normalisedKey}|${text}`;
       if (this.assetDelayNotices?.has(dedupeKey)) {
@@ -3939,9 +3957,36 @@
         key: normalisedKey,
         originalKey: typeof key === 'string' ? key : null,
         kind,
+        assetKind,
         message: text,
         variant,
+        indicator: indicatorOptions
+          ? {
+              label: indicatorOptions.label || null,
+              title: indicatorOptions.title || null,
+              message: indicatorOptions.message || text,
+              delayMs: indicatorOptions.delayMs ?? null,
+            }
+          : undefined,
       });
+      if (indicatorOptions) {
+        const baseLabel =
+          indicatorOptions.label || this.describeAssetKey(normalisedKey) || `${normalisedKey} assets`;
+        const capitalisedLabel = baseLabel.charAt(0).toUpperCase() + baseLabel.slice(1);
+        const indicatorDetail = {
+          key: normalisedKey,
+          originalKey: typeof key === 'string' ? key : null,
+          kind: indicatorOptions.assetKind || assetKind || 'asset',
+          noticeKind: kind,
+          label: baseLabel,
+          title: indicatorOptions.title || `Loading ${capitalisedLabel}`,
+          message: indicatorOptions.message || text,
+          delayMs: Number.isFinite(indicatorOptions.delayMs)
+            ? Math.max(0, indicatorOptions.delayMs)
+            : this.assetDelayIndicatorThresholdMs,
+        };
+        this.emitGameEvent('asset-load-delay-indicator', indicatorDetail);
+      }
     }
 
     clearAssetDelayNoticesForKey(key) {
@@ -12490,6 +12535,25 @@
         asset: 'critical assets',
       };
       return mapping[normalisedKey] || `${normalisedKey} assets`;
+    }
+
+    buildAssetDelayIndicator(key, context = {}) {
+      const normalisedKey = typeof key === 'string' && key.trim().length ? key.trim() : 'asset';
+      const label = this.describeAssetKey(normalisedKey);
+      const capitalised = label.charAt(0).toUpperCase() + label.slice(1);
+      const delayMs = Number.isFinite(context.delayMs)
+        ? Math.max(0, context.delayMs)
+        : this.assetDelayIndicatorThresholdMs;
+      const assetKind = context.kind || 'asset';
+      return {
+        key: normalisedKey,
+        label,
+        title: `Loading ${capitalised}`,
+        message: `Loading the ${label} — placeholder assets are active until streaming completes.`,
+        hint: `Loading the ${label} — placeholder assets are active until streaming completes.`,
+        delayMs,
+        assetKind,
+      };
     }
 
     buildAssetRecoveryMessage() {

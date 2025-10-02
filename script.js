@@ -841,6 +841,128 @@
     };
   })();
 
+  const assetLoadingIndicatorState = {
+    active: new Map(),
+    overlayActive: false,
+  };
+
+  function normaliseAssetIndicatorKey(value) {
+    if (typeof value === 'string' && value.trim().length) {
+      return value.trim().toLowerCase();
+    }
+    if (Number.isFinite(value)) {
+      return String(value);
+    }
+    return 'asset';
+  }
+
+  function normaliseAssetIndicatorKind(value) {
+    if (typeof value === 'string' && value.trim().length) {
+      return value.trim().toLowerCase();
+    }
+    return 'asset';
+  }
+
+  function buildAssetIndicatorToken(kind, key) {
+    return `${normaliseAssetIndicatorKind(kind)}:${normaliseAssetIndicatorKey(key)}`;
+  }
+
+  function updateAssetLoadingIndicatorOverlay() {
+    if (typeof bootstrapOverlay === 'undefined') {
+      return;
+    }
+    const entries = Array.from(assetLoadingIndicatorState.active.values());
+    if (!entries.length) {
+      if (assetLoadingIndicatorState.overlayActive && bootstrapOverlay.state?.mode === 'loading') {
+        bootstrapOverlay.hide();
+      }
+      assetLoadingIndicatorState.overlayActive = false;
+      return;
+    }
+    if (bootstrapOverlay.state?.mode === 'error') {
+      assetLoadingIndicatorState.overlayActive = false;
+      return;
+    }
+    const primary = entries[0];
+    const additional = entries.length - 1;
+    let message = primary.message || 'Loading assets — this may take a moment.';
+    if (additional > 0) {
+      message += ` (${additional} more ${additional === 1 ? 'asset stream' : 'asset streams'} waiting.)`;
+    }
+    const title = primary.title || 'Loading assets…';
+    bootstrapOverlay.showLoading({
+      title,
+      message,
+    });
+    assetLoadingIndicatorState.overlayActive = true;
+  }
+
+  function registerAssetLoadingIndicator(detail = {}) {
+    const kind = normaliseAssetIndicatorKind(detail.kind ?? detail.assetKind);
+    const key = normaliseAssetIndicatorKey(detail.key ?? detail.originalKey);
+    const token = `${kind}:${key}`;
+    const rawLabel =
+      typeof detail.label === 'string' && detail.label.trim().length
+        ? detail.label.trim()
+        : key !== 'asset'
+          ? `${kind} ${key}`
+          : 'assets';
+    const title =
+      typeof detail.title === 'string' && detail.title.trim().length
+        ? detail.title.trim()
+        : `Loading ${rawLabel}`;
+    const message =
+      typeof detail.message === 'string' && detail.message.trim().length
+        ? detail.message.trim()
+        : `Loading ${rawLabel} — this may take a moment.`;
+    assetLoadingIndicatorState.active.set(token, {
+      key,
+      kind,
+      title,
+      message,
+    });
+    updateAssetLoadingIndicatorOverlay();
+  }
+
+  function clearAssetLoadingIndicator(kind, key) {
+    const token = buildAssetIndicatorToken(kind, key);
+    if (!assetLoadingIndicatorState.active.delete(token)) {
+      return;
+    }
+    if (!assetLoadingIndicatorState.active.size) {
+      if (assetLoadingIndicatorState.overlayActive && bootstrapOverlay.state?.mode === 'loading') {
+        bootstrapOverlay.hide();
+      }
+      assetLoadingIndicatorState.overlayActive = false;
+      return;
+    }
+    updateAssetLoadingIndicatorOverlay();
+  }
+
+  function clearAssetLoadingIndicatorByKey(key) {
+    const normalisedKey = normaliseAssetIndicatorKey(key);
+    const tokens = [];
+    assetLoadingIndicatorState.active.forEach((entry, token) => {
+      if (entry.key === normalisedKey) {
+        tokens.push(token);
+      }
+    });
+    if (!tokens.length) {
+      return;
+    }
+    tokens.forEach((token) => {
+      assetLoadingIndicatorState.active.delete(token);
+    });
+    if (!assetLoadingIndicatorState.active.size) {
+      if (assetLoadingIndicatorState.overlayActive && bootstrapOverlay.state?.mode === 'loading') {
+        bootstrapOverlay.hide();
+      }
+      assetLoadingIndicatorState.overlayActive = false;
+      return;
+    }
+    updateAssetLoadingIndicatorOverlay();
+  }
+
   bootstrapOverlay.showLoading();
 
   function logDiagnosticsEvent(scope, message, { level = 'info', detail = null, timestamp = null } = {}) {
@@ -1055,6 +1177,7 @@
           timestamp: Number.isFinite(detail?.timestamp) ? detail.timestamp : undefined,
         });
       }
+      clearAssetLoadingIndicatorByKey(detail?.key ?? detail?.originalKey);
     });
     globalScope.addEventListener('infinite-rails:asset-recovery-prompt', (event) => {
       const detail = event?.detail && typeof event.detail === 'object' ? event.detail : {};
@@ -1149,6 +1272,10 @@
         });
       }
     });
+    globalScope.addEventListener('infinite-rails:asset-load-delay-indicator', (event) => {
+      const detail = event?.detail && typeof event.detail === 'object' ? event.detail : {};
+      registerAssetLoadingIndicator(detail);
+    });
     globalScope.addEventListener('infinite-rails:asset-fetch-start', (event) => {
       const detail = event?.detail && typeof event.detail === 'object' ? event.detail : {};
       const label = formatAssetLogLabel(detail);
@@ -1181,6 +1308,7 @@
           timestamp: Number.isFinite(detail?.timestamp) ? detail.timestamp : undefined,
         });
       }
+      clearAssetLoadingIndicator(detail?.kind, detail?.key);
     });
     globalScope.addEventListener('infinite-rails:start-error', (event) => {
       const detail = event?.detail && typeof event.detail === 'object' ? event.detail : {};
