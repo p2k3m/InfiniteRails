@@ -32,6 +32,31 @@ describe('portal mechanics', () => {
     expect(collisions[0].reason).toBe('tree');
   });
 
+  it('detects blocking occupants such as players and chests', () => {
+    const footprint = buildPortalFrame({ x: 3, y: 3 }, { x: 0, y: 1 });
+    const grid = Array.from({ length: 8 }, () =>
+      Array.from({ length: 8 }, () => ({ type: 'grass', walkable: true })),
+    );
+    const interiorTile = footprint.interior[0];
+    grid[interiorTile.y][interiorTile.x] = {
+      type: 'grass',
+      walkable: true,
+      occupant: 'player',
+    };
+    const collisions = detectPortalCollision(grid, footprint);
+    const reasons = collisions.map((entry) => entry.reason);
+    expect(reasons).toContain('player');
+    const secondInterior = footprint.interior[1];
+    grid[secondInterior.y][secondInterior.x] = {
+      type: 'grass',
+      walkable: true,
+      occupants: ['chest'],
+    };
+    const collisionsWithChest = detectPortalCollision(grid, footprint);
+    const chestReasons = collisionsWithChest.map((entry) => entry.reason);
+    expect(chestReasons).toContain('chest');
+  });
+
   it('activates the shader immediately when ignited with a torch', () => {
     const footprint = buildPortalFrame({ x: 5, y: 5 }, { x: 0, y: 1 });
     const result = ignitePortalFrame(footprint, { tool: 'torch' });

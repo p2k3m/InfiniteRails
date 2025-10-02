@@ -7290,6 +7290,39 @@
       return `${gridX}|${gridZ}|${relY}`;
     }
 
+    getPortalFrameSlotForPlacement(gridX, gridZ, level) {
+      if (!this.portalFrameSlots?.size) {
+        return null;
+      }
+      let baseHeight = this.initialHeightMap?.[gridX]?.[gridZ];
+      if (!Number.isFinite(baseHeight)) {
+        baseHeight = null;
+      }
+      if (Number.isFinite(baseHeight)) {
+        const relY = level - baseHeight;
+        if (Number.isInteger(relY) && relY >= 0) {
+          const slot = this.portalFrameSlots.get(this.getPortalSlotKey(gridX, gridZ, relY));
+          if (slot) {
+            return slot;
+          }
+        }
+      }
+      let fallback = null;
+      this.portalFrameSlots.forEach((slot) => {
+        if (fallback) return;
+        if (slot.gridX !== gridX || slot.gridZ !== gridZ) {
+          return;
+        }
+        const slotBase = Number.isFinite(slot.baseHeight)
+          ? slot.baseHeight
+          : baseHeight ?? 0;
+        if (slotBase + slot.relY === level) {
+          fallback = slot;
+        }
+      });
+      return fallback;
+    }
+
     resetPortalFrameState() {
       this.portalFrameSlots.clear();
       this.restorePortalInteriorBlocks();
@@ -7487,6 +7520,38 @@
       };
     }
 
+    getPortalFrameSlotBounds(slot, padding = 0.05) {
+      if (!slot) {
+        return null;
+      }
+      const gridX = Number.isFinite(slot.gridX) ? slot.gridX : null;
+      const gridZ = Number.isFinite(slot.gridZ) ? slot.gridZ : null;
+      if (gridX === null || gridZ === null) {
+        return null;
+      }
+      const baseHeight = Number.isFinite(slot.baseHeight)
+        ? slot.baseHeight
+        : this.initialHeightMap?.[gridX]?.[gridZ] ?? 0;
+      const targetLevel = baseHeight + slot.relY;
+      const worldX = (gridX - WORLD_SIZE / 2) * BLOCK_SIZE;
+      const worldZ = (gridZ - WORLD_SIZE / 2) * BLOCK_SIZE;
+      const centerY = (targetLevel + 0.5) * BLOCK_SIZE;
+      return {
+        centerX: worldX,
+        centerY,
+        centerZ: worldZ,
+        halfWidth: BLOCK_SIZE * 0.5 + padding,
+        halfDepth: BLOCK_SIZE * 0.5 + padding,
+        minY: targetLevel * BLOCK_SIZE - padding,
+        maxY: (targetLevel + 1) * BLOCK_SIZE + padding,
+      };
+    }
+
+    collectPortalFrameSlotObstructions(slot, padding = 0.05) {
+      const bounds = this.getPortalFrameSlotBounds(slot, padding);
+      return this.collectEntitiesWithinBounds(bounds);
+    }
+
     isEntityWithinPortalBounds(entry, bounds) {
       if (!entry?.position || !bounds) {
         return false;
@@ -7515,8 +7580,7 @@
       return true;
     }
 
-    collectPortalFootprintObstructions() {
-      const bounds = this.getPortalInteriorBounds(0.25);
+    collectEntitiesWithinBounds(bounds) {
       if (!bounds) {
         return [];
       }
@@ -7583,9 +7647,14 @@
       return obstructions;
     }
 
-    formatPortalObstructionMessage(obstructions = []) {
+    collectPortalFootprintObstructions() {
+      const bounds = this.getPortalInteriorBounds(0.25);
+      return this.collectEntitiesWithinBounds(bounds);
+    }
+
+    formatPortalObstructionLabel(obstructions = [], fallback = '') {
       if (!Array.isArray(obstructions) || !obstructions.length) {
-        return '';
+        return fallback;
       }
       const descriptors = [];
       obstructions.forEach((entry) => {
@@ -7596,18 +7665,56 @@
         }
       });
       if (!descriptors.length) {
-        return 'Portal activation blocked — clear the obstruction occupying the gateway.';
+        return fallback;
       }
       const unique = Array.from(new Set(descriptors));
-      let label;
       if (unique.length === 1) {
-        label = unique[0];
-      } else if (unique.length === 2) {
-        label = `${unique[0]} and ${unique[1]}`;
-      } else {
-        label = `${unique.slice(0, -1).join(', ')}, and ${unique[unique.length - 1]}`;
+        return unique[0];
+      }
+      if (unique.length === 2) {
+        return `${unique[0]} and ${unique[1]}`;
+      }
+      return `${unique.slice(0, -1).join(', ')}, and ${unique[unique.length - 1]}`;
+    }
+
+    formatPortalObstructionMessage(obstructions = []) {
+      const label = this.formatPortalObstructionLabel(
+        obstructions,
+        'obstruction occupying the gateway',
+      );
+      if (!label) {
+        return 'Portal activation blocked — clear the obstruction occupying the gateway.';
       }
       return `Portal activation blocked — clear the ${label} occupying the gateway.`;
+    }
+
+    formatPortalPlacementRejectionMessage(obstructions = []) {
+      const label = this.formatPortalObstructionLabel(obstructions, 'gateway obstruction');
+      if (!label) {
+        return 'Portal frame placement blocked — clear the obstruction occupying the frame.';
+      }
+      return `Portal frame placement blocked — clear the ${label} occupying the frame.`;
+    }
+
+    logPortalFramePlacementRejection(slot, obstructions, context = {}) {
+      if (typeof console === 'undefined') {
+        return;
+      }
+      const reason = this.formatPortalObstructionLabel(obstructions, 'unknown obstruction');
+      const detail = {
+        slot,
+        obstructions,
+        context,
+      };
+      const message =
+        `Portal frame placement rejected at (${slot?.gridX ?? '?'}, ${slot?.gridZ ?? '?'}, relY ${
+          slot?.relY ?? '?'
+        }) — clear the ${reason}.`;
+      if (typeof console.warn === 'function') {
+        console.warn(message, detail);
+      } else if (typeof console.log === 'function') {
+        console.log(message, detail);
+      }
     }
 
     refreshPortalObstructionState() {
@@ -10055,11 +10162,17 @@
 
     placeBlock() {
       const intersections = this.castFromCamera();
-      if (!intersections.length) return;
+      if (!Array.isArray(intersections) || !intersections.length) return;
       const hit = intersections.find((intersection) => intersection.object?.userData?.columnKey);
       if (!hit) return;
       const mesh = hit.object;
-      const { columnKey, gx, gz } = mesh.userData;
+      const { columnKey, gx, gz } = mesh.userData || {};
+      if (typeof columnKey !== 'string') {
+        return;
+      }
+      if (!Number.isInteger(gx) || !Number.isInteger(gz)) {
+        return;
+      }
       const column = this.columns.get(columnKey) ?? [];
       const newLevel = column.length;
       const worldX = mesh.position.x;
@@ -10069,6 +10182,39 @@
         return;
       }
       const allowed = new Set(['grass-block', 'dirt', 'stone']);
+      const selectedSlot = this.hotbar?.[this.selectedHotbarIndex];
+      const selectedItem = selectedSlot?.item;
+      if (!selectedItem || selectedSlot.quantity <= 0 || !allowed.has(selectedItem)) {
+        this.showHint('Select a block in your hotbar to place it.');
+        return;
+      }
+      let portalSlot = null;
+      if (selectedItem === 'stone') {
+        portalSlot = this.getPortalFrameSlotForPlacement(gx, gz, newLevel);
+      }
+      if (portalSlot) {
+        const obstructions = this.collectPortalFrameSlotObstructions(portalSlot);
+        if (obstructions.length) {
+          const message = this.formatPortalPlacementRejectionMessage(obstructions);
+          this.portalFootprintObstructed = true;
+          this.portalFootprintObstructionSummary = message;
+          this.logPortalFramePlacementRejection(portalSlot, obstructions, {
+            gridX: gx,
+            gridZ: gz,
+            level: newLevel,
+          });
+          if (typeof this.showHint === 'function') {
+            this.showHint(message);
+          }
+          if (typeof this.updatePortalProgress === 'function') {
+            this.updatePortalProgress();
+          }
+          if (typeof this.setPortalStatusIndicator === 'function') {
+            this.setPortalStatusIndicator('blocked', message, 'Portal Blocked');
+          }
+          return;
+        }
+      }
       const consumed = this.useSelectedItem({ allow: allowed });
       if (!consumed) {
         this.showHint('Select a block in your hotbar to place it.');
