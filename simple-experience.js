@@ -11895,6 +11895,11 @@
       if (recipe.description) {
         descriptionSegments.push(recipe.description);
       }
+      const eligibility = this.computeRecipeEligibility(recipe, key);
+      const eligibilitySummary = this.describeRecipeEligibility(eligibility);
+      if (eligibilitySummary) {
+        descriptionSegments.push(eligibilitySummary);
+      }
       descriptionSegments.push(`Autofill to award +${recipe.score} pts.`);
       this.showCraftingHelperHint('recipe', {
         title: recipe.label,
@@ -12010,6 +12015,24 @@
     handleCraftSuggestionClick(event) {
       const button = event.target.closest('[data-recipe-key]');
       if (!button) return;
+      if (button.getAttribute('aria-disabled') === 'true') {
+        if (event?.preventDefault) {
+          event.preventDefault();
+        }
+        const status = button.dataset.status || 'missing';
+        if (status === 'locked') {
+          this.showHint('Discover this recipe before crafting it.');
+        } else if (status === 'missing') {
+          const summary = button.dataset.missingSummary || '';
+          const message = summary
+            ? `Missing ingredients: ${summary}.`
+            : 'Gather the missing ingredients to craft this recipe.';
+          this.showHint(message);
+        } else {
+          this.showHint('Recipe unavailable.');
+        }
+        return;
+      }
       const key = button.dataset.recipeKey;
       if (!key) return;
       const parts = key.split(',').filter(Boolean);
@@ -12171,14 +12194,37 @@
         button.type = 'button';
         button.className = 'crafting-suggestions__item';
         button.dataset.recipeKey = key;
-        button.textContent = `${recipe.label} (${key.replace(/,/g, ' → ')})`;
+        const sequenceText = key.replace(/,/g, ' → ');
+        button.textContent = `${recipe.label} (${sequenceText})`;
+        const eligibility = this.computeRecipeEligibility(recipe, key);
+        const statusToken = this.getRecipeEligibilityToken(eligibility);
+        const statusLabel = this.describeRecipeEligibility(eligibility);
+        const missingSummary = eligibility.hasMaterials
+          ? ''
+          : this.describeMissingIngredients(eligibility.missing);
+        button.dataset.status = statusToken;
+        button.dataset.eligible = eligibility.eligible ? 'true' : 'false';
+        button.dataset.unlocked = eligibility.unlocked ? 'true' : 'false';
+        if (missingSummary) {
+          button.dataset.missingSummary = missingSummary;
+        }
+        if (eligibility.eligible) {
+          button.removeAttribute('aria-disabled');
+        } else {
+          button.setAttribute('aria-disabled', 'true');
+        }
         const hintParts = [];
         if (recipe.description) {
           hintParts.push(recipe.description);
         }
+        if (statusLabel) {
+          hintParts.push(statusLabel);
+        }
         hintParts.push(`Autofill sequence • +${recipe.score} pts`);
         button.setAttribute('data-hint', hintParts.join(' — '));
         const li = document.createElement('li');
+        li.dataset.status = statusToken;
+        li.dataset.eligible = button.dataset.eligible;
         li.appendChild(button);
         fragment.appendChild(li);
       });
@@ -12290,26 +12336,15 @@
           message: 'Sequence fizzles. No recipe matched.',
         };
       }
-      const counts = this.buildIngredientCount(recipe.sequence);
-      const missing = [];
-      counts.forEach((required, itemId) => {
-        const available = this.getInventoryCountForItem(itemId);
-        if (available < required) {
-          missing.push({
-            itemId,
-            required,
-            available,
-            missing: required - available,
-          });
-        }
-      });
-      if (missing.length) {
+      const eligibility = this.computeRecipeEligibility(recipe, key, { requireUnlock: false });
+      if (!eligibility.hasMaterials) {
+        const summary = this.describeMissingIngredients(eligibility.missing);
         return {
           valid: false,
           reason: 'missing-ingredients',
           recipe,
-          missing,
-          message: `Missing materials: ${this.describeMissingIngredients(missing)}.`,
+          missing: eligibility.missing,
+          message: summary ? `Missing materials: ${summary}.` : 'Missing materials for this recipe.',
         };
       }
       return {
@@ -12350,10 +12385,12 @@
 
     updateCraftingSearchResults() {
       if (!this.craftingSearchResultsEl) return;
-      const term = (this.craftingState.searchTerm || '').trim();
+      const term = (this.craftingState.searchTerm || '').trim().toLowerCase();
       const results = [];
       this.craftingRecipes.forEach((recipe, key) => {
-        if (!term || recipe.label.toLowerCase().includes(term) || key.includes(term)) {
+        const labelMatch = recipe.label.toLowerCase().includes(term);
+        const keyMatch = key.toLowerCase().includes(term);
+        if (!term || labelMatch || keyMatch) {
           results.push({ key, recipe });
         }
       });
@@ -12363,14 +12400,53 @@
         button.type = 'button';
         button.className = 'crafting-search__result';
         button.dataset.recipeKey = key;
-        button.textContent = `${recipe.label} — ${key.replace(/,/g, ' → ')}`;
+        const sequenceParts = this.getRecipeSequence(recipe, key);
+        const sequenceText = this.formatRecipeSequence(sequenceParts);
+        const eligibility = this.computeRecipeEligibility(recipe, key);
+        const statusToken = this.getRecipeEligibilityToken(eligibility);
+        const statusLabel = this.describeRecipeEligibility(eligibility);
+        const missingSummary = eligibility.hasMaterials
+          ? ''
+          : this.describeMissingIngredients(eligibility.missing);
+        button.dataset.status = statusToken;
+        button.dataset.eligible = eligibility.eligible ? 'true' : 'false';
+        button.dataset.unlocked = eligibility.unlocked ? 'true' : 'false';
+        if (missingSummary) {
+          button.dataset.missingSummary = missingSummary;
+        }
+        if (eligibility.eligible) {
+          button.removeAttribute('aria-disabled');
+        } else {
+          button.setAttribute('aria-disabled', 'true');
+        }
+        const title = document.createElement('span');
+        title.textContent = recipe.label;
+        const order = document.createElement('span');
+        order.className = 'crafting-search-panel__result-output';
+        order.textContent = sequenceText;
+        const subtitle = document.createElement('span');
+        subtitle.className = 'crafting-search-panel__result-subtitle';
+        const subtitleParts = [];
+        if (statusLabel) {
+          subtitleParts.push(statusLabel);
+        }
+        subtitleParts.push(`+${recipe.score} pts`);
+        subtitle.textContent = subtitleParts.join(' • ');
+        button.innerHTML = '';
+        button.append(title, order, subtitle);
         const hintParts = [];
         if (recipe.description) {
           hintParts.push(recipe.description);
         }
-        hintParts.push(`Autofill sequence • +${recipe.score} pts`);
+        if (statusLabel) {
+          hintParts.push(statusLabel);
+        }
+        hintParts.push(`Reward: +${recipe.score} pts`);
+        hintParts.push(`Order: ${sequenceText}`);
         button.setAttribute('data-hint', hintParts.join(' — '));
         const li = document.createElement('li');
+        li.dataset.status = statusToken;
+        li.dataset.eligible = button.dataset.eligible;
         li.appendChild(button);
         fragment.appendChild(li);
       });
@@ -12416,6 +12492,59 @@
         }
       }
       return true;
+    }
+
+    computeRecipeEligibility(recipe, key, options = {}) {
+      if (!recipe) {
+        return { unlocked: false, hasMaterials: false, eligible: false, missing: [], key: '' };
+      }
+      const parts = this.getRecipeSequence(recipe, key);
+      const sequenceKey = typeof key === 'string' && key.length ? key : parts.join(',');
+      const unlocked = this.craftingState.unlocked.has(sequenceKey);
+      const counts = this.buildIngredientCount(parts);
+      const missing = [];
+      counts.forEach((required, itemId) => {
+        const available = this.getInventoryCountForItem(itemId);
+        if (available < required) {
+          missing.push({
+            itemId,
+            required,
+            available,
+            missing: required - available,
+          });
+        }
+      });
+      const hasMaterials = missing.length === 0;
+      const requireUnlock = options.requireUnlock !== false;
+      const eligible = (requireUnlock ? unlocked : true) && hasMaterials;
+      return { unlocked, hasMaterials, eligible, missing, key: sequenceKey };
+    }
+
+    describeRecipeEligibility(eligibility) {
+      if (!eligibility) {
+        return 'Unavailable';
+      }
+      if (!eligibility.unlocked) {
+        return 'Recipe undiscovered';
+      }
+      if (!eligibility.hasMaterials) {
+        const summary = this.describeMissingIngredients(eligibility.missing);
+        return summary ? `Missing ingredients: ${summary}` : 'Missing ingredients';
+      }
+      return 'Ready to craft';
+    }
+
+    getRecipeEligibilityToken(eligibility) {
+      if (!eligibility) {
+        return 'unavailable';
+      }
+      if (!eligibility.unlocked) {
+        return 'locked';
+      }
+      if (!eligibility.hasMaterials) {
+        return 'missing';
+      }
+      return 'ready';
     }
 
     findRecipesMatchingPrefix(sequence) {
