@@ -221,6 +221,40 @@ describe('default renderer Three.js bootstrap', () => {
     resetLoader();
   });
 
+  it('rejects when an alternate THREE instance attempts to override the canonical global context', async () => {
+    const originalThree = { marker: 'original' };
+    const duplicateThree = { marker: 'duplicate' };
+    const scope = { THREE: duplicateThree, THREE_GLOBAL: originalThree, console: { warn: vi.fn() } };
+    global.window = scope;
+
+    const documentStub = {
+      querySelectorAll: () => [],
+      querySelector: () => null,
+    };
+
+    const loadScript = vi.fn();
+    const reportThreeLoadFailure = vi.fn();
+
+    const { ensureThree, resetLoader } = instantiateEnsureThree({
+      loadScript,
+      scriptUrls: ['vendor/three.min.js'],
+      documentStub,
+      reportThreeLoadFailure,
+    });
+
+    await expect(ensureThree()).rejects.toThrow(
+      'Multiple Three.js contexts detected; refusing to bootstrap duplicate instance.'
+    );
+    expect(reportThreeLoadFailure).toHaveBeenCalledWith(
+      expect.objectContaining({ code: 'duplicate-three-global' }),
+      expect.objectContaining({ reason: 'duplicate-three-global' })
+    );
+    expect(scope.THREE).toBe(originalThree);
+    expect(scope.THREE_GLOBAL).toBe(originalThree);
+    expect(loadScript).not.toHaveBeenCalled();
+    resetLoader();
+  });
+
   it('attempts bundled sources sequentially and annotates failures', async () => {
     const scope = {};
     global.window = scope;
