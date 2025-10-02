@@ -76,6 +76,13 @@
 
   const configWarningDeduper = new Set();
 
+  const DEFAULT_AMBIENT_TRACKS = Object.freeze([
+    'ambientOverworld',
+    'ambientDefault',
+    'ambient',
+    'bubble',
+  ]);
+
   function logConfigWarning(message, context = {}) {
     const consoleRef = typeof console !== 'undefined' ? console : null;
     if (!consoleRef) {
@@ -1512,6 +1519,7 @@
       this.detachPointerPreferenceObserver = null;
       this.prefersReducedMotion = this.detectReducedMotion();
       this.audio = this.createAudioController();
+      this.activeAmbientTrack = null;
       this.onPointerLockChange = this.handlePointerLockChange.bind(this);
       this.onPointerLockError = this.handlePointerLockError.bind(this);
       this.onMouseUp = this.handleMouseUp.bind(this);
@@ -1631,6 +1639,7 @@
         this.loadFirstPersonArms(sessionId);
         this.initializeScoreboardUi();
         this.applyDimensionSettings(this.currentDimensionIndex);
+        this.primeAmbientAudio();
         this.buildTerrain();
         this.buildRails();
         this.spawnDimensionChests();
@@ -1677,6 +1686,53 @@
           stage: 'startup',
         });
         this.publishStateSnapshot('start-error');
+      }
+    }
+
+    primeAmbientAudio() {
+      this.activeAmbientTrack = null;
+      if (!this.audio || typeof this.audio !== 'object') {
+        return;
+      }
+      const { audio } = this;
+      if (typeof audio.resumeContextIfNeeded === 'function') {
+        try {
+          audio.resumeContextIfNeeded();
+        } catch (error) {
+          if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+            console.debug('Unable to resume audio context.', error);
+          }
+        }
+      }
+      if (typeof audio.has !== 'function' || typeof audio.play !== 'function') {
+        return;
+      }
+      const themeTracks = Array.isArray(this.dimensionSettings?.ambientTracks)
+        ? this.dimensionSettings.ambientTracks
+            .map((name) => (typeof name === 'string' ? name.trim() : ''))
+            .filter(Boolean)
+        : null;
+      const candidates = themeTracks && themeTracks.length ? themeTracks : DEFAULT_AMBIENT_TRACKS;
+      const selectedTrack = candidates.find((name) => {
+        try {
+          return audio.has(name);
+        } catch (error) {
+          if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+            console.debug('Ambient audio availability check failed.', error);
+          }
+          return false;
+        }
+      });
+      if (!selectedTrack) {
+        return;
+      }
+      this.activeAmbientTrack = selectedTrack;
+      try {
+        audio.play(selectedTrack, { loop: true, volume: 0.32 });
+      } catch (error) {
+        if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+          console.debug('Unable to start ambient audio playback.', error);
+        }
       }
     }
 
