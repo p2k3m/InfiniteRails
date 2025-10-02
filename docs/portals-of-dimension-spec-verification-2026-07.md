@@ -20,7 +20,7 @@ implementation so future regressions can be caught quickly.
   `Model load failed, using fallback cube` if the asset is missing.【F:simple-experience.js†L2947-L3022】
 - Pointer lock, WASD, joystick, and touch controls are wired through
   `bindEvents()` and `updateMovement()`, which also emit the
-  `console.error('Movement input detected (forward). If the avatar fails to advance, confirm control bindings and resolve any physics constraints blocking motion.')` debug cue demanded by the prompt series.【F:simple-experience.js†L4300-L4465】【F:simple-experience.js†L3812-L3868】
+  `console.error('Movement input detected (forward). If the avatar fails to advance, confirm control bindings and resolve any locked physics/body constraints or failed transform updates blocking motion.')` debug cue demanded by the prompt series.【F:simple-experience.js†L4300-L4465】【F:simple-experience.js†L3812-L3868】
 
 ## 3. Core Loop: Mining, Crafting, Portals, and Dimensions
 - Crafting UI state is maintained by `handleCraftButton()`, `refreshCraftingUi()`,

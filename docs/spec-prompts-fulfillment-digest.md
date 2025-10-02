@@ -12,7 +12,7 @@ This digest crosswalks the "Detailed Prompts for Coding Agents" from the enhance
 
 ## Input controls and responsiveness
 - Event binding inside `bindEvents()` wires pointer lock, WASD, mouse mining/placing, hotbar taps, and the virtual joystick, covering every interaction described in the control prompt.【F:simple-experience.js†L3600-L3658】
-- Movement handlers constrain camera pitch, track pressed keys, print the "Movement input detected (forward). If the avatar fails to advance, confirm control bindings and resolve any physics constraints blocking motion." debug cue, and keep delta-based acceleration aligned with Minecraft-style movement.【F:simple-experience.js†L3680-L3864】
+- Movement handlers constrain camera pitch, track pressed keys, print the "Movement input detected (forward). If the avatar fails to advance, confirm control bindings and resolve any locked physics/body constraints or failed transform updates blocking motion." debug cue, and keep delta-based acceleration aligned with Minecraft-style movement.【F:simple-experience.js†L3680-L3864】
 
 ## Entities, zombies, and golem defence
 - Zombie AI spawns on night cycles, chases the player, and applies contact damage with the required `Zombie spawn and chase triggered. If AI stalls or pathfinding breaks, validate the navmesh and spawn configuration.` diagnostic, fulfilling the combat prompt.【F:simple-experience.js†L4024-L4086】

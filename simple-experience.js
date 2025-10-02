@@ -9613,7 +9613,7 @@
       }
       if (this.isKeyForAction(code, 'moveForward') && !event.repeat) {
         console.error(
-          'Movement input detected (forward). If the avatar fails to advance, confirm control bindings and resolve any physics constraints blocking motion.',
+          'Movement input detected (forward). If the avatar fails to advance, confirm control bindings and resolve any locked physics/body constraints or failed transform updates blocking motion.',
         );
         this.queueMovementBindingValidation('moveForward');
       }

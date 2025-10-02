@@ -9,7 +9,7 @@ This addendum replays the "Comprehensive Analysis and Enhancement Specifications
 
 ## Player presence & input fidelity
 - `loadPlayerCharacter()` locks the camera to Steve’s head, clones the GLTF rig (with fallback cube), and spins an idle `AnimationMixer`, proving a visible avatar exists even if the network asset fails.【F:simple-experience.js†L2943-L3033】
-- Pointer-lock mouse look, WASD movement logging (`Movement input detected (forward). If the avatar fails to advance, confirm control bindings and resolve any physics constraints blocking motion.`), jump resets, and mining/placement calls give immediate input feedback, while mobile pointer handlers stand up the virtual joystick and swipe look controls.【F:simple-experience.js†L4429-L4619】【F:simple-experience.js†L2475-L2740】
+- Pointer-lock mouse look, WASD movement logging (`Movement input detected (forward). If the avatar fails to advance, confirm control bindings and resolve any locked physics/body constraints or failed transform updates blocking motion.`), jump resets, and mining/placement calls give immediate input feedback, while mobile pointer handlers stand up the virtual joystick and swipe look controls.【F:simple-experience.js†L4429-L4619】【F:simple-experience.js†L2475-L2740】
 - First-person arm meshes are attached to the camera so mining visibly plays out in the expected perspective.【F:simple-experience.js†L2896-L2941】
 
 ## Survival loop, entities & combat

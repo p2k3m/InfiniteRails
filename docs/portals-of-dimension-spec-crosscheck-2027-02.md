@@ -7,7 +7,7 @@
 
 ## Player Presence and Controls
 - `loadPlayerCharacter()` attaches the camera to the Steve model (or a fallback cube) and keeps the animated first-person arms parented to the camera for immersive mining feedback.【F:simple-experience.js†L2943-L3033】
-- Keyboard and pointer-lock listeners log the “Movement input detected (forward). If the avatar fails to advance, confirm control bindings and resolve any physics constraints blocking motion.” instrumentation, route WASD/crafting inputs, and guard pointer capture with the spec’s tutorial copy.【F:simple-experience.js†L4400-L4470】
+- Keyboard and pointer-lock listeners log the “Movement input detected (forward). If the avatar fails to advance, confirm control bindings and resolve any locked physics/body constraints or failed transform updates blocking motion.” instrumentation, route WASD/crafting inputs, and guard pointer capture with the spec’s tutorial copy.【F:simple-experience.js†L4400-L4470】
 - Mouse presses request pointer lock, mine or place voxels, and keep the hint system in sync with the active input mode.【F:simple-experience.js†L4561-L4601】
 
 ## Entities, Combat, and Survival
