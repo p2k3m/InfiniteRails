@@ -6897,13 +6897,12 @@
       if (!(this.navigationMeshes instanceof Map)) {
         this.navigationMeshes = new Map();
       }
-      const chunk = this.terrainChunkMap.get(chunkKey);
-      if (!chunk) {
-        this.navigationMeshes.delete(chunkKey);
-        if (this.dirtyNavigationChunks) {
-          this.dirtyNavigationChunks.delete(chunkKey);
-        }
-        return null;
+      const chunk = this.terrainChunkMap.get(chunkKey) || null;
+      if (!chunk && typeof console !== 'undefined') {
+        console.warn('Navigation mesh rebuild fallback — chunk missing, deriving mesh from height map.', {
+          chunkKey,
+          reason: options.reason ?? 'rebuild',
+        });
       }
       const navmesh = this.computeNavigationMeshForChunk(chunkKey, chunk);
       if (!navmesh) {
@@ -10210,7 +10209,13 @@
       const tmpStep = this.tmpVector2;
       for (const zombie of this.zombies) {
         const { mesh } = zombie;
-        this.ensureNavigationMeshForWorldPosition(mesh.position.x, mesh.position.z);
+        const currentChunkKey = this.getChunkKeyForWorldPosition(mesh.position.x, mesh.position.z);
+        if (currentChunkKey) {
+          this.ensureNavigationMeshForChunk(currentChunkKey, { reason: 'zombie-chase' });
+          zombie.navChunkKey = currentChunkKey;
+        } else {
+          zombie.navChunkKey = null;
+        }
         tmpDir.subVectors(playerPosition, mesh.position);
         const distance = tmpDir.length();
         let baseState = 'idle';
@@ -10270,9 +10275,29 @@
       mesh.castShadow = true;
       mesh.receiveShadow = true;
       mesh.position.set(x, ground + 0.9, z);
-      this.ensureNavigationMeshForWorldPosition(x, z);
+      const spawnChunkKey = this.getChunkKeyForWorldPosition(x, z);
+      if (spawnChunkKey) {
+        this.ensureNavigationMeshForChunk(spawnChunkKey, { reason: 'zombie-spawn' });
+      } else {
+        this.ensureNavigationMeshForWorldPosition(x, z, { reason: 'zombie-spawn-fallback' });
+        if (typeof console !== 'undefined') {
+          console.warn('Zombie spawned outside navmesh coverage — verify spawn radius and terrain bounds.', {
+            x,
+            z,
+          });
+        }
+      }
       zombieGroup.add(mesh);
-      const zombie = { id, mesh, speed: 2.4, lastAttack: this.elapsed, placeholder: true, animation: null };
+      const zombie = {
+        id,
+        mesh,
+        speed: 2.4,
+        lastAttack: this.elapsed,
+        placeholder: true,
+        animation: null,
+        navChunkKey: spawnChunkKey ?? null,
+        spawnedAt: this.elapsed,
+      };
       this.zombies.push(zombie);
       this.upgradeZombie(zombie);
       console.error(
@@ -13488,6 +13513,80 @@
         assetFailures: Array.from(this.assetFailureCounts.entries()),
         assetRecoveryPending: Array.from(this.assetRecoveryPendingKeys),
         assetRecoveryPromptActive: Boolean(this.assetRecoveryPromptActive),
+        zombieAi: this.getZombieAIDiagnostics(),
+      };
+    }
+
+    getZombieAIDiagnostics() {
+      const spawnInterval = ZOMBIE_SPAWN_INTERVAL;
+      const contactRange = ZOMBIE_CONTACT_RANGE;
+      const maxPerDimension = ZOMBIE_MAX_PER_DIMENSION;
+      const zombies = Array.isArray(this.zombies) ? this.zombies : [];
+      const navigationMeshes = this.navigationMeshes instanceof Map ? this.navigationMeshes : null;
+      const navigationSummary = this.navigationMeshSummary || null;
+      const activeChunks = new Set();
+      const details = [];
+      const playerPosition = this.playerRig?.position ?? null;
+      for (const zombie of zombies) {
+        const chunkKey =
+          zombie.navChunkKey ??
+          (zombie.mesh?.position
+            ? this.getChunkKeyForWorldPosition(zombie.mesh.position.x, zombie.mesh.position.z)
+            : null);
+        if (chunkKey) {
+          activeChunks.add(chunkKey);
+        }
+        let distanceToPlayer = null;
+        if (playerPosition && zombie.mesh?.position?.distanceTo) {
+          const distance = zombie.mesh.position.distanceTo(playerPosition);
+          if (Number.isFinite(distance)) {
+            distanceToPlayer = Number(distance.toFixed(2));
+          }
+        }
+        let lastAttackAgo = null;
+        if (Number.isFinite(this.elapsed) && Number.isFinite(zombie.lastAttack)) {
+          const delta = this.elapsed - zombie.lastAttack;
+          if (Number.isFinite(delta)) {
+            lastAttackAgo = Number(delta.toFixed(2));
+          }
+        }
+        details.push({
+          id: zombie.id,
+          chunk: chunkKey,
+          distanceToPlayer,
+          lastAttackAgo,
+          speed: zombie.speed,
+          spawnedAt: zombie.spawnedAt ?? null,
+        });
+      }
+      let timeSinceLastSpawn = null;
+      if (Number.isFinite(this.elapsed) && Number.isFinite(this.lastZombieSpawn)) {
+        const delta = this.elapsed - this.lastZombieSpawn;
+        if (Number.isFinite(delta)) {
+          timeSinceLastSpawn = Number(delta.toFixed(2));
+        }
+      }
+      return {
+        spawnInterval,
+        contactRange,
+        maxPerDimension,
+        isNight: this.isNight(),
+        activeCount: zombies.length,
+        lastSpawnAt: this.lastZombieSpawn ?? null,
+        timeSinceLastSpawn,
+        navigation: {
+          chunksTracked: navigationMeshes ? navigationMeshes.size : 0,
+          activeChunks: Array.from(activeChunks),
+          summary: navigationSummary
+            ? {
+                chunkCount: navigationSummary.chunkCount ?? 0,
+                walkableCells: navigationSummary.walkableCells ?? 0,
+                updatedAt: navigationSummary.updatedAt ?? 0,
+                reason: navigationSummary.reason ?? null,
+              }
+            : null,
+        },
+        zombies: details,
       };
     }
 
