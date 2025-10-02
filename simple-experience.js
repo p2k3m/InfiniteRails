@@ -37,6 +37,7 @@
   const HOTBAR_SLOTS = 9;
   const KEY_BINDINGS_STORAGE_KEY = 'infinite-rails-keybindings';
   const SCOREBOARD_STORAGE_KEY = 'infinite-dimension-scoreboard';
+  const FIRST_RUN_TUTORIAL_STORAGE_KEY = 'infinite-rails-first-run-tutorial';
   const MOVEMENT_ACTIONS = ['moveForward', 'moveBackward', 'moveLeft', 'moveRight'];
   const DEFAULT_KEY_BINDINGS = (() => {
     const map = {
@@ -880,6 +881,16 @@
       this.pointerFallbackDragging = false;
       this.pointerFallbackLast = null;
       this.pointerFallbackButton = null;
+      this.firstRunTutorialEl = this.ui?.firstRunTutorial || null;
+      this.firstRunTutorialBackdrop = this.ui?.firstRunTutorialBackdrop || null;
+      this.firstRunTutorialCloseButton = this.ui?.firstRunTutorialCloseButton || null;
+      this.firstRunTutorialPrimaryButton = this.ui?.firstRunTutorialPrimaryButton || null;
+      this.firstRunTutorialControlsBound = false;
+      this.firstRunTutorialHideTimer = null;
+      this.firstRunTutorialMarkOnDismiss = false;
+      this.firstRunTutorialShowBriefingOnDismiss = false;
+      this.firstRunTutorialSeenCache = null;
+      this.onFirstRunTutorialClose = this.handleFirstRunTutorialClose.bind(this);
       this.assetFailureNotices = new Set();
       this.eventFailureNotices = new Set();
       this.boundEventDisposers = [];
@@ -1305,7 +1316,10 @@
         this.revealDimensionIntro(this.dimensionSettings, { duration: 6200, intent: 'arrival' });
         this.refreshCraftingUi();
         this.hideIntro();
-        this.showBriefingOverlay();
+        const tutorialShown = this.maybeShowFirstRunTutorial();
+        if (!tutorialShown) {
+          this.showBriefingOverlay();
+        }
         this.autoCaptureLocation({ updateOnFailure: true }).catch((error) => {
           console.warn('Location capture failed', error);
         });
@@ -1352,6 +1366,182 @@
           }
         }
       }
+    }
+
+    bindFirstRunTutorialControls() {
+      if (this.firstRunTutorialControlsBound) {
+        return;
+      }
+      if (this.firstRunTutorialCloseButton) {
+        this.firstRunTutorialCloseButton.addEventListener('click', this.onFirstRunTutorialClose);
+      }
+      if (this.firstRunTutorialPrimaryButton) {
+        this.firstRunTutorialPrimaryButton.addEventListener('click', this.onFirstRunTutorialClose);
+      }
+      if (this.firstRunTutorialBackdrop) {
+        this.firstRunTutorialBackdrop.addEventListener('click', this.onFirstRunTutorialClose);
+      }
+      this.firstRunTutorialControlsBound = true;
+    }
+
+    hasSeenFirstRunTutorial() {
+      if (this.firstRunTutorialSeenCache === true) {
+        return true;
+      }
+      if (this.firstRunTutorialSeenCache === false) {
+        return false;
+      }
+      const scope = typeof window !== 'undefined' ? window : typeof globalThis !== 'undefined' ? globalThis : null;
+      if (!scope?.localStorage) {
+        this.firstRunTutorialSeenCache = false;
+        return false;
+      }
+      try {
+        const stored = scope.localStorage.getItem(FIRST_RUN_TUTORIAL_STORAGE_KEY);
+        const seen = stored === '1' || stored === 'true';
+        this.firstRunTutorialSeenCache = seen;
+        return seen;
+      } catch (error) {
+        if (typeof console !== 'undefined' && console.debug) {
+          console.debug('Unable to read first run tutorial preference from storage.', error);
+        }
+        this.firstRunTutorialSeenCache = false;
+        return false;
+      }
+    }
+
+    markFirstRunTutorialSeen() {
+      this.firstRunTutorialSeenCache = true;
+      const scope = typeof window !== 'undefined' ? window : typeof globalThis !== 'undefined' ? globalThis : null;
+      if (!scope?.localStorage) {
+        return;
+      }
+      try {
+        scope.localStorage.setItem(FIRST_RUN_TUTORIAL_STORAGE_KEY, '1');
+      } catch (error) {
+        if (typeof console !== 'undefined' && console.debug) {
+          console.debug('Unable to persist first run tutorial preference.', error);
+        }
+      }
+    }
+
+    maybeShowFirstRunTutorial() {
+      if (!this.firstRunTutorialEl) {
+        return false;
+      }
+      if (this.hasSeenFirstRunTutorial()) {
+        return false;
+      }
+      this.showFirstRunTutorial({ markSeenOnDismiss: true, autoFocus: true, showBriefingAfter: true });
+      return true;
+    }
+
+    showFirstRunTutorial({ markSeenOnDismiss = false, autoFocus = false, showBriefingAfter = false } = {}) {
+      const overlay = this.firstRunTutorialEl;
+      if (!overlay) {
+        return false;
+      }
+      const scope = typeof window !== 'undefined' ? window : typeof globalThis !== 'undefined' ? globalThis : null;
+      if (scope && this.firstRunTutorialHideTimer) {
+        scope.clearTimeout(this.firstRunTutorialHideTimer);
+        this.firstRunTutorialHideTimer = null;
+      }
+      this.bindFirstRunTutorialControls();
+      overlay.hidden = false;
+      overlay.setAttribute('aria-hidden', 'false');
+      overlay.setAttribute('data-visible', 'true');
+      this.firstRunTutorialMarkOnDismiss = !!markSeenOnDismiss;
+      this.firstRunTutorialShowBriefingOnDismiss = !!showBriefingAfter;
+      const body = typeof document !== 'undefined' ? document.body : null;
+      if (body?.classList) {
+        body.classList.add('first-run-tutorial-active');
+      }
+      const raf =
+        typeof requestAnimationFrame === 'function'
+          ? requestAnimationFrame
+          : scope?.requestAnimationFrame ?? null;
+      if (typeof raf === 'function') {
+        raf(() => {
+          overlay.classList.add('is-visible');
+        });
+      } else {
+        overlay.classList.add('is-visible');
+      }
+      if (autoFocus && this.firstRunTutorialPrimaryButton) {
+        const focusTarget = this.firstRunTutorialPrimaryButton;
+        const timerHost = scope ?? (typeof globalThis !== 'undefined' ? globalThis : null);
+        const focus = () => {
+          try {
+            focusTarget.focus({ preventScroll: true });
+          } catch (error) {
+            try {
+              focusTarget.focus();
+            } catch (nestedError) {
+              if (typeof console !== 'undefined' && console.debug) {
+                console.debug('Unable to focus tutorial primary action.', nestedError);
+              }
+            }
+          }
+        };
+        if (timerHost?.setTimeout) {
+          timerHost.setTimeout(focus, 80);
+        } else {
+          focus();
+        }
+      }
+      return true;
+    }
+
+    hideFirstRunTutorial({ markSeen = false, showBriefingAfter = false } = {}) {
+      const overlay = this.firstRunTutorialEl;
+      if (!overlay) {
+        if (markSeen) {
+          this.markFirstRunTutorialSeen();
+        }
+        if (showBriefingAfter) {
+          this.showBriefingOverlay();
+        }
+        return false;
+      }
+      const scope = typeof window !== 'undefined' ? window : typeof globalThis !== 'undefined' ? globalThis : null;
+      if (scope && this.firstRunTutorialHideTimer) {
+        scope.clearTimeout(this.firstRunTutorialHideTimer);
+        this.firstRunTutorialHideTimer = null;
+      }
+      overlay.classList.remove('is-visible');
+      overlay.setAttribute('data-visible', 'false');
+      const body = typeof document !== 'undefined' ? document.body : null;
+      const finalise = () => {
+        overlay.hidden = true;
+        overlay.setAttribute('aria-hidden', 'true');
+        if (body?.classList) {
+          body.classList.remove('first-run-tutorial-active');
+        }
+        if (showBriefingAfter) {
+          this.showBriefingOverlay();
+        }
+        this.firstRunTutorialHideTimer = null;
+      };
+      if (scope?.setTimeout) {
+        this.firstRunTutorialHideTimer = scope.setTimeout(finalise, 220);
+      } else {
+        finalise();
+      }
+      if (markSeen) {
+        this.markFirstRunTutorialSeen();
+      }
+      this.firstRunTutorialMarkOnDismiss = false;
+      this.firstRunTutorialShowBriefingOnDismiss = false;
+      return true;
+    }
+
+    handleFirstRunTutorialClose(event) {
+      if (event?.preventDefault) {
+        event.preventDefault();
+      }
+      const markSeen = this.firstRunTutorialMarkOnDismiss;
+      const showBriefingAfter = this.firstRunTutorialShowBriefingOnDismiss;
+      this.hideFirstRunTutorial({ markSeen, showBriefingAfter });
     }
 
     showBriefingOverlay() {
