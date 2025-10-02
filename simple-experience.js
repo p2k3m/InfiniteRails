@@ -802,6 +802,7 @@
       this.scene = null;
       this.camera = null;
       this.cameraFrustumHeight = 6;
+      this.cameraFieldOfView = 60;
       this.renderer = null;
       this.sunLight = null;
       this.hemiLight = null;
@@ -2542,8 +2543,6 @@
       const width = this.canvas.clientWidth || this.canvas.width || 1;
       const height = this.canvas.clientHeight || this.canvas.height || 1;
       const aspect = width / Math.max(1, height);
-      const frustumHeight = this.cameraFrustumHeight ?? 6;
-      const frustumWidth = frustumHeight * aspect;
 
       let renderer;
       try {
@@ -2583,14 +2582,8 @@
       this.scene.background = new THREE.Color('#87ceeb');
       this.scene.fog = new THREE.Fog(0x87ceeb, 40, 140);
 
-      this.camera = new THREE.OrthographicCamera(
-        -frustumWidth / 2,
-        frustumWidth / 2,
-        frustumHeight / 2,
-        -frustumHeight / 2,
-        0.1,
-        250,
-      );
+      const fov = this.cameraFieldOfView ?? 60;
+      this.camera = new THREE.PerspectiveCamera(fov, aspect, 0.1, 250);
       this.camera.position.set(0, 0, 0);
 
       this.playerRig = new THREE.Group();
@@ -2602,7 +2595,6 @@
       this.cameraBoom.add(this.camera);
       this.scene.add(this.playerRig);
       this.camera.position.set(0, 0, 0);
-      this.camera.lookAt(new THREE.Vector3(0, PLAYER_EYE_HEIGHT, 10));
       this.updateCameraFrustum(width, height);
 
       this.hemiLight = new THREE.HemisphereLight(0xbddcff, 0x34502d, 0.9);
@@ -2660,15 +2652,23 @@
       if (!this.camera || typeof width !== 'number' || typeof height !== 'number') {
         return;
       }
+      const safeWidth = Math.max(1, width);
       const safeHeight = Math.max(1, height);
-      const aspect = width / safeHeight;
-      const frustumHeight = this.cameraFrustumHeight ?? 6;
-      const frustumWidth = frustumHeight * aspect;
-      this.camera.left = -frustumWidth / 2;
-      this.camera.right = frustumWidth / 2;
-      this.camera.top = frustumHeight / 2;
-      this.camera.bottom = -frustumHeight / 2;
-      this.camera.updateProjectionMatrix();
+      if (this.camera.isPerspectiveCamera) {
+        this.camera.aspect = safeWidth / safeHeight;
+        this.camera.updateProjectionMatrix();
+        return;
+      }
+      if (this.camera.isOrthographicCamera) {
+        const aspect = safeWidth / safeHeight;
+        const frustumHeight = this.cameraFrustumHeight ?? 6;
+        const frustumWidth = frustumHeight * aspect;
+        this.camera.left = -frustumWidth / 2;
+        this.camera.right = frustumWidth / 2;
+        this.camera.top = frustumHeight / 2;
+        this.camera.bottom = -frustumHeight / 2;
+        this.camera.updateProjectionMatrix();
+      }
     }
 
     refreshCameraBaseOffset() {
@@ -3547,10 +3547,33 @@
         }
       };
 
+      const resumeAudioContext = () => {
+        const ctx = scope?.Howler?.ctx;
+        const state = typeof ctx?.state === 'string' ? ctx.state : '';
+        if (!ctx || state === 'running' || typeof ctx.resume !== 'function') {
+          return;
+        }
+        try {
+          const result = ctx.resume();
+          if (result && typeof result.catch === 'function') {
+            result.catch((error) => {
+              if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+                console.debug('Audio context resume rejected.', error);
+              }
+            });
+          }
+        } catch (error) {
+          if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+            console.debug('Audio context resume failed.', error);
+          }
+        }
+      };
+
       const playInternal = (requestedName, resolvedName, options = {}) => {
         if (!resolvedName || !samples[resolvedName]) {
           return;
         }
+        resumeAudioContext();
         if (useHowler) {
           let howl = howlCache.get(resolvedName);
           if (!howl) {
@@ -3678,6 +3701,9 @@
             return;
           }
           fallbackPlaying.forEach((baseVolume, audio) => applyMasterVolume(audio, baseVolume));
+        },
+        resumeContextIfNeeded() {
+          resumeAudioContext();
         },
         _resolve(name) {
           // Exposed for debugging and automated tests.
@@ -4248,6 +4274,15 @@
     markInteraction() {
       const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
       this.lastInteractionTimeMs = now;
+      if (this.audio && typeof this.audio.resumeContextIfNeeded === 'function') {
+        try {
+          this.audio.resumeContextIfNeeded();
+        } catch (error) {
+          if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+            console.debug('Audio context resume threw during interaction.', error);
+          }
+        }
+      }
     }
 
     isSceneActive() {

@@ -12,7 +12,7 @@ const scriptSource = fs.readFileSync(scriptPath, 'utf8');
 describe('Portals of Dimension spec regression checks', () => {
   it('keeps the procedural island and render loop configuration intact', () => {
     expect(simpleExperienceSource).toMatch(/const WORLD_SIZE = 64/);
-    expect(simpleExperienceSource).toMatch(/new THREE\.OrthographicCamera/);
+    expect(simpleExperienceSource).toMatch(/new THREE\.PerspectiveCamera/);
     expect(
       simpleExperienceSource.includes(
         'World generation summary — ${columnCount} columns created. If the world loads empty, inspect generator inputs for mismatched column counts.',
@@ -69,7 +69,7 @@ describe('Portals of Dimension spec regression checks', () => {
   });
 
   it('keeps the first-person rig and day/night pipeline wired as specced', () => {
-    expect(simpleExperienceSource).toMatch(/this\.camera = new THREE\.OrthographicCamera/);
+    expect(simpleExperienceSource).toMatch(/this\.camera = new THREE\.PerspectiveCamera/);
     expect(simpleExperienceSource).toMatch(/this\.camera\.add\(this\.handGroup\);/);
     expect(simpleExperienceSource).toMatch(/this\.elapsed = DAY_LENGTH_SECONDS \* 0\.5;/);
     expect(simpleExperienceSource).toMatch(/updateDayNightCycle\(\)/);

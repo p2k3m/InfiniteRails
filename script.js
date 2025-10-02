@@ -2021,45 +2021,127 @@
     if (threeLoaderPromise) {
       return threeLoaderPromise;
     }
-    threeLoaderPromise = new Promise((resolve, reject) => {
-      const attempt = (index) => {
+
+    function normaliseUrlForComparison(url) {
+      if (!url) {
+        return '';
+      }
+      try {
+        const base = scope?.location?.href
+          || (typeof document !== 'undefined' && document.baseURI)
+          || documentRef?.baseURI
+          || undefined;
+        return new URL(url, base).href;
+      } catch (error) {
+        return url;
+      }
+    }
+
+    function getPreloadedThreeScript() {
+      const doc = typeof document !== 'undefined' ? document : scope.document || documentRef;
+      if (!doc?.querySelector) {
+        return null;
+      }
+      try {
+        return doc.querySelector('script[data-preload-three]');
+      } catch (error) {
+        return null;
+      }
+    }
+
+    function loadThreeFromCandidates({ startIndex = 0, exclude = [] } = {}) {
+      return new Promise((resolve, reject) => {
+        const attempt = (index) => {
+          if (scope.THREE && typeof scope.THREE === 'object') {
+            scope.THREE_GLOBAL = scope.THREE;
+            resolve(scope.THREE);
+            return;
+          }
+          if (index >= THREE_CDN_URLS.length) {
+            reject(new Error('Unable to load Three.js from configured sources.'));
+            return;
+          }
+          const candidate = THREE_CDN_URLS[index];
+          const normalisedCandidate = normaliseUrlForComparison(candidate);
+          if (exclude.includes(normalisedCandidate)) {
+            attempt(index + 1);
+            return;
+          }
+          const attrs = {
+            'data-three-fallback': 'true',
+            'data-three-fallback-index': String(index),
+          };
+          loadScript(candidate, attrs)
+            .then(() => {
+              if (scope.THREE && typeof scope.THREE === 'object') {
+                scope.THREE_GLOBAL = scope.THREE;
+                resolve(scope.THREE);
+              } else {
+                attempt(index + 1);
+              }
+            })
+            .catch((error) => {
+              const doc = typeof document !== 'undefined' ? document : scope.document || documentRef;
+              const failingElement = doc?.querySelector?.(`script[data-three-fallback-index="${index}"]`);
+              if (failingElement?.setAttribute) {
+                failingElement.setAttribute('data-three-fallback-error', 'true');
+              }
+              if (scope.console?.warn) {
+                scope.console.warn('Failed to load Three.js fallback', { url: candidate, error });
+              }
+              attempt(index + 1);
+            });
+        };
+        attempt(startIndex);
+      });
+    }
+
+    function waitForPreloadedThree() {
+      const script = getPreloadedThreeScript();
+      if (!script) {
+        return null;
+      }
+      if (scope.THREE && typeof scope.THREE === 'object') {
+        scope.THREE_GLOBAL = scope.THREE;
+        return Promise.resolve(scope.THREE);
+      }
+      const readyState = script.readyState;
+      if (readyState === 'loaded' || readyState === 'complete') {
         if (scope.THREE && typeof scope.THREE === 'object') {
           scope.THREE_GLOBAL = scope.THREE;
-          resolve(scope.THREE);
-          return;
+          return Promise.resolve(scope.THREE);
         }
-        if (index >= THREE_CDN_URLS.length) {
-          reject(new Error('Unable to load Three.js from configured sources.'));
-          return;
-        }
-        const url = THREE_CDN_URLS[index];
-        const attrs = {
-          'data-three-fallback': 'true',
-          'data-three-fallback-index': String(index),
+        return Promise.reject(new Error('Preloaded Three.js script finished without exposing THREE.'));
+      }
+      return new Promise((resolve, reject) => {
+        const handleLoad = () => {
+          if (scope.THREE && typeof scope.THREE === 'object') {
+            scope.THREE_GLOBAL = scope.THREE;
+            resolve(scope.THREE);
+          } else {
+            reject(new Error('Preloaded Three.js script loaded without exposing THREE.'));
+          }
         };
-        loadScript(url, attrs)
-          .then(() => {
-            if (scope.THREE && typeof scope.THREE === 'object') {
-              scope.THREE_GLOBAL = scope.THREE;
-              resolve(scope.THREE);
-            } else {
-              attempt(index + 1);
-            }
-          })
-          .catch((error) => {
-            const doc = typeof document !== 'undefined' ? document : scope.document || documentRef;
-            const failingElement = doc?.querySelector?.(`script[src="${url}"]`);
-            if (failingElement?.setAttribute) {
-              failingElement.setAttribute('data-three-fallback-error', 'true');
-            }
-            if (scope.console?.warn) {
-              scope.console.warn('Failed to load Three.js fallback', { url, error });
-            }
-            attempt(index + 1);
-          });
-      };
-      attempt(0);
-    });
+        const handleError = (event) => {
+          reject(event instanceof Error ? event : new Error('Preloaded Three.js script failed to load.'));
+        };
+        script.addEventListener('load', handleLoad, { once: true });
+        script.addEventListener('error', handleError, { once: true });
+      });
+    }
+
+    const preloadPromise = waitForPreloadedThree();
+    if (preloadPromise) {
+      const excluded = [];
+      const preloadedScript = getPreloadedThreeScript();
+      if (preloadedScript?.src) {
+        excluded.push(normaliseUrlForComparison(preloadedScript.src));
+      }
+      threeLoaderPromise = preloadPromise.catch(() => loadThreeFromCandidates({ startIndex: 0, exclude: excluded }));
+      return threeLoaderPromise;
+    }
+
+    threeLoaderPromise = loadThreeFromCandidates();
     return threeLoaderPromise;
   }
 
