@@ -93,7 +93,9 @@ Touch-first devices automatically fall back to the sandbox renderer unless you e
 The sandbox keeps the portal-building brief front-and-centre while the production renderer continues to mature. Flip the flags
 above whenever you want to regression-test the work-in-progress advanced build without losing the reliable sandbox.
 
-### Troubleshooting a blank viewport
+### Troubleshooting
+
+#### White screen or blank viewport
 
 If you load the page and only see the HUD without the voxel world, run through the quick checks below:
 
@@ -103,6 +105,27 @@ If you load the page and only see the HUD without the voxel world, run through t
 4. **Disable browser extensions.** Content blockers can prevent pointer-lock or audio initialisation; retry in a private window if input still appears frozen.
 
 These steps restore the intended first-person experience when a deployment or cached configuration temporarily forces the alternate renderer path.
+
+#### Asset 403 errors
+
+403 responses on textures, GLTFs, or audio files usually mean the CDN or hosting layer is blocking relative asset fetches:
+
+1. **Check `assetBaseUrl`.** When hosting from a subdirectory or CDN, ensure `APP_CONFIG.assetBaseUrl` points at the folder that exposes `assets/` and `vendor/`. Mismatched prefixes produce signed URL or CORS failures.
+2. **Validate headers.** Confirm the server is configured to serve static assets with the correct MIME types and CORS headers. Three.js will abort loads when GLTF files are returned as HTML error pages.
+3. **Regenerate tokens.** If you rely on signed URLs, regenerate the token bundle and redeploy. Expired credentials manifest as 403s even when the path is correct.
+
+Once the CDN returns `200 OK` with the expected content type, the renderer will resume streaming the missing resources without requiring code changes.
+
+#### Renderer fails to boot
+
+When the advanced renderer refuses to start (no player spawn, empty scene, or repeated retries in the console):
+
+1. **Reset local overrides.** Clear `localStorage` keys beginning with `infinite-rails-` to remove conflicting feature flags, then reload to allow the default configuration to reapply.
+2. **Confirm WebGL support.** Visit `chrome://gpu` (or the equivalent in your browser) and make sure WebGL2 is hardware accelerated. Outdated GPU drivers can trigger the fallback or leave the renderer stalled.
+3. **Rebuild the bundle.** Run `npm install` followed by `npm run build` (or the deploy pipeline) to ensure the advanced build artifacts are present and up to date.
+4. **Fallback to sandbox.** If the advanced build continues to fail, launch with `?mode=simple` so playtesting can continue while renderer-specific regressions are investigated.
+
+Capturing console logs and the exact build SHA alongside these steps will accelerate triage when filing a regression report.
 
 ## Controls
 
