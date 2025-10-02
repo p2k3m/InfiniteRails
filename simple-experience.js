@@ -2183,7 +2183,13 @@
           this.scoreboardStatusEl.textContent = statusMessage;
         }
         this.clearOfflineSyncNotice('sync', { message: statusMessage });
-        console.log('Score synced', { reason, score: entry.score });
+        console.error(
+          'Score sync diagnostic — confirm the leaderboard API accepted the update. Inspect the network panel if the leaderboard remains stale.',
+          {
+            reason,
+            score: entry.score,
+          },
+        );
       } catch (error) {
         console.warn('Unable to sync score to backend', error);
         this.pendingScoreSyncReason = reason;
@@ -2375,7 +2381,9 @@
       });
       this.refreshCameraBaseOffset();
       if (typeof console !== 'undefined') {
-        console.log('Scene populated');
+        console.error(
+          'Scene population check fired — validate terrain, rails, portals, mobs, and chests render correctly. Re-run asset bootstrap if visuals are missing.',
+        );
       }
     }
 
@@ -3088,7 +3096,9 @@
             return useCachedFallbackTexture({ url }) ?? null;
           }
           this.prepareExternalTexture(result.texture);
-          console.log(`External texture loaded for ${key} from ${result.url}`);
+          console.error(
+            `Texture streaming check — ${key} resolved via ${result.url}. If textures appear blank, verify CDN availability and fallback cache configuration.`,
+          );
           this.completeAssetTimer('textures', key, { success: true, url: result.url });
           return result.texture;
         })
@@ -4316,7 +4326,9 @@
           this.camera.position.copy(this.firstPersonCameraOffset);
         }
         this.applyCameraPerspective(this.cameraPerspective);
-        console.log('Steve visible in scene (fallback)');
+        console.error(
+          'Avatar visibility fallback active — Steve forced visible without standard model. Inspect character load pipeline to restore the default avatar.',
+        );
         this.ensurePlayerArmsVisible();
         return;
       }
@@ -4373,7 +4385,9 @@
         this.playerIdleAction.loop = THREE.LoopRepeat;
         this.playerIdleAction.play();
       }
-      console.log('Steve visible in scene');
+      console.error(
+        'Avatar visibility confirmed — verify animation rig initialises correctly if the player appears static.',
+      );
       this.ensurePlayerArmsVisible();
     }
 
@@ -4489,7 +4503,9 @@
       }
       this.updateDayNightCycle();
       this.updateDimensionInfoPanel();
-      console.log(`Dimension online: ${theme.name}`);
+      console.error(
+        `Dimension activation notice — ${theme.name} assets should now be visible. If the environment loads empty, confirm theme registration and manifest entries for this dimension.`,
+      );
     }
 
     buildTerrain() {
@@ -4599,9 +4615,15 @@
         const chunkCount = Array.isArray(this.terrainChunkGroups)
           ? this.terrainChunkGroups.length
           : 0;
-        console.log(`World generated: ${columnCount} voxels`);
-        console.log(`Terrain blocks placed: ${voxelCount}`);
-        console.log(`Terrain chunks populated: ${chunkCount}`);
+        console.error(
+          `World generation summary — ${columnCount} columns created. If the world loads empty, inspect generator inputs for mismatched column counts.`,
+        );
+        console.error(
+          `Terrain block placement summary — ${voxelCount} blocks placed. For missing terrain, review the heightmap generator and chunk hydration routines.`,
+        );
+        console.error(
+          `Terrain chunk population summary — ${chunkCount} chunks loaded. Investigate the streaming manager if this number stalls unexpectedly.`,
+        );
         if (chunkCount <= 0 || voxelCount <= 0) {
           console.warn('Terrain generation produced no active chunk groups or voxels.', {
             chunkCount,
@@ -5182,7 +5204,9 @@
       }
       this.audio.play('craftChime', { volume: 0.68 });
       this.lastChestHintAt = this.elapsed;
-      console.log(`Loot chest opened: ${chest.id}`);
+      console.error(
+        `Loot chest interaction flagged — ${chest.id}. If rewards are missing, review the chest configuration and loot tables for this encounter.`,
+      );
     }
 
     updateLootChests(delta) {
@@ -5735,9 +5759,13 @@
       this.updatePortalProgress();
       this.updateHud();
       this.scheduleScoreSync('portal-activated');
-      console.log('Portal active');
+      console.error(
+        'Portal activation triggered — ensure portal shaders and collision volumes initialise. Rebuild the portal pipeline if travellers become stuck.',
+      );
       const activeDimension = this.dimensionSettings?.name || 'Unknown Dimension';
-      console.log(`Portal active in ${activeDimension}`);
+      console.error(
+        `Portal dimension status — active dimension: ${activeDimension}. If transitions fail, verify the dimension registry and connection graph.`,
+      );
       this.emitGameEvent('portal-activated', {
         dimension: this.dimensionSettings?.id ?? null,
         summary: this.createRunSummary('portal-activated'),
@@ -5831,7 +5859,9 @@
         this.gravityScale = transitionResult.physics.gravity;
       }
       if (this.dimensionSettings) {
-        console.log(`Dimension: ${this.dimensionSettings.name} unlocked`);
+        console.error(
+          `Dimension unlock flow fired — ${this.dimensionSettings.name}. If the unlock fails to present rewards, audit quest requirements and persistence flags.`,
+        );
       }
       this.buildTerrain();
       this.buildRails();
@@ -6571,7 +6601,9 @@
         event.preventDefault();
       }
       if (this.isKeyForAction(code, 'moveForward') && !event.repeat) {
-        console.log('Moving forward');
+        console.error(
+          'Movement input detected (forward). If the avatar fails to advance, confirm control bindings and resolve any physics constraints blocking motion.',
+        );
       }
       if (this.isKeyForAction(code, 'resetPosition')) {
         this.resetPosition();
@@ -7419,7 +7451,9 @@
       const zombie = { id, mesh, speed: 2.4, lastAttack: this.elapsed, placeholder: true };
       this.zombies.push(zombie);
       this.upgradeZombie(zombie);
-      console.log('Zombie spawned, chasing');
+      console.error(
+        'Zombie spawn and chase triggered. If AI stalls or pathfinding breaks, validate the navmesh and spawn configuration.',
+      );
     }
 
     clearZombies() {
@@ -7627,7 +7661,9 @@
       this.updateHud();
       this.scheduleScoreSync('respawn');
       this.audio.play('bubble', { volume: 0.45 });
-      console.log('Respawn triggered');
+      console.error(
+        'Respawn handler invoked. Ensure checkpoint logic restores player position, inventory, and status effects as expected.',
+      );
     }
 
     mineBlock() {

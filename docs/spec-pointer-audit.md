@@ -62,13 +62,13 @@ behaviour.
 
 ## Detailed coding prompt verification
 - **Rendering & world generation** – `setupScene()` provisions the orthographic camera, lighting rig, and renderer,
-  while `buildTerrain()` seeds the 64×64 island and logs the “World generated: 4096 voxels” trace demanded by the
+  while `buildTerrain()` seeds the 64×64 island and logs the “World generation summary — 4096 columns created. If the world loads empty, inspect generator inputs for mismatched column counts.” trace demanded by the
   validation prompt.【F:simple-experience.js†L2161-L2394】
 - **Player visibility** – `loadPlayerCharacter()` attaches the GLTF-driven Steve mesh to the player rig, couples the
-  camera to his head bone for first-person play, and reports “Steve visible in scene” once the idle animation spins
+  camera to his head bone for first-person play, and reports “Avatar visibility confirmed — verify animation rig initialises correctly if the player appears static.” once the idle animation spins
   up.【F:simple-experience.js†L2199-L2270】
-- **Input responsiveness** – Pointer lock, WASD handling, joystick fallbacks, and the keypress debug log (“Moving
-  forward”) are implemented inside `bindEvents()` and `handleKeyDown()` so desktop and mobile inputs map directly to
+- **Input responsiveness** – Pointer lock, WASD handling, joystick fallbacks, and the keypress debug log (“Movement
+  input detected (forward). If the avatar fails to advance, confirm control bindings and resolve any physics constraints blocking motion.”) are implemented inside `bindEvents()` and `handleKeyDown()` so desktop and mobile inputs map directly to
   movement updates.【F:simple-experience.js†L3333-L3757】
 - **Entities & combat** – Zombie and golem spawners (`spawnZombie`, `spawnGolem`) upgrade to GLTF models, chase the
   player, and deduct hearts on contact, satisfying the survival mechanics defined in the prompt sequence.【F:simple-experience.js†L3815-L4089】

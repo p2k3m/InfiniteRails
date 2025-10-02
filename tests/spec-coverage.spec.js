@@ -13,22 +13,58 @@ describe('Portals of Dimension spec regression checks', () => {
   it('keeps the procedural island and render loop configuration intact', () => {
     expect(simpleExperienceSource).toMatch(/const WORLD_SIZE = 64/);
     expect(simpleExperienceSource).toMatch(/new THREE\.OrthographicCamera/);
-    expect(simpleExperienceSource).toMatch(/World generated: \$\{columnCount\} voxels/);
+    expect(
+      simpleExperienceSource.includes(
+        'World generation summary — ${columnCount} columns created. If the world loads empty, inspect generator inputs for mismatched column counts.',
+      ),
+    ).toBe(true);
   });
 
   it('keeps the console telemetry checkpoints demanded by the spec', () => {
-    expect(simpleExperienceSource).toMatch(/Scene populated/);
-    expect(simpleExperienceSource).toMatch(/Steve visible in scene/);
-    expect(simpleExperienceSource).toMatch(/Zombie spawned, chasing/);
-    expect(simpleExperienceSource).toMatch(/Respawn triggered/);
-    expect(simpleExperienceSource).toMatch(/Portal active/);
+    expect(
+      simpleExperienceSource.includes(
+        'Scene population check fired — validate terrain, rails, portals, mobs, and chests render correctly. Re-run asset bootstrap if visuals are missing.',
+      ),
+    ).toBe(true);
+    expect(
+      simpleExperienceSource.includes(
+        'Avatar visibility confirmed — verify animation rig initialises correctly if the player appears static.',
+      ),
+    ).toBe(true);
+    expect(
+      simpleExperienceSource.includes(
+        'Zombie spawn and chase triggered. If AI stalls or pathfinding breaks, validate the navmesh and spawn configuration.',
+      ),
+    ).toBe(true);
+    expect(
+      simpleExperienceSource.includes(
+        'Respawn handler invoked. Ensure checkpoint logic restores player position, inventory, and status effects as expected.',
+      ),
+    ).toBe(true);
+    expect(
+      simpleExperienceSource.includes(
+        'Portal activation triggered — ensure portal shaders and collision volumes initialise. Rebuild the portal pipeline if travellers become stuck.',
+      ),
+    ).toBe(true);
   });
 
   it('retains the player control and progression instrumentation', () => {
-    expect(simpleExperienceSource.includes("console.log('Moving forward');")).toBe(true);
+    expect(
+      simpleExperienceSource.includes(
+        'Movement input detected (forward). If the avatar fails to advance, confirm control bindings and resolve any physics constraints blocking motion.',
+      ),
+    ).toBe(true);
     expect(simpleExperienceSource.includes('this.canvas.requestPointerLock')).toBe(true);
-    expect(simpleExperienceSource.includes('console.log(`Dimension: ${this.dimensionSettings.name} unlocked`);')).toBe(true);
-    expect(simpleExperienceSource.includes("console.log('Score synced'")).toBe(true);
+    expect(
+      simpleExperienceSource.includes(
+        'Dimension unlock flow fired — ${this.dimensionSettings.name}. If the unlock fails to present rewards, audit quest requirements and persistence flags.',
+      ),
+    ).toBe(true);
+    expect(
+      simpleExperienceSource.includes(
+        'Score sync diagnostic — confirm the leaderboard API accepted the update. Inspect the network panel if the leaderboard remains stale.',
+      ),
+    ).toBe(true);
     expect(simpleExperienceSource.includes('navigator.geolocation.getCurrentPosition')).toBe(true);
   });
 

@@ -78,8 +78,7 @@ implementation that runs in the browser today.
 - The render loop clamps `delta` and applies inertia/frustum-limited movement to
   hold 60 FPS on modest hardware, while terrain chunking and anisotropic texture
   upgrades keep GPU load predictable.【F:simple-experience.js†L4383-L4405】【F:simple-experience.js†L2146-L2161】
-- Console instrumentation (`console.log('Scene populated')`, `console.log('World
-  generated: 4096 voxels')`, etc.) provides the validation breadcrumbs requested
+- Console instrumentation (`console.error('Scene population check fired — validate terrain, rails, portals, mobs, and chests render correctly. Re-run asset bootstrap if visuals are missing.')`, `console.error('World generation summary — 4096 columns created. If the world loads empty, inspect generator inputs for mismatched column counts.')`, etc.) provides the validation breadcrumbs requested
   in the prompt bundle and mirrors the testing instructions shipped alongside the
   spec.【F:simple-experience.js†L1532-L1539】【F:simple-experience.js†L3003-L3037】
 

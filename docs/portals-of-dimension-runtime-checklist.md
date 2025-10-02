@@ -4,7 +4,7 @@ This checklist records the concrete runtime behaviours that satisfy the "Compreh
 
 ## Render + World Initialisation
 - `SimpleExperience.start()` boots the renderer, seeds UI integrations, builds the voxel island, lays rails, and begins the frame loop in one pass, ensuring the scene is playable as soon as the player clicks **Start**.【F:simple-experience.js†L688-L717】
-- Procedural terrain generation fills the 64×64 island with height-mapped voxels while logging the resulting counts, guaranteeing the "World generated: 4096 voxels" console check noted in the spec.【F:simple-experience.js†L2440-L2505】
+- Procedural terrain generation fills the 64×64 island with height-mapped voxels while logging the resulting counts, guaranteeing the `World generation summary — 4096 columns created. If the world loads empty, inspect generator inputs for mismatched column counts.` console check noted in the spec.【F:simple-experience.js†L2440-L2505】
 - The daylight system drives a 10-minute orbit that powers sun/moon lighting, fog tinting, and zombie-spawn timing so the HUD daylight bar mirrors the brief’s pacing.【F:simple-experience.js†L3966-L4024】
 
 ## Player View + Controls
@@ -13,10 +13,10 @@ This checklist records the concrete runtime behaviours that satisfy the "Compreh
 
 ## Gameplay Loop
 - Rails, chests, portal frames, and boss scheduling spin up during `buildRails()`, `spawnDimensionChests()`, and `evaluateBossChallenge()`—matching the progression beats for mining, loot, and the Netherite collapse puzzle.【F:simple-experience.js†L2613-L2680】【F:simple-experience.js†L2968-L3116】
-- Portal assembly validates 4×3 frames, activates the shader plane, and emits the "Portal active" log plus score syncs, proving the interdimensional flow.【F:simple-experience.js†L3312-L3440】
+- Portal assembly validates 4×3 frames, activates the shader plane, and emits the `Portal activation triggered — ensure portal shaders and collision volumes initialise. Rebuild the portal pipeline if travellers become stuck.` log plus score syncs, proving the interdimensional flow.【F:simple-experience.js†L3312-L3440】
 
 ## Entities + Combat Support
-- Zombie spawning, golem escorts, and collision-driven combat damage are active, including the console diagnostic and score bumps when golems defeat a zombie.【F:simple-experience.js†L4063-L4218】
+- Zombie spawning, golem escorts, and collision-driven combat damage are active, including the `Zombie spawn and chase triggered. If AI stalls or pathfinding breaks, validate the navmesh and spawn configuration.` diagnostic and score bumps when golems defeat a zombie.【F:simple-experience.js†L4063-L4218】
 
 ## HUD + Progression Feedback
 - Portal progress, victory summaries, and replay controls all surface inside the dimension info panel so the victory flow mirrors the spec’s requirements.【F:simple-experience.js†L5040-L5089】

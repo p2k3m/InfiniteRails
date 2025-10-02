@@ -7,9 +7,9 @@ implementation so reviewers can verify each requirement without trawling the ent
 - `SimpleExperience.start()` hides the intro modal, preloads assets, seeds the render loop, and captures the
   player's location so the island appears immediately with a daylight value of 50%.【F:simple-experience.js†L688-L717】
 - `setupScene()` configures the orthographic camera, lighting rig, and render targets the spec called for, emitting a
-  "Scene populated" log when the world is ready.【F:simple-experience.js†L1191-L1269】
+  “Scene population check fired — validate terrain, rails, portals, mobs, and chests render correctly. Re-run asset bootstrap if visuals are missing.” log when the world is ready.【F:simple-experience.js†L1191-L1269】
 - `buildTerrain()` procedurally generates the 64×64 voxel island, repopulates chunk metadata, and logs the 4,096-column
-  trace that guards against the empty-scene regression described in the brief.【F:simple-experience.js†L2428-L2502】
+  trace (`World generation summary — … columns created`) that guards against the empty-scene regression described in the brief.【F:simple-experience.js†L2428-L2502】
 
 ## Core Gameplay Loop
 - Steve's first-person rig loads from `steve.gltf`, falls back to a cube if the asset fails, and keeps the camera bound to

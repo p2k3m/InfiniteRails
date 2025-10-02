@@ -19,7 +19,7 @@ for ambient and DirectionalLight for sun (orbit for day/night cycle every 600s).
 Start requestAnimationFrame(gameLoop) with delta = clock.getDelta(), calling
 update(delta) then renderer.render(scene, camera). Fix empty scene bug by
 ensuring worldGroup.add(voxel) in a nested loop. Validate: On load,
-console.log('World generated: 4096 voxels'); target 60 FPS. Output the complete
+console.error('World generation summary — 4096 columns created. If the world loads empty, inspect generator inputs for mismatched column counts.'); target 60 FPS. Output the complete
 bootstrap() and gameLoop() functions, integrating with existing APP_CONFIG.
 ```
 
@@ -33,7 +33,7 @@ child of head bone for first-person view (visible arms/hands). Implement
 AnimationMixer for idle loop. Call loadPlayerModel() in bootstrap() after world
 gen. Ensure no third-person—camera locked to Steve's perspective. Fix
 invisibility: Add error handler logging 'Model load failed, using fallback cube'.
-Validate: Console.log('Steve visible in scene'); move test with temp keydown.
+Validate: console.error('Avatar visibility confirmed — verify animation rig initialises correctly if the player appears static.'); move test with temp keydown.
 Output loadPlayerModel() and camera attachment code, with Minecraft-style
 low-poly textures.
 ```
@@ -48,7 +48,7 @@ rotateY); 'click' for pointerlock and left/right mine/place (raycast from camera
 remove/add voxel to hotbar). For mobile, add touchstart/move/end on canvas for
 virtual joystick (bottom-left div, analog vector to movement). Fix no-response:
 Use preventDefault(), global scope, and pressedKeys Set for held keys. Add Space
-for jump (velocity.y += 10delta). Validate: Press W → log('Moving forward');
+for jump (velocity.y += 10delta). Validate: Press W → console.error('Movement input detected (forward). If the avatar fails to advance, confirm control bindings and resolve any physics constraints blocking motion.');
 ensure 1 unit/sec speed. Output full event handlers, normalized for
 desktop/mobile like Minecraft controls.
 ```
@@ -63,8 +63,8 @@ Vector3 towards player (speed 2delta), collision detect (distance <1 → deduct
 every 30s), target nearest zombie (intercept if <10 units). Health: Array of 10
 heart meshes (scale on damage); 5 hits → fade screen black, respawn player at
 [0,0,0] retaining inventory. Fix missing characters: Ensure add to scene.
-Validate: Simulate night → log('Zombie spawned, chasing'); 5 hits → 'Respawn
-triggered'. Output entity creation/update functions with AI pathing (simple A
+Validate: Simulate night → console.error('Zombie spawn and chase triggered. If AI stalls or pathfinding breaks, validate the navmesh and spawn configuration.'); 5 hits → 'Respawn
+handler invoked. Ensure checkpoint logic restores player position, inventory, and status effects as expected.'. Output entity creation/update functions with AI pathing (simple A
 stub).
 ```
 
@@ -91,8 +91,7 @@ collision, fade (alpha tween 2s) and swap worldGroup to new dimension
 (procedural gen: Rock adds gravity*1.5 via velocity scale, +5 pts). Sequential
 unlocks: Track currentDimension index. Netherite boss: Timer crumbles rails
 (remove meshes), align jumps to collect Ingot → victory modal. Fix
-non-functional: Bind raycast to place. Validate: Build frame → log('Portal
-active'); enter → 'Dimension: Rock unlocked'. Output portal detection/transition
+non-functional: Bind raycast to place. Validate: Build frame → console.error('Portal activation triggered — ensure portal shaders and collision volumes initialise. Rebuild the portal pipeline if travellers become stuck.'); enter → 'Dimension unlock flow fired — Rock. If the unlock fails to present rewards, audit quest requirements and persistence flags.'. Output portal detection/transition
 code with shaders.
 ```
 
@@ -104,7 +103,7 @@ button: gapi.load → signIn callback posts to /users (Google ID, geolocation vi
 navigator). Add Howler.js for SFX (mine: crunch.wav from S3). Polish: Tooltips
 on UI ('WASD: Move'), 'Made by Manu' footer, win screen replay. Update
 deploy.yml: Add asset sync step, validate FPS >50 post-deploy. Fix slowness:
-Compress GLTF, error logs for shaders. Validate: Login → log('Score synced');
+Compress GLTF, error logs for shaders. Validate: Login → console.error('Score sync diagnostic — confirm the leaderboard API accepted the update. Inspect the network panel if the leaderboard remains stale.');
 full playthrough no lags. Output API/fetch code, footer HTML, and workflow YAML
 additions.
 ```
