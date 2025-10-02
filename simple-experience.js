@@ -99,6 +99,19 @@
     }
   }
 
+  function setInertState(element, shouldBeInert) {
+    if (!element) {
+      return;
+    }
+    if (typeof element.toggleAttribute === 'function') {
+      element.toggleAttribute('inert', shouldBeInert);
+    } else if (shouldBeInert) {
+      element.setAttribute?.('inert', '');
+    } else {
+      element.removeAttribute?.('inert');
+    }
+  }
+
   function deepFreeze(value, seen = new WeakSet()) {
     if (!value || typeof value !== 'object') {
       return value;
@@ -1643,11 +1656,10 @@
       if (introModal) {
         introModal.hidden = true;
         introModal.style.display = 'none';
-        introModal.setAttribute('aria-hidden', 'true');
+        setInertState(introModal, true);
       }
       if (startButton) {
         startButton.disabled = true;
-        startButton.setAttribute('aria-hidden', 'true');
         startButton.setAttribute('tabindex', '-1');
         startButton.blur();
       }
@@ -1747,7 +1759,7 @@
       }
       this.bindFirstRunTutorialControls();
       overlay.hidden = false;
-      overlay.setAttribute('aria-hidden', 'false');
+      setInertState(overlay, false);
       overlay.setAttribute('data-visible', 'true');
       this.firstRunTutorialMarkOnDismiss = !!markSeenOnDismiss;
       this.firstRunTutorialShowBriefingOnDismiss = !!showBriefingAfter;
@@ -1812,7 +1824,7 @@
       const body = typeof document !== 'undefined' ? document.body : null;
       const finalise = () => {
         overlay.hidden = true;
-        overlay.setAttribute('aria-hidden', 'true');
+        setInertState(overlay, true);
         if (body?.classList) {
           body.classList.remove('first-run-tutorial-active');
         }
@@ -1850,7 +1862,7 @@
       timerHost.clearTimeout(this.briefingAutoHideTimer);
       timerHost.clearTimeout(this.briefingFadeTimer);
       briefing.hidden = false;
-      briefing.setAttribute('aria-hidden', 'false');
+      setInertState(briefing, false);
       requestAnimationFrame(() => {
         briefing.classList.add('is-visible');
       });
@@ -1878,11 +1890,11 @@
       timerHost.clearTimeout(this.briefingAutoHideTimer);
       if (!briefing.classList.contains('is-visible')) {
         briefing.hidden = true;
-        briefing.setAttribute('aria-hidden', 'true');
+        setInertState(briefing, true);
         return;
       }
       briefing.classList.remove('is-visible');
-      briefing.setAttribute('aria-hidden', 'true');
+      setInertState(briefing, true);
       const duration = force ? 120 : 280;
       this.briefingFadeTimer = timerHost.setTimeout(() => {
         briefing.hidden = true;
@@ -1903,7 +1915,6 @@
         this.pointerHintEl.textContent = text;
       }
       this.pointerHintEl.hidden = false;
-      this.pointerHintEl.setAttribute('aria-hidden', 'false');
       // Force a reflow so the transition triggers reliably when toggling classes quickly.
       void this.pointerHintEl.offsetWidth;
       this.pointerHintEl.classList.add('is-visible');
@@ -1927,7 +1938,6 @@
         el.removeEventListener('transitionend', finalize);
         this.pointerHintLastMessage = '';
       };
-      el.setAttribute('aria-hidden', 'true');
       el.classList.remove('is-visible');
       this.pointerHintActive = false;
       if (this.pointerHintHideTimer) {
@@ -4306,26 +4316,26 @@
       if (!controlsVerified) {
         this.teardownMobileControls();
         controls.dataset.active = 'false';
-        controls.setAttribute('aria-hidden', 'true');
-        this.virtualJoystickEl?.setAttribute?.('aria-hidden', 'true');
+        setInertState(controls, true);
+        this.virtualJoystickEl && setInertState(this.virtualJoystickEl, true);
         this.mobileControlsActive = false;
         this.updatePointerHintForInputMode();
         return;
       }
       const shouldActivate = Boolean(this.isTouchPreferred);
       if (shouldActivate === this.mobileControlsActive) {
-        controls.setAttribute('aria-hidden', shouldActivate ? 'false' : 'true');
+        setInertState(controls, !shouldActivate);
         controls.dataset.active = shouldActivate ? 'true' : 'false';
         if (shouldActivate) {
-          this.virtualJoystickEl?.setAttribute('aria-hidden', 'false');
+          this.virtualJoystickEl && setInertState(this.virtualJoystickEl, false);
         } else {
-          this.virtualJoystickEl?.setAttribute('aria-hidden', 'true');
+          this.virtualJoystickEl && setInertState(this.virtualJoystickEl, true);
           this.updatePointerHintForInputMode();
         }
         return;
       }
       this.teardownMobileControls();
-      controls.setAttribute('aria-hidden', shouldActivate ? 'false' : 'true');
+      setInertState(controls, !shouldActivate);
       controls.dataset.active = shouldActivate ? 'true' : 'false';
       if (!shouldActivate) {
         this.updatePointerHintForInputMode();
@@ -4406,7 +4416,7 @@
       }
 
       if (this.virtualJoystickEl) {
-        this.virtualJoystickEl.setAttribute('aria-hidden', 'false');
+        setInertState(this.virtualJoystickEl, false);
         this.virtualJoystickEl.addEventListener('pointerdown', this.onJoystickPointerDown, { passive: false });
         window.addEventListener('pointermove', this.onJoystickPointerMove, { passive: false });
         window.addEventListener('pointerup', this.onJoystickPointerUp);
@@ -4624,10 +4634,10 @@
       this.resetJoystick();
       if (this.mobileControlsRoot) {
         this.mobileControlsRoot.dataset.active = 'false';
-        this.mobileControlsRoot.setAttribute('aria-hidden', 'true');
+        setInertState(this.mobileControlsRoot, true);
       }
       if (this.virtualJoystickEl) {
-        this.virtualJoystickEl.setAttribute('aria-hidden', 'true');
+        setInertState(this.virtualJoystickEl, true);
       }
       this.mobileControlsActive = false;
       this.updatePointerHintForInputMode();
@@ -9049,13 +9059,12 @@
       if (this.startButtonEl) {
         this.startButtonEl.disabled = true;
         this.startButtonEl.textContent = 'Renderer unavailable';
-        this.startButtonEl.setAttribute('aria-hidden', 'true');
         this.startButtonEl.setAttribute('tabindex', '-1');
       }
       if (this.introModalEl) {
         this.introModalEl.hidden = false;
         this.introModalEl.style.display = 'grid';
-        this.introModalEl.setAttribute('aria-hidden', 'false');
+        setInertState(this.introModalEl, false);
       }
       if (this.hudRootEl) {
         this.hudRootEl.classList.add('renderer-unavailable');
@@ -10400,7 +10409,7 @@
       const expanded = this.hotbarExpanded === true;
       if (this.extendedInventoryEl) {
         this.extendedInventoryEl.dataset.visible = expanded ? 'true' : 'false';
-        this.extendedInventoryEl.setAttribute('aria-hidden', expanded ? 'false' : 'true');
+        setInertState(this.extendedInventoryEl, !expanded);
       }
       if (this.hotbarExpandButton) {
         this.hotbarExpandButton.setAttribute('aria-expanded', expanded ? 'true' : 'false');
@@ -10676,7 +10685,7 @@
       this.updateAssetRecoveryPromptMessage();
       this.assetRecoveryOverlayEl.hidden = false;
       this.assetRecoveryOverlayEl.removeAttribute('hidden');
-      this.assetRecoveryOverlayEl.setAttribute('aria-hidden', 'false');
+      setInertState(this.assetRecoveryOverlayEl, false);
       this.assetRecoveryOverlayEl.setAttribute('data-mode', 'error');
       if (this.assetRecoveryDialogEl) {
         this.assetRecoveryDialogEl.setAttribute('aria-busy', 'false');
@@ -10717,7 +10726,7 @@
         this.assetRecoveryPromptActive = false;
         return;
       }
-      this.assetRecoveryOverlayEl.setAttribute('aria-hidden', 'true');
+      setInertState(this.assetRecoveryOverlayEl, true);
       this.assetRecoveryOverlayEl.setAttribute('hidden', '');
       this.assetRecoveryOverlayEl.hidden = true;
       this.assetRecoveryPromptActive = false;
@@ -11147,12 +11156,12 @@
       if (!this.craftingModal) return;
       if (visible) {
         this.craftingModal.hidden = false;
-        this.craftingModal.setAttribute('aria-hidden', 'false');
+        setInertState(this.craftingModal, false);
         document.exitPointerLock?.();
         this.refreshCraftingUi();
       } else {
         this.craftingModal.hidden = true;
-        this.craftingModal.setAttribute('aria-hidden', 'true');
+        setInertState(this.craftingModal, true);
         this.toggleCraftingSearch(false);
         this.canvas.focus({ preventScroll: true });
         this.clearCraftingHelperHint();
@@ -11166,13 +11175,13 @@
       if (!this.inventoryModal) return;
       if (visible) {
         this.inventoryModal.hidden = false;
-        this.inventoryModal.setAttribute('aria-hidden', 'false');
+        setInertState(this.inventoryModal, false);
         document.exitPointerLock?.();
         this.updateInventoryModal();
         this.inventorySortButton?.setAttribute('aria-pressed', 'false');
       } else {
         this.inventoryModal.hidden = true;
-        this.inventoryModal.setAttribute('aria-hidden', 'true');
+        setInertState(this.inventoryModal, true);
         this.canvas.focus({ preventScroll: true });
         this.inventorySortButton?.setAttribute('aria-pressed', 'false');
       }
@@ -11189,12 +11198,12 @@
       if (!this.craftingSearchPanel) return;
       if (visible) {
         this.craftingSearchPanel.hidden = false;
-        this.craftingSearchPanel.setAttribute('aria-hidden', 'false');
+        setInertState(this.craftingSearchPanel, false);
         this.updateCraftingSearchResults();
         this.craftingSearchInput?.focus();
       } else {
         this.craftingSearchPanel.hidden = true;
-        this.craftingSearchPanel.setAttribute('aria-hidden', 'true');
+        setInertState(this.craftingSearchPanel, true);
         this.craftingState.searchTerm = '';
       }
     }
@@ -12000,7 +12009,7 @@
       dimensionIntroNameEl.textContent = heading;
       dimensionIntroRulesEl.textContent = `${ruleLabel}: ${rules}`;
       dimensionIntroEl.hidden = false;
-      dimensionIntroEl.setAttribute('aria-hidden', 'false');
+      setInertState(dimensionIntroEl, false);
       dimensionIntroEl.classList.remove('active');
       void dimensionIntroEl.offsetWidth;
       dimensionIntroEl.classList.add('active');
@@ -12026,7 +12035,7 @@
       timerHost.clearTimeout(this.dimensionIntroFadeTimer);
       const finalize = () => {
         dimensionIntroEl.hidden = true;
-        dimensionIntroEl.setAttribute('aria-hidden', 'true');
+        setInertState(dimensionIntroEl, true);
         dimensionIntroEl.dataset.intent = 'hidden';
       };
       if (immediate || this.prefersReducedMotion) {
@@ -12148,7 +12157,7 @@
       this.victoryShareBusy = false;
       if (this.victoryCelebrationEl) {
         this.victoryCelebrationEl.hidden = false;
-        this.victoryCelebrationEl.setAttribute('aria-hidden', 'false');
+        setInertState(this.victoryCelebrationEl, false);
         this.victoryCelebrationEl.classList.remove('active');
         void this.victoryCelebrationEl.offsetWidth;
         this.victoryCelebrationEl.classList.add('active');
@@ -12190,7 +12199,7 @@
       this.victoryCelebrationActive = false;
       this.clearVictoryEffectTimers();
       this.victoryCelebrationEl.classList.remove('active');
-      this.victoryCelebrationEl.setAttribute('aria-hidden', 'true');
+      setInertState(this.victoryCelebrationEl, true);
       const finalize = () => {
         this.victoryCelebrationEl.hidden = true;
         if (this.victoryConfettiEl) {
@@ -12470,13 +12479,13 @@
         <p>${escapeHtml(text)}</p>
       `;
       this.victoryBannerEl.classList.add('visible');
-      this.victoryBannerEl.setAttribute('aria-hidden', 'false');
+      setInertState(this.victoryBannerEl, false);
     }
 
     hideVictoryBanner() {
       if (!this.victoryBannerEl) return;
       this.victoryBannerEl.classList.remove('visible');
-      this.victoryBannerEl.setAttribute('aria-hidden', 'true');
+      setInertState(this.victoryBannerEl, true);
       this.victoryBannerEl.innerHTML = '';
     }
 
