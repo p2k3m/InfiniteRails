@@ -5187,7 +5187,96 @@
         if (!error || error.__assetFailureHandled !== true) {
           this.handleAssetLoadFailure(key, error);
         }
+        const fallbackScene = this.createModelFallbackMesh(key, { reason: 'failed' });
+        if (fallbackScene) {
+          return { scene: fallbackScene, animations: [] };
+        }
         return null;
+      }
+    }
+
+    createModelFallbackMesh(key, options = {}) {
+      const THREE = this.THREE;
+      if (!THREE) {
+        return null;
+      }
+      const reasonLabel =
+        typeof options.reason === 'string' && options.reason.trim().length ? options.reason.trim() : 'failed';
+      const normalisedKey = typeof key === 'string' && key ? key.toLowerCase() : '';
+      const applyPlaceholderMetadata = (object, placeholderKey) => {
+        if (!object) {
+          return null;
+        }
+        object.userData = {
+          ...(object.userData || {}),
+          placeholder: true,
+          placeholderKey: placeholderKey || normalisedKey || 'asset',
+          placeholderReason: reasonLabel,
+          placeholderSource: 'model-fallback',
+        };
+        return object;
+      };
+      switch (normalisedKey) {
+        case 'steve': {
+          const placeholder = this.buildAvatarPlaceholderMesh(reasonLabel);
+          if (!placeholder) {
+            return null;
+          }
+          placeholder.name = 'PlayerAvatarFallback';
+          return applyPlaceholderMetadata(placeholder, 'steve');
+        }
+        case 'zombie': {
+          const material = new THREE.MeshStandardMaterial({
+            color: '#47a34b',
+            roughness: 0.68,
+            metalness: 0.18,
+            emissive: '#14532d',
+            emissiveIntensity: 0.22,
+          });
+          const geometry = new THREE.BoxGeometry(0.9, 1.8, 0.9);
+          const mesh = new THREE.Mesh(geometry, material);
+          mesh.name = 'ZombieFallback';
+          mesh.castShadow = true;
+          mesh.receiveShadow = true;
+          return applyPlaceholderMetadata(mesh, 'zombie');
+        }
+        case 'golem': {
+          const actor = this.createGolemActor();
+          if (!actor) {
+            return null;
+          }
+          actor.traverse((child) => {
+            if (child.isMesh && child.material?.emissive) {
+              child.material.emissiveIntensity = Math.max(child.material.emissiveIntensity || 0.18, 0.25);
+            }
+          });
+          actor.name = 'GolemFallback';
+          return applyPlaceholderMetadata(actor, 'golem');
+        }
+        case 'chest': {
+          const chest = this.createChestMesh(this.dimensionSettings || null);
+          if (!chest) {
+            return null;
+          }
+          chest.name = 'ChestFallback';
+          return applyPlaceholderMetadata(chest, 'chest');
+        }
+        default: {
+          const size = Number.isFinite(options.size) && options.size > 0 ? options.size : 1;
+          const geometry = new THREE.BoxGeometry(size, size, size);
+          const material = new THREE.MeshStandardMaterial({
+            color: options.color || '#9ca3af',
+            roughness: 0.82,
+            metalness: 0.12,
+            emissive: '#1f2937',
+            emissiveIntensity: 0.12,
+          });
+          const mesh = new THREE.Mesh(geometry, material);
+          mesh.name = `${normalisedKey || 'asset'}-fallback`;
+          mesh.castShadow = true;
+          mesh.receiveShadow = true;
+          return applyPlaceholderMetadata(mesh, normalisedKey || 'asset');
+        }
       }
     }
 
@@ -5490,6 +5579,41 @@
       }
     }
 
+    getAvatarPlaceholderColor(reason = 'loading') {
+      const reasonLabel = typeof reason === 'string' && reason.trim().length ? reason.trim() : 'loading';
+      if (reasonLabel === 'failed') {
+        return 0xf97316;
+      }
+      if (reasonLabel === 'boot') {
+        return 0x22d3ee;
+      }
+      return 0x3b82f6;
+    }
+
+    buildAvatarPlaceholderMesh(reason = 'loading') {
+      const THREE = this.THREE;
+      if (!THREE) {
+        return null;
+      }
+      const reasonLabel = typeof reason === 'string' && reason.trim().length ? reason.trim() : 'loading';
+      const placeholderColor = this.getAvatarPlaceholderColor(reasonLabel);
+      const material = new THREE.MeshStandardMaterial({ color: placeholderColor, metalness: 0.12, roughness: 0.58 });
+      const geometry = new THREE.BoxGeometry(0.6, 1.8, 0.4);
+      const placeholder = new THREE.Mesh(geometry, material);
+      placeholder.name = 'PlayerAvatarPlaceholder';
+      placeholder.position.set(0, -PLAYER_EYE_HEIGHT, 0);
+      placeholder.castShadow = true;
+      placeholder.receiveShadow = true;
+      placeholder.userData = {
+        ...(placeholder.userData || {}),
+        placeholder: true,
+        placeholderKey: 'steve',
+        placeholderReason: reasonLabel,
+        placeholderSource: 'model-fallback',
+      };
+      return placeholder;
+    }
+
     ensurePlayerAvatarPlaceholder(reason = 'loading') {
       const THREE = this.THREE;
       if (!THREE || !this.playerRig) {
@@ -5500,12 +5624,7 @@
       }
       const reasonLabel = typeof reason === 'string' && reason.trim().length ? reason.trim() : 'loading';
       const severityOrder = { boot: 0, loading: 1, failed: 2 };
-      const placeholderColor =
-        reasonLabel === 'failed'
-          ? 0xf97316
-          : reasonLabel === 'boot'
-            ? 0x22d3ee
-            : 0x3b82f6;
+      const placeholderColor = this.getAvatarPlaceholderColor(reasonLabel);
       if (this.playerAvatar && this.playerAvatar.userData?.placeholder) {
         const currentReason = this.playerAvatar.userData.placeholderReason || 'loading';
         const currentSeverity = severityOrder[currentReason] ?? 0;
@@ -5517,6 +5636,8 @@
           this.playerAvatar.material.color.set(placeholderColor);
         }
         this.playerAvatar.userData.placeholderReason = reasonLabel;
+        this.playerAvatar.userData.placeholderKey = 'steve';
+        this.playerAvatar.userData.placeholderSource = this.playerAvatar.userData.placeholderSource || 'ensure';
         if (this.camera && this.camera.parent !== this.playerAvatar) {
           try {
             this.playerAvatar.add(this.camera);
@@ -5535,16 +5656,11 @@
         });
         return this.playerAvatar;
       }
-      const material = new THREE.MeshStandardMaterial({ color: placeholderColor, metalness: 0.12, roughness: 0.58 });
-      const geometry = new THREE.BoxGeometry(0.6, 1.8, 0.4);
-      const placeholder = new THREE.Mesh(geometry, material);
-      placeholder.name = 'PlayerAvatarPlaceholder';
-      placeholder.position.set(0, -PLAYER_EYE_HEIGHT, 0);
-      placeholder.castShadow = true;
-      placeholder.receiveShadow = true;
-      placeholder.userData = placeholder.userData || {};
-      placeholder.userData.placeholder = true;
-      placeholder.userData.placeholderReason = reasonLabel;
+      const placeholder = this.buildAvatarPlaceholderMesh(reasonLabel);
+      if (!placeholder) {
+        return null;
+      }
+      placeholder.userData.placeholderSource = 'ensure';
       if (this.playerAvatar && this.playerRig?.remove) {
         try {
           this.playerRig.remove(this.playerAvatar);
@@ -5750,7 +5866,7 @@
           this.zombieGroup.remove(placeholder);
           disposeObject3D(placeholder);
           zombie.mesh = model;
-          zombie.placeholder = false;
+          zombie.placeholder = model?.userData?.placeholder === true;
           if (zombie.animation) {
             this.disposeAnimationRig(zombie.animation);
           }
@@ -5781,7 +5897,7 @@
           this.golemGroup.remove(placeholder);
           disposeObject3D(placeholder);
           golem.mesh = model;
-          golem.placeholder = false;
+          golem.placeholder = model?.userData?.placeholder === true;
           if (golem.animation) {
             this.disposeAnimationRig(golem.animation);
           }
@@ -10551,6 +10667,7 @@
         steve: 'Explorer avatar unavailable — using the fallback rig until models return.',
         zombie: 'Hostile models offline — zombies now appear as simplified husks.',
         golem: 'Iron golems using simplified armour while detailed models load.',
+        chest: 'Treasure chests using simplified casings while detailed models load.',
       };
       const fallbackMessage = (options.fallbackMessage || messageMap[key] || '').trim();
       this.recordAssetFailure(key, { error, fallbackMessage });
