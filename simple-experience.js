@@ -1121,6 +1121,21 @@
       this.scoreboardPollIntervalSeconds = 45;
       this.scoreboardPollTimer = 0;
       this.scoreboardStorageKey = options.scoreboardStorageKey || SCOREBOARD_STORAGE_KEY;
+      const docRef = typeof document !== 'undefined' ? document : null;
+      this.scorePanelEl = this.ui.scorePanelEl || docRef?.getElementById('scorePanel') || null;
+      this.scoreMetricElements = {
+        recipes: this.ui.scoreRecipesEl || null,
+        dimensions: this.ui.scoreDimensionsEl || null,
+        portal: this.ui.scorePortalsEl || null,
+        combat: this.ui.scoreCombatEl || null,
+        loot: this.ui.scoreLootEl || null,
+      };
+      this.scoreMetricFlashTimers = new Map();
+      this.craftingScoreEvents = 0;
+      this.dimensionScoreEvents = 0;
+      this.portalScoreEvents = 0;
+      this.combatScoreEvents = 0;
+      this.lootScoreEvents = 0;
       this.lastScoreboardFetch = 0;
       this.offlineSyncActive = false;
       this.lastOfflineSyncHintAt = 0;
@@ -1343,6 +1358,7 @@
       this.scoreBreakdown = {
         recipes: 0,
         dimensions: 0,
+        portal: 0,
         loot: 0,
         exploration: 0,
         combat: 0,
@@ -2476,6 +2492,14 @@
         recipePoints: Number(this.scoreBreakdown?.recipes ?? 0),
         dimensionPoints: Number(this.scoreBreakdown?.dimensions ?? 0),
         penalties: Number(this.scoreBreakdown?.penalties ?? 0),
+        portalEvents: this.portalScoreEvents ?? 0,
+        portalPoints: Number(this.scoreBreakdown?.portal ?? 0),
+        combatEvents: this.combatScoreEvents ?? 0,
+        combatPoints: Number(this.scoreBreakdown?.combat ?? 0),
+        lootEvents: this.lootScoreEvents ?? 0,
+        lootPoints: Number(this.scoreBreakdown?.loot ?? 0),
+        craftingEvents: this.craftingScoreEvents ?? recipeCount,
+        dimensionEvents: this.dimensionScoreEvents ?? 0,
         breakdown: this.getScoreBreakdownSnapshot(),
       };
     }
@@ -7762,6 +7786,7 @@
       this.addScoreBreakdown('portal', 5);
       const message = events.length ? events.join(' ') : 'Portal ignited — step through to travel.';
       this.showHint(message);
+      this.updateHud();
       this.scheduleScoreSync('portal-primed');
     }
 
@@ -12127,6 +12152,9 @@
       }
       const previous = Number.isFinite(this.scoreBreakdown[key]) ? this.scoreBreakdown[key] : 0;
       this.scoreBreakdown[key] = previous + numericAmount;
+      if (numericAmount > 0) {
+        this.notifyScoreEvent(key, numericAmount);
+      }
     }
 
     getScoreBreakdownSnapshot() {
@@ -12144,6 +12172,62 @@
       return snapshot;
     }
 
+    notifyScoreEvent(category, amount) {
+      if (!Number.isFinite(amount) || amount <= 0) {
+        return;
+      }
+      const normalizedKey = typeof category === 'string' ? category.trim().toLowerCase() : '';
+      if (!normalizedKey) {
+        return;
+      }
+      switch (normalizedKey) {
+        case 'recipes':
+          this.craftingScoreEvents = (this.craftingScoreEvents || 0) + 1;
+          break;
+        case 'dimensions':
+          this.dimensionScoreEvents = (this.dimensionScoreEvents || 0) + 1;
+          break;
+        case 'portal':
+          this.portalScoreEvents = (this.portalScoreEvents || 0) + 1;
+          break;
+        case 'combat':
+          this.combatScoreEvents = (this.combatScoreEvents || 0) + 1;
+          break;
+        case 'loot':
+          this.lootScoreEvents = (this.lootScoreEvents || 0) + 1;
+          break;
+        default:
+          break;
+      }
+      const panel = this.scorePanelEl || this.ui?.scorePanelEl || null;
+      if (panel && panel.classList) {
+        panel.classList.remove('score-overlay--flash');
+        // Trigger a reflow so the animation can restart.
+        void panel.offsetWidth;
+        panel.classList.add('score-overlay--flash');
+      }
+      const targets = this.scoreMetricElements || {};
+      const element = targets[normalizedKey];
+      if (!element) {
+        return;
+      }
+      const timers = this.scoreMetricFlashTimers || (this.scoreMetricFlashTimers = new Map());
+      if (timers.has(element)) {
+        clearTimeout(timers.get(element));
+        timers.delete(element);
+      }
+      element.classList.remove('score-overlay__metric-value--flash');
+      void element.offsetWidth;
+      element.classList.add('score-overlay__metric-value--flash');
+      element.dataset.delta = `+${this.formatPointValue(amount)} pts`;
+      const timer = setTimeout(() => {
+        element.classList.remove('score-overlay__metric-value--flash');
+        delete element.dataset.delta;
+        timers.delete(element);
+      }, 900);
+      timers.set(element, timer);
+    }
+
     formatPointValue(value) {
       const numeric = Math.max(0, Number(value) || 0);
       if (!Number.isFinite(numeric)) {
@@ -12157,7 +12241,15 @@
     }
 
     updateHud() {
-      const { heartsEl, scoreTotalEl, scoreRecipesEl, scoreDimensionsEl } = this.ui;
+      const {
+        heartsEl,
+        scoreTotalEl,
+        scoreRecipesEl,
+        scoreDimensionsEl,
+        scorePortalsEl,
+        scoreCombatEl,
+        scoreLootEl,
+      } = this.ui;
       if (heartsEl) {
         heartsEl.innerHTML = createHeartMarkup(this.health);
       }
@@ -12166,9 +12258,10 @@
         scoreTotalEl.textContent = roundedScore.toLocaleString();
       }
       if (scoreRecipesEl) {
-        const recipeCount = this.craftedRecipes?.size ?? 0;
+        const recipeCount = this.craftingScoreEvents ?? 0;
         const recipePoints = this.scoreBreakdown?.recipes ?? 0;
-        scoreRecipesEl.textContent = `${recipeCount} (+${this.formatPointValue(recipePoints)} pts)`;
+        const label = recipeCount === 1 ? 'craft' : 'crafts';
+        scoreRecipesEl.textContent = `${recipeCount} ${label} (+${this.formatPointValue(recipePoints)} pts)`;
       }
       if (scoreDimensionsEl) {
         const dimensionCount = Math.max(1, this.currentDimensionIndex + 1);
@@ -12180,6 +12273,24 @@
         }
         display += ')';
         scoreDimensionsEl.textContent = display;
+      }
+      if (scorePortalsEl) {
+        const portalCount = this.portalScoreEvents ?? 0;
+        const portalPoints = this.scoreBreakdown?.portal ?? 0;
+        const label = portalCount === 1 ? 'event' : 'events';
+        scorePortalsEl.textContent = `${portalCount} ${label} (+${this.formatPointValue(portalPoints)} pts)`;
+      }
+      if (scoreCombatEl) {
+        const combatCount = this.combatScoreEvents ?? 0;
+        const combatPoints = this.scoreBreakdown?.combat ?? 0;
+        const label = combatCount === 1 ? 'victory' : 'victories';
+        scoreCombatEl.textContent = `${combatCount} ${label} (+${this.formatPointValue(combatPoints)} pts)`;
+      }
+      if (scoreLootEl) {
+        const lootCount = this.lootScoreEvents ?? 0;
+        const lootPoints = this.scoreBreakdown?.loot ?? 0;
+        const label = lootCount === 1 ? 'find' : 'finds';
+        scoreLootEl.textContent = `${lootCount} ${label} (+${this.formatPointValue(lootPoints)} pts)`;
       }
       this.updateInventoryUi();
       this.updateDimensionInfoPanel();
@@ -12744,6 +12855,30 @@
         if (breakdown.recipes !== undefined) {
           stats.push({ label: 'Crafting Score', value: formatBreakdownValue(breakdown.recipes) });
         }
+        if (breakdown.portal !== undefined) {
+          const portalCount = this.portalScoreEvents ?? 0;
+          const label = portalCount === 1 ? 'Portal Event' : 'Portal Events';
+          stats.push({
+            label,
+            value: `${portalCount.toLocaleString()} • ${formatBreakdownValue(breakdown.portal)} pts`,
+          });
+        }
+        if (breakdown.combat !== undefined) {
+          const combatCount = this.combatScoreEvents ?? 0;
+          const label = combatCount === 1 ? 'Combat Victory' : 'Combat Victories';
+          stats.push({
+            label,
+            value: `${combatCount.toLocaleString()} • ${formatBreakdownValue(breakdown.combat)} pts`,
+          });
+        }
+        if (breakdown.loot !== undefined) {
+          const lootCount = this.lootScoreEvents ?? 0;
+          const label = lootCount === 1 ? 'Loot Find' : 'Loot Finds';
+          stats.push({
+            label,
+            value: `${lootCount.toLocaleString()} • ${formatBreakdownValue(breakdown.loot)} pts`,
+          });
+        }
         if (breakdown.penalties) {
           stats.push({ label: 'Penalties', value: `-${formatBreakdownValue(breakdown.penalties)}` });
         }
@@ -12995,7 +13130,13 @@
       const score = {
         total: Math.round(this.score ?? 0),
         recipes: this.craftedRecipes?.size ?? 0,
+        craftingEvents: this.craftingScoreEvents ?? 0,
         dimensions: Math.max(0, this.currentDimensionIndex + 1),
+        dimensionEvents: this.dimensionScoreEvents ?? 0,
+        portalEvents: this.portalScoreEvents ?? 0,
+        combatEvents: this.combatScoreEvents ?? 0,
+        lootEvents: this.lootScoreEvents ?? 0,
+        breakdown: this.getScoreBreakdownSnapshot(),
       };
       scope.__INFINITE_RAILS_STATE__ = {
         isRunning: Boolean(this.started && !this.rendererUnavailable),
