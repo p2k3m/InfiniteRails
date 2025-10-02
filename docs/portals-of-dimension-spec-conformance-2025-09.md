@@ -5,10 +5,10 @@ This digest traces each requirement from the "Comprehensive Analysis and Enhance
 ## Initialization and Onboarding
 - `SimpleExperience.start()` bootstraps the session: it seeds the scene, generates the island, spawns loot chests, and kicks off the render loop while hiding the landing modal for an immediate fullscreen reveal.【F:simple-experience.js†L761-L795】
 - The briefing overlay, pointer hint, and pointer-lock onboarding state machine fade in for five seconds so players learn WASD/mouse/touch controls without losing immersion.【F:simple-experience.js†L817-L914】
-- `setupScene()` provisions an orthographic first-person camera, hemisphere/directional lighting, ambient fill, and world groups, logging "Scene populated" when the render surface is ready.【F:simple-experience.js†L1460-L1540】
+- `setupScene()` provisions an orthographic first-person camera, hemisphere/directional lighting, ambient fill, and world groups, logging “Scene population check fired — validate terrain, rails, portals, mobs, and chests render correctly. Re-run asset bootstrap if visuals are missing.” when the render surface is ready.【F:simple-experience.js†L1460-L1540】
 
 ## Core Gameplay Loop
-- `buildTerrain()` procedurally sculpts a 64×64 voxel island, caches column metadata, and reports both column and voxel counts so telemetry can validate the 4,096-block target.【F:simple-experience.js†L2966-L3043】
+- `buildTerrain()` procedurally sculpts a 64×64 voxel island, caches column metadata, and reports both column and voxel counts (`World generation summary — … columns created`) so telemetry can validate the 4,096-block target.【F:simple-experience.js†L2966-L3043】
 - Rails, loot chests, and Netherite challenge scaffolding are instantiated through `buildRails()`, `spawnDimensionChests()`, and the collapse handlers, ensuring traversal set-pieces appear immediately.【F:simple-experience.js†L3151-L3339】
 - First-person locomotion, pointer-lock yaw, gravity, jump buffering, and mobile joystick routing are all performed in `updateMovement()` each frame, aligning with the requested WASD + touch parity.【F:simple-experience.js†L4407-L4473】
 - Mining and placement rely on raycasts from the camera; `mineBlock()` and `placeBlock()` remove/add voxels, update inventory, apply score deltas, and trigger screen shake + audio cues.【F:simple-experience.js†L4873-L4972】

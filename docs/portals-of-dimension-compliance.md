@@ -43,7 +43,7 @@ behaviour outlined in the latest enhancement brief. Each checklist item is mappe
 ## Portals, rails, and dimension progression
 
 * Portal frames are tracked per-column, validated via `portal-mechanics.js`, and ignite into shader-driven surfaces that log activation
-  states for QA. 【F:simple-experience.js†L2876-L3194】
+  states for QA (`Portal activation triggered — ensure portal shaders and collision volumes initialise. Rebuild the portal pipeline if travellers become stuck.`). 【F:simple-experience.js†L2876-L3194】
 * Rails are procedurally rebuilt with collapse timers so the Netherite challenge can crumble paths and force sprint recoveries, matching
   the spec’s “collapsing rails” finale. 【F:simple-experience.js†L2371-L2440】
 * Dimension palettes adjust gravity, sky colours, rail tones, and portal hues while queueing boss encounters or resetting challenge state
@@ -58,7 +58,7 @@ behaviour outlined in the latest enhancement brief. Each checklist item is mappe
 
 ## Validation and monitoring hooks
 
-* Console logs (`Scene populated`, `World generated`, `Steve visible`, `Zombie spawned, chasing`, `Respawn triggered`, `Portal active`)
+* Console logs (`Scene population check fired — …`, `World generation summary — …`, `Avatar visibility confirmed — …`, `Zombie spawn and chase triggered. …`, `Respawn handler invoked. …`, `Portal activation triggered — …`)
   ensure automated smoke tests can assert each phase without relying on screenshots. 【F:simple-experience.js†L1080-L2259】【F:simple-experience.js†L2040-L2088】【F:simple-experience.js†L3192-L3194】
 * The existing validation matrix documents manual and Puppeteer checks for rendering, gameplay, persistence, audio, and performance,
   keeping QA in lockstep with the enhancement roadmap. 【F:docs/validation-matrix.md†L1-L69】【F:docs/validation-matrix.md†L70-L119】

@@ -14,16 +14,15 @@ future regressions.
   `renderFrame()` so QA can confirm the 3D scene populated.
   【F:simple-experience.js†L2348-L2422】【F:simple-experience.js†L3690-L3709】
 - **First-person Steve embodiment** – GLTF assets (with box-mesh fallbacks)
-  attach the camera to the head bone, add animated arms, and emit "Steve visible
-  in scene" once the rig is ready.【F:simple-experience.js†L1984-L2055】【F:simple-experience.js†L2170-L2249】
+  attach the camera to the head bone, add animated arms, and emit “Avatar visibility confirmed — verify animation rig initialises correctly if the player appears static.” once the rig is ready.【F:simple-experience.js†L1984-L2055】【F:simple-experience.js†L2170-L2249】
 - **Responsive controls** – Pointer lock, WASD, jump, mining, placement, and the
-  virtual joystick bind inside `bindEvents()`, logging "Moving forward" on the
+  virtual joystick bind inside `bindEvents()`, logging “Movement input detected (forward). If the avatar fails to advance, confirm control bindings and resolve any physics constraints blocking motion.” on the
   first `W` press to prove input wiring.【F:simple-experience.js†L3510-L3654】
 - **Portals & dimension advancement** – Portal frames activate with shader
   planes, queue score syncs, and advance to the next gravity palette while
   logging each unlock.【F:simple-experience.js†L3330-L3470】
 - **Night cycle combat** – Zombies spawn every night, chase the player, and
-  trigger respawn logs after five hits; golems auto-spawn to intercept attackers
+  trigger respawn logs after five hits (`Respawn handler invoked. Ensure checkpoint logic restores player position, inventory, and status effects as expected.`); golems auto-spawn to intercept attackers
   and award score for each defense.【F:simple-experience.js†L3940-L4172】
 - **Boss finale & loot** – The Netherite collapse routine, Eternal Ingot crystal,
   and loot chests ship with emissive meshes and scoring hooks, matching the
@@ -38,7 +37,7 @@ future regressions.
    `window.APP_CONFIG.forceSimpleMode = true` before loading `script.js` to skip
    any experimental renderer flags.
 2. **Check console telemetry** – Look for the boot logs listed above
-   (`Scene populated`, `World generated: …`, `Steve visible in scene`). Missing
+   (`Scene population check fired — …`, `World generation summary — …`, `Avatar visibility confirmed — …`). Missing
    logs usually indicate a blocked asset or WebGL failure.
 3. **Confirm assets served** – Ensure the `/assets` directory ships with the
    page; GLTF fallbacks protect gameplay, but textures still improve fidelity.

@@ -5,8 +5,8 @@ This document summarises how the current `simple-experience.js` runtime aligns w
 ## World Initialisation & Rendering
 
 * **Three.js bootstrap** – `SimpleExperience.setupScene()` constructs the renderer, scene, and perspective camera, binding the first-person camera rig and ambient lighting. 【F:simple-experience.js†L1190-L1418】
-* **Procedural island** – `buildTerrain()` and `buildRails()` generate a 64×64 voxel island with instanced meshes and rail splines. The helper logs `World generated: 4096 voxels` for validation. 【F:simple-experience.js†L2300-L2442】【F:simple-experience.js†L2414-L2424】
-* **Console telemetry** – Startup and progression emit deterministic logs (`Scene populated`, `Steve visible in scene`, `Zombie spawned, chasing`, `Respawn triggered`, `Portal active`) that our Vitest regression suite asserts for. 【F:simple-experience.js†L1564-L1584】【F:simple-experience.js†L2836-L2906】【F:simple-experience.js†L4734-L4746】【F:simple-experience.js†L4899-L4916】【F:simple-experience.js†L4002-L4020】
+* **Procedural island** – `buildTerrain()` and `buildRails()` generate a 64×64 voxel island with instanced meshes and rail splines. The helper logs `World generation summary — 4096 columns created. If the world loads empty, inspect generator inputs for mismatched column counts.` for validation. 【F:simple-experience.js†L2300-L2442】【F:simple-experience.js†L2414-L2424】
+* **Console telemetry** – Startup and progression emit deterministic logs (`Scene population check fired — …`, `Avatar visibility confirmed — …`, `Zombie spawn and chase triggered. …`, `Respawn handler invoked. …`, `Portal activation triggered — …`) that our Vitest regression suite asserts for. 【F:simple-experience.js†L1564-L1584】【F:simple-experience.js†L2836-L2906】【F:simple-experience.js†L4734-L4746】【F:simple-experience.js†L4899-L4916】【F:simple-experience.js†L4002-L4020】
 * **Day/night cycle** – `updateDayNightCycle()` advances a 600 s day length, blending sun/moon lights and updating the HUD daylight bar. 【F:simple-experience.js†L3004-L3126】【F:simple-experience.js†L4935-L4988】
 
 ## Player Presentation & Controls

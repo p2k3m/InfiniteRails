@@ -192,15 +192,15 @@ async function runSimpleScenario(browser) {
       throw new Error('Sandbox event log did not record any entries.');
     }
 
-    const worldGenerated = infoLogs.find((line) => line.includes('World generated:'));
+    const worldGenerated = infoLogs.find((line) => line.includes('World generation summary —'));
     if (!worldGenerated) {
       console.warn('World generation log was not captured; relying on debug snapshot.');
     }
-    const steveVisible = infoLogs.find((line) => line.includes('Steve visible in scene'));
+    const steveVisible = infoLogs.find((line) => line.includes('Avatar visibility confirmed —'));
     if (!steveVisible) {
       console.warn('Player visibility confirmation log missing; verifying via scene graph.');
     }
-    const dimensionLog = infoLogs.find((line) => line.includes('Dimension online:'));
+    const dimensionLog = infoLogs.find((line) => line.includes('Dimension activation notice —'));
     if (!dimensionLog) {
       console.warn('Dimension activation log missing; relying on HUD validation.');
     }
@@ -293,7 +293,9 @@ async function run() {
   try {
     await runAdvancedScenario(browser);
     await runSimpleScenario(browser);
-    console.log('E2E smoke test passed for advanced and sandbox renderers.');
+    console.error(
+      'E2E smoke test completion checkpoint — review scenario assertions if this emits during a failing run; success must be validated by test expectations rather than console output.',
+    );
   } finally {
     await browser?.close?.();
   }

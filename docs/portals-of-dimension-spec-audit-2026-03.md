@@ -8,15 +8,15 @@ fulfil the requested behaviours.
 ## Render Pipeline and World Generation
 - `SimpleExperience.setupScene()` assembles the orthographic camera, hemisphere
   ambient light, directional sunlight, and renderer while the sandbox boot log
-  announces `Scene populated` so regressions are easy to spot.
+  announces `Scene population check fired — validate terrain, rails, portals, mobs, and chests render correctly. Re-run asset bootstrap if visuals are missing.` so regressions are easy to spot.
 - `SimpleExperience.buildTerrain()` fills the 64×64 grid (4,096 voxels) using
-  cached geometries and reports `World generated: ${columnCount} voxels` to
+  cached geometries and reports `World generation summary — ${columnCount} columns created. If the world loads empty, inspect generator inputs for mismatched column counts.` to
   confirm the procedural terrain is present every session.
 
 ## Player Perspective and Controls
 - `SimpleExperience.loadPlayerCharacter()` loads the Steve GLTF, falls back to a
   stylised cube when the asset is unavailable, attaches the camera to the head
-  bone for first-person play, and emits `Steve visible in scene` console events
+  bone for first-person play, and emits `Avatar visibility confirmed — verify animation rig initialises correctly if the player appears static.` console events
   for verification.
 - Pointer lock, WASD handling, joystick input, and raycast-driven mining all
   live inside `handleMouseMove`, `handleKeyDown`, `updateMovement`, and related
@@ -25,7 +25,7 @@ fulfil the requested behaviours.
 ## Entities, Combat, and Survival Loop
 - Zombie and iron golem spawners (`spawnZombie`, `spawnIronGolem`) leverage
   `createZombie`/`createGolem` helpers and the combat utilities to deduct
-  hearts, trigger respawns after five hits, and log `Zombie spawned, chasing` to
+  hearts, trigger respawns after five hits, and log `Zombie spawn and chase triggered. If AI stalls or pathfinding breaks, validate the navmesh and spawn configuration.` to
   satisfy the survival requirements.
 - Hearts, bubbles, and status HUD elements update inside `updateHud()` so
   survival cues always reflect the current run.

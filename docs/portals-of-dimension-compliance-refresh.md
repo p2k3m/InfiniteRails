@@ -5,8 +5,8 @@ This addendum captures the concrete runtime hooks that satisfy the "Comprehensiv
 ## Rendering & Onboarding
 
 - `SimpleExperience.start()` boots the experience by wiring up scene assets, terrain, UI, and the first render pass so the island appears as soon as the page loads.【F:simple-experience.js†L716-L745】
-- `setupScene()` installs the orthographic camera, grouped scene graph, lights, renderer configuration, and logs `Scene populated` once everything is in place.【F:simple-experience.js†L1398-L1477】
-- `buildTerrain()` rebuilds the 64×64 voxel island, seeds chunk metadata for culling, and prints both column and voxel counts (`World generated: 4096 voxels`).【F:simple-experience.js†L2635-L2709】
+- `setupScene()` installs the orthographic camera, grouped scene graph, lights, renderer configuration, and logs `Scene population check fired — validate terrain, rails, portals, mobs, and chests render correctly. Re-run asset bootstrap if visuals are missing.` once everything is in place.【F:simple-experience.js†L1398-L1477】
+- `buildTerrain()` rebuilds the 64×64 voxel island, seeds chunk metadata for culling, and prints both column and voxel counts (`World generation summary — … columns created`).【F:simple-experience.js†L2635-L2709】
 - `showBriefingOverlay()` displays the five-second tutorial overlay and pointer-lock hint described in the onboarding flow, with timers for auto-dismiss and manual dismissal.【F:simple-experience.js†L766-L812】
 
 ## Core Movement & Interaction
@@ -17,7 +17,7 @@ This addendum captures the concrete runtime hooks that satisfy the "Comprehensiv
 
 ## Survival & Entities
 
-- `updateZombies()` spawns and steers zombies toward the player at night, lerps them to ground height, applies contact damage, and logs when each pursuit begins.【F:simple-experience.js†L4231-L4293】
+- `updateZombies()` spawns and steers zombies toward the player at night, lerps them to ground height, applies contact damage, and logs when each pursuit begins (`Zombie spawn and chase triggered. If AI stalls or pathfinding breaks, validate the navmesh and spawn configuration.`).【F:simple-experience.js†L4231-L4293】
 - `updateGolems()` and `damagePlayer()` coordinate allied iron golems, collision checks, score bumps for saved runs, camera shake, and respawn handling after five hits.【F:simple-experience.js†L4385-L4464】
 - Dimension theming (gravity, palettes, netherite finale flag) is re-applied through `applyDimensionSettings()` each time the player advances, matching the sequential progression brief.【F:simple-experience.js†L2583-L2633】
 
