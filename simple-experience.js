@@ -10300,6 +10300,7 @@
       };
       this.zombies.push(zombie);
       this.upgradeZombie(zombie);
+      this.runImmediateGolemDefense();
       console.error(
         'Zombie spawn and chase triggered. If AI stalls or pathfinding breaks, validate the navmesh and spawn configuration.',
       );
@@ -10440,6 +10441,9 @@
     updateGolems(delta) {
       const golemGroup = this.ensureEntityGroup('golem');
       if (!golemGroup) return;
+      if (!Array.isArray(this.golems)) {
+        this.golems = [];
+      }
       const shouldSpawnGuard = this.isNight() || this.zombies.length > 0;
       if (
         shouldSpawnGuard &&
@@ -10502,6 +10506,7 @@
           this.updateAnimationRig(golem.animation, delta);
         }
       }
+      const beforeCullCount = this.golems.length;
       this.golems = this.golems.filter((golem) => {
         const keep = golem.mesh.parent === this.golemGroup;
         if (!keep && golem.animation) {
@@ -10510,6 +10515,21 @@
         }
         return keep;
       });
+      const removedCount = beforeCullCount - this.golems.length;
+      if (removedCount > 0 && shouldSpawnGuard && this.golems.length < GOLEM_MAX_PER_DIMENSION) {
+        this.spawnGolem();
+      }
+    }
+
+    runImmediateGolemDefense() {
+      if (typeof this.updateGolems !== 'function') {
+        return;
+      }
+      try {
+        this.updateGolems(0);
+      } catch (error) {
+        console.warn('Failed to synchronise golem defence after zombie spawn.', error);
+      }
     }
 
     clearGolems() {
