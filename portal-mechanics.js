@@ -39,20 +39,81 @@ function buildPortalFrame(origin, facing = { x: 0, y: 1 }) {
   };
 }
 
-function isPortalTileBlocked(tile) {
-  if (!tile) return true;
-  if (tile.type === 'portal' || tile.type === 'portalFrame' || tile.type === 'portalDormant') {
-    return true;
+const BLOCKING_TILE_TYPES = new Set(['lava', 'water', 'void', 'tree', 'chest', 'player']);
+const BLOCKING_OCCUPANTS = new Set(['player', 'tree', 'chest']);
+
+function normaliseOccupantToken(value) {
+  if (!value) return null;
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return trimmed ? trimmed.toLowerCase() : null;
   }
-  if (tile.hazard) return true;
-  if (tile.walkable === false) return true;
-  if (tile.type && tile.walkable === undefined) {
-    const blockingTypes = new Set(['lava', 'water', 'void', 'tree', 'chest']);
-    if (blockingTypes.has(tile.type)) {
-      return true;
+  if (typeof value === 'object') {
+    if (typeof value.type === 'string') {
+      return value.type.trim().toLowerCase();
+    }
+    if (typeof value.name === 'string') {
+      return value.name.trim().toLowerCase();
+    }
+    if (typeof value.kind === 'string') {
+      return value.kind.trim().toLowerCase();
     }
   }
-  return false;
+  return null;
+}
+
+function getBlockingOccupant(tile) {
+  if (!tile) return null;
+  const candidates = [];
+  if (tile.occupant !== undefined) {
+    candidates.push(tile.occupant);
+  }
+  if (Array.isArray(tile.occupants)) {
+    candidates.push(...tile.occupants);
+  }
+  if (tile.entity !== undefined) {
+    candidates.push(tile.entity);
+  }
+  if (Array.isArray(tile.entities)) {
+    candidates.push(...tile.entities);
+  }
+  for (const candidate of candidates) {
+    const token = normaliseOccupantToken(candidate);
+    if (token && BLOCKING_OCCUPANTS.has(token)) {
+      return token;
+    }
+  }
+  return null;
+}
+
+function getPortalTileBlockReason(tile) {
+  if (!tile) {
+    return 'missing';
+  }
+  if (tile.type === 'portal' || tile.type === 'portalFrame' || tile.type === 'portalDormant') {
+    return tile.type || 'portal';
+  }
+  const occupant = getBlockingOccupant(tile);
+  if (occupant) {
+    return occupant;
+  }
+  if (tile.hazard) {
+    if (typeof tile.hazard === 'string') {
+      return tile.hazard;
+    }
+    return 'hazard';
+  }
+  if (tile.walkable === false) {
+    return tile.type ?? 'blocked';
+  }
+  if (tile.type && tile.walkable === undefined && BLOCKING_TILE_TYPES.has(tile.type)) {
+    return tile.type;
+  }
+  return null;
+}
+
+function isPortalTileBlocked(tile) {
+  return Boolean(getPortalTileBlockReason(tile));
 }
 
 function detectPortalCollision(grid, footprint) {
@@ -69,8 +130,9 @@ function detectPortalCollision(grid, footprint) {
       collisions.push({ x, y, reason: 'missing' });
       continue;
     }
-    if (isPortalTileBlocked(tile)) {
-      collisions.push({ x, y, reason: tile.type ?? 'blocked' });
+    const blockReason = getPortalTileBlockReason(tile);
+    if (blockReason) {
+      collisions.push({ x, y, reason: blockReason });
     }
   }
   return collisions;

@@ -465,4 +465,126 @@ describe('simple experience entity lifecycle', () => {
     expect(hint).toContain('loot chest');
     expect(experience.scheduleScoreSync).not.toHaveBeenCalledWith('portal-primed');
   });
+
+  it('rejects portal frame placement when a player blocks the slot', async () => {
+    const { experience } = createExperienceForTest();
+    experience.start();
+    await Promise.resolve();
+
+    const worldSize = experience.heightMap.length;
+    experience.initialHeightMap = Array.from({ length: worldSize }, () => Array(worldSize).fill(1));
+    experience.heightMap = experience.initialHeightMap.map((row) => row.slice());
+    experience.portalAnchorGrid = experience.computePortalAnchorGrid();
+    experience.resetPortalFrameState();
+
+    const anchor = experience.portalAnchorGrid;
+    const gridX = Math.max(0, Math.min(worldSize - 1, anchor.x - 1));
+    const gridZ = Math.max(0, Math.min(worldSize - 1, anchor.z));
+    const columnKey = `${gridX}|${gridZ}`;
+    const baseHeight = experience.initialHeightMap[gridX][gridZ];
+    const column = [];
+    for (let level = 0; level < baseHeight; level += 1) {
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshBasicMaterial());
+      mesh.position.set((gridX - worldSize / 2) * 1, level + 0.5, (gridZ - worldSize / 2) * 1);
+      mesh.userData = { columnKey, gx: gridX, gz: gridZ, level, blockType: 'grass-block' };
+      column.push(mesh);
+    }
+    experience.columns.set(columnKey, column);
+    experience.heightMap[gridX][gridZ] = column.length;
+
+    const topMesh = column[column.length - 1];
+    experience.castFromCamera = vi.fn(() => [{ object: topMesh }]);
+
+    experience.hotbar = Array.from({ length: 9 }, () => ({ item: null, quantity: 0 }));
+    experience.selectedHotbarIndex = 0;
+    experience.hotbar[0] = { item: 'stone', quantity: 2 };
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const useSelectedSpy = vi.spyOn(experience, 'useSelectedItem');
+
+    try {
+      const targetLevel = column.length;
+      const blockCenterY = targetLevel + 0.5;
+      experience.playerRig.position.set(topMesh.position.x, blockCenterY, topMesh.position.z);
+
+      experience.placeBlock();
+
+      expect(useSelectedSpy).not.toHaveBeenCalled();
+      expect(experience.columns.get(columnKey)).toHaveLength(baseHeight);
+      expect(experience.hotbar[0].quantity).toBe(2);
+      const hint = experience.showHint.mock.calls.at(-1)?.[0] ?? '';
+      expect(hint).toContain('Portal frame placement blocked');
+      expect(hint).toContain('player');
+      expect(experience.portalStatusState).toBe('blocked');
+      expect(warnSpy).toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+      useSelectedSpy.mockRestore();
+    }
+  });
+
+  it('places a portal frame block when the slot is clear', async () => {
+    const { experience } = createExperienceForTest();
+    experience.start();
+    await Promise.resolve();
+
+    const worldSize = experience.heightMap.length;
+    experience.initialHeightMap = Array.from({ length: worldSize }, () => Array(worldSize).fill(1));
+    experience.heightMap = experience.initialHeightMap.map((row) => row.slice());
+    experience.portalAnchorGrid = experience.computePortalAnchorGrid();
+    experience.resetPortalFrameState();
+
+    const anchor = experience.portalAnchorGrid;
+    const gridX = Math.max(0, Math.min(worldSize - 1, anchor.x + 1));
+    const gridZ = Math.max(0, Math.min(worldSize - 1, anchor.z));
+    const columnKey = `${gridX}|${gridZ}`;
+    const baseHeight = experience.initialHeightMap[gridX][gridZ];
+    const column = [];
+    for (let level = 0; level < baseHeight; level += 1) {
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshBasicMaterial());
+      mesh.position.set((gridX - worldSize / 2) * 1, level + 0.5, (gridZ - worldSize / 2) * 1);
+      mesh.userData = { columnKey, gx: gridX, gz: gridZ, level, blockType: 'grass-block' };
+      column.push(mesh);
+    }
+    experience.columns.set(columnKey, column);
+    experience.heightMap[gridX][gridZ] = column.length;
+
+    const topMesh = column[column.length - 1];
+    experience.castFromCamera = vi.fn(() => [{ object: topMesh }]);
+
+    experience.hotbar = Array.from({ length: 9 }, () => ({ item: null, quantity: 0 }));
+    experience.selectedHotbarIndex = 0;
+    experience.hotbar[0] = { item: 'stone', quantity: 3 };
+
+    experience.playerRig.position.set(topMesh.position.x, topMesh.position.y + 5, topMesh.position.z + 5);
+
+    experience.terrainGroup = new THREE.Group();
+    experience.terrainChunkMap = new Map();
+    experience.dirtyTerrainChunks = new Set();
+    experience.terrainChunkGroups = [];
+    experience.terrainChunkSize = experience.terrainChunkSize ?? 8;
+    experience.materials = experience.materials || {};
+    experience.materials.stone = experience.materials.stone || new THREE.MeshBasicMaterial();
+    experience.materials.dirt = experience.materials.dirt || new THREE.MeshBasicMaterial();
+    experience.materials.grass = experience.materials.grass || new THREE.MeshBasicMaterial();
+    experience.blockGeometry = experience.blockGeometry || new THREE.BoxGeometry(1, 1, 1);
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const useSelectedSpy = vi.spyOn(experience, 'useSelectedItem');
+
+    try {
+      experience.placeBlock();
+
+      expect(useSelectedSpy).toHaveBeenCalledOnce();
+      const columnAfter = experience.columns.get(columnKey);
+      expect(columnAfter).toHaveLength(baseHeight + 1);
+      expect(experience.hotbar[0].quantity).toBe(2);
+      const placedBlock = columnAfter[columnAfter.length - 1];
+      expect(placedBlock?.userData?.blockType).toBe('stone');
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+      useSelectedSpy.mockRestore();
+    }
+  });
 });
