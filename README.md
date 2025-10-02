@@ -277,6 +277,18 @@ This repository ships with a GitHub Actions workflow that deploys the static sit
 3. Repository contents (excluding version control and workflow files) are synchronised to the target S3 bucket.
 4. The workflow automatically discovers the CloudFront distribution attached to the S3 origin, invalidates its cache, waits for the flush to finish, and exposes both the distribution ID and URL as job outputs. The URL is also written to the run summary for quick access.
 
+> **Always invalidate the CDN on every deploy.**
+>
+> Even when you ship manually (outside the GitHub Actions workflow), run a full CloudFront invalidation right after syncing the latest assets to S3 so browsers stop serving cached bundles. Skipping this step leaves stale JavaScript, CSS, or GLTF files in place and frequently manifests as missing HUD assets or boot-time script errors. Trigger the flush with:
+>
+> ```bash
+> aws cloudfront create-invalidation \
+>   --distribution-id "$AWS_CLOUDFRONT_DISTRIBUTION_ID" \
+>   --paths "/*"
+> ```
+>
+> Wait for the invalidation to complete before announcing the deploy so players and automated smoke tests pick up the refreshed build immediately.
+
 If no CloudFront distribution matches the S3 bucket, the workflow fails with instructions to create or tag one before redeploying.
 
 ### Static asset permissions
