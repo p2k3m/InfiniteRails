@@ -375,8 +375,14 @@ jobs:
             echo '::warning::Cache invalidation request completed but no ID was returned.'
           else
             echo "::notice::Submitted CloudFront invalidation ${INVALIDATION_ID}"
+
+            echo "Waiting for CloudFront invalidation ${INVALIDATION_ID} to complete..."
+            aws cloudfront wait invalidation-completed \
+              --distribution-id "${DISTRIBUTION_ID}" \
+              --id "${INVALIDATION_ID}"
+
             {
-              echo '### 🧹 CloudFront cache invalidated'
+              echo '### 🧹 CloudFront cache flushed'
               echo ''
               echo "- Distribution ID: \`${DISTRIBUTION_ID}\`"
               echo "- Invalidation ID: \`${INVALIDATION_ID}\`"

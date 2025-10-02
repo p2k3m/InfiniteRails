@@ -252,7 +252,7 @@ This repository ships with a GitHub Actions workflow that deploys the static sit
 1. Workflow validates that all required AWS secrets exist. Missing secrets trigger an actionable failure with setup steps.
 2. AWS credentials are configured via `aws-actions/configure-aws-credentials`.
 3. Repository contents (excluding version control and workflow files) are synchronised to the target S3 bucket.
-4. The workflow automatically discovers the CloudFront distribution attached to the S3 origin, invalidates its cache, and exposes both the distribution ID and URL as job outputs. The URL is also written to the run summary for quick access.
+4. The workflow automatically discovers the CloudFront distribution attached to the S3 origin, invalidates its cache, waits for the flush to finish, and exposes both the distribution ID and URL as job outputs. The URL is also written to the run summary for quick access.
 
 If no CloudFront distribution matches the S3 bucket, the workflow fails with instructions to create or tag one before redeploying.
 
