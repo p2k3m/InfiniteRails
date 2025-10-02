@@ -1244,6 +1244,11 @@
       this.terrainChunkGroups = [];
       this.terrainChunkMap = new Map();
       this.dirtyTerrainChunks = new Set();
+      this.navigationMeshes = new Map();
+      this.dirtyNavigationChunks = new Set();
+      this.navigationMeshGeneration = 0;
+      this.navigationMeshBuildCounter = 0;
+      this.navigationMeshSummary = { chunkCount: 0, walkableCells: 0, reason: 'init', updatedAt: 0 };
       this.chunkFrustum = new THREE.Frustum();
       this.chunkFrustumMatrix = new THREE.Matrix4();
       this.terrainCullingAccumulator = 0;
@@ -5587,6 +5592,31 @@
       this.terrainChunkGroups = [];
       this.terrainChunkMap.clear();
       this.dirtyTerrainChunks.clear();
+      if (!this.navigationMeshes) {
+        this.navigationMeshes = new Map();
+      } else {
+        this.navigationMeshes.clear();
+      }
+      if (!this.dirtyNavigationChunks) {
+        this.dirtyNavigationChunks = new Set();
+      } else {
+        this.dirtyNavigationChunks.clear();
+      }
+      this.navigationMeshGeneration += 1;
+      const meshInitTimestamp = Date.now();
+      if (!this.navigationMeshSummary) {
+        this.navigationMeshSummary = {
+          chunkCount: 0,
+          walkableCells: 0,
+          reason: 'pending',
+          updatedAt: meshInitTimestamp,
+        };
+      } else {
+        this.navigationMeshSummary.chunkCount = 0;
+        this.navigationMeshSummary.walkableCells = 0;
+        this.navigationMeshSummary.reason = 'pending';
+        this.navigationMeshSummary.updatedAt = meshInitTimestamp;
+      }
       this.lastCullingCameraValid = false;
       const half = WORLD_SIZE / 2;
       const totalColumns = WORLD_SIZE * WORLD_SIZE;
@@ -5671,6 +5701,26 @@
       this.terrainChunkGroups.forEach((chunk) => {
         this.recalculateTerrainChunkBounds(chunk);
       });
+      const navigationSummary = this.refreshNavigationMeshes({ reason: 'world-load' });
+      const navSummaryTimestamp = Date.now();
+      if (!this.navigationMeshSummary) {
+        this.navigationMeshSummary = {
+          chunkCount: navigationSummary.chunkCount,
+          walkableCells: navigationSummary.walkableCells,
+          reason: 'world-load',
+          updatedAt: navSummaryTimestamp,
+        };
+      } else {
+        this.navigationMeshSummary.chunkCount = navigationSummary.chunkCount;
+        this.navigationMeshSummary.walkableCells = navigationSummary.walkableCells;
+        this.navigationMeshSummary.reason = 'world-load';
+        this.navigationMeshSummary.updatedAt = navSummaryTimestamp;
+      }
+      if (typeof console !== 'undefined') {
+        console.error(
+          `Navigation mesh initialization summary — ${navigationSummary.chunkCount} chunk meshes prepared with ${navigationSummary.walkableCells} walkable surfaces. If mobs stop moving, inspect chunk hydration and navmesh rebuilding.`,
+        );
+      }
       this.terrainCullingAccumulator = this.terrainCullingInterval;
       const voxelsUsed = voxelBudget - remainingVoxels;
       this.terrainVoxelBudget = voxelBudget;
@@ -5733,19 +5783,43 @@
       return `${chunkX}|${chunkZ}`;
     }
 
+    parseTerrainChunkKey(chunkKey) {
+      if (typeof chunkKey !== 'string' || !chunkKey) {
+        return { chunkX: 0, chunkZ: 0, valid: false };
+      }
+      const [chunkXRaw, chunkZRaw] = chunkKey.split('|');
+      const parsedX = Number.parseInt(chunkXRaw ?? '', 10);
+      const parsedZ = Number.parseInt(chunkZRaw ?? '', 10);
+      const chunkX = Number.isFinite(parsedX) ? parsedX : 0;
+      const chunkZ = Number.isFinite(parsedZ) ? parsedZ : 0;
+      return { chunkX, chunkZ, valid: Number.isFinite(parsedX) && Number.isFinite(parsedZ) };
+    }
+
+    getChunkKeyForWorldPosition(x, z) {
+      if (!Number.isFinite(x) || !Number.isFinite(z)) {
+        return null;
+      }
+      const halfWorld = WORLD_SIZE / 2;
+      const gridX = Math.floor(x / BLOCK_SIZE + halfWorld);
+      const gridZ = Math.floor(z / BLOCK_SIZE + halfWorld);
+      if (gridX < 0 || gridX >= WORLD_SIZE || gridZ < 0 || gridZ >= WORLD_SIZE) {
+        return null;
+      }
+      return this.getTerrainChunkKey(gridX, gridZ);
+    }
+
     ensureTerrainChunk(chunkKey) {
       let chunk = this.terrainChunkMap.get(chunkKey);
       if (chunk) {
         return chunk;
       }
       const THREE = this.THREE;
-      const [chunkXRaw, chunkZRaw] = chunkKey.split('|');
-      const chunkX = Number.parseInt(chunkXRaw ?? '0', 10) || 0;
-      const chunkZ = Number.parseInt(chunkZRaw ?? '0', 10) || 0;
+      const { chunkX, chunkZ } = this.parseTerrainChunkKey(chunkKey);
       chunk = new THREE.Group();
       chunk.name = `TerrainChunk-${chunkX}-${chunkZ}`;
       chunk.visible = true;
       chunk.userData = {
+        chunkKey,
         chunkX,
         chunkZ,
         minY: 0,
@@ -5804,16 +5878,296 @@
     markTerrainChunkDirty(chunkKey) {
       if (!chunkKey || !this.terrainChunkMap.has(chunkKey)) return;
       this.dirtyTerrainChunks.add(chunkKey);
+      if (this.dirtyNavigationChunks) {
+        this.dirtyNavigationChunks.add(chunkKey);
+      }
     }
 
     refreshDirtyTerrainChunks() {
-      if (!this.dirtyTerrainChunks.size) return;
+      const dirtyNavCount = this.dirtyNavigationChunks?.size ?? 0;
+      if (!this.dirtyTerrainChunks.size && !dirtyNavCount) return;
+      const keys = new Set();
       for (const key of this.dirtyTerrainChunks) {
+        keys.add(key);
+      }
+      if (dirtyNavCount) {
+        for (const key of this.dirtyNavigationChunks) {
+          keys.add(key);
+        }
+      }
+      if (!keys.size) {
+        this.dirtyTerrainChunks.clear();
+        if (this.dirtyNavigationChunks) {
+          this.dirtyNavigationChunks.clear();
+        }
+        return;
+      }
+      let navMeshesUpdated = 0;
+      for (const key of keys) {
         const chunk = this.terrainChunkMap.get(key);
-        if (!chunk) continue;
-        this.recalculateTerrainChunkBounds(chunk);
+        if (!chunk) {
+          if (this.navigationMeshes instanceof Map) {
+            this.navigationMeshes.delete(key);
+          }
+          continue;
+        }
+        if (this.dirtyTerrainChunks.has(key)) {
+          this.recalculateTerrainChunkBounds(chunk);
+        }
+        const navmesh = this.rebuildNavigationMeshForChunk(key, { reason: 'terrain-update' });
+        if (navmesh) {
+          navMeshesUpdated += 1;
+        }
       }
       this.dirtyTerrainChunks.clear();
+      if (this.dirtyNavigationChunks) {
+        this.dirtyNavigationChunks.clear();
+      }
+      if (navMeshesUpdated > 0) {
+        const meshRegistry = this.navigationMeshes instanceof Map ? this.navigationMeshes : null;
+        const totalWalkable = meshRegistry
+          ? Array.from(meshRegistry.values()).reduce((sum, mesh) => sum + (mesh?.walkableCellCount ?? 0), 0)
+          : 0;
+        const chunkCount = meshRegistry ? meshRegistry.size : 0;
+        const timestamp = Date.now();
+        if (!this.navigationMeshSummary) {
+          this.navigationMeshSummary = {
+            chunkCount,
+            walkableCells: totalWalkable,
+            reason: 'terrain-update',
+            updatedAt: timestamp,
+          };
+        } else {
+          this.navigationMeshSummary.chunkCount = chunkCount;
+          this.navigationMeshSummary.walkableCells = totalWalkable;
+          this.navigationMeshSummary.reason = 'terrain-update';
+          this.navigationMeshSummary.updatedAt = timestamp;
+        }
+        if (typeof console !== 'undefined') {
+          console.info(
+            `Navigation mesh delta refresh — ${navMeshesUpdated} chunk meshes rebuilt (${totalWalkable} walkable surfaces tracked).`,
+          );
+        }
+      }
+    }
+
+    ensureNavigationMeshForWorldPosition(x, z, options = {}) {
+      const chunkKey = this.getChunkKeyForWorldPosition(x, z);
+      if (!chunkKey) {
+        return null;
+      }
+      return this.ensureNavigationMeshForChunk(chunkKey, options);
+    }
+
+    ensureNavigationMeshForChunk(chunkKey, options = {}) {
+      if (!chunkKey) {
+        return null;
+      }
+      if (!(this.navigationMeshes instanceof Map)) {
+        this.navigationMeshes = new Map();
+      }
+      if (this.dirtyNavigationChunks?.has(chunkKey)) {
+        return this.rebuildNavigationMeshForChunk(chunkKey, { reason: options.reason ?? 'ensure-dirty' });
+      }
+      const navmesh = this.navigationMeshes.get(chunkKey) || null;
+      if (navmesh) {
+        this.validateNavigationMesh(navmesh, { chunkKey, reason: options.reason ?? 'ensure-existing' });
+        return navmesh;
+      }
+      return this.rebuildNavigationMeshForChunk(chunkKey, { reason: options.reason ?? 'ensure-missing' });
+    }
+
+    rebuildNavigationMeshForChunk(chunkKey, options = {}) {
+      if (!chunkKey) {
+        return null;
+      }
+      if (!(this.navigationMeshes instanceof Map)) {
+        this.navigationMeshes = new Map();
+      }
+      const chunk = this.terrainChunkMap.get(chunkKey);
+      if (!chunk) {
+        this.navigationMeshes.delete(chunkKey);
+        if (this.dirtyNavigationChunks) {
+          this.dirtyNavigationChunks.delete(chunkKey);
+        }
+        return null;
+      }
+      const navmesh = this.computeNavigationMeshForChunk(chunkKey, chunk);
+      if (!navmesh) {
+        this.navigationMeshes.delete(chunkKey);
+        if (this.dirtyNavigationChunks) {
+          this.dirtyNavigationChunks.delete(chunkKey);
+        }
+        return null;
+      }
+      this.navigationMeshBuildCounter += 1;
+      navmesh.revision = this.navigationMeshBuildCounter;
+      navmesh.lastUpdateReason = options.reason ?? 'rebuild';
+      this.navigationMeshes.set(chunkKey, navmesh);
+      if (this.dirtyNavigationChunks) {
+        this.dirtyNavigationChunks.delete(chunkKey);
+      }
+      this.validateNavigationMesh(navmesh, { chunkKey, reason: options.reason ?? 'rebuild' });
+      return navmesh;
+    }
+
+    computeNavigationMeshForChunk(chunkKey, chunk = null) {
+      if (!chunkKey) {
+        return null;
+      }
+      if (!Array.isArray(this.heightMap) || !this.heightMap.length) {
+        return null;
+      }
+      const { chunkX, chunkZ } = this.parseTerrainChunkKey(chunkKey);
+      const chunkSize = this.terrainChunkSize;
+      const halfWorld = WORLD_SIZE / 2;
+      const cells = [];
+      let minX = Infinity;
+      let maxX = -Infinity;
+      let minZ = Infinity;
+      let maxZ = -Infinity;
+      let minY = Infinity;
+      let maxY = -Infinity;
+      let walkableCells = 0;
+      for (let localX = 0; localX < chunkSize; localX += 1) {
+        const gridX = chunkX * chunkSize + localX;
+        const columnRow = this.heightMap[gridX];
+        if (!columnRow) continue;
+        for (let localZ = 0; localZ < chunkSize; localZ += 1) {
+          const gridZ = chunkZ * chunkSize + localZ;
+          const columnHeight = columnRow[gridZ] ?? 0;
+          if (columnHeight <= 0) continue;
+          const surfaceY = columnHeight * BLOCK_SIZE;
+          const worldX = (gridX - halfWorld) * BLOCK_SIZE;
+          const worldZ = (gridZ - halfWorld) * BLOCK_SIZE;
+          cells.push({
+            gridX,
+            gridZ,
+            columnHeight,
+            surfaceY,
+            worldX,
+            worldZ,
+          });
+          walkableCells += 1;
+          if (worldX < minX) minX = worldX;
+          if (worldX > maxX) maxX = worldX;
+          if (worldZ < minZ) minZ = worldZ;
+          if (worldZ > maxZ) maxZ = worldZ;
+          if (surfaceY < minY) minY = surfaceY;
+          if (surfaceY > maxY) maxY = surfaceY;
+        }
+      }
+      if (chunk?.userData) {
+        const chunkData = chunk.userData;
+        if (!Number.isFinite(minY) && Number.isFinite(chunkData.minY)) {
+          minY = chunkData.minY;
+        }
+        if (!Number.isFinite(maxY) && Number.isFinite(chunkData.maxY)) {
+          maxY = chunkData.maxY;
+        }
+      }
+      const bounds = {
+        minX: Number.isFinite(minX) ? minX - BLOCK_SIZE * 0.5 : 0,
+        maxX: Number.isFinite(maxX) ? maxX + BLOCK_SIZE * 0.5 : 0,
+        minZ: Number.isFinite(minZ) ? minZ - BLOCK_SIZE * 0.5 : 0,
+        maxZ: Number.isFinite(maxZ) ? maxZ + BLOCK_SIZE * 0.5 : 0,
+        minY: Number.isFinite(minY) ? minY : 0,
+        maxY: Number.isFinite(maxY) ? maxY : 0,
+      };
+      return {
+        key: chunkKey,
+        chunkX,
+        chunkZ,
+        generation: this.navigationMeshGeneration,
+        walkableCellCount: walkableCells,
+        cells,
+        bounds,
+        updatedAt: Date.now(),
+      };
+    }
+
+    validateNavigationMesh(navmesh, context = {}) {
+      if (!navmesh) {
+        if (typeof console !== 'undefined') {
+          console.warn('Navigation mesh validation failed — mesh missing.', context);
+        }
+        return false;
+      }
+      if (!Array.isArray(navmesh.cells)) {
+        if (typeof console !== 'undefined') {
+          console.warn('Navigation mesh validation failed — missing cell data.', {
+            ...context,
+            navmeshKey: navmesh.key,
+          });
+        }
+        return false;
+      }
+      if (navmesh.walkableCellCount !== navmesh.cells.length) {
+        navmesh.walkableCellCount = navmesh.cells.length;
+      }
+      const bounds = navmesh.bounds || {};
+      const boundKeys = ['minX', 'maxX', 'minZ', 'maxZ', 'minY', 'maxY'];
+      let boundsValid = true;
+      for (const key of boundKeys) {
+        if (!Number.isFinite(bounds[key])) {
+          boundsValid = false;
+          break;
+        }
+      }
+      if (!boundsValid && typeof console !== 'undefined') {
+        console.warn('Navigation mesh validation warning — bounds unavailable or invalid.', {
+          ...context,
+          chunkKey: context.chunkKey ?? navmesh.key,
+        });
+      }
+      if (!navmesh.cells.length && typeof console !== 'undefined') {
+        console.warn('Navigation mesh validation warning — chunk contains no walkable cells.', {
+          ...context,
+          chunkKey: context.chunkKey ?? navmesh.key,
+        });
+      }
+      return boundsValid;
+    }
+
+    refreshNavigationMeshes(options = {}) {
+      if (!(this.navigationMeshes instanceof Map)) {
+        this.navigationMeshes = new Map();
+      }
+      const summary = {
+        chunkCount: 0,
+        walkableCells: 0,
+        reason: options.reason ?? 'bulk-refresh',
+        updatedAt: Date.now(),
+      };
+      for (const [chunkKey] of this.terrainChunkMap) {
+        const navmesh = this.rebuildNavigationMeshForChunk(chunkKey, {
+          reason: options.reason ?? 'bulk-refresh',
+        });
+        if (!navmesh) {
+          continue;
+        }
+        summary.chunkCount += 1;
+        summary.walkableCells += navmesh.walkableCellCount;
+      }
+      if (!this.navigationMeshSummary) {
+        this.navigationMeshSummary = {
+          chunkCount: summary.chunkCount,
+          walkableCells: summary.walkableCells,
+          reason: summary.reason,
+          updatedAt: summary.updatedAt,
+        };
+      } else {
+        this.navigationMeshSummary.chunkCount = summary.chunkCount;
+        this.navigationMeshSummary.walkableCells = summary.walkableCells;
+        this.navigationMeshSummary.reason = summary.reason;
+        this.navigationMeshSummary.updatedAt = summary.updatedAt;
+      }
+      if (options.log && typeof console !== 'undefined') {
+        console.error(
+          `Navigation mesh refresh summary — ${summary.chunkCount} chunk meshes rebuilt, ${summary.walkableCells} walkable surfaces tracked (${summary.reason}).`,
+        );
+      }
+      return summary;
     }
 
     buildRails() {
@@ -8727,10 +9081,12 @@
         this.lastZombieSpawn = this.elapsed;
       }
       const playerPosition = this.getCameraWorldPosition(this.tmpVector3);
+      this.ensureNavigationMeshForWorldPosition(playerPosition.x, playerPosition.z);
       const tmpDir = this.tmpVector;
       const tmpStep = this.tmpVector2;
       for (const zombie of this.zombies) {
         const { mesh } = zombie;
+        this.ensureNavigationMeshForWorldPosition(mesh.position.x, mesh.position.z);
         tmpDir.subVectors(playerPosition, mesh.position);
         const distance = tmpDir.length();
         let baseState = 'idle';
@@ -8790,6 +9146,7 @@
       mesh.castShadow = true;
       mesh.receiveShadow = true;
       mesh.position.set(x, ground + 0.9, z);
+      this.ensureNavigationMeshForWorldPosition(x, z);
       zombieGroup.add(mesh);
       const zombie = { id, mesh, speed: 2.4, lastAttack: this.elapsed, placeholder: true, animation: null };
       this.zombies.push(zombie);
@@ -8915,6 +9272,7 @@
       const z = base.z + Math.sin(angle) * radius;
       const ground = this.sampleGroundHeight(x, z);
       actor.position.set(x, ground + 1, z);
+      this.ensureNavigationMeshForWorldPosition(x, z);
       golemGroup.add(actor);
       const golem = {
         id: `golem-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -8944,10 +9302,15 @@
       if (!this.golems.length) return;
       const THREE = this.THREE;
       const playerPosition = this.getCameraWorldPosition(this.tmpVector3);
+      this.ensureNavigationMeshForWorldPosition(playerPosition.x, playerPosition.z);
       for (const golem of this.golems) {
         golem.cooldown = Math.max(0, golem.cooldown - delta);
         const target = this.findNearestZombie(golem.mesh.position) ?? null;
         const destination = target?.mesh?.position ?? playerPosition;
+        this.ensureNavigationMeshForWorldPosition(golem.mesh.position.x, golem.mesh.position.z);
+        if (destination) {
+          this.ensureNavigationMeshForWorldPosition(destination.x, destination.z);
+        }
         if (destination) {
           this.tmpVector.subVectors(destination, golem.mesh.position);
           const distance = this.tmpVector.length();
