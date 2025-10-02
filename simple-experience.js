@@ -1434,7 +1434,7 @@
         this.buildRails();
         this.spawnDimensionChests();
         this.refreshPortalState();
-        this.positionPlayer();
+        this.attachPlayerToSimulation();
         this.evaluateBossChallenge();
         this.bindEvents();
         this.initializeMobileControls();
@@ -7523,6 +7523,27 @@
       this.verticalVelocity = 0;
       this.isGrounded = false;
       this.positionPlayer();
+    }
+
+    attachPlayerToSimulation() {
+      this.resetPosition();
+      this.isGrounded = true;
+      this.prevTime = null;
+      this.renderAccumulator = 0;
+      if (this.keys && typeof this.keys.clear === 'function') {
+        this.keys.clear();
+      }
+      if (this.joystickVector?.set) {
+        this.joystickVector.set(0, 0);
+      }
+      if (this.touchButtonStates) {
+        this.touchButtonStates.up = false;
+        this.touchButtonStates.down = false;
+        this.touchButtonStates.left = false;
+        this.touchButtonStates.right = false;
+      }
+      this.touchJumpRequested = false;
+      this.refreshCameraBaseOffset();
     }
 
     scheduleNextFrame() {
