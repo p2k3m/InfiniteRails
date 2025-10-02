@@ -7,7 +7,7 @@
     <link rel="stylesheet" href="styles.css" />
     <link rel="icon" type="image/svg+xml" href="assets/favicon.svg" />
   </head>
-  <body>
+  <body data-color-mode="dark" data-color-mode-preference="auto">
     <div class="background-sheen"></div>
     <div class="manu-logo" id="logo" aria-hidden="false" data-hint="Created by Manu">
       <svg
@@ -683,6 +683,28 @@
           </fieldset>
           <fieldset class="settings-modal__fieldset settings-modal__fieldset--toggles">
             <legend class="settings-modal__legend">Accessibility</legend>
+            <section class="settings-modal__theme" aria-labelledby="themeToggleLabel" aria-describedby="themeToggleDescription">
+              <div class="settings-modal__toggle-copy">
+                <span id="themeToggleLabel" class="settings-modal__toggle-title">Interface theme</span>
+                <span id="themeToggleDescription" class="settings-modal__toggle-description">
+                  Switch between dark, light, or automatic contrast if your browser can't detect a preferred colour scheme.
+                </span>
+              </div>
+              <div class="settings-modal__theme-options" role="radiogroup" aria-labelledby="themeToggleLabel">
+                <label class="settings-modal__theme-option">
+                  <input type="radio" name="colorMode" id="colorModeAuto" value="auto" aria-describedby="themeToggleDescription" />
+                  <span>Auto</span>
+                </label>
+                <label class="settings-modal__theme-option">
+                  <input type="radio" name="colorMode" id="colorModeLight" value="light" aria-describedby="themeToggleDescription" />
+                  <span>Light</span>
+                </label>
+                <label class="settings-modal__theme-option">
+                  <input type="radio" name="colorMode" id="colorModeDark" value="dark" aria-describedby="themeToggleDescription" />
+                  <span>Dark</span>
+                </label>
+              </div>
+            </section>
             <label class="settings-modal__toggle">
               <span class="settings-modal__toggle-copy">
                 <span id="colorBlindModeLabel" class="settings-modal__toggle-title">Colour-blind assist</span>
@@ -1415,9 +1437,14 @@
     <script src="asset-resolver.js" defer></script>
     <script src="assets/offline-assets.js" defer></script>
     <script src="audio-aliases.js" defer></script>
+    <script src="audio-captions.js" defer></script>
     <script src="scoreboard-utils.js" defer></script>
     <script src="portal-mechanics.js" defer></script>
     <script src="simple-experience.js" defer></script>
     <script src="script.js" defer></script>
+    <div class="caption-layer" id="captionOverlay" role="status" aria-live="assertive" aria-atomic="true" hidden>
+      <p class="caption-layer__text" id="captionOverlayText"></p>
+    </div>
+    <div class="sr-only" id="captionLiveRegion" aria-live="assertive" aria-atomic="true"></div>
   </body>
 </html>

@@ -3235,6 +3235,8 @@
       };
       const howlCache = useHowler ? new Map() : null;
       const fallbackPlaying = useHowler ? null : new Map();
+      let lastCaptionText = null;
+      let lastCaptionAt = 0;
       let masterVolume = 1;
       const clampVolume = (value) => {
         if (!Number.isFinite(value)) {
@@ -3247,6 +3249,49 @@
         const volume = clampVolume(baseVolume) * masterVolume;
         audio.volume = clampVolume(volume);
       };
+      const getCaptionText = (requestedName, resolvedName) => {
+        const captions = scope?.INFINITE_RAILS_AUDIO_CAPTIONS;
+        if (!captions || typeof captions !== 'object') {
+          return null;
+        }
+        if (requestedName && typeof captions[requestedName] === 'string') {
+          return captions[requestedName];
+        }
+        if (resolvedName && typeof captions[resolvedName] === 'string') {
+          return captions[resolvedName];
+        }
+        return null;
+      };
+
+      const announceCaption = (requestedName, resolvedName) => {
+        const caption = getCaptionText(requestedName, resolvedName);
+        if (!caption || typeof scope?.dispatchEvent !== 'function' || typeof CustomEvent !== 'function') {
+          return;
+        }
+        const now = Date.now();
+        if (caption === lastCaptionText && now - lastCaptionAt < 1200) {
+          return;
+        }
+        lastCaptionText = caption;
+        lastCaptionAt = now;
+        try {
+          scope.dispatchEvent(
+            new CustomEvent('infinite-rails:audio-caption', {
+              detail: {
+                caption,
+                name: requestedName || resolvedName || null,
+                resolvedName: resolvedName || null,
+                timestamp: now,
+              },
+            }),
+          );
+        } catch (error) {
+          if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+            console.debug('Unable to dispatch audio caption event.', error);
+          }
+        }
+      };
+
       const playInternal = (requestedName, resolvedName, options = {}) => {
         if (!resolvedName || !samples[resolvedName]) {
           return;
@@ -3314,6 +3359,7 @@
             });
           }
         }
+        announceCaption(requestedName, resolvedName);
         if (
           requestedName &&
           requestedName !== resolvedName &&
