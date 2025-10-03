@@ -301,6 +301,22 @@ const api = {
 
 if (typeof module !== 'undefined' && typeof module.exports !== 'undefined') {
   module.exports = api;
+  if (typeof Object.defineProperty === 'function') {
+    Object.defineProperty(module.exports, 'default', {
+      value: api,
+      enumerable: false,
+      configurable: true,
+      writable: true,
+    });
+    Object.defineProperty(module.exports, '__esModule', {
+      value: true,
+      enumerable: false,
+      configurable: true,
+    });
+  } else {
+    module.exports.default = api;
+    module.exports.__esModule = true;
+  }
 }
 
 const globalScope =

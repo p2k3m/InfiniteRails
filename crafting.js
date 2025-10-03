@@ -369,3 +369,19 @@ module.exports = {
   validateCraftAttempt,
   searchRecipes,
 };
+if (typeof Object.defineProperty === 'function') {
+  Object.defineProperty(module.exports, 'default', {
+    value: module.exports,
+    enumerable: false,
+    configurable: true,
+    writable: true,
+  });
+  Object.defineProperty(module.exports, '__esModule', {
+    value: true,
+    enumerable: false,
+    configurable: true,
+  });
+} else {
+  module.exports.default = module.exports;
+  module.exports.__esModule = true;
+}

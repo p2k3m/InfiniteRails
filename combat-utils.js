@@ -1,6 +1,23 @@
 (function (globalScope, factory) {
   if (typeof module === 'object' && typeof module.exports === 'object') {
-    module.exports = factory();
+    const exported = factory();
+    module.exports = exported;
+    if (typeof Object.defineProperty === 'function') {
+      Object.defineProperty(module.exports, 'default', {
+        value: exported,
+        enumerable: false,
+        configurable: true,
+        writable: true,
+      });
+      Object.defineProperty(module.exports, '__esModule', {
+        value: true,
+        enumerable: false,
+        configurable: true,
+      });
+    } else {
+      module.exports.default = exported;
+      module.exports.__esModule = true;
+    }
   } else {
     const target = globalScope || (typeof globalThis !== 'undefined' ? globalThis : {});
     target.CombatUtils = factory();
