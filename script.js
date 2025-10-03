@@ -4092,30 +4092,54 @@
     notices.push({ key, message });
   }
 
-  function createAssetUrlCandidates(relativePath) {
+  function createAssetUrlCandidates(relativePath, options = {}) {
+    if (!relativePath || typeof relativePath !== 'string') {
+      return [];
+    }
     const urls = [];
     const normalisedPath = relativePath.replace(/^\.\//, '');
-    const assetBase = globalScope.APP_CONFIG?.assetBaseUrl;
-    if (assetBase) {
+    const isHttpUrl = /^https?:/i.test(relativePath);
+
+    if (options?.preloadedSelector && documentRef && typeof documentRef.querySelector === 'function') {
       try {
-        const base = assetBase.endsWith('/') ? assetBase : `${assetBase}/`;
-        urls.push(new URL(normalisedPath, base).href);
+        const preloaded = documentRef.querySelector(options.preloadedSelector);
+        if (preloaded?.src) {
+          urls.push(preloaded.src);
+        }
       } catch (error) {
         if (globalScope.console?.warn) {
-          globalScope.console.warn('Failed to resolve assetBaseUrl candidate', {
-            assetBaseUrl: assetBase,
+          globalScope.console.warn('Failed to resolve preloaded asset URL candidate.', {
+            selector: options.preloadedSelector,
             asset: relativePath,
             error,
           });
         }
       }
     }
-    if (/^https?:/i.test(relativePath)) {
-      urls.push(relativePath);
-    } else {
-      urls.push(normalisedPath);
+
+    if (!urls.length) {
+      const assetBase = globalScope.APP_CONFIG?.assetBaseUrl;
+      if (assetBase) {
+        try {
+          const base = assetBase.endsWith('/') ? assetBase : `${assetBase}/`;
+          urls.push(new URL(normalisedPath, base).href);
+        } catch (error) {
+          if (globalScope.console?.warn) {
+            globalScope.console.warn('Failed to resolve assetBaseUrl candidate.', {
+              assetBaseUrl: assetBase,
+              asset: relativePath,
+              error,
+            });
+          }
+        }
+      }
     }
-    return Array.from(new Set(urls));
+
+    if (!urls.length) {
+      urls.push(isHttpUrl ? relativePath : normalisedPath);
+    }
+
+    return urls;
   }
 
   function loadScript(url, attributes = {}) {
@@ -4311,7 +4335,9 @@
   }
 
   const THREE_SCRIPT_URL = (() => {
-    const candidates = createAssetUrlCandidates('vendor/three.min.js');
+    const candidates = createAssetUrlCandidates('vendor/three.min.js', {
+      preloadedSelector: 'script[data-preload-three]',
+    });
     return candidates.length ? candidates[0] : null;
   })();
   const GLTF_LOADER_URL = (() => {

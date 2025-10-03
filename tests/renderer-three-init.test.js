@@ -23,6 +23,20 @@ if (loadScriptStart === -1 || loadScriptEnd === -1 || loadScriptEnd <= loadScrip
 }
 const loadScriptSource = scriptSource.slice(loadScriptStart, loadScriptEnd);
 
+const createAssetUrlCandidatesStart = scriptSource.indexOf('function createAssetUrlCandidates');
+const createAssetUrlCandidatesEnd = scriptSource.indexOf('function loadScript', createAssetUrlCandidatesStart);
+if (
+  createAssetUrlCandidatesStart === -1 ||
+  createAssetUrlCandidatesEnd === -1 ||
+  createAssetUrlCandidatesEnd <= createAssetUrlCandidatesStart
+) {
+  throw new Error('Failed to locate createAssetUrlCandidates definition in script.js');
+}
+const createAssetUrlCandidatesSource = scriptSource.slice(
+  createAssetUrlCandidatesStart,
+  createAssetUrlCandidatesEnd,
+);
+
 function instantiateEnsureThree({
   loadScript,
   scriptUrl = 'vendor/three.min.js',
@@ -48,6 +62,15 @@ function instantiateLoadScript({ documentStub, documentRef = null, globalScopeSt
     "'use strict';" + loadScriptSource + '\n  return loadScript;'
   );
   return factory(documentRef, globalScopeStub);
+}
+
+function instantiateCreateAssetUrlCandidates({ documentStub = null, globalScopeStub = {} } = {}) {
+  const factory = new Function(
+    'documentRef',
+    'globalScope',
+    "'use strict';" + createAssetUrlCandidatesSource + '\n  return createAssetUrlCandidates;'
+  );
+  return factory(documentStub, globalScopeStub);
 }
 
 describe('loadScript helper', () => {
@@ -193,7 +216,8 @@ describe('default renderer Three.js bootstrap', () => {
   });
 
   it('includes only bundled Three.js asset candidates', () => {
-    expect(scriptSource).toContain("createAssetUrlCandidates('vendor/three.min.js')");
+    expect(scriptSource).toContain("createAssetUrlCandidates('vendor/three.min.js', {");
+    expect(scriptSource).toContain("preloadedSelector: 'script[data-preload-three]'");
     expect(scriptSource).not.toContain("'https://unpkg.com/three");
     expect(scriptSource).not.toContain("'https://cdn.jsdelivr.net/npm/three");
   });
@@ -321,5 +345,52 @@ describe('default renderer Three.js bootstrap', () => {
 
   it('simple experience pulls THREE from the global scope', () => {
     expect(simpleExperienceSource).toContain('const THREE = window.THREE_GLOBAL || window.THREE;');
+  });
+});
+
+
+describe('createAssetUrlCandidates helper', () => {
+  it('prefers a preloaded script source when available', () => {
+    const preloadedSrc = 'https://cdn.example.com/vendor/three.min.js';
+    const documentStub = {
+      querySelector: vi.fn((selector) =>
+        selector === 'script[data-preload-three]' ? { src: preloadedSrc } : null,
+      ),
+    };
+    const globalScopeStub = { APP_CONFIG: {}, console: { warn: vi.fn() } };
+    const createAssetUrlCandidates = instantiateCreateAssetUrlCandidates({
+      documentStub,
+      globalScopeStub,
+    });
+    const candidates = createAssetUrlCandidates('vendor/three.min.js', {
+      preloadedSelector: 'script[data-preload-three]',
+    });
+    expect(documentStub.querySelector).toHaveBeenCalledWith('script[data-preload-three]');
+    expect(candidates).toEqual([preloadedSrc]);
+  });
+
+  it('falls back to the configured asset base when no preloaded script is present', () => {
+    const documentStub = { querySelector: vi.fn(() => null) };
+    const globalScopeStub = {
+      APP_CONFIG: { assetBaseUrl: 'https://cdn.example.com/bundles/' },
+      console: { warn: vi.fn() },
+    };
+    const createAssetUrlCandidates = instantiateCreateAssetUrlCandidates({
+      documentStub,
+      globalScopeStub,
+    });
+    const candidates = createAssetUrlCandidates('vendor/three.min.js');
+    expect(candidates).toEqual(['https://cdn.example.com/bundles/vendor/three.min.js']);
+  });
+
+  it('returns the provided path when no overrides are configured', () => {
+    const createAssetUrlCandidates = instantiateCreateAssetUrlCandidates({
+      documentStub: { querySelector: vi.fn(() => null) },
+      globalScopeStub: { APP_CONFIG: {}, console: { warn: vi.fn() } },
+    });
+    expect(createAssetUrlCandidates('vendor/three.min.js')).toEqual(['vendor/three.min.js']);
+    expect(createAssetUrlCandidates('https://static.example.com/vendor/three.min.js')).toEqual([
+      'https://static.example.com/vendor/three.min.js',
+    ]);
   });
 });
