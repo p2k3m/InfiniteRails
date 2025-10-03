@@ -8425,14 +8425,68 @@
         };
         return object;
       };
+      const defaultEmissive = '#111827';
+      const buildPrimitiveFallback = (shape, config = {}) => {
+        const safeShape = typeof shape === 'string' && shape ? shape : 'box';
+        const primitiveName = config.name || `${normalisedKey || 'asset'}-primitive-fallback`;
+        const color = config.color ?? options.color ?? '#9ca3af';
+        let geometry;
+        if (safeShape === 'sphere') {
+          const radius = Number.isFinite(config.radius) && config.radius > 0 ? config.radius : 0.75;
+          const widthSegments = Math.max(8, Math.floor(config.widthSegments ?? 24));
+          const heightSegments = Math.max(8, Math.floor(config.heightSegments ?? 16));
+          geometry = new THREE.SphereGeometry(radius, widthSegments, heightSegments);
+        } else {
+          const width = Number.isFinite(config.width) && config.width > 0 ? config.width : config.size || 1;
+          const height = Number.isFinite(config.height) && config.height > 0 ? config.height : config.size || 1;
+          const depth = Number.isFinite(config.depth) && config.depth > 0 ? config.depth : config.size || 1;
+          geometry = new THREE.BoxGeometry(width, height, depth);
+        }
+        const material = new THREE.MeshStandardMaterial({
+          color,
+          roughness: config.roughness ?? 0.78,
+          metalness: config.metalness ?? 0.14,
+          emissive: config.emissive ?? defaultEmissive,
+          emissiveIntensity: config.emissiveIntensity ?? 0.18,
+        });
+        const mesh = new THREE.Mesh(geometry, material);
+        mesh.name = primitiveName;
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+        return mesh;
+      };
+      const withPrimitiveFallback = (object, placeholderKey, config = {}) => {
+        if (object) {
+          return applyPlaceholderMetadata(object, placeholderKey);
+        }
+        if (typeof console !== 'undefined' && typeof console.warn === 'function') {
+          console.warn(
+            `Placeholder mesh generation failed for ${normalisedKey || 'asset'} — reverting to primitive fallback.`,
+            { reason: reasonLabel },
+          );
+        }
+        const primitive = buildPrimitiveFallback(config.shape || 'box', config);
+        return applyPlaceholderMetadata(primitive, placeholderKey);
+      };
       switch (normalisedKey) {
         case 'steve': {
           const placeholder = this.buildAvatarPlaceholderMesh(reasonLabel);
-          if (!placeholder) {
-            return null;
+          if (placeholder) {
+            placeholder.name = 'PlayerAvatarFallback';
           }
-          placeholder.name = 'PlayerAvatarFallback';
-          return applyPlaceholderMetadata(placeholder, 'steve');
+          return withPrimitiveFallback(
+            placeholder,
+            'steve',
+            {
+              shape: 'box',
+              width: 0.6,
+              height: 1.8,
+              depth: 0.4,
+              color: this.getAvatarPlaceholderColor(reasonLabel),
+              name: 'PlayerAvatarPrimitiveFallback',
+              emissive: '#1e3a8a',
+            },
+          );
         }
         case 'zombie': {
           const material = new THREE.MeshStandardMaterial({
@@ -8447,53 +8501,97 @@
           mesh.name = 'ZombieFallback';
           mesh.castShadow = true;
           mesh.receiveShadow = true;
-          return applyPlaceholderMetadata(mesh, 'zombie');
+          return withPrimitiveFallback(
+            mesh,
+            'zombie',
+            {
+              shape: 'box',
+              width: 0.9,
+              height: 1.8,
+              depth: 0.9,
+              color: '#47a34b',
+              name: 'ZombiePrimitiveFallback',
+              emissive: '#14532d',
+              emissiveIntensity: 0.22,
+              roughness: 0.68,
+              metalness: 0.18,
+            },
+          );
         }
         case 'golem': {
           const actor = this.createGolemActor();
-          if (!actor) {
-            return null;
+          if (actor) {
+            actor.traverse((child) => {
+              if (child.isMesh && child.material?.emissive) {
+                child.material.emissiveIntensity = Math.max(child.material.emissiveIntensity || 0.18, 0.25);
+              }
+            });
+            actor.name = 'GolemFallback';
           }
-          actor.traverse((child) => {
-            if (child.isMesh && child.material?.emissive) {
-              child.material.emissiveIntensity = Math.max(child.material.emissiveIntensity || 0.18, 0.25);
-            }
-          });
-          actor.name = 'GolemFallback';
-          return applyPlaceholderMetadata(actor, 'golem');
+          return withPrimitiveFallback(
+            actor,
+            'golem',
+            {
+              shape: 'box',
+              width: 1.4,
+              height: 2.6,
+              depth: 0.9,
+              color: '#9ca3af',
+              name: 'GolemPrimitiveFallback',
+              emissive: '#1f2937',
+            },
+          );
         }
         case 'chest': {
           const chest = this.createChestMesh(this.dimensionSettings || null);
-          if (!chest) {
-            return null;
+          if (chest) {
+            chest.name = 'ChestFallback';
           }
-          chest.name = 'ChestFallback';
-          return applyPlaceholderMetadata(chest, 'chest');
+          return withPrimitiveFallback(
+            chest,
+            'chest',
+            {
+              shape: 'box',
+              width: 0.9,
+              height: 0.9,
+              depth: 0.9,
+              color: '#b45309',
+              name: 'ChestPrimitiveFallback',
+              emissive: '#451a03',
+            },
+          );
         }
         case 'portal':
         case 'portal-core':
         case 'portal-frame': {
           const portal = this.createPortalPlaceholderMesh(this.dimensionSettings || null);
-          if (!portal) {
-            return null;
+          if (portal) {
+            portal.name = 'PortalFallback';
           }
-          portal.name = 'PortalFallback';
-          return applyPlaceholderMetadata(portal, 'portal-core');
+          return withPrimitiveFallback(
+            portal,
+            'portal-core',
+            {
+              shape: 'sphere',
+              radius: 1.1,
+              color: '#7c3aed',
+              emissive: '#4c1d95',
+              emissiveIntensity: 0.28,
+              name: 'PortalPrimitiveFallback',
+            },
+          );
         }
         default: {
           const size = Number.isFinite(options.size) && options.size > 0 ? options.size : 1;
-          const geometry = new THREE.BoxGeometry(size, size, size);
-          const material = new THREE.MeshStandardMaterial({
+          const mesh = buildPrimitiveFallback('box', {
+            size,
             color: options.color || '#9ca3af',
-            roughness: 0.82,
-            metalness: 0.12,
+            name: `${normalisedKey || 'asset'}-fallback`,
             emissive: '#1f2937',
             emissiveIntensity: 0.12,
+            roughness: 0.82,
+            metalness: 0.12,
           });
-          const mesh = new THREE.Mesh(geometry, material);
-          mesh.name = `${normalisedKey || 'asset'}-fallback`;
-          mesh.castShadow = true;
-          mesh.receiveShadow = true;
           return applyPlaceholderMetadata(mesh, normalisedKey || 'asset');
         }
       }
@@ -16752,9 +16850,23 @@
           ? `${friendly.charAt(0).toUpperCase()}${friendly.slice(1)} failed to load.`
           : 'Critical assets failed to load.';
       }
+      const ensurePlaceholderExplanation = (message) => {
+        const trimmed = (message || '').trim();
+        if (!trimmed) {
+          return 'Placeholder visuals active until assets recover.';
+        }
+        if (/[Pp]laceholder/.test(trimmed) || /simplified/.test(trimmed) || /fallback/.test(trimmed)) {
+          return trimmed;
+        }
+        if (trimmed.endsWith('.')) {
+          return `${trimmed} Placeholder visuals active until assets recover.`;
+        }
+        return `${trimmed} — placeholder visuals active until assets recover.`;
+      };
       if (missingLabel && !fallbackMessage.includes(missingLabel)) {
         fallbackMessage = `${fallbackMessage} (Missing: ${missingLabel})`;
       }
+      fallbackMessage = ensurePlaceholderExplanation(fallbackMessage);
       this.recordAssetFailure(key, { error, fallbackMessage, assetSummary: summary });
       if (!fallbackMessage) {
         return;
