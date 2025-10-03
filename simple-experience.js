@@ -12559,8 +12559,24 @@
       if (!this.zombieGeometry) {
         this.zombieGeometry = new THREE.BoxGeometry(0.9, 1.8, 0.9);
       }
-      const material = this.materials.zombie.clone();
-      material.color.offsetHSL(0, (Math.random() - 0.5) * 0.1, (Math.random() - 0.5) * 0.1);
+      const baseMaterial = this.materials?.zombie;
+      const supportsStandardMaterial =
+        THREE && typeof THREE.MeshStandardMaterial === 'function' && !baseMaterial;
+      const MaterialClass = supportsStandardMaterial
+        ? THREE.MeshStandardMaterial
+        : THREE?.MeshBasicMaterial;
+      const material = baseMaterial?.clone
+        ? baseMaterial.clone()
+        : MaterialClass
+        ? new MaterialClass(
+            supportsStandardMaterial
+              ? { color: new THREE.Color('#2e7d32'), roughness: 0.8, metalness: 0.1 }
+              : { color: new THREE.Color('#2e7d32') },
+          )
+        : new THREE.MeshBasicMaterial({ color: new THREE.Color('#2e7d32') });
+      if (material?.color?.offsetHSL) {
+        material.color.offsetHSL(0, (Math.random() - 0.5) * 0.1, (Math.random() - 0.5) * 0.1);
+      }
       const mesh = new THREE.Mesh(this.zombieGeometry, material);
       mesh.castShadow = true;
       mesh.receiveShadow = true;
@@ -12669,8 +12685,19 @@
       const THREE = this.THREE;
       if (!THREE) return null;
       const group = new THREE.Group();
-      const bodyMaterial = new THREE.MeshStandardMaterial({ color: '#d9c9a7', roughness: 0.7, metalness: 0.1 });
-      const accentMaterial = new THREE.MeshStandardMaterial({ color: '#ffb347', emissive: '#ff7043', emissiveIntensity: 0.3 });
+      const supportsStandardMaterial = typeof THREE.MeshStandardMaterial === 'function';
+      const BodyMaterialClass = supportsStandardMaterial ? THREE.MeshStandardMaterial : THREE.MeshBasicMaterial;
+      const AccentMaterialClass = supportsStandardMaterial ? THREE.MeshStandardMaterial : THREE.MeshBasicMaterial;
+      const bodyMaterial = new BodyMaterialClass(
+        supportsStandardMaterial
+          ? { color: '#d9c9a7', roughness: 0.7, metalness: 0.1 }
+          : { color: '#d9c9a7' },
+      );
+      const accentMaterial = new AccentMaterialClass(
+        supportsStandardMaterial
+          ? { color: '#ffb347', emissive: '#ff7043', emissiveIntensity: 0.3 }
+          : { color: '#ffb347' },
+      );
       const body = new THREE.Mesh(new THREE.BoxGeometry(0.9, 1.6, 0.6), bodyMaterial);
       body.position.y = 0.8;
       const head = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.6, 0.6), bodyMaterial.clone());
