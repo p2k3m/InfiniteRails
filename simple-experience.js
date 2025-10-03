@@ -5454,7 +5454,7 @@
       this.worldRoot.add(this.challengeGroup);
       this.createFirstPersonHands();
       this.loadPlayerCharacter().catch((error) => {
-        console.warn('Player model failed to load; continuing with primitive hands.', error);
+        console.error('Player model failed to load; continuing with primitive hands.', error);
       });
       this.refreshCameraBaseOffset();
       if (typeof console !== 'undefined') {
@@ -7139,11 +7139,11 @@
             ? info.message.trim()
             : `Audio sample "${fallbackName}" failed to play.`;
         const timestamp = Date.now();
-        if (typeof console !== 'undefined' && typeof console.warn === 'function') {
+        if (typeof console !== 'undefined' && typeof console.error === 'function') {
           if (info?.error) {
-            console.warn(message, info.error);
+            console.error(message, info.error);
           } else {
-            console.warn(message);
+            console.error(message);
           }
         }
         if (typeof scope?.dispatchEvent !== 'function' || typeof CustomEvent !== 'function') {
@@ -9503,7 +9503,7 @@
       try {
         asset = await this.cloneModelScene('steve');
       } catch (error) {
-        console.warn('Failed to load Steve model.', error);
+        console.error('Failed to load Steve model.', error);
         asset = null;
       }
       if (sessionId !== this.activeSessionId) {
@@ -9513,7 +9513,7 @@
         return;
       }
       if (!asset?.scene) {
-        console.warn('Model load failed, using fallback cube');
+        console.error('Model load failed, using fallback cube');
         const fallback = this.ensurePlayerAvatarPlaceholder('failed');
         if (fallback) {
           console.error(
@@ -9658,7 +9658,7 @@
           }
         })
         .catch((error) => {
-          console.warn('Failed to upgrade zombie model', error);
+          console.error('Failed to upgrade zombie model', error);
         });
     }
 
@@ -9689,7 +9689,7 @@
           }
         })
         .catch((error) => {
-          console.warn('Failed to upgrade golem model', error);
+          console.error('Failed to upgrade golem model', error);
         });
     }
 
@@ -9818,7 +9818,7 @@
           try {
             this.scene.add(this.worldRoot);
           } catch (error) {
-            console.warn('Failed to attach regenerated world root to the scene.', error);
+            console.error('Failed to attach regenerated world root to the scene.', error);
             notifyLiveDiagnostics(
               'scene',
               'Failed to attach regenerated world root to the scene.',
@@ -9841,7 +9841,7 @@
         try {
           this.worldRoot.add(this.terrainGroup);
         } catch (error) {
-          console.warn('Failed to attach regenerated terrain group to the world root.', error);
+          console.error('Failed to attach regenerated terrain group to the world root.', error);
           notifyLiveDiagnostics(
             'scene',
             'Failed to attach regenerated terrain group to the world root.',
@@ -10409,7 +10409,7 @@
             `Terrain chunk population summary — ${chunkCount} chunks loaded. Investigate the streaming manager if this number stalls unexpectedly.`,
           );
           if (chunkCount <= 0 || voxelCount <= 0) {
-            console.warn('Terrain generation produced no active chunk groups or voxels.', {
+            console.error('Terrain generation produced no active chunk groups or voxels.', {
               chunkCount,
               voxelCount,
               voxelBudget,
@@ -10421,14 +10421,14 @@
             );
           }
           if (terrainMeshCount !== voxelCount) {
-            console.warn('Terrain mesh count mismatch detected.', {
+            console.error('Terrain mesh count mismatch detected.', {
               terrainMeshCount,
               voxelCount,
             });
           }
           const filteredEmptyChunks = emptyChunkKeys.filter(Boolean);
           if (filteredEmptyChunks.length) {
-            console.warn('Empty terrain chunks detected after generation.', { emptyChunks: filteredEmptyChunks });
+            console.error('Empty terrain chunks detected after generation.', { emptyChunks: filteredEmptyChunks });
           }
           if (voxelBudget < MAX_TERRAIN_VOXELS || budgetRemaining === 0) {
             console.info(`Terrain voxel cap enforced at ${voxelsUsed}/${voxelBudget} blocks.`);
@@ -10443,7 +10443,7 @@
           minDetectedHeight,
         });
         if (!integrity.valid && typeof console !== 'undefined') {
-          console.warn('Terrain integrity issues detected after build.', { issues: integrity.issues });
+          console.error('Terrain integrity issues detected after build.', { issues: integrity.issues });
         }
         return {
           summary: {
@@ -10491,7 +10491,7 @@
       let { summary, heightmapResult } = executeTerrainBuild(false, null);
       if (!summary?.integrity?.valid && heightmapResult?.source === 'streamed') {
         if (typeof console !== 'undefined') {
-          console.warn('Streamed heightmap failed validation. Regenerating terrain with seeded fallback.', {
+          console.error('Streamed heightmap failed validation. Regenerating terrain with seeded fallback.', {
             issues: summary.integrity?.issues || ['unknown'],
           });
         }
@@ -10827,7 +10827,7 @@
       }
       const chunk = this.terrainChunkMap.get(chunkKey) || null;
       if (!chunk && typeof console !== 'undefined') {
-        console.warn('Navigation mesh rebuild fallback — chunk missing, deriving mesh from height map.', {
+        console.error('Navigation mesh rebuild fallback — chunk missing, deriving mesh from height map.', {
           chunkKey,
           reason: options.reason ?? 'rebuild',
         });
@@ -10929,13 +10929,13 @@
     validateNavigationMesh(navmesh, context = {}) {
       if (!navmesh) {
         if (typeof console !== 'undefined') {
-          console.warn('Navigation mesh validation failed — mesh missing.', context);
+          console.error('Navigation mesh validation failed — mesh missing.', context);
         }
         return false;
       }
       if (!Array.isArray(navmesh.cells)) {
         if (typeof console !== 'undefined') {
-          console.warn('Navigation mesh validation failed — missing cell data.', {
+          console.error('Navigation mesh validation failed — missing cell data.', {
             ...context,
             navmeshKey: navmesh.key,
           });
@@ -10955,13 +10955,13 @@
         }
       }
       if (!boundsValid && typeof console !== 'undefined') {
-        console.warn('Navigation mesh validation warning — bounds unavailable or invalid.', {
+        console.error('Navigation mesh validation warning — bounds unavailable or invalid.', {
           ...context,
           chunkKey: context.chunkKey ?? navmesh.key,
         });
       }
       if (!navmesh.cells.length && typeof console !== 'undefined') {
-        console.warn('Navigation mesh validation warning — chunk contains no walkable cells.', {
+        console.error('Navigation mesh validation warning — chunk contains no walkable cells.', {
           ...context,
           chunkKey: context.chunkKey ?? navmesh.key,
         });
@@ -17274,7 +17274,7 @@
     handleAssetLoadFailure(key, error, options = {}) {
       const summary = this.buildAssetDebugSummary(key);
       if (error && typeof console !== 'undefined') {
-        console.warn(`Asset load failure for ${key || 'unknown asset'}.`, error);
+        console.error(`Asset load failure for ${key || 'unknown asset'}.`, error);
       }
       if (key === 'steve') {
         this.ensurePlayerAvatarPlaceholder('failed');
