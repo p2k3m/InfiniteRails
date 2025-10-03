@@ -4172,6 +4172,28 @@ body.sidebar-open .player-hint {
   min-width: 96px;
 }
 
+.compose-overlay__action--primary {
+  flex: 1 1 auto;
+  padding: 0.85rem 1.4rem;
+  border-radius: 999px;
+  border: 1px solid rgba(73, 242, 255, 0.45);
+  background: linear-gradient(135deg, rgba(73, 242, 255, 0.85), rgba(44, 158, 232, 0.85));
+  color: #03131f;
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  box-shadow: 0 1rem 2.2rem rgba(7, 33, 63, 0.35);
+  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+.compose-overlay__action--primary:hover,
+.compose-overlay__action--primary:focus-visible {
+  transform: translateY(-1px);
+  border-color: rgba(73, 242, 255, 0.85);
+  box-shadow: 0 1.25rem 2.6rem rgba(7, 33, 63, 0.45);
+  outline: none;
+}
+
 .compose-overlay[data-mode='error'] .compose-overlay__spinner {
   display: none;
 }

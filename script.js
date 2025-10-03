@@ -560,6 +560,7 @@
       limit: 60,
       counter: 0,
     };
+    const recoveryActionState = { cleanup: null };
 
     function getDocument() {
       if (documentRef) {
@@ -606,6 +607,8 @@
         logEmpty,
         supportLink,
         downloadButton,
+        actions: doc.getElementById('globalOverlayActions'),
+        recoveryButton: doc.getElementById('globalOverlayRecoveryButton'),
       };
     }
 
@@ -803,6 +806,64 @@
       updateLogElements();
     }
 
+    function applyRecoveryAction(options = null, elements = null) {
+      const doc = elements ? null : getDocument();
+      const refs = elements || getElements(doc);
+      if (!refs?.actions || !refs?.recoveryButton) {
+        return;
+      }
+      const { actions: actionsContainer, recoveryButton } = refs;
+      if (recoveryActionState.cleanup) {
+        try {
+          recoveryActionState.cleanup();
+        } catch (cleanupError) {
+          if (globalScope?.console?.debug) {
+            globalScope.console.debug('Failed to clean up recovery action listener.', cleanupError);
+          }
+        }
+        recoveryActionState.cleanup = null;
+      }
+      recoveryButton.disabled = false;
+      recoveryButton.removeAttribute('aria-label');
+      recoveryButton.removeAttribute('data-recovery-action');
+      if (!options || typeof options.label !== 'string' || !options.label.trim().length) {
+        actionsContainer.setAttribute('hidden', '');
+        actionsContainer.hidden = true;
+        recoveryButton.setAttribute('hidden', '');
+        recoveryButton.hidden = true;
+        return;
+      }
+      const label = options.label.trim();
+      actionsContainer.hidden = false;
+      actionsContainer.removeAttribute('hidden');
+      recoveryButton.hidden = false;
+      recoveryButton.removeAttribute('hidden');
+      recoveryButton.textContent = label;
+      if (typeof options.ariaLabel === 'string' && options.ariaLabel.trim().length) {
+        recoveryButton.setAttribute('aria-label', options.ariaLabel.trim());
+      } else if (typeof options.description === 'string' && options.description.trim().length) {
+        recoveryButton.setAttribute('aria-label', `${label}. ${options.description.trim()}`);
+      }
+      if (typeof options.action === 'string' && options.action.trim().length) {
+        recoveryButton.dataset.recoveryAction = options.action.trim();
+      }
+      const hasHandler = typeof options.onSelect === 'function';
+      recoveryButton.disabled = !hasHandler;
+      if (!hasHandler) {
+        return;
+      }
+      const handler = (event) => {
+        if (event?.preventDefault) {
+          event.preventDefault();
+        }
+        options.onSelect(event);
+      };
+      recoveryButton.addEventListener('click', handler);
+      recoveryActionState.cleanup = () => {
+        recoveryButton.removeEventListener('click', handler);
+      };
+    }
+
     function setDiagnostic(type, update = {}) {
       if (!type || !DIAGNOSTIC_TYPES.includes(type)) {
         return diagnosticsState;
@@ -855,6 +916,7 @@
       }
       updateDiagnosticsElements(elements);
       updateLogElements(elements);
+      applyRecoveryAction(null, elements);
       state.mode = mode;
       state.visible = true;
     }
@@ -881,6 +943,7 @@
       if (spinner) {
         spinner.setAttribute('aria-hidden', 'true');
       }
+      applyRecoveryAction(null, elements);
       state.mode = 'idle';
       state.visible = false;
     }
@@ -905,6 +968,12 @@
         return { ...state };
       },
       setDiagnostic,
+      setRecoveryAction(options = null) {
+        applyRecoveryAction(options);
+      },
+      clearRecoveryAction() {
+        applyRecoveryAction(null);
+      },
       refreshDiagnostics() {
         updateDiagnosticsElements();
         updateLogElements();
@@ -1186,6 +1255,92 @@
       severity,
       autoHideMs: severity === 'success' || severity === 'info' ? 6000 : null,
     });
+    if (typeof bootstrapOverlay?.setRecoveryAction === 'function') {
+      if (diagnosticStatus === 'error') {
+        const detailSnapshot = detail && typeof detail === 'object' ? { ...detail } : null;
+        if (diagnosticScope === 'assets') {
+          bootstrapOverlay.setRecoveryAction({
+            label: 'Reload Assets',
+            action: 'reload-assets',
+            description: 'Reloads the experience and requests missing assets again.',
+            onSelect: (event) => {
+              if (event?.currentTarget) {
+                event.currentTarget.disabled = true;
+              }
+              if (typeof logDiagnosticsEvent === 'function') {
+                const recoveryDetail = detailSnapshot ? { ...detailSnapshot } : {};
+                recoveryDetail.source = 'global-overlay';
+                logDiagnosticsEvent('assets', 'Player initiated asset reload from diagnostics overlay.', {
+                  level: 'warning',
+                  detail: recoveryDetail,
+                });
+              }
+              if (
+                typeof globalScope?.dispatchEvent === 'function' &&
+                typeof globalScope?.CustomEvent === 'function'
+              ) {
+                try {
+                  const eventDetail = { source: 'global-overlay' };
+                  if (detailSnapshot) {
+                    eventDetail.context = detailSnapshot;
+                  }
+                  globalScope.dispatchEvent(
+                    new globalScope.CustomEvent('infinite-rails:asset-recovery-reload-requested', {
+                      detail: eventDetail,
+                    }),
+                  );
+                } catch (dispatchError) {
+                  if (globalScope?.console?.debug) {
+                    globalScope.console.debug('Unable to dispatch asset recovery reload event.', dispatchError);
+                  }
+                }
+              }
+              const locationTarget = globalScope?.location;
+              if (locationTarget && typeof locationTarget.reload === 'function') {
+                locationTarget.reload();
+                return;
+              }
+              if (event?.currentTarget) {
+                event.currentTarget.disabled = false;
+              }
+              showHudAlert({
+                title: 'Reload unavailable',
+                message: 'Reload the page manually to restore missing assets.',
+                severity: 'warning',
+                autoHideMs: 7000,
+              });
+            },
+          });
+        } else {
+          bootstrapOverlay.setRecoveryAction({
+            label: 'Diagnostics Help',
+            action: 'diagnostics-help',
+            description: 'Open troubleshooting guidance in a new tab.',
+            onSelect: () => {
+              if (typeof logDiagnosticsEvent === 'function') {
+                const helpScope = typeof logScope === 'string' && logScope.trim().length ? logScope : 'diagnostics';
+                logDiagnosticsEvent(helpScope, 'Player opened diagnostics help from recovery overlay.', {
+                  level: 'info',
+                  detail: detailSnapshot ? { ...detailSnapshot, source: 'global-overlay' } : { source: 'global-overlay' },
+                });
+              }
+              const docRef = typeof document !== 'undefined' ? document : globalScope?.document ?? null;
+              const supportLink = docRef?.getElementById('globalOverlaySupportLink');
+              if (supportLink && typeof supportLink.click === 'function') {
+                supportLink.click();
+                return;
+              }
+              const href = supportLink?.href || 'https://support.infiniterails.app/diagnostics';
+              if (typeof globalScope?.open === 'function') {
+                globalScope.open(href, '_blank', 'noopener');
+              }
+            },
+          });
+        }
+      } else if (typeof bootstrapOverlay?.clearRecoveryAction === 'function') {
+        bootstrapOverlay.clearRecoveryAction();
+      }
+    }
     if (
       diagnosticScope &&
       typeof bootstrapOverlay?.setDiagnostic === 'function'
