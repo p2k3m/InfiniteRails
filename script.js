@@ -965,10 +965,65 @@
 
   bootstrapOverlay.showLoading();
 
-  function logDiagnosticsEvent(scope, message, { level = 'info', detail = null, timestamp = null } = {}) {
-    if (!bootstrapOverlay || typeof bootstrapOverlay.logEvent !== 'function') {
+  function shouldSendDiagnosticsToServer(entry) {
+    if (!diagnosticsEndpoint) {
+      return false;
+    }
+    const level = typeof entry?.level === 'string' ? entry.level.toLowerCase() : '';
+    return level === 'error' || level === 'critical' || level === 'fatal';
+  }
+
+  function sendDiagnosticsEventToServer(entry) {
+    if (!shouldSendDiagnosticsToServer(entry)) {
       return;
     }
+    const scope = typeof globalScope !== 'undefined' ? globalScope : globalThis;
+    const timestamp = Number.isFinite(entry?.timestamp) ? entry.timestamp : Date.now();
+    const payload = {
+      scope: entry?.scope ?? null,
+      message: entry?.message ?? null,
+      level: entry?.level ?? 'info',
+      detail: entry?.detail ?? null,
+      timestamp,
+      rendererMode: scope?.InfiniteRails?.rendererMode ?? null,
+    };
+    let body;
+    try {
+      body = JSON.stringify(payload);
+    } catch (error) {
+      scope?.console?.debug?.('Unable to serialise diagnostics payload for analytics endpoint.', error);
+      return;
+    }
+    const navigatorRef = scope?.navigator ?? null;
+    if (typeof navigatorRef?.sendBeacon === 'function') {
+      try {
+        const delivered = navigatorRef.sendBeacon(diagnosticsEndpoint, body);
+        if (delivered) {
+          return;
+        }
+      } catch (error) {
+        scope?.console?.debug?.('Diagnostics beacon sendBeacon failed', error);
+      }
+    }
+    const fetchFn =
+      typeof scope?.fetch === 'function'
+        ? scope.fetch.bind(scope)
+        : typeof fetch === 'function'
+          ? fetch
+          : null;
+    if (fetchFn) {
+      fetchFn(diagnosticsEndpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body,
+        keepalive: true,
+      }).catch((error) => {
+        scope?.console?.debug?.('Diagnostics beacon fetch failed', error);
+      });
+    }
+  }
+
+  function logDiagnosticsEvent(scope, message, { level = 'info', detail = null, timestamp = null } = {}) {
     const payload = {};
     if (typeof level === 'string') {
       payload.level = level;
@@ -979,7 +1034,17 @@
     if (Number.isFinite(timestamp)) {
       payload.timestamp = timestamp;
     }
-    bootstrapOverlay.logEvent(scope, message, payload);
+    const entry = {
+      scope,
+      message,
+      level: payload.level || 'info',
+      detail: payload.detail ?? null,
+      timestamp: Number.isFinite(payload.timestamp) ? payload.timestamp : Date.now(),
+    };
+    if (bootstrapOverlay && typeof bootstrapOverlay.logEvent === 'function') {
+      bootstrapOverlay.logEvent(scope, message, payload);
+    }
+    sendDiagnosticsEventToServer(entry);
   }
 
   function presentCriticalErrorOverlay({
@@ -1154,6 +1219,83 @@
     }
   }
 
+  function summariseAssetSourceValue(value) {
+    if (typeof value !== 'string') {
+      return null;
+    }
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return null;
+    }
+    if (/^data:/i.test(trimmed)) {
+      const mimeMatch = trimmed.match(/^data:([^;,]+)/i);
+      return mimeMatch ? `data URI (${mimeMatch[1]})` : 'data URI';
+    }
+    let pathname = trimmed;
+    try {
+      const parsed = new URL(trimmed, globalScope?.location?.href ?? undefined);
+      pathname = parsed.pathname || trimmed;
+    } catch (error) {
+      const queryIndex = pathname.indexOf('?');
+      if (queryIndex >= 0) {
+        pathname = pathname.slice(0, queryIndex);
+      }
+      const hashIndex = pathname.indexOf('#');
+      if (hashIndex >= 0) {
+        pathname = pathname.slice(0, hashIndex);
+      }
+    }
+    const segments = pathname.split('/').filter(Boolean);
+    const fileName = segments.length ? segments[segments.length - 1] : null;
+    return fileName || trimmed;
+  }
+
+  function extractAssetSourceLabel(detail) {
+    if (!detail || typeof detail !== 'object') {
+      return null;
+    }
+    const directLabel =
+      (typeof detail.assetSourceLabel === 'string' && detail.assetSourceLabel.trim()) ||
+      (typeof detail.assetFileName === 'string' && detail.assetFileName.trim());
+    if (directLabel) {
+      return directLabel.trim();
+    }
+    const sources = Array.isArray(detail.assetSources) ? detail.assetSources : [];
+    for (const value of sources) {
+      const label = summariseAssetSourceValue(value);
+      if (label) {
+        return label;
+      }
+    }
+    return null;
+  }
+
+  function formatAssetSummaryLabels(summaries = []) {
+    const labels = [];
+    summaries.forEach((entry) => {
+      const label =
+        (typeof entry?.sourceLabel === 'string' && entry.sourceLabel.trim()) ||
+        (typeof entry?.fileName === 'string' && entry.fileName.trim());
+      if (label) {
+        const trimmed = label.trim();
+        if (!labels.includes(trimmed)) {
+          labels.push(trimmed);
+        }
+      }
+    });
+    if (!labels.length) {
+      return null;
+    }
+    if (labels.length === 1) {
+      return labels[0];
+    }
+    if (labels.length === 2) {
+      return `${labels[0]} and ${labels[1]}`;
+    }
+    const head = labels.slice(0, -1).join(', ');
+    return `${head}, and ${labels[labels.length - 1]}`;
+  }
+
   if (typeof globalScope?.addEventListener === 'function') {
     globalScope.addEventListener('infinite-rails:started', (event) => {
       applyRendererReadyState(event?.detail && typeof event.detail === 'object' ? event.detail : null, {
@@ -1211,27 +1353,47 @@
           : keyLabel
             ? `Asset load failure detected for ${keyLabel}.`
             : 'Critical asset failed to load.';
+      const assetLabel =
+        typeof detail?.assetLabel === 'string' && detail.assetLabel.trim().length
+          ? detail.assetLabel.trim()
+          : null;
+      const sourceLabel = extractAssetSourceLabel(detail);
+      let decoratedFriendly = friendly;
+      if (assetLabel && !decoratedFriendly.includes(assetLabel)) {
+        decoratedFriendly = `${decoratedFriendly} — ${assetLabel}`;
+      }
+      if (sourceLabel && !decoratedFriendly.includes(sourceLabel)) {
+        decoratedFriendly = `${decoratedFriendly} (Missing: ${sourceLabel})`;
+      }
       const failureCount = Number.isFinite(detail?.failureCount) ? detail.failureCount : null;
       const errorMessage =
         typeof detail?.errorMessage === 'string' && detail.errorMessage.trim().length
           ? detail.errorMessage.trim()
           : null;
       const extraParts = [];
+      if (assetLabel && !decoratedFriendly.includes(assetLabel)) {
+        extraParts.push(assetLabel);
+      }
+      if (sourceLabel && !decoratedFriendly.includes(sourceLabel)) {
+        extraParts.push(`Missing: ${sourceLabel}`);
+      }
       if (failureCount && failureCount > 1) {
         extraParts.push(`Attempts: ${failureCount}`);
       }
-      if (errorMessage && errorMessage !== friendly) {
+      if (errorMessage && errorMessage !== decoratedFriendly) {
         extraParts.push(errorMessage);
       }
-      const overlayMessage = extraParts.length ? `${friendly} — ${extraParts.join(' — ')}` : friendly;
+      const overlayMessage = extraParts.length
+        ? `${decoratedFriendly} — ${extraParts.join(' — ')}`
+        : decoratedFriendly;
       presentCriticalErrorOverlay({
         title: 'Assets failed to load',
         message: overlayMessage,
         diagnosticScope: 'assets',
         diagnosticStatus: 'error',
-        diagnosticMessage: friendly,
+        diagnosticMessage: decoratedFriendly,
         logScope: 'assets',
-        logMessage: friendly,
+        logMessage: decoratedFriendly,
         detail,
         timestamp: Number.isFinite(detail?.timestamp) ? detail.timestamp : undefined,
       });
@@ -1243,14 +1405,19 @@
         typeof detail?.message === 'string' && detail.message.trim().length
           ? detail.message.trim()
           : 'Critical assets failed to load after multiple attempts. Reload or retry to continue.';
+      const missingSummary = formatAssetSummaryLabels(Array.isArray(detail?.assetSummaries) ? detail.assetSummaries : []);
+      const decoratedMessage =
+        missingSummary && !/Missing files:/i.test(message)
+          ? `${message}${message.trim().endsWith('.') ? '' : '.'} Missing files: ${missingSummary}.`
+          : message;
       presentCriticalErrorOverlay({
         title: 'Restore missing assets',
-        message,
+        message: decoratedMessage,
         diagnosticScope: 'assets',
         diagnosticStatus: 'error',
-        diagnosticMessage: message,
+        diagnosticMessage: decoratedMessage,
         logScope: 'assets',
-        logMessage: message,
+        logMessage: decoratedMessage,
         detail,
         timestamp: Number.isFinite(detail?.timestamp) ? detail.timestamp : undefined,
       });
@@ -1261,14 +1428,19 @@
         typeof detail?.message === 'string' && detail.message.trim().length
           ? detail.message.trim()
           : 'Retrying missing assets — results pending.';
+      const missingSummary = formatAssetSummaryLabels(Array.isArray(detail?.assetSummaries) ? detail.assetSummaries : []);
+      const decoratedMessage =
+        missingSummary && !/Missing files:/i.test(message)
+          ? `${message}${message.trim().endsWith('.') ? '' : '.'} Missing files: ${missingSummary}.`
+          : message;
       presentCriticalErrorOverlay({
         title: 'Asset recovery in progress',
-        message,
+        message: decoratedMessage,
         diagnosticScope: 'assets',
         diagnosticStatus: 'error',
-        diagnosticMessage: message,
+        diagnosticMessage: decoratedMessage,
         logScope: 'assets',
-        logMessage: message,
+        logMessage: decoratedMessage,
         detail,
         timestamp: Number.isFinite(detail?.timestamp) ? detail.timestamp : undefined,
       });
@@ -1514,6 +1686,51 @@
     });
   }
 
+  function normaliseDiagnosticsEndpoint(endpoint) {
+    if (!endpoint || typeof endpoint !== 'string') {
+      return null;
+    }
+    const trimmed = endpoint.trim();
+    if (!trimmed) {
+      return null;
+    }
+    let resolved;
+    try {
+      resolved = new URL(trimmed, globalScope?.location?.href ?? undefined);
+    } catch (error) {
+      logConfigWarning(
+        'Invalid APP_CONFIG.diagnosticsEndpoint detected; analytics logging disabled. Update APP_CONFIG.diagnosticsEndpoint to a valid absolute HTTP(S) URL to capture diagnostics remotely.',
+        {
+          diagnosticsEndpoint: endpoint,
+          error: error?.message ?? String(error),
+        },
+      );
+      return null;
+    }
+    const hasExplicitProtocol = /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(trimmed);
+    if (!hasExplicitProtocol) {
+      logConfigWarning(
+        'APP_CONFIG.diagnosticsEndpoint must be an absolute URL including the protocol. Update the configuration to point at an HTTP(S) analytics endpoint.',
+        {
+          diagnosticsEndpoint: endpoint,
+          resolved: resolved.href,
+        },
+      );
+      return null;
+    }
+    if (resolved.protocol !== 'https:' && resolved.protocol !== 'http:') {
+      logConfigWarning(
+        'APP_CONFIG.diagnosticsEndpoint must use HTTP or HTTPS. Update the configuration so diagnostics can be sent to a reachable analytics service.',
+        {
+          diagnosticsEndpoint: endpoint,
+          protocol: resolved.protocol,
+        },
+      );
+      return null;
+    }
+    return resolved.href;
+  }
+
   function normaliseApiBaseUrl(base) {
     if (!base || typeof base !== 'string') {
       return null;
@@ -1610,6 +1827,13 @@
     globalAppConfig.apiBaseUrl = apiBaseUrl;
   }
   const apiBaseInvalid = Boolean(originalApiBaseUrl && !apiBaseUrl);
+
+  const originalDiagnosticsEndpoint =
+    globalAppConfig?.diagnosticsEndpoint ?? globalAppConfig?.logEndpoint ?? null;
+  const diagnosticsEndpoint = normaliseDiagnosticsEndpoint(originalDiagnosticsEndpoint);
+  if (globalAppConfig && typeof globalAppConfig === 'object') {
+    globalAppConfig.diagnosticsEndpoint = diagnosticsEndpoint;
+  }
 
   const googleClientId =
     typeof globalAppConfig?.googleClientId === 'string' && globalAppConfig.googleClientId.trim().length > 0

@@ -13564,6 +13564,7 @@
     }
 
     handleAssetLoadFailure(key, error, options = {}) {
+      const summary = this.buildAssetDebugSummary(key);
       if (error && typeof console !== 'undefined') {
         console.warn(`Asset load failure for ${key || 'unknown asset'}.`, error);
       }
@@ -13579,8 +13580,18 @@
         golem: 'Iron golems using simplified armour while detailed models load.',
         chest: 'Treasure chests using simplified casings while detailed models load.',
       };
-      const fallbackMessage = (options.fallbackMessage || messageMap[key] || '').trim();
-      this.recordAssetFailure(key, { error, fallbackMessage });
+      let fallbackMessage = (options.fallbackMessage || messageMap[key] || '').trim();
+      const missingLabel = summary.primarySourceLabel || summary.fileName || summary.primarySource || null;
+      if (!fallbackMessage) {
+        const friendly = summary.friendlyName || this.describeAssetKey(key);
+        fallbackMessage = friendly
+          ? `${friendly.charAt(0).toUpperCase()}${friendly.slice(1)} failed to load.`
+          : 'Critical assets failed to load.';
+      }
+      if (missingLabel && !fallbackMessage.includes(missingLabel)) {
+        fallbackMessage = `${fallbackMessage} (Missing: ${missingLabel})`;
+      }
+      this.recordAssetFailure(key, { error, fallbackMessage, assetSummary: summary });
       if (!fallbackMessage) {
         return;
       }
@@ -13662,11 +13673,23 @@
       const previous = this.assetFailureCounts.get(normalisedKey) || 0;
       const next = previous + 1;
       this.assetFailureCounts.set(normalisedKey, next);
+      const summary =
+        context?.assetSummary && typeof context.assetSummary === 'object'
+          ? context.assetSummary
+          : this.buildAssetDebugSummary(normalisedKey);
       const detail = {
         key: normalisedKey,
         failureCount: next,
         fallbackMessage: context?.fallbackMessage || null,
         errorMessage: context?.error?.message ?? null,
+        assetLabel: summary?.debugLabel ?? null,
+        assetFriendlyName: summary?.friendlyName ?? null,
+        assetFileName: summary?.fileName ?? null,
+        assetExtension: summary?.extension ?? null,
+        assetSource: summary?.primarySource ?? null,
+        assetSourceLabel: summary?.primarySourceLabel ?? null,
+        assetSources: Array.isArray(summary?.sources) ? summary.sources.slice(0, 10) : [],
+        timestamp: Date.now(),
       };
       this.emitGameEvent('asset-load-failure', detail);
       if (next >= this.assetRecoveryPromptThreshold) {
@@ -13692,6 +13715,131 @@
       return mapping[normalisedKey] || `${normalisedKey} assets`;
     }
 
+    resolveAssetSourceCandidates(key) {
+      if (typeof key !== 'string' || !key.trim()) {
+        return [];
+      }
+      const normalised = key.trim();
+      if (normalised.startsWith('texture:')) {
+        const textureKey = normalised.slice('texture:'.length);
+        const sources = this.getExternalTextureSources(textureKey) || [];
+        if (sources.length) {
+          return sources;
+        }
+        return [`${textureKey}.png`];
+      }
+      const url = MODEL_URLS[normalised];
+      if (typeof url === 'string' && url.trim()) {
+        return [url.trim()];
+      }
+      return [];
+    }
+
+    extractAssetSourceMetadata(source) {
+      if (typeof source !== 'string') {
+        return null;
+      }
+      const trimmed = source.trim();
+      if (!trimmed) {
+        return null;
+      }
+      if (/^data:/i.test(trimmed)) {
+        const mimeMatch = trimmed.match(/^data:([^;,]+)/i);
+        const mime = mimeMatch ? mimeMatch[1] : null;
+        const subtype = mime && mime.includes('/') ? mime.split('/').pop() : null;
+        const extension = subtype ? subtype.split('+')[0].toLowerCase() : null;
+        const label = mime ? `data URI (${mime})` : 'data URI';
+        return {
+          source: trimmed,
+          fileName: null,
+          extension,
+          label,
+        };
+      }
+      let pathname = trimmed;
+      try {
+        const parsed = new URL(trimmed, typeof window !== 'undefined' ? window.location?.href : undefined);
+        pathname = parsed.pathname || trimmed;
+      } catch (error) {
+        const queryIndex = pathname.indexOf('?');
+        if (queryIndex >= 0) {
+          pathname = pathname.slice(0, queryIndex);
+        }
+        const hashIndex = pathname.indexOf('#');
+        if (hashIndex >= 0) {
+          pathname = pathname.slice(0, hashIndex);
+        }
+      }
+      const segments = pathname.split('/').filter(Boolean);
+      const fileName = segments.length ? segments[segments.length - 1] : null;
+      let extension = null;
+      if (fileName && fileName.includes('.')) {
+        extension = fileName.split('.').pop().toLowerCase();
+      }
+      const label = fileName || trimmed;
+      return {
+        source: trimmed,
+        fileName: fileName || null,
+        extension,
+        label,
+      };
+    }
+
+    buildAssetDebugSummary(key) {
+      const normalised = typeof key === 'string' && key.trim().length ? key.trim() : 'asset';
+      const friendlyName = this.describeAssetKey(normalised);
+      const candidates = this.resolveAssetSourceCandidates(normalised);
+      const primary = candidates.length ? candidates[0] : null;
+      const metadata = primary ? this.extractAssetSourceMetadata(primary) : null;
+      let fileName = metadata?.fileName || null;
+      let extension = metadata?.extension || null;
+      if (!fileName && normalised.startsWith('texture:')) {
+        const textureKey = normalised.slice('texture:'.length);
+        fileName = `${textureKey}.png`;
+      }
+      if (!extension && fileName && fileName.includes('.')) {
+        extension = fileName.split('.').pop().toLowerCase();
+      }
+      const debugLabel = metadata?.label
+        ? `${friendlyName} (${metadata.label})`
+        : fileName
+          ? `${friendlyName} (${fileName})`
+          : friendlyName;
+      return {
+        key: normalised,
+        friendlyName,
+        sources: candidates.slice(),
+        primarySource: primary,
+        primarySourceLabel: metadata?.label || (fileName ? fileName : null),
+        fileName,
+        extension,
+        debugLabel,
+      };
+    }
+
+    formatAssetSourceSummaryList(summaries = []) {
+      const labels = [];
+      summaries.forEach((entry) => {
+        const label =
+          (typeof entry?.primarySourceLabel === 'string' && entry.primarySourceLabel.trim()) ||
+          (typeof entry?.fileName === 'string' && entry.fileName.trim());
+        if (label && !labels.includes(label)) {
+          labels.push(label);
+        }
+      });
+      if (!labels.length) {
+        return '';
+      }
+      if (labels.length === 1) {
+        return labels[0];
+      }
+      if (labels.length === 2) {
+        return `${labels[0]} and ${labels[1]}`;
+      }
+      const head = labels.slice(0, -1).join(', ');
+      return `${head}, and ${labels[labels.length - 1]}`;
+    }
+
     buildAssetDelayIndicator(key, context = {}) {
       const normalisedKey = typeof key === 'string' && key.trim().length ? key.trim() : 'asset';
       const label = this.describeAssetKey(normalisedKey);
@@ -13711,11 +13859,14 @@
       };
     }
 
-    buildAssetRecoveryMessage() {
+    buildAssetRecoveryMessage(precomputedSummaries = null) {
       if (!this.assetRecoveryPendingKeys.size) {
         return 'Critical assets failed to load after multiple attempts. Reload the page or retry the stream to continue.';
       }
-      const friendlyNames = Array.from(this.assetRecoveryPendingKeys).map((key) => this.describeAssetKey(key));
+      const summaries = Array.isArray(precomputedSummaries)
+        ? precomputedSummaries
+        : Array.from(this.assetRecoveryPendingKeys).map((key) => this.buildAssetDebugSummary(key));
+      const friendlyNames = summaries.map((entry) => entry.friendlyName);
       let label = friendlyNames[0] || 'critical assets';
       if (friendlyNames.length === 2) {
         label = `${friendlyNames[0]} and ${friendlyNames[1]}`;
@@ -13724,7 +13875,12 @@
         label = `${initial}, and ${friendlyNames[friendlyNames.length - 1]}`;
       }
       const capitalised = label.charAt(0).toUpperCase() + label.slice(1);
-      return `${capitalised} failed to load after multiple attempts. Reload the page to rebuild caches or press “Retry Assets” to try again.`;
+      let message = `${capitalised} failed to load after multiple attempts. Reload the page to rebuild caches or press “Retry Assets” to try again.`;
+      const sourceSummary = this.formatAssetSourceSummaryList(summaries);
+      if (sourceSummary) {
+        message += ` Missing files: ${sourceSummary}.`;
+      }
+      return message;
     }
 
     updateAssetRecoveryPromptMessage(messageOverride = null) {
@@ -13765,11 +13921,20 @@
     }
 
     promptAssetRecovery() {
-      const message = this.buildAssetRecoveryMessage();
+      const summaries = Array.from(this.assetRecoveryPendingKeys).map((key) => this.buildAssetDebugSummary(key));
+      const message = this.buildAssetRecoveryMessage(summaries);
       if (this.assetRecoveryOverlayEl) {
         const eventDetail = {
           keys: Array.from(this.assetRecoveryPendingKeys),
           failureCounts: Array.from(this.assetFailureCounts.entries()),
+          assetSummaries: summaries.map((entry) => ({
+            key: entry.key,
+            label: entry.friendlyName,
+            source: entry.primarySource ?? null,
+            sourceLabel: entry.primarySourceLabel ?? null,
+            fileName: entry.fileName ?? null,
+            extension: entry.extension ?? null,
+          })),
           message,
         };
         if (this.assetRecoveryPromptActive) {
