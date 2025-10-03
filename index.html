@@ -296,24 +296,69 @@
           </div>
         </div>
         <div class="hud-layer" id="gameHud">
-          <div
-            class="hud-alert"
-            id="hudAlert"
-            role="alert"
-            aria-live="assertive"
-            hidden
-          >
-            <span class="hud-alert__icon" aria-hidden="true"></span>
-            <div class="hud-alert__content">
-              <span class="hud-alert__title" id="hudAlertTitle"></span>
-              <span class="hud-alert__message" id="hudAlertMessage"></span>
-            </div>
+        <div
+          class="hud-alert"
+          id="hudAlert"
+          role="alert"
+          aria-live="assertive"
+          hidden
+        >
+          <span class="hud-alert__icon" aria-hidden="true"></span>
+          <div class="hud-alert__content">
+            <span class="hud-alert__title" id="hudAlertTitle"></span>
+            <span class="hud-alert__message" id="hudAlertMessage"></span>
           </div>
-          <div class="hud-layer__corner hud-layer__corner--top-left">
-            <div class="hud-card hud-card--status" data-hint="Monitor vitals and access crafting tools.">
-              <div class="hud-status" aria-label="Player vitals" role="group" data-hint="Health, oxygen, and time remainers.">
-                <div class="status-item hearts" id="hearts" data-hint="Current health hearts."></div>
-                <div class="status-item bubbles" id="bubbles" data-hint="Breath remaining while underwater."></div>
+        </div>
+        <div
+          class="lost-guidance-banner"
+          id="lostGuidanceBanner"
+          role="region"
+          aria-live="polite"
+          aria-labelledby="lostGuidanceTitle"
+          hidden
+        >
+          <div class="lost-guidance-banner__body">
+            <div class="lost-guidance-banner__header">
+              <span class="lost-guidance-banner__icon" aria-hidden="true">🧭</span>
+              <div class="lost-guidance-banner__heading">
+                <p class="lost-guidance-banner__eyebrow">Need a plan?</p>
+                <h2 class="lost-guidance-banner__title" id="lostGuidanceTitle">
+                  Here's how to get back on track
+                </h2>
+              </div>
+            </div>
+            <ul class="lost-guidance-banner__steps" aria-label="Getting started checklist">
+              <li class="lost-guidance-banner__step">
+                <span class="lost-guidance-banner__step-label">Move</span>
+                <span class="lost-guidance-banner__step-detail">
+                  Use <strong id="lostGuidanceMoveKeys">W · A · S · D</strong> or drag to explore the rail.
+                </span>
+              </li>
+              <li class="lost-guidance-banner__step">
+                <span class="lost-guidance-banner__step-label">Gather &amp; craft</span>
+                <span class="lost-guidance-banner__step-detail">
+                  Collect wood and stone with <strong id="lostGuidanceGatherKeys">Space · Click · F</strong>, then open crafting
+                  (<strong id="lostGuidanceCraftKey">E</strong>) to forge a Stone Pickaxe.
+                </span>
+              </li>
+              <li class="lost-guidance-banner__step">
+                <span class="lost-guidance-banner__step-label">Portal goal</span>
+                <span class="lost-guidance-banner__step-detail">
+                  Place blocks and ignite the frame with <strong id="lostGuidancePortalKeys">Q · R</strong> to open your escape
+                  portal.
+                </span>
+              </li>
+            </ul>
+            <button type="button" class="lost-guidance-banner__dismiss" id="lostGuidanceDismiss">
+              Resume the run
+            </button>
+          </div>
+        </div>
+        <div class="hud-layer__corner hud-layer__corner--top-left">
+          <div class="hud-card hud-card--status" data-hint="Monitor vitals and access crafting tools.">
+            <div class="hud-status" aria-label="Player vitals" role="group" data-hint="Health, oxygen, and time remainers.">
+              <div class="status-item hearts" id="hearts" data-hint="Current health hearts."></div>
+              <div class="status-item bubbles" id="bubbles" data-hint="Breath remaining while underwater."></div>
                 <div class="status-item time" id="timeOfDay" data-hint="Local dimension time."></div>
               </div>
               <button

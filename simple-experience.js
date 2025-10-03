@@ -2133,6 +2133,40 @@
       this.renderIdleThresholdSeconds = 2.5;
       const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
       this.lastInteractionTimeMs = now;
+      this.lostGuidanceEl = this.ui.lostGuidanceBanner || null;
+      this.lostGuidanceDismissButton = this.ui.lostGuidanceDismissButton || null;
+      this.lostGuidanceMoveKeysEl = this.ui.lostGuidanceMoveKeys || null;
+      this.lostGuidanceGatherKeysEl = this.ui.lostGuidanceGatherKeys || null;
+      this.lostGuidanceCraftKeyEl = this.ui.lostGuidanceCraftKey || null;
+      this.lostGuidancePortalKeysEl = this.ui.lostGuidancePortalKeys || null;
+      this.lostGuidanceVisible = false;
+      this.lostGuidanceDismissedUntilProgress = false;
+      this.lostGuidanceAutoHideHandle = null;
+      this.lostGuidanceLastProgressAt = now;
+      this.lostGuidanceLastShowAt = 0;
+      this.lostGuidanceShowCount = 0;
+      const firstGuidanceThreshold = Number.isFinite(options.lostGuidanceFirstThresholdSeconds)
+        ? options.lostGuidanceFirstThresholdSeconds
+        : Number.isFinite(Number.parseFloat(options.lostGuidanceFirstThresholdSeconds))
+          ? Number.parseFloat(options.lostGuidanceFirstThresholdSeconds)
+          : 45;
+      const repeatGuidanceThreshold = Number.isFinite(options.lostGuidanceRepeatThresholdSeconds)
+        ? options.lostGuidanceRepeatThresholdSeconds
+        : Number.isFinite(Number.parseFloat(options.lostGuidanceRepeatThresholdSeconds))
+          ? Number.parseFloat(options.lostGuidanceRepeatThresholdSeconds)
+          : 90;
+      const cooldownSeconds = Number.isFinite(options.lostGuidanceCooldownSeconds)
+        ? options.lostGuidanceCooldownSeconds
+        : Number.isFinite(Number.parseFloat(options.lostGuidanceCooldownSeconds))
+          ? Number.parseFloat(options.lostGuidanceCooldownSeconds)
+          : 35;
+      this.lostGuidanceFirstThresholdSeconds = Math.max(20, firstGuidanceThreshold);
+      this.lostGuidanceRepeatThresholdSeconds = Math.max(
+        this.lostGuidanceFirstThresholdSeconds,
+        repeatGuidanceThreshold,
+      );
+      this.lostGuidanceCooldownSeconds = Math.max(20, cooldownSeconds);
+      this.onLostGuidanceDismiss = this.handleLostGuidanceDismiss.bind(this);
       this.lazyAssetLoading = options.lazyAssetLoading !== false;
       this.lazyModelWarmupQueue = [];
       this.lazyModelWarmupHandle = null;
@@ -2497,6 +2531,7 @@
       this.onCanvasPointerLock = this.handleCanvasPointerLockRequest.bind(this);
       this.setupGuideUi();
       this.setupTutorialUi();
+      this.setupLostGuidanceUi();
       this.pendingHeightmapStream = null;
       this.heightmapStreamState = 'idle';
       this.heightmapStreamFailureCount = 0;
@@ -2542,6 +2577,7 @@
       const sessionId = this.activeSessionId;
       this.cameraPerspective = 'first';
       this.resetPlayerCharacterState();
+      this.resetLostGuidance('start');
       this.started = true;
       this.unloadBeaconSent = false;
       this.rendererUnavailable = false;
@@ -3136,6 +3172,22 @@
         if (!this.openTutorialButton.hasAttribute('aria-pressed')) {
           this.openTutorialButton.setAttribute('aria-pressed', 'false');
         }
+      }
+    }
+
+    setupLostGuidanceUi() {
+      this.refreshLostGuidanceContent();
+      const banner = this.lostGuidanceEl;
+      if (banner) {
+        banner.hidden = true;
+        banner.classList.remove('is-visible');
+        safelySetAriaHidden(banner, true);
+      }
+      if (this.lostGuidanceDismissButton && !this.lostGuidanceDismissButton.dataset.simpleLostBound) {
+        this.addSafeEventListener(this.lostGuidanceDismissButton, 'click', this.onLostGuidanceDismiss, {
+          context: 'dismissing lost guidance',
+        });
+        this.lostGuidanceDismissButton.dataset.simpleLostBound = 'true';
       }
     }
 
@@ -3782,6 +3834,60 @@
       if (noteEl) {
         noteEl.innerHTML = `Need a refresher later? Press <strong>${tutorialKeys}</strong> or use the <strong>Tutorial</strong> button in the HUD.`;
       }
+      this.refreshLostGuidanceContent();
+    }
+
+    refreshLostGuidanceContent() {
+      const banner = this.lostGuidanceEl;
+      if (!banner) {
+        return;
+      }
+      const prefersTouch = this.detectTouchPreferred();
+      const moveEl = this.lostGuidanceMoveKeysEl;
+      const gatherEl = this.lostGuidanceGatherKeysEl;
+      const craftEl = this.lostGuidanceCraftKeyEl;
+      const portalEl = this.lostGuidancePortalKeysEl;
+      if (prefersTouch) {
+        if (moveEl) {
+          moveEl.textContent = 'Left joystick · Swipe';
+        }
+        if (gatherEl) {
+          gatherEl.textContent = 'Tap ✦ · Tap blocks';
+        }
+        if (craftEl) {
+          craftEl.textContent = 'Hammer button';
+        }
+        if (portalEl) {
+          portalEl.textContent = '✦ to place · ⧉ to ignite';
+        }
+        return;
+      }
+      if (moveEl) {
+        moveEl.textContent = this.getMovementKeySummary({ joiner: ' · ', fallback: 'W · A · S · D' });
+      }
+      if (gatherEl) {
+        const gatherKeys = [];
+        const jumpLabel = this.getActionKeyLabels('jump', { limit: 1 })?.[0];
+        if (jumpLabel) {
+          gatherKeys.push(jumpLabel);
+        }
+        gatherKeys.push('Click');
+        this.getActionKeyLabels('interact', { limit: 2 }).forEach((label) => {
+          if (label && !gatherKeys.includes(label)) {
+            gatherKeys.push(label);
+          }
+        });
+        gatherEl.textContent = gatherKeys.length ? gatherKeys.join(' · ') : 'Space · Click · F';
+      }
+      if (craftEl) {
+        const craftLabel = this.getActionKeyLabels('toggleCrafting', { limit: 1 })?.[0] || 'E';
+        craftEl.textContent = craftLabel;
+      }
+      if (portalEl) {
+        const placeLabel = this.getActionKeyLabels('placeBlock', { limit: 1 })?.[0] || 'Q';
+        const igniteLabel = this.getActionKeyLabels('buildPortal', { limit: 1 })?.[0] || 'R';
+        portalEl.textContent = `${placeLabel} · ${igniteLabel}`;
+      }
     }
 
     maybeShowFirstRunTutorial() {
@@ -3924,6 +4030,98 @@
         const showBriefingAfter = this.firstRunTutorialShowBriefingOnDismiss;
         this.hideFirstRunTutorial({ markSeen, showBriefingAfter });
       }
+    }
+
+    handleLostGuidanceDismiss(event) {
+      if (event?.preventDefault) {
+        event.preventDefault();
+      }
+      this.hideLostGuidance({ manual: true });
+      this.focusGameViewport();
+    }
+
+    showLostGuidance(reason = 'idle') {
+      const banner = this.lostGuidanceEl;
+      if (!banner || this.lostGuidanceVisible) {
+        return false;
+      }
+      if (this.firstRunTutorialEl && this.firstRunTutorialEl.hidden === false) {
+        return false;
+      }
+      this.refreshLostGuidanceContent();
+      banner.hidden = false;
+      safelySetAriaHidden(banner, false);
+      // Force layout so the transition fires when toggled rapidly.
+      void banner.offsetWidth;
+      banner.classList.add('is-visible');
+      this.lostGuidanceVisible = true;
+      this.lostGuidanceDismissedUntilProgress = false;
+      const now = this.getHighResTimestamp();
+      this.lostGuidanceLastShowAt = now;
+      this.lostGuidanceShowCount += 1;
+      const scope = typeof window !== 'undefined' ? window : typeof globalThis !== 'undefined' ? globalThis : null;
+      if (scope) {
+        if (this.lostGuidanceAutoHideHandle) {
+          scope.clearTimeout(this.lostGuidanceAutoHideHandle);
+        }
+        this.lostGuidanceAutoHideHandle = scope.setTimeout(() => {
+          this.hideLostGuidance({ reason: 'timeout' });
+        }, 12000);
+      }
+      return true;
+    }
+
+    hideLostGuidance({ manual = false, immediate = false, reason = 'auto' } = {}) {
+      const banner = this.lostGuidanceEl;
+      const scope = typeof window !== 'undefined' ? window : typeof globalThis !== 'undefined' ? globalThis : null;
+      if (scope && this.lostGuidanceAutoHideHandle) {
+        scope.clearTimeout(this.lostGuidanceAutoHideHandle);
+        this.lostGuidanceAutoHideHandle = null;
+      }
+      if (!banner) {
+        if (manual) {
+          this.lostGuidanceDismissedUntilProgress = true;
+          this.lostGuidanceLastShowAt = this.getHighResTimestamp();
+        }
+        return false;
+      }
+      if (!this.lostGuidanceVisible) {
+        if (manual) {
+          this.lostGuidanceDismissedUntilProgress = true;
+          this.lostGuidanceLastShowAt = this.getHighResTimestamp();
+        }
+        return false;
+      }
+      const setHidden = () => {
+        banner.hidden = true;
+        safelySetAriaHidden(banner, true);
+      };
+      banner.classList.remove('is-visible');
+      if (immediate) {
+        setHidden();
+      } else if (scope && typeof scope.setTimeout === 'function') {
+        scope.setTimeout(setHidden, 160);
+      } else {
+        setHidden();
+      }
+      this.lostGuidanceVisible = false;
+      if (manual) {
+        this.lostGuidanceDismissedUntilProgress = true;
+        this.lostGuidanceLastShowAt = this.getHighResTimestamp();
+      }
+      return true;
+    }
+
+    resetLostGuidance(reason = 'reset') {
+      if (this.lostGuidanceEl) {
+        this.hideLostGuidance({ immediate: true, reason: 'reset' });
+      }
+      const now = this.getHighResTimestamp();
+      this.lostGuidanceLastProgressAt = now;
+      if (reason === 'start') {
+        this.lostGuidanceShowCount = 0;
+      }
+      this.lostGuidanceDismissedUntilProgress = false;
     }
 
     showBriefingOverlay() {
@@ -4509,6 +4707,46 @@
         return;
       }
       this.loadScoreboard();
+    }
+
+    updateLostGuidance(delta) {
+      if (!this.lostGuidanceEl || !this.started || this.rendererUnavailable) {
+        return;
+      }
+      if (this.victoryAchieved) {
+        this.hideLostGuidance({ reason: 'victory', immediate: true });
+        return;
+      }
+      const firstRunVisible = this.firstRunTutorialEl ? this.firstRunTutorialEl.hidden === false : false;
+      if (firstRunVisible) {
+        this.hideLostGuidance({ reason: 'tutorial' });
+        return;
+      }
+      const briefingVisible = this.ui?.gameBriefing ? this.ui.gameBriefing.hidden === false : false;
+      if (briefingVisible) {
+        return;
+      }
+      if (this.lostGuidanceDismissedUntilProgress && !this.lostGuidanceVisible) {
+        return;
+      }
+      const now = this.getHighResTimestamp();
+      if (!Number.isFinite(this.lostGuidanceLastProgressAt)) {
+        this.lostGuidanceLastProgressAt = now;
+        return;
+      }
+      const idleSeconds = Math.max(0, (now - this.lostGuidanceLastProgressAt) / 1000);
+      const threshold =
+        this.lostGuidanceShowCount === 0
+          ? this.lostGuidanceFirstThresholdSeconds
+          : this.lostGuidanceRepeatThresholdSeconds;
+      if (idleSeconds < threshold) {
+        return;
+      }
+      const sinceLastShow = Math.max(0, (now - (this.lostGuidanceLastShowAt || 0)) / 1000);
+      if (sinceLastShow < this.lostGuidanceCooldownSeconds) {
+        return;
+      }
+      this.showLostGuidance('idle');
     }
 
     getStoredScoreboardEntries() {
@@ -8168,6 +8406,15 @@
             console.debug('Audio context resume threw during interaction.', error);
           }
         }
+      }
+    }
+
+    markGuidanceProgress(reason = 'interaction') {
+      const now = this.getHighResTimestamp();
+      this.lostGuidanceLastProgressAt = now;
+      this.lostGuidanceDismissedUntilProgress = false;
+      if (this.lostGuidanceVisible) {
+        this.hideLostGuidance({ reason: reason || 'progress' });
       }
     }
 
@@ -12404,6 +12651,7 @@
       this.addScoreBreakdown('portal', 5);
       const message = events.length ? events.join(' ') : 'Portal ignited — step through to travel.';
       this.showHint(message);
+      this.markGuidanceProgress('portal');
       this.updateHud();
       this.scheduleScoreSync('portal-primed');
     }
@@ -12809,6 +13057,7 @@
         summary: this.createRunSummary('dimension-advanced'),
       });
       this.publishStateSnapshot('dimension-advanced');
+      this.markGuidanceProgress('dimension');
     }
 
     rebindDimensionContext() {
@@ -14107,6 +14356,7 @@
       this.updatePlayerAnimation(delta);
       this.updateScoreSync(delta);
       this.updateScoreboardPolling(delta);
+      this.updateLostGuidance(delta);
     }
 
     handleRenderLoopError(stage, error) {
@@ -15752,6 +16002,7 @@
       if (drops.length) {
         this.collectDrops(drops);
       }
+      this.markGuidanceProgress('gather');
       this.updateHud();
       this.audio.playRandom(['miningA', 'miningB'], {
         volume: 0.45 + Math.random() * 0.2,
@@ -15851,6 +16102,7 @@
       this.score = Math.max(0, this.score - 0.25);
       this.updatePortalFrameStateForColumn(gx, gz);
       this.updateHud();
+      this.markGuidanceProgress('build');
       this.audio.play('blockPlace', {
         volume: 0.42 + Math.random() * 0.12,
         rate: 1.18 + Math.random() * 0.12,
@@ -15907,6 +16159,7 @@
       });
       if (collectedAny) {
         this.updateHud();
+        this.markGuidanceProgress('collect');
       }
     }
 
@@ -18046,6 +18299,7 @@
       this.showHint(validation.message || `${recipe.label} crafted!`);
       this.refreshCraftingUi();
       this.updateHud();
+      this.markGuidanceProgress('craft');
       this.scheduleScoreSync('recipe-crafted');
       this.audio.play('craftChime', { volume: 0.6 });
       this.emitGameEvent('recipe-crafted', {

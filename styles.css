@@ -2761,6 +2761,156 @@ body.game-active #gameCanvas {
   color: rgba(224, 236, 255, 0.9);
 }
 
+.lost-guidance-banner {
+  position: absolute;
+  top: calc(clamp(1rem, 2.2vw, 1.5rem) + env(safe-area-inset-top, 0px));
+  left: 50%;
+  width: min(48rem, calc(100% - clamp(2rem, 4vw, 3rem)));
+  transform: translate(-50%, -12px);
+  background: linear-gradient(135deg, rgba(25, 42, 82, 0.92), rgba(13, 24, 52, 0.9));
+  border: 1px solid rgba(123, 168, 255, 0.25);
+  border-radius: clamp(0.75rem, 2vw, 1.1rem);
+  padding: clamp(1rem, 2.3vw, 1.5rem) clamp(1.1rem, 2.4vw, 1.9rem);
+  color: #f4f6ff;
+  box-shadow: 0 28px 48px rgba(6, 16, 40, 0.45);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.28s ease, transform 0.28s ease;
+  z-index: 12;
+}
+
+.lost-guidance-banner.is-visible {
+  opacity: 1;
+  transform: translate(-50%, 0);
+  pointer-events: auto;
+}
+
+.lost-guidance-banner__body {
+  display: grid;
+  gap: clamp(0.85rem, 2.2vw, 1.35rem);
+}
+
+.lost-guidance-banner__header {
+  display: flex;
+  align-items: center;
+  gap: clamp(0.75rem, 2vw, 1.1rem);
+}
+
+.lost-guidance-banner__icon {
+  display: grid;
+  place-items: center;
+  width: clamp(2.75rem, 4vw, 3.25rem);
+  height: clamp(2.75rem, 4vw, 3.25rem);
+  font-size: clamp(1.4rem, 2.8vw, 1.8rem);
+  background: radial-gradient(circle at 35% 35%, rgba(147, 197, 253, 0.35), rgba(59, 130, 246, 0.12));
+  border-radius: 0.9rem;
+}
+
+.lost-guidance-banner__eyebrow {
+  margin: 0;
+  font-size: 0.75rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: rgba(191, 219, 254, 0.82);
+}
+
+.lost-guidance-banner__title {
+  margin: 0;
+  font-size: clamp(1.1rem, 2.6vw, 1.45rem);
+  font-weight: 700;
+  color: #f8faff;
+}
+
+.lost-guidance-banner__steps {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: clamp(0.6rem, 1.6vw, 0.85rem);
+}
+
+.lost-guidance-banner__step {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.lost-guidance-banner__step-label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(191, 219, 254, 0.86);
+}
+
+.lost-guidance-banner__step-detail {
+  font-size: clamp(0.9rem, 2.2vw, 1.05rem);
+  line-height: 1.45;
+  color: rgba(235, 244, 255, 0.92);
+}
+
+.lost-guidance-banner__step-detail strong {
+  color: #fff;
+  font-weight: 700;
+}
+
+.lost-guidance-banner__dismiss {
+  justify-self: start;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.55rem 1.15rem;
+  border-radius: 999px;
+  border: 1px solid rgba(147, 197, 253, 0.6);
+  background: rgba(59, 130, 246, 0.22);
+  color: #f8fbff;
+  font-size: 0.9rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease, transform 0.2s ease;
+}
+
+.lost-guidance-banner__dismiss:hover,
+.lost-guidance-banner__dismiss:focus-visible {
+  background: rgba(79, 140, 255, 0.4);
+  border-color: rgba(191, 219, 254, 0.9);
+  transform: translateY(-1px);
+}
+
+.lost-guidance-banner__dismiss:focus-visible {
+  outline: 2px solid rgba(191, 219, 254, 0.95);
+  outline-offset: 2px;
+}
+
+@media (max-width: 768px) {
+  .lost-guidance-banner {
+    width: min(24rem, calc(100% - 1.8rem));
+    padding: 0.95rem 1.1rem;
+    transform: translate(-50%, -10px);
+  }
+
+  .lost-guidance-banner__body {
+    gap: 0.75rem;
+  }
+
+  .lost-guidance-banner__header {
+    gap: 0.65rem;
+  }
+
+  .lost-guidance-banner__steps {
+    gap: 0.55rem;
+  }
+
+  .lost-guidance-banner__step-detail {
+    font-size: 0.95rem;
+  }
+
+  .lost-guidance-banner__dismiss {
+    width: 100%;
+    justify-content: center;
+  }
+}
+
 @media (max-width: 768px) {
   .hud-alert {
     top: 0.6rem;
