@@ -2,6 +2,127 @@
   const globalScope = typeof window !== 'undefined' ? window : globalThis;
   const documentRef = globalScope.document ?? null;
 
+  const assetBaseConsistencyState = { mismatchLogged: false };
+
+  function ensureTrailingSlash(value) {
+    if (!value || typeof value !== 'string') {
+      return value;
+    }
+    return value.endsWith('/') ? value : `${value}/`;
+  }
+
+  function resolveUrlWithBases(target, bases) {
+    if (!target || typeof target !== 'string') {
+      return null;
+    }
+    const candidates = Array.isArray(bases) ? bases.filter(Boolean) : [];
+    candidates.push(undefined);
+    for (const base of candidates) {
+      try {
+        return base ? new URL(target, base) : new URL(target);
+      } catch (error) {}
+    }
+    return null;
+  }
+
+  function normaliseConfiguredAssetBase(value, bases) {
+    const resolved = resolveUrlWithBases(value, bases);
+    if (!resolved) {
+      return null;
+    }
+    return ensureTrailingSlash(resolved.href);
+  }
+
+  function deriveDirectoryHref(value, bases) {
+    const resolved = resolveUrlWithBases(value, bases);
+    if (!resolved) {
+      return null;
+    }
+    try {
+      const directory = new URL('./', resolved);
+      return ensureTrailingSlash(directory.href);
+    } catch (error) {
+      let href = resolved.href;
+      if (!href.endsWith('/')) {
+        href = href.replace(/[^/]*$/, '');
+      }
+      return ensureTrailingSlash(href);
+    }
+  }
+
+  function findBootstrapScriptElement(doc) {
+    if (!doc) {
+      return null;
+    }
+    if (doc.currentScript) {
+      return doc.currentScript;
+    }
+    if (typeof doc.getElementsByTagName !== 'function') {
+      return null;
+    }
+    const scripts = doc.getElementsByTagName('script');
+    for (let index = 0; index < scripts.length; index += 1) {
+      const candidate = scripts[index];
+      const source = candidate?.src || '';
+      if (typeof source === 'string' && /\bscript\.js(?:[?#].*)?$/i.test(source)) {
+        return candidate;
+      }
+    }
+    return null;
+  }
+
+  function deriveProductionAssetRoot(scope, doc) {
+    const baseCandidates = [doc?.baseURI, scope?.location?.href];
+    const scriptElement = findBootstrapScriptElement(doc);
+    const scriptDerived = deriveDirectoryHref(scriptElement?.src ?? null, baseCandidates);
+    if (scriptDerived) {
+      return scriptDerived;
+    }
+    if (scope?.location?.href) {
+      const locationDerived = deriveDirectoryHref(scope.location.href, baseCandidates);
+      if (locationDerived) {
+        return locationDerived;
+      }
+    }
+    return null;
+  }
+
+  function ensureProductionAssetBase(scope, doc) {
+    if (!scope) {
+      return;
+    }
+    const config =
+      scope.APP_CONFIG && typeof scope.APP_CONFIG === 'object'
+        ? scope.APP_CONFIG
+        : (scope.APP_CONFIG = {});
+    const baseCandidates = [doc?.baseURI, scope?.location?.href];
+    const expectedBase = deriveProductionAssetRoot(scope, doc);
+    if (!expectedBase) {
+      return;
+    }
+    const configuredBase = normaliseConfiguredAssetBase(config.assetBaseUrl ?? null, baseCandidates);
+    if (
+      configuredBase &&
+      configuredBase !== expectedBase &&
+      !assetBaseConsistencyState.mismatchLogged &&
+      scope?.console &&
+      typeof scope.console.warn === 'function'
+    ) {
+      assetBaseConsistencyState.mismatchLogged = true;
+      scope.console.warn(
+        'APP_CONFIG.assetBaseUrl mismatch detected; overriding to production asset root.',
+        {
+          configured: config.assetBaseUrl ?? null,
+          normalisedConfigured: configuredBase,
+          expected: expectedBase,
+        },
+      );
+    }
+    config.assetBaseUrl = expectedBase;
+  }
+
+  ensureProductionAssetBase(globalScope, documentRef);
+
   if (!globalScope.__INFINITE_RAILS_STATE__) {
     globalScope.__INFINITE_RAILS_STATE__ = {
       isRunning: false,
