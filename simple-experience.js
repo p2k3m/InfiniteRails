@@ -23,7 +23,7 @@
     ],
     rails: [
       `${DEFAULT_TEXTURE_BASE_URL}/rails.png`,
-      'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4////fwAJ/wP+1n84xQAAAABJRU5ErkJggg==',
+      'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAaElEQVR4nGPUkhH4zzCAgHHnxln/5eWVGJZOboALnr30DM7Or6lgoKU8CzZXff35C6+rqSnPhFclHQDjaBrA5qrRNEBXB4ymAbwq6QBG08BoGhhNA6NpYDQNjKaB0TQwmgZG08BoGgAA0SM0+BZHEZkAAAAASUVORK5CYII=',
     ],
   };
   const TEXTURE_PACK_ERROR_NOTICE_THRESHOLD = 3;
@@ -5335,9 +5335,9 @@
         return;
       }
       const isFirstNotice = this.texturePackNoticeShown !== true;
-      if (typeof console !== 'undefined' && typeof console.error === 'function') {
+      if (typeof console !== 'undefined' && typeof console.warn === 'function') {
         if (isFirstNotice || message !== this.lastTextureFallbackMessage) {
-          console.error(message, {
+          console.warn(message, {
             failures: this.texturePackErrorCount,
             missingKeys: Array.from(this.textureFallbackMissingKeys || []),
           });
@@ -5690,10 +5690,26 @@
             return useCachedFallbackTexture({ url }) ?? null;
           }
           this.prepareExternalTexture(result.texture);
-          this.noteTexturePackRecovery(key, { url: result.url || null });
-          console.error(
-            `Texture streaming check — ${key} resolved via ${result.url}. If textures appear blank, verify CDN availability and fallback cache configuration.`,
-          );
+          const resolvedUrl = result.url || '';
+          const usedEmbeddedFallback = typeof resolvedUrl === 'string' && resolvedUrl.startsWith('data:');
+          if (usedEmbeddedFallback) {
+            this.noteTexturePackFallback('embedded-texture', { key, url: resolvedUrl });
+            this.scheduleTextureRetry(key, { reason: 'embedded-texture', url: resolvedUrl });
+          } else {
+            this.noteTexturePackRecovery(key, { url: resolvedUrl || null });
+          }
+          const logger = usedEmbeddedFallback ? console.warn : console.info;
+          if (typeof logger === 'function') {
+            const sourceDescription = usedEmbeddedFallback
+              ? 'an embedded fallback texture'
+              : resolvedUrl;
+            const advisory = usedEmbeddedFallback
+              ? 'External sources failed, using embedded texture data.'
+              : 'External texture stream succeeded.';
+            logger(
+              `Texture streaming ${usedEmbeddedFallback ? 'fallback' : 'check'} — ${key} resolved via ${sourceDescription}. ${advisory} If textures appear blank, verify CDN availability and fallback cache configuration.`,
+            );
+          }
           this.completeAssetTimer('textures', key, { success: true, url: result.url });
           return result.texture;
         })
