@@ -161,5 +161,21 @@
 
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = resolver;
+    if (typeof Object.defineProperty === 'function') {
+      Object.defineProperty(module.exports, 'default', {
+        value: resolver,
+        enumerable: false,
+        configurable: true,
+        writable: true,
+      });
+      Object.defineProperty(module.exports, '__esModule', {
+        value: true,
+        enumerable: false,
+        configurable: true,
+      });
+    } else {
+      module.exports.default = resolver;
+      module.exports.__esModule = true;
+    }
   }
 })();

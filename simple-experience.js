@@ -20106,6 +20106,30 @@
   };
 
   if (typeof module !== 'undefined' && module.exports) {
-    module.exports.SimpleExperience = window.SimpleExperience;
+    const exported = window.SimpleExperience;
+    module.exports = exported;
+    if (typeof Object.defineProperty === 'function') {
+      Object.defineProperty(module.exports, 'default', {
+        value: exported,
+        enumerable: false,
+        configurable: true,
+        writable: true,
+      });
+      Object.defineProperty(module.exports, '__esModule', {
+        value: true,
+        enumerable: false,
+        configurable: true,
+      });
+      Object.defineProperty(module.exports, 'SimpleExperience', {
+        value: exported,
+        enumerable: false,
+        configurable: true,
+        writable: true,
+      });
+    } else {
+      module.exports.default = exported;
+      module.exports.__esModule = true;
+      module.exports.SimpleExperience = exported;
+    }
   }
 })();
