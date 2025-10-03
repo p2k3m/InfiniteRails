@@ -110,6 +110,42 @@
     return Object.freeze(map);
   })();
 
+  function normaliseLiveDiagnosticError(error) {
+    if (!error) {
+      return null;
+    }
+    if (error instanceof Error) {
+      return {
+        name: error.name,
+        message: error.message,
+        stack: typeof error.stack === 'string' ? error.stack : undefined,
+      };
+    }
+    if (typeof error === 'string') {
+      return { message: error };
+    }
+    if (typeof error === 'number' || typeof error === 'boolean') {
+      return { value: error };
+    }
+    try {
+      return JSON.parse(JSON.stringify(error));
+    } catch (serializationError) {
+      return { message: String(error) };
+    }
+  }
+
+  function notifyLiveDiagnostics(category, message, detail = null, options = {}) {
+    try {
+      const scope = typeof window !== 'undefined' ? window : typeof globalThis !== 'undefined' ? globalThis : null;
+      const api = scope?.InfiniteRails?.diagnostics;
+      if (api && typeof api.record === 'function') {
+        api.record(category, message, detail, options);
+      }
+    } catch (error) {
+      // Ignore live diagnostics forwarding errors to keep gameplay responsive.
+    }
+  }
+
   const configWarningDeduper = new Set();
 
   const DEFAULT_AMBIENT_TRACKS = Object.freeze([
@@ -6789,6 +6825,12 @@
             console.warn(
               `Falling back to default ${key} texture${lastUrl} because external sources failed.`,
             );
+            notifyLiveDiagnostics(
+              'texture',
+              `Falling back to default ${key} texture source.`,
+              { key, url: options.url || null },
+              { level: 'warning' },
+            );
           }
           this.noteTexturePackFallback('fallback-texture', {
             key,
@@ -6796,6 +6838,12 @@
           });
         } else if (!options.silent) {
           console.warn(`No procedural fallback texture is available for ${key}.`);
+          notifyLiveDiagnostics(
+            'texture',
+            `No procedural fallback texture is available for ${key}.`,
+            { key },
+            { level: 'warning' },
+          );
         }
         return fallbackTexture;
       };
@@ -6814,6 +6862,12 @@
             undefined,
             () => {
               console.warn(`Failed to load texture ${url}; attempting fallback source.`);
+              notifyLiveDiagnostics(
+                'texture',
+                `Failed to load texture source for ${key}.`,
+                { key, url, attempt: index + 1 },
+                { level: 'warning' },
+              );
               resolve(null);
             },
           );
@@ -8477,6 +8531,11 @@
             `Failed to load model "${key}" from ${url} after ${attemptsTried} attempt(s).`,
             error,
           );
+          notifyLiveDiagnostics(
+            'model',
+            `Failed to load model "${key}" from ${url}.`,
+            { key, url, attempts: attemptsTried, error: normaliseLiveDiagnosticError(error) },
+          );
           const fallbackOptions = loaderUnavailable
             ? { fallbackMessage: this.buildModelLoaderFallbackMessage(key) }
             : undefined;
@@ -9760,6 +9819,12 @@
             this.scene.add(this.worldRoot);
           } catch (error) {
             console.warn('Failed to attach regenerated world root to the scene.', error);
+            notifyLiveDiagnostics(
+              'scene',
+              'Failed to attach regenerated world root to the scene.',
+              { error: normaliseLiveDiagnosticError(error) },
+              { level: 'warning' },
+            );
           }
         }
       }
@@ -9777,6 +9842,12 @@
           this.worldRoot.add(this.terrainGroup);
         } catch (error) {
           console.warn('Failed to attach regenerated terrain group to the world root.', error);
+          notifyLiveDiagnostics(
+            'scene',
+            'Failed to attach regenerated terrain group to the world root.',
+            { error: normaliseLiveDiagnosticError(error) },
+            { level: 'warning' },
+          );
         }
       }
       if (!(this.columns instanceof Map)) {
@@ -12745,6 +12816,12 @@
         this.ensurePlayerPhysicsBody();
       } catch (error) {
         console.warn('Failed to ensure player physics body after dimension transition.', error);
+        notifyLiveDiagnostics(
+          'ui',
+          'Failed to ensure player physics body after dimension transition.',
+          { error: normaliseLiveDiagnosticError(error) },
+          { level: 'warning' },
+        );
       }
       try {
         if (this.cameraPerspective) {
@@ -12754,26 +12831,56 @@
         }
       } catch (error) {
         console.warn('Failed to reapply camera bindings after dimension transition.', error);
+        notifyLiveDiagnostics(
+          'ui',
+          'Failed to reapply camera bindings after dimension transition.',
+          { error: normaliseLiveDiagnosticError(error) },
+          { level: 'warning' },
+        );
       }
       try {
         this.ensurePlayerArmsVisible();
       } catch (error) {
         console.warn('Failed to refresh player arm visibility after dimension transition.', error);
+        notifyLiveDiagnostics(
+          'ui',
+          'Failed to refresh player arm visibility after dimension transition.',
+          { error: normaliseLiveDiagnosticError(error) },
+          { level: 'warning' },
+        );
       }
       try {
         this.initializeMobileControls();
       } catch (error) {
         console.warn('Failed to reinitialise mobile controls after dimension transition.', error);
+        notifyLiveDiagnostics(
+          'ui',
+          'Failed to reinitialise mobile controls after dimension transition.',
+          { error: normaliseLiveDiagnosticError(error) },
+          { level: 'warning' },
+        );
       }
       try {
         this.bindEvents();
       } catch (error) {
         console.warn('Failed to ensure UI events remain bound after dimension transition.', error);
+        notifyLiveDiagnostics(
+          'ui',
+          'Failed to ensure UI events remain bound after dimension transition.',
+          { error: normaliseLiveDiagnosticError(error) },
+          { level: 'warning' },
+        );
       }
       try {
         this.updatePointerHintForInputMode();
       } catch (error) {
         console.warn('Failed to refresh pointer hint after dimension transition.', error);
+        notifyLiveDiagnostics(
+          'ui',
+          'Failed to refresh pointer hint after dimension transition.',
+          { error: normaliseLiveDiagnosticError(error) },
+          { level: 'warning' },
+        );
       }
       try {
         if (typeof this.refreshFirstRunTutorialContent === 'function') {
@@ -12781,6 +12888,12 @@
         }
       } catch (error) {
         console.warn('Failed to refresh tutorial content after dimension transition.', error);
+        notifyLiveDiagnostics(
+          'ui',
+          'Failed to refresh tutorial content after dimension transition.',
+          { error: normaliseLiveDiagnosticError(error) },
+          { level: 'warning' },
+        );
       }
     }
 
@@ -12850,6 +12963,12 @@
         return normaliseKeyBindingMap(parsed);
       } catch (error) {
         console.debug('Failed to load key bindings from storage.', error);
+        notifyLiveDiagnostics(
+          'hotkey',
+          'Failed to load key bindings from storage.',
+          { error: normaliseLiveDiagnosticError(error) },
+          { level: 'warning' },
+        );
         return null;
       }
     }
@@ -12877,6 +12996,12 @@
         }
       } catch (error) {
         console.debug('Failed to persist key bindings.', error);
+        notifyLiveDiagnostics(
+          'hotkey',
+          'Failed to persist key bindings.',
+          { error: normaliseLiveDiagnosticError(error) },
+          { level: 'warning' },
+        );
       }
     }
 
@@ -13785,6 +13910,7 @@
         avatarWorldPosition: avatarWorldSummary,
         anchorPosition: anchorSummary,
       };
+      notifyLiveDiagnostics('movement', message, report, { level: 'warning' });
       if (!warn) {
         return;
       }
@@ -15104,6 +15230,11 @@
             if (typeof console !== 'undefined' && typeof console.error === 'function') {
               console.error('Failed to respawn zombie after collision failure.', spawnError);
             }
+            notifyLiveDiagnostics(
+              'ai',
+              'Failed to respawn zombie after collision failure.',
+              { error: normaliseLiveDiagnosticError(spawnError) },
+            );
           }
         }
         return;
@@ -15118,6 +15249,11 @@
             if (typeof console !== 'undefined' && typeof console.error === 'function') {
               console.error('Failed to respawn golem after collision failure.', spawnError);
             }
+            notifyLiveDiagnostics(
+              'ai',
+              'Failed to respawn golem after collision failure.',
+              { error: normaliseLiveDiagnosticError(spawnError) },
+            );
           }
         }
       }
@@ -15188,6 +15324,15 @@
         }
         console.error('AI scripts failed to attach to entity group.', logContext);
       }
+      notifyLiveDiagnostics(
+        'ai',
+        message,
+        {
+          kind: label,
+          reason: context.reason ?? 'unknown',
+          error: normaliseLiveDiagnosticError(context.error),
+        },
+      );
       if (typeof this.emitGameEvent === 'function') {
         const detail = { kind: label, reason: context.reason ?? 'unknown' };
         if (context.error instanceof Error) {
