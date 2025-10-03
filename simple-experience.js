@@ -1618,6 +1618,7 @@
       this.offlineSyncActive = false;
       this.lastOfflineSyncHintAt = 0;
       this.offlineSyncHintCooldownMs = 16000;
+      this.lastPublishedStateSignature = null;
       this.hotbarEl = this.ui.hotbarEl || null;
       this.handOverlayEl = this.ui.handOverlayEl || null;
       this.handOverlayIconEl = this.ui.handOverlayIconEl || null;
@@ -16464,6 +16465,30 @@
       return snapshot;
     }
 
+    getScoreSnapshot() {
+      const breakdown = this.getScoreBreakdownSnapshot();
+      return {
+        total: Math.round(this.score ?? 0),
+        recipes: this.craftedRecipes?.size ?? 0,
+        craftingEvents: this.craftingScoreEvents ?? 0,
+        dimensions: Math.max(0, this.currentDimensionIndex + 1),
+        dimensionEvents: this.dimensionScoreEvents ?? 0,
+        portalEvents: this.portalScoreEvents ?? 0,
+        combatEvents: this.combatScoreEvents ?? 0,
+        lootEvents: this.lootScoreEvents ?? 0,
+        breakdown,
+      };
+    }
+
+    getPlayerStatusSnapshot() {
+      const health = Math.max(0, Math.round(this.health ?? FALLBACK_HEALTH));
+      return {
+        health,
+        maxHealth: FALLBACK_HEALTH,
+        hearts: Math.max(0, health / 2),
+      };
+    }
+
     notifyScoreEvent(category, amount) {
       if (!Number.isFinite(amount) || amount <= 0) {
         return;
@@ -16676,8 +16701,7 @@
       }
     }
 
-    updatePortalProgress() {
-      const { portalProgressLabel, portalProgressBar } = this.ui;
+    getPortalStatusSnapshot() {
       const obstructionState = this.refreshPortalObstructionState();
       const required = this.portalFrameRequiredCount || PORTAL_BLOCK_REQUIREMENT;
       const rawProgress = required > 0 ? this.portalBlocksPlaced / required : 0;
@@ -16692,70 +16716,94 @@
       let statusMessage = remainingBlocks
         ? `${remainingBlocks} frame block${remainingBlocks === 1 ? '' : 's'} required to stabilise.`
         : 'Awaiting ignition sequence';
-      if (portalProgressLabel) {
-        if (this.victoryAchieved) {
-          portalProgressLabel.textContent = 'Eternal Ingot secured';
-          statusState = 'victory';
-          statusLabel = 'Network Secured';
-          statusMessage = 'Eternal Ingot secured';
-        } else if (this.netheriteChallengeActive && this.dimensionSettings?.id === 'netherite') {
-          const seconds = Number.isFinite(this.netheriteCountdownDisplay)
-            ? Math.max(0, this.netheriteCountdownDisplay)
-            : Math.ceil(Math.max(0, this.netheriteCountdownSeconds - this.netheriteChallengeTimer));
-          portalProgressLabel.textContent = `Collapse in ${seconds}s`;
-          statusState = 'active';
-          statusLabel = 'Collapse Imminent';
-          statusMessage = `Collapse in ${seconds}s`;
-        } else if (this.portalActivated) {
-          portalProgressLabel.textContent = 'Portal stabilised';
-          statusState = 'active';
-          statusLabel = 'Portal Active';
-          if (nextName) {
-            statusMessage = `Next: ${nextName}${nextRulesSummary ? ` — ${nextRulesSummary}` : ''}`;
-          } else {
-            statusMessage = 'Gateway stabilised — return to base.';
-          }
-        } else if (this.portalReady) {
-          portalProgressLabel.textContent = 'Portal ready — press F to ignite';
-          statusState = 'ready';
-          statusLabel = 'Portal Ready';
-          statusMessage = nextName
-            ? `Ignite with F to access ${nextName}.`
-            : 'Ignite with F to open the final gateway.';
-        } else if (obstructionState.blocked && !this.portalActivated) {
-          portalProgressLabel.textContent = 'Clear the portal footprint';
-          statusState = 'blocked';
-          statusLabel = 'Portal Blocked';
-          statusMessage = obstructionState.summary || 'Gateway occupied';
-        } else if (!this.portalFrameInteriorValid && this.portalBlocksPlaced > 0) {
-          portalProgressLabel.textContent = 'Clear the portal interior';
-          statusState = 'blocked';
-          statusLabel = 'Portal Blocked';
-          statusMessage = 'Interior obstructed';
+      let progressLabel = `Portal frame ${progressPercent}%`;
+      if (this.victoryAchieved) {
+        progressLabel = 'Eternal Ingot secured';
+        statusState = 'victory';
+        statusLabel = 'Network Secured';
+        statusMessage = 'Eternal Ingot secured';
+      } else if (this.netheriteChallengeActive && this.dimensionSettings?.id === 'netherite') {
+        const seconds = Number.isFinite(this.netheriteCountdownDisplay)
+          ? Math.max(0, this.netheriteCountdownDisplay)
+          : Math.ceil(Math.max(0, this.netheriteCountdownSeconds - this.netheriteChallengeTimer));
+        progressLabel = `Collapse in ${seconds}s`;
+        statusState = 'active';
+        statusLabel = 'Collapse Imminent';
+        statusMessage = `Collapse in ${seconds}s`;
+      } else if (this.portalActivated) {
+        progressLabel = 'Portal stabilised';
+        statusState = 'active';
+        statusLabel = 'Portal Active';
+        if (nextName) {
+          statusMessage = `Next: ${nextName}${nextRulesSummary ? ` — ${nextRulesSummary}` : ''}`;
         } else {
-          portalProgressLabel.textContent = `Portal frame ${progressPercent}%`;
-          if (progress > 0) {
-            statusState = 'building';
-            statusLabel = 'Portal Stabilising';
-            statusMessage = `${progressPercent}% frame integrity`;
-          }
+          statusMessage = 'Gateway stabilised — return to base.';
         }
+      } else if (this.portalReady) {
+        progressLabel = 'Portal ready — press F to ignite';
+        statusState = 'ready';
+        statusLabel = 'Portal Ready';
+        statusMessage = nextName
+          ? `Ignite with F to access ${nextName}.`
+          : 'Ignite with F to open the final gateway.';
+      } else if (obstructionState.blocked && !this.portalActivated) {
+        progressLabel = 'Clear the portal footprint';
+        statusState = 'blocked';
+        statusLabel = 'Portal Blocked';
+        statusMessage = obstructionState.summary || 'Gateway occupied';
+      } else if (!this.portalFrameInteriorValid && this.portalBlocksPlaced > 0) {
+        progressLabel = 'Clear the portal interior';
+        statusState = 'blocked';
+        statusLabel = 'Portal Blocked';
+        statusMessage = 'Interior obstructed';
+      } else if (progress > 0) {
+        statusState = 'building';
+        statusLabel = 'Portal Stabilising';
+        statusMessage = `${progressPercent}% frame integrity`;
       }
-      this.setPortalStatusIndicator(statusState, statusMessage, statusLabel);
-      if (portalProgressBar) {
-        let displayProgress = this.victoryAchieved ? 1 : progress;
-        if (this.portalReady && !this.portalActivated) {
-          displayProgress = 1;
-        } else if (obstructionState.blocked && !this.portalActivated) {
-          displayProgress = Math.min(displayProgress, 0.5);
-        } else if (!this.portalFrameInteriorValid && !this.portalActivated) {
-          displayProgress = Math.min(displayProgress, 0.5);
-        } else if (this.netheriteChallengeActive && this.dimensionSettings?.id === 'netherite') {
-          const remaining = Math.max(0, this.netheriteCountdownSeconds - this.netheriteChallengeTimer);
-          const fraction = this.netheriteCountdownSeconds > 0 ? 1 - Math.min(1, remaining / this.netheriteCountdownSeconds) : 1;
-          displayProgress = Math.max(displayProgress, fraction);
-        }
-        portalProgressBar.style.setProperty('--progress', displayProgress.toFixed(2));
+
+      let displayProgress = this.victoryAchieved ? 1 : progress;
+      if (this.portalReady && !this.portalActivated) {
+        displayProgress = 1;
+      } else if (obstructionState.blocked && !this.portalActivated) {
+        displayProgress = Math.min(displayProgress, 0.5);
+      } else if (!this.portalFrameInteriorValid && !this.portalActivated) {
+        displayProgress = Math.min(displayProgress, 0.5);
+      } else if (this.netheriteChallengeActive && this.dimensionSettings?.id === 'netherite') {
+        const remaining = Math.max(0, this.netheriteCountdownSeconds - this.netheriteChallengeTimer);
+        const fraction =
+          this.netheriteCountdownSeconds > 0
+            ? 1 - Math.min(1, remaining / this.netheriteCountdownSeconds)
+            : 1;
+        displayProgress = Math.max(displayProgress, fraction);
+      }
+
+      return {
+        progress,
+        progressPercent,
+        remainingBlocks,
+        requiredBlocks: required,
+        state: statusState,
+        statusLabel,
+        statusMessage,
+        progressLabel,
+        displayProgress,
+        blocked: Boolean(obstructionState.blocked),
+        obstructionSummary: obstructionState.summary || '',
+        nextDimension: nextName,
+        nextRules: nextRulesSummary,
+      };
+    }
+
+    updatePortalProgress() {
+      const { portalProgressLabel, portalProgressBar } = this.ui;
+      const snapshot = this.getPortalStatusSnapshot();
+      if (portalProgressLabel && snapshot.progressLabel) {
+        portalProgressLabel.textContent = snapshot.progressLabel;
+      }
+      this.setPortalStatusIndicator(snapshot.state, snapshot.statusMessage, snapshot.statusLabel);
+      if (portalProgressBar && Number.isFinite(snapshot.displayProgress)) {
+        portalProgressBar.style.setProperty('--progress', snapshot.displayProgress.toFixed(2));
       }
     }
 
@@ -16919,9 +16967,9 @@
       });
     }
 
-    updateDimensionInfoPanel() {
-      const { dimensionInfoEl } = this.ui;
-      if (!dimensionInfoEl) return;
+    getDimensionInfoSnapshot() {
+      const index = Math.max(0, this.currentDimensionIndex);
+      const total = DIMENSION_THEME.length;
       if (this.victoryAchieved) {
         const rank = this.getPlayerLeaderboardRank();
         const totalRuns = Math.max(this.scoreEntries.length, rank ?? 0);
@@ -16929,35 +16977,74 @@
           ? `Rank #${rank} of ${Math.max(totalRuns, rank)}`
           : 'Unranked — connect to publish your run.';
         const scoreLabel = Math.round(this.score);
-        dimensionInfoEl.innerHTML = `
-          <h3>Netherite Terminus</h3>
-          <p>You stabilised every dimension and recovered the Eternal Ingot.</p>
-          <p class="dimension-meta">Score ${scoreLabel} · ${leaderboardLabel}</p>
-          <p><button type="button" class="victory-replay-button" data-action="replay-run">Replay Run</button></p>
-        `;
-        return;
+        return {
+          name: 'Netherite Terminus',
+          description: 'You stabilised every dimension and recovered the Eternal Ingot.',
+          meta: `Score ${scoreLabel} · ${leaderboardLabel}`,
+          index,
+          total,
+          victory: true,
+          victoryDetails: {
+            title: 'Netherite Terminus',
+            message: 'You stabilised every dimension and recovered the Eternal Ingot.',
+            meta: `Score ${scoreLabel} · ${leaderboardLabel}`,
+            replayAvailable: true,
+          },
+        };
       }
-      const theme = this.dimensionSettings ?? DIMENSION_THEME[0];
-      dimensionInfoEl.dataset.simpleInit = 'true';
-      const gravity = (theme.gravity ?? 1).toFixed(2);
-      const speed = (theme.speedMultiplier ?? 1).toFixed(2);
-      let meta = `Gravity ×${gravity} · Speed ×${speed} · Dimension ${
-        this.currentDimensionIndex + 1
-      }/${DIMENSION_THEME.length}`;
-      if (theme.id === 'netherite' && !this.victoryAchieved) {
+      const theme = this.dimensionSettings ?? DIMENSION_THEME[index] ?? null;
+      const name = theme?.name ?? 'Unknown Realm';
+      const description = theme?.description ?? '';
+      const gravityValue = Number.isFinite(theme?.gravity) ? Number(theme.gravity) : 1;
+      const speedValue = Number.isFinite(theme?.speedMultiplier) ? Number(theme.speedMultiplier) : 1;
+      let meta = `Gravity ×${gravityValue.toFixed(2)} · Speed ×${speedValue.toFixed(2)} · Dimension ${
+        index + 1
+      }/${total}`;
+      let countdownSeconds = null;
+      if (theme?.id === 'netherite' && !this.victoryAchieved) {
         if (this.netheriteChallengeActive && !this.eternalIngotCollected) {
           const seconds = Number.isFinite(this.netheriteCountdownDisplay)
             ? Math.max(0, this.netheriteCountdownDisplay)
             : Math.ceil(Math.max(0, this.netheriteCountdownSeconds - this.netheriteChallengeTimer));
+          countdownSeconds = seconds;
           meta += ` · Collapse in ${seconds}s`;
         } else if (this.eternalIngotCollected) {
           meta += ' · Eternal Ingot secured';
         }
       }
+      return {
+        name,
+        description,
+        meta,
+        index,
+        total,
+        victory: false,
+        netherite: {
+          challengeActive: Boolean(this.netheriteChallengeActive && theme?.id === 'netherite'),
+          countdownSeconds,
+          ingotCollected: Boolean(this.eternalIngotCollected),
+        },
+      };
+    }
+
+    updateDimensionInfoPanel() {
+      const { dimensionInfoEl } = this.ui;
+      if (!dimensionInfoEl) return;
+      const snapshot = this.getDimensionInfoSnapshot();
+      if (snapshot.victory && snapshot.victoryDetails) {
+        dimensionInfoEl.innerHTML = `
+          <h3>${snapshot.victoryDetails.title}</h3>
+          <p>${snapshot.victoryDetails.message}</p>
+          <p class="dimension-meta">${snapshot.victoryDetails.meta}</p>
+          ${snapshot.victoryDetails.replayAvailable ? '<p><button type="button" class="victory-replay-button" data-action="replay-run">Replay Run</button></p>' : ''}
+        `;
+        return;
+      }
+      dimensionInfoEl.dataset.simpleInit = 'true';
       dimensionInfoEl.innerHTML = `
-        <h3>${theme.name}</h3>
-        <p>${theme.description ?? ''}</p>
-        <p class="dimension-meta">${meta}</p>
+        <h3>${snapshot.name}</h3>
+        <p>${snapshot.description ?? ''}</p>
+        <p class="dimension-meta">${snapshot.meta ?? ''}</p>
       `;
     }
 
@@ -17419,31 +17506,70 @@
         return;
       }
       const scope = window;
+      const score = this.getScoreSnapshot();
+      const portal = this.getPortalStatusSnapshot();
+      const dimension = this.getDimensionInfoSnapshot();
+      const player = this.getPlayerStatusSnapshot();
+      const signature = this.buildStateSignature({ score, portal, dimension, player });
+      if (reason === 'frame' && signature === this.lastPublishedStateSignature) {
+        return;
+      }
+      this.lastPublishedStateSignature = signature;
       const world = this.createWorldSnapshot();
-      const score = {
-        total: Math.round(this.score ?? 0),
-        recipes: this.craftedRecipes?.size ?? 0,
-        craftingEvents: this.craftingScoreEvents ?? 0,
-        dimensions: Math.max(0, this.currentDimensionIndex + 1),
-        dimensionEvents: this.dimensionScoreEvents ?? 0,
-        portalEvents: this.portalScoreEvents ?? 0,
-        combatEvents: this.combatScoreEvents ?? 0,
-        lootEvents: this.lootScoreEvents ?? 0,
-        breakdown: this.getScoreBreakdownSnapshot(),
-      };
-      scope.__INFINITE_RAILS_STATE__ = {
+      const state = {
         isRunning: Boolean(this.started && !this.rendererUnavailable),
         rendererMode: scope.__INFINITE_RAILS_RENDERER_MODE__ || null,
         world,
-        dimension: { name: this.dimensionSettings?.name ?? null },
-        portal: {
-          ready: Boolean(this.portalReady),
-          activated: Boolean(this.portalActivated),
-        },
+        dimension,
+        portal,
         score,
+        player,
         reason,
         updatedAt: Date.now(),
+        signature,
       };
+      scope.__INFINITE_RAILS_STATE__ = state;
+      if (typeof scope.dispatchEvent === 'function') {
+        try {
+          scope.dispatchEvent(new CustomEvent('infinite-rails:state', { detail: state }));
+        } catch (error) {
+          if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+            console.debug('Failed to dispatch state snapshot event.', error);
+          }
+        }
+      }
+    }
+
+    buildStateSignature(components = {}) {
+      const score = components.score || {};
+      const breakdown = score.breakdown || {};
+      const sortedBreakdown = Object.keys(breakdown)
+        .sort()
+        .map((key) => `${key}:${Number.isFinite(breakdown[key]) ? Number(breakdown[key]) : 0}`)
+        .join(',');
+      const portal = components.portal || {};
+      const dimension = components.dimension || {};
+      const player = components.player || {};
+      return [
+        Number.isFinite(score.total) ? Math.round(score.total) : 0,
+        Number.isFinite(score.craftingEvents) ? score.craftingEvents : 0,
+        Number.isFinite(score.dimensionEvents) ? score.dimensionEvents : 0,
+        Number.isFinite(score.portalEvents) ? score.portalEvents : 0,
+        Number.isFinite(score.combatEvents) ? score.combatEvents : 0,
+        Number.isFinite(score.lootEvents) ? score.lootEvents : 0,
+        sortedBreakdown,
+        Number.isFinite(player.health) ? player.health : 0,
+        dimension.name ?? '',
+        Number.isFinite(dimension.index) ? dimension.index : 0,
+        dimension.meta ?? '',
+        dimension.victory ? 'victory' : '',
+        portal.state ?? '',
+        portal.statusLabel ?? '',
+        portal.progressLabel ?? '',
+        portal.statusMessage ?? '',
+        Number.isFinite(portal.displayProgress) ? portal.displayProgress.toFixed(2) : '',
+        Number.isFinite(portal.remainingBlocks) ? portal.remainingBlocks : '',
+      ].join('|');
     }
 
     getDeveloperMetrics() {

@@ -1250,6 +1250,176 @@
     return fileName || trimmed;
   }
 
+  const hudStateBinding = {
+    listener: null,
+    ui: null,
+    lastSignature: null,
+  };
+
+  function createHeartMarkupFromHealth(health) {
+    const numeric = Number.isFinite(health) ? Math.max(0, Math.round(health)) : 0;
+    const fullHearts = Math.floor(numeric / 2);
+    const halfHeart = numeric % 2;
+    const pieces = [];
+    for (let i = 0; i < 5; i += 1) {
+      const index = i * 2;
+      let glyph = '♡';
+      if (index + 1 <= fullHearts) {
+        glyph = '❤';
+      } else if (index < fullHearts + halfHeart) {
+        glyph = '❥';
+      }
+      pieces.push(`<span class="heart-icon" aria-hidden="true">${glyph}</span>`);
+    }
+    return `<span class="hud-hearts" role="img" aria-label="${numeric / 2} hearts remaining">${pieces.join('')}</span>`;
+  }
+
+  function formatHudPointValue(value) {
+    const numeric = Math.max(0, Number(value) || 0);
+    if (!Number.isFinite(numeric)) {
+      return '0';
+    }
+    const maxFractionDigits = numeric < 1 ? 2 : numeric < 10 ? 1 : 0;
+    return numeric.toLocaleString(undefined, {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: maxFractionDigits,
+    });
+  }
+
+  function formatHudMetric(count, singularLabel, pluralLabel, points) {
+    const safeCount = Number.isFinite(count) ? Math.max(0, count) : 0;
+    const label = safeCount === 1 ? singularLabel : pluralLabel;
+    const formattedPoints = formatHudPointValue(points);
+    return `${safeCount} ${label} (+${formattedPoints} pts)`;
+  }
+
+  function escapeHtml(value) {
+    return String(value)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function applyHudStateSnapshot(stateLike) {
+    const ui = hudStateBinding.ui;
+    if (!ui) {
+      return;
+    }
+    const state = stateLike && typeof stateLike === 'object' ? stateLike : globalScope.__INFINITE_RAILS_STATE__;
+    if (!state || typeof state !== 'object') {
+      return;
+    }
+    const signature = typeof state.signature === 'string' ? state.signature : null;
+    if (signature && hudStateBinding.lastSignature === signature) {
+      return;
+    }
+    hudStateBinding.lastSignature = signature;
+    const player = state.player || {};
+    if (ui.heartsEl && Number.isFinite(player.health)) {
+      ui.heartsEl.innerHTML = createHeartMarkupFromHealth(player.health);
+    }
+    const score = state.score || {};
+    const breakdown = score.breakdown || {};
+    if (ui.scoreTotalEl && Number.isFinite(score.total)) {
+      ui.scoreTotalEl.textContent = Math.round(score.total).toLocaleString();
+    }
+    if (ui.scoreRecipesEl) {
+      const recipePoints = breakdown.recipes ?? breakdown.crafting ?? 0;
+      ui.scoreRecipesEl.textContent = formatHudMetric(score.craftingEvents, 'craft', 'crafts', recipePoints);
+    }
+    if (ui.scoreDimensionsEl) {
+      const dimensionCount = Number.isFinite(score.dimensions) ? Math.max(1, score.dimensions) : 1;
+      const dimensionPoints = breakdown.dimensions ?? 0;
+      const penaltyPoints = breakdown.penalties ?? 0;
+      let display = `${dimensionCount} (+${formatHudPointValue(dimensionPoints)} pts`;
+      if (penaltyPoints > 0) {
+        display += `, -${formatHudPointValue(penaltyPoints)} penalty`;
+      }
+      display += ')';
+      ui.scoreDimensionsEl.textContent = display;
+    }
+    if (ui.scorePortalsEl) {
+      const portalPoints = breakdown.portal ?? breakdown.portals ?? 0;
+      ui.scorePortalsEl.textContent = formatHudMetric(score.portalEvents, 'event', 'events', portalPoints);
+    }
+    if (ui.scoreCombatEl) {
+      const combatPoints = breakdown.combat ?? 0;
+      ui.scoreCombatEl.textContent = formatHudMetric(score.combatEvents, 'victory', 'victories', combatPoints);
+    }
+    if (ui.scoreLootEl) {
+      const lootPoints = breakdown.loot ?? 0;
+      ui.scoreLootEl.textContent = formatHudMetric(score.lootEvents, 'find', 'finds', lootPoints);
+    }
+    const portal = state.portal || {};
+    if (ui.portalProgressLabel && typeof portal.progressLabel === 'string') {
+      ui.portalProgressLabel.textContent = portal.progressLabel;
+    }
+    if (ui.portalProgressBar) {
+      if (Number.isFinite(portal.displayProgress)) {
+        ui.portalProgressBar.style.setProperty('--progress', Number(portal.displayProgress).toFixed(2));
+      } else {
+        ui.portalProgressBar.style.removeProperty('--progress');
+      }
+    }
+    if (ui.portalStatusEl) {
+      const statusState = typeof portal.state === 'string' ? portal.state : 'inactive';
+      const statusLabel = typeof portal.statusLabel === 'string' ? portal.statusLabel : 'Portal Status';
+      const statusMessage = typeof portal.statusMessage === 'string' ? portal.statusMessage : '';
+      ui.portalStatusEl.dataset.state = statusState;
+      ui.portalStatusEl.setAttribute('aria-label', `Portal status: ${statusLabel}. ${statusMessage}`);
+      if (ui.portalStatusStateText) {
+        ui.portalStatusStateText.textContent = statusLabel;
+      }
+      if (ui.portalStatusDetailText) {
+        ui.portalStatusDetailText.textContent = statusMessage;
+      } else if (!ui.portalStatusStateText && ui.portalStatusText) {
+        ui.portalStatusText.textContent = statusMessage;
+      } else if (ui.portalStatusText && ui.portalStatusStateText && !ui.portalStatusDetailText) {
+        ui.portalStatusText.textContent = `${statusLabel}: ${statusMessage}`;
+      }
+      if (ui.portalStatusIcon) {
+        ui.portalStatusIcon.dataset.state = statusState;
+      }
+    }
+    const dimension = state.dimension || {};
+    if (ui.dimensionInfoEl && dimension) {
+      if (dimension.victory && dimension.victoryDetails) {
+        const victory = dimension.victoryDetails;
+        const replayMarkup = victory.replayAvailable
+          ? '<p><button type="button" class="victory-replay-button" data-action="replay-run">Replay Run</button></p>'
+          : '';
+        ui.dimensionInfoEl.innerHTML = `
+          <h3>${escapeHtml(victory.title ?? dimension.name ?? 'Netherite Terminus')}</h3>
+          <p>${escapeHtml(victory.message ?? '')}</p>
+          <p class="dimension-meta">${escapeHtml(victory.meta ?? '')}</p>
+          ${replayMarkup}
+        `;
+      } else {
+        ui.dimensionInfoEl.innerHTML = `
+          <h3>${escapeHtml(dimension.name ?? 'Unknown Realm')}</h3>
+          <p>${escapeHtml(dimension.description ?? '')}</p>
+          <p class="dimension-meta">${escapeHtml(dimension.meta ?? '')}</p>
+        `;
+      }
+    }
+  }
+
+  function ensureHudStateBinding(ui) {
+    if (!ui || typeof globalScope?.addEventListener !== 'function') {
+      return;
+    }
+    hudStateBinding.ui = ui;
+    if (!hudStateBinding.listener) {
+      hudStateBinding.listener = (event) => {
+        applyHudStateSnapshot(event?.detail);
+      };
+      globalScope.addEventListener('infinite-rails:state', hudStateBinding.listener);
+    }
+    applyHudStateSnapshot(globalScope.__INFINITE_RAILS_STATE__);
+  }
+
   function extractAssetSourceLabel(detail) {
     if (!detail || typeof detail !== 'object') {
       return null;
@@ -4475,6 +4645,7 @@
     }
     ensureHudDefaults(doc);
     const ui = collectSimpleExperienceUi(doc);
+    ensureHudStateBinding(ui);
     bindDebugModeControls(ui);
     bindDeveloperStatsControls(ui);
     bindExperienceEventLog(ui);
