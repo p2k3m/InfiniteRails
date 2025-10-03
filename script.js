@@ -5515,9 +5515,25 @@
     return Object.keys(detail).length ? detail : null;
   }
 
+  function ensureRendererFallbackIndicator() {
+    try {
+      if (typeof setRendererModeIndicator === 'function') {
+        setRendererModeIndicator('simple');
+      } else if (globalScope) {
+        globalScope.__INFINITE_RAILS_RENDERER_MODE__ = 'simple';
+        if (globalScope.InfiniteRails && typeof globalScope.InfiniteRails === 'object') {
+          globalScope.InfiniteRails.rendererMode = 'simple';
+        }
+      }
+    } catch (error) {
+      globalScope?.console?.debug?.('Failed to update renderer indicator for WebGL fallback.', error);
+    }
+  }
+
   function updateRendererStateForWebglFallback() {
     const state = globalScope?.__INFINITE_RAILS_STATE__;
     if (!state || typeof state !== 'object') {
+      ensureRendererFallbackIndicator();
       return;
     }
     try {
@@ -5527,6 +5543,7 @@
     } catch (error) {
       globalScope?.console?.debug?.('Failed to update renderer state for WebGL fallback.', error);
     }
+    ensureRendererFallbackIndicator();
   }
 
   function applyWebglFallbackConfig(config, probeError) {

@@ -378,6 +378,7 @@ describe('renderer mode selection', () => {
           'WebGL is unavailable on this device, so the mission briefing view is shown instead of the full 3D renderer.',
       },
     ]);
+    expect(windowStub.__INFINITE_RAILS_RENDERER_MODE__).toBe('simple');
     expect(showError).toHaveBeenCalledTimes(1);
     expect(showError).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -485,6 +486,7 @@ describe('renderer mode selection', () => {
           'WebGL is unavailable on this device, so the mission briefing view is shown instead of the full 3D renderer.',
       },
     ]);
+    expect(windowStub.__INFINITE_RAILS_RENDERER_MODE__).toBe('simple');
     expect(showError).toHaveBeenCalledTimes(1);
     expect(setDiagnostic).toHaveBeenCalledWith('renderer', {
       status: 'warning',
