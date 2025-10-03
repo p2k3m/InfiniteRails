@@ -2623,6 +2623,29 @@
         detail,
         timestamp: Number.isFinite(detail?.timestamp) ? detail.timestamp : undefined,
       });
+      const activeMode = resolveRendererModeForFallback(detail);
+      if (activeMode !== 'simple') {
+        const fallbackContext = { reason: 'initialisation-error', mode: activeMode || 'unknown' };
+        if (stage) {
+          fallbackContext.stage = stage;
+        }
+        let fallbackError = null;
+        if (detail?.error instanceof Error) {
+          fallbackError = detail.error;
+        } else {
+          const fallbackMessage =
+            reportedErrorMessage ||
+            (typeof detail?.message === 'string' && detail.message.trim().length ? detail.message.trim() : null) ||
+            diagnosticMessage;
+          if (fallbackMessage) {
+            fallbackError = new Error(fallbackMessage);
+            if (errorName) {
+              fallbackError.name = errorName;
+            }
+          }
+        }
+        tryStartSimpleFallback(fallbackError, fallbackContext);
+      }
     });
     globalScope.addEventListener('infinite-rails:score-sync-offline', (event) => {
       const detail = event?.detail && typeof event.detail === 'object' ? event.detail : {};
