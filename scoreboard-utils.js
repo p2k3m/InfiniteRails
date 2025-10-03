@@ -6,6 +6,22 @@
     globalScope.ScoreboardUtils = globalFactory();
   }
 })(function () {
+  function normalizeText(value) {
+    if (value === null || value === undefined) {
+      return null;
+    }
+    const stringValue = typeof value === 'string' ? value : String(value);
+    const trimmed = stringValue.trim();
+    if (!trimmed) {
+      return null;
+    }
+    const lower = trimmed.toLowerCase();
+    if (lower === 'undefined' || lower === 'null') {
+      return null;
+    }
+    return trimmed;
+  }
+
   function normalizeDimensionLabels(entry) {
     if (!entry || typeof entry !== 'object') {
       return [];
@@ -15,18 +31,43 @@
     const addSource = (value) => {
       if (!value) return;
       if (Array.isArray(value)) {
-        if (value.length) {
-          sources.push(value);
+        const sanitized = value
+          .map((item) => {
+            if (typeof item === 'string' || typeof item === 'number') {
+              return normalizeText(item);
+            }
+            if (item && typeof item === 'object') {
+              return (
+                normalizeText(item.name) ||
+                normalizeText(item.label) ||
+                normalizeText(item.id)
+              );
+            }
+            return null;
+          })
+          .filter(Boolean);
+        if (sanitized.length) {
+          sources.push(sanitized);
         }
         return;
       }
-      if (typeof value === 'string') {
-        const segments = value
+      if (typeof value === 'string' || typeof value === 'number') {
+        const segments = String(value)
           .split(/[|,/\u2022\u2013\u2014]+/)
-          .map((segment) => segment.trim())
+          .map((segment) => normalizeText(segment))
           .filter(Boolean);
         if (segments.length) {
           sources.push(segments);
+        }
+        return;
+      }
+      if (value && typeof value === 'object') {
+        const label =
+          normalizeText(value.name) ||
+          normalizeText(value.label) ||
+          normalizeText(value.id);
+        if (label) {
+          sources.push([label]);
         }
       }
     };
@@ -42,18 +83,7 @@
     const seen = new Set();
     sources.forEach((source) => {
       source.forEach((item) => {
-        let label = null;
-        if (typeof item === 'string') {
-          label = item.trim();
-        } else if (item && typeof item === 'object') {
-          if (typeof item.name === 'string') {
-            label = item.name.trim();
-          } else if (typeof item.label === 'string') {
-            label = item.label.trim();
-          } else if (typeof item.id === 'string') {
-            label = item.id.trim();
-          }
-        }
+        const label = normalizeText(item);
         if (label && !seen.has(label)) {
           seen.add(label);
           labels.push(label);
@@ -88,7 +118,7 @@
       Object.entries(source).forEach(([key, value]) => {
         if (typeof key !== 'string') return;
         const trimmed = key.trim();
-        if (!trimmed) return;
+        if (!trimmed || trimmed.toLowerCase() === 'undefined') return;
         const numeric = Number(value);
         if (Number.isFinite(numeric)) {
           breakdown[trimmed] = numeric;
@@ -130,9 +160,25 @@
         const dimensionPoints = Number.isFinite(breakdown.dimensions) ? breakdown.dimensions : 0;
         const recipePoints = Number.isFinite(breakdown.recipes) ? breakdown.recipes : 0;
         const penaltyPoints = Number.isFinite(breakdown.penalties) ? breakdown.penalties : 0;
+        const idCandidate =
+          normalizeText(entry.id) ||
+          normalizeText(entry.googleId) ||
+          normalizeText(entry.playerId);
+        const nameCandidate =
+          normalizeText(entry.name) ||
+          normalizeText(entry.displayName) ||
+          normalizeText(entry.playerName);
+        const locationLabel =
+          normalizeText(entry.locationLabel) ||
+          normalizeText(entry.location?.label) ||
+          normalizeText(entry.locationName);
+        const updatedAt =
+          normalizeText(entry.updatedAt) ||
+          normalizeText(entry.lastUpdated) ||
+          normalizeText(entry.updated_at);
         return {
-          id: entry.id ?? entry.googleId ?? entry.playerId ?? `guest-${Math.random().toString(36).slice(2)}`,
-          name: entry.name ?? entry.displayName ?? 'Explorer',
+          id: idCandidate || `guest-${Math.random().toString(36).slice(2)}`,
+          name: nameCandidate || 'Explorer',
           score: scoreValue,
           dimensionCount: toNumber(entry.dimensionCount ?? entry.dimensions ?? entry.realms, 0),
           runTimeSeconds: toNumber(entry.runTimeSeconds ?? entry.runtimeSeconds ?? entry.runtime, 0),
@@ -142,8 +188,8 @@
             (entry.latitude !== undefined && entry.longitude !== undefined
               ? { latitude: entry.latitude, longitude: entry.longitude }
               : null),
-          locationLabel: entry.locationLabel ?? entry.location?.label ?? entry.locationName ?? null,
-          updatedAt: entry.updatedAt ?? entry.lastUpdated ?? entry.updated_at ?? null,
+          locationLabel: locationLabel,
+          updatedAt,
           dimensionLabels: normalizeDimensionLabels(entry),
           recipePoints,
           dimensionPoints,
