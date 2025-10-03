@@ -6586,16 +6586,6 @@
       const sampleNames =
         samples && typeof samples === 'object' ? Object.keys(samples) : [];
       const available = new Set(sampleNames);
-      if (!available.size) {
-        return {
-          has: () => false,
-          play: () => {},
-          playRandom: () => {},
-          stopAll: () => {},
-          setMasterVolume: () => {},
-          getLoadedSampleCount: () => 0,
-        };
-      }
       const totalSamples = available.size;
       const HowlCtor = scope?.Howl;
       const useHowler = typeof HowlCtor === 'function';
@@ -6629,6 +6619,21 @@
       }
       const aliasCache = new Map();
       const aliasNotified = new Set();
+      const missingSampleNotified = new Set();
+      const fallbackAlertName = '__fallback_alert__';
+      const fallbackAlertSample =
+        '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';
+      const getSamplePayload = (name) => {
+        if (!name) return null;
+        if (name === fallbackAlertName) {
+          return fallbackAlertSample;
+        }
+        if (!samples || typeof samples !== 'object') {
+          return null;
+        }
+        const payload = samples[name];
+        return typeof payload === 'string' && payload.trim().length ? payload : null;
+      };
       const resolveAudioName = (name) => {
         if (!name) return null;
         if (available.has(name)) {
@@ -6646,6 +6651,29 @@
         aliasCache.set(name, resolved);
         return resolved;
       };
+      const aliasIntegrityIssues = [];
+      aliasMap.forEach((candidates, aliasName) => {
+        if (!candidates || !candidates.length) {
+          return;
+        }
+        const resolved = candidates.find((candidate) => available.has(candidate));
+        if (!resolved) {
+          aliasIntegrityIssues.push({ aliasName, candidates: [...candidates] });
+        }
+      });
+      if (!totalSamples && typeof console !== 'undefined' && typeof console.warn === 'function') {
+        console.warn(
+          'No embedded audio samples were detected. Gameplay actions will fall back to an alert tone until audio assets are restored.',
+        );
+      }
+      if (aliasIntegrityIssues.length && typeof console !== 'undefined' && typeof console.warn === 'function') {
+        const detail = aliasIntegrityIssues
+          .map((issue) => `${issue.aliasName} → [${issue.candidates.join(', ')}]`)
+          .join('; ');
+        console.warn(
+          `One or more audio aliases do not resolve to an available sample. Missing mappings: ${detail}. A fallback alert tone will be used until the samples are restored.`,
+        );
+      }
       const howlCache = useHowler ? new Map() : null;
       const fallbackPlaying = useHowler ? null : new Map();
       let lastCaptionText = null;
@@ -6872,7 +6900,17 @@
       };
 
       const playInternal = (requestedName, resolvedName, options = {}) => {
-        if (!resolvedName || !samples[resolvedName]) {
+        if (!resolvedName) {
+          return;
+        }
+        const samplePayload = getSamplePayload(resolvedName);
+        if (!samplePayload) {
+          if (resolvedName !== fallbackAlertName) {
+            logAudioPlaybackIssue(requestedName, resolvedName, {
+              message: `Audio sample "${resolvedName}" could not be loaded.`,
+              code: 'missing-sample',
+            });
+          }
           return;
         }
         resumeAudioContext();
@@ -6880,7 +6918,7 @@
           let howl = howlCache.get(resolvedName);
           if (!howl) {
             howl = new HowlCtor({
-              src: [`data:audio/wav;base64,${samples[resolvedName]}`],
+              src: [`data:audio/wav;base64,${samplePayload}`],
               volume: options.volume ?? 1,
               preload: true,
             });
@@ -6965,7 +7003,7 @@
           }
         } else {
           const baseVolume = options.volume !== undefined ? clampVolume(options.volume) : 1;
-          const src = `data:audio/wav;base64,${samples[resolvedName]}`;
+          const src = `data:audio/wav;base64,${samplePayload}`;
           const instance = new AudioCtor(src);
           instance.preload = 'auto';
           instance.loop = Boolean(options.loop);
@@ -7055,13 +7093,31 @@
           aliasNotified.add(requestedName);
         }
       };
+      const playFallbackAlert = (requestedName, options = {}) => {
+        const fallbackOptions = Object.assign({}, options);
+        if (fallbackOptions.volume === undefined) {
+          fallbackOptions.volume = 0.7;
+        }
+        const nameForLog = typeof requestedName === 'string' && requestedName.trim().length ? requestedName : null;
+        if (nameForLog && !missingSampleNotified.has(nameForLog)) {
+          logAudioPlaybackIssue(nameForLog, null, {
+            message: `Audio sample "${nameForLog}" is unavailable. Playing fallback alert tone instead.`,
+            code: 'missing-sample',
+          });
+          missingSampleNotified.add(nameForLog);
+        }
+        playInternal(nameForLog, fallbackAlertName, fallbackOptions);
+      };
       const controller = {
         has(name) {
           return Boolean(resolveAudioName(name));
         },
         play(name, options = {}) {
           const resolved = resolveAudioName(name);
-          if (!resolved) return;
+          if (!resolved) {
+            playFallbackAlert(name, options);
+            return;
+          }
           playInternal(name, resolved, options);
         },
         playRandom(names = [], options = {}) {
@@ -7072,7 +7128,11 @@
               pool.push({ requested: name, resolved });
             }
           });
-          if (!pool.length) return;
+          if (!pool.length) {
+            const first = Array.isArray(names) && names.length ? names[0] : null;
+            playFallbackAlert(first, options);
+            return;
+          }
           const choice = pool[Math.floor(Math.random() * pool.length)];
           playInternal(choice.requested, choice.resolved, options);
         },
