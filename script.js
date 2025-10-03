@@ -40,6 +40,30 @@
     metricsErrorLogged: false,
   };
 
+  const LIVE_DIAGNOSTIC_CATEGORIES = Object.freeze({
+    model: { label: 'Model', icon: '🧊' },
+    texture: { label: 'Texture', icon: '🖼️' },
+    ai: { label: 'AI', icon: '🤖' },
+    ui: { label: 'UI', icon: '🪟' },
+    scene: { label: 'Scene', icon: '🌌' },
+    hotkey: { label: 'Hotkey', icon: '⌨️' },
+    movement: { label: 'Movement', icon: '🏃' },
+    system: { label: 'System', icon: '🛰️' },
+  });
+
+  const liveDiagnosticsState = {
+    enabled: false,
+    entries: [],
+    limit: 80,
+    counter: 0,
+    toggleButton: null,
+    panel: null,
+    list: null,
+    empty: null,
+    clearButton: null,
+    debugListenerCleanup: null,
+  };
+
   let activeExperienceInstance = null;
 
   function isDebugModeEnabled() {
@@ -2927,6 +2951,7 @@
         typeof bootstrapOverlay?.getLogEntries === 'function'
           ? bootstrapOverlay.getLogEntries()
           : [],
+      liveDiagnostics: getLiveDiagnosticsEntriesSnapshot(),
     };
   }
 
@@ -3115,6 +3140,7 @@
     refreshDebugModeUi();
     refreshEventLogDebugDetails();
     refreshRendererFailureOverlay();
+    refreshLiveDiagnosticsUi();
     if (options.log !== false) {
       appendEventLogEntry('debug-mode', {
         enabled: next,
@@ -3415,6 +3441,272 @@
       };
     }
     setDeveloperStatsEnabled(developerStatsState.enabled, { persist: false, forceRefresh: true });
+  }
+
+  function normaliseLiveDiagnosticType(value) {
+    if (typeof value !== 'string') {
+      return 'system';
+    }
+    const key = value.trim().toLowerCase();
+    return LIVE_DIAGNOSTIC_CATEGORIES[key] ? key : 'system';
+  }
+
+  function normaliseLiveDiagnosticLevel(level) {
+    if (typeof level !== 'string') {
+      return 'error';
+    }
+    const key = level.trim().toLowerCase();
+    if (key === 'warning' || key === 'info') {
+      return key;
+    }
+    if (key === 'success') {
+      return 'info';
+    }
+    return 'error';
+  }
+
+  function serialiseLiveDiagnosticDetail(detail) {
+    if (detail === null || typeof detail === 'undefined') {
+      return null;
+    }
+    if (typeof detail === 'string' || typeof detail === 'number' || typeof detail === 'boolean') {
+      return detail;
+    }
+    if (detail instanceof Error) {
+      return {
+        name: detail.name,
+        message: detail.message,
+        stack: typeof detail.stack === 'string' ? detail.stack : undefined,
+      };
+    }
+    if (detail && typeof detail === 'object') {
+      try {
+        return JSON.parse(JSON.stringify(detail));
+      } catch (error) {
+        const copy = {};
+        Object.keys(detail).forEach((key) => {
+          const value = detail[key];
+          if (typeof value === 'undefined') {
+            return;
+          }
+          if (value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+            copy[key] = value;
+            return;
+          }
+          try {
+            copy[key] = JSON.parse(JSON.stringify(value));
+          } catch (nestedError) {
+            copy[key] = String(value);
+          }
+        });
+        return copy;
+      }
+    }
+    return String(detail);
+  }
+
+  function formatLiveDiagnosticDetail(detail) {
+    if (detail === null || typeof detail === 'undefined') {
+      return null;
+    }
+    if (typeof detail === 'string') {
+      return detail;
+    }
+    if (typeof detail === 'number' || typeof detail === 'boolean') {
+      return String(detail);
+    }
+    try {
+      return JSON.stringify(detail, null, 2);
+    } catch (error) {
+      return String(detail);
+    }
+  }
+
+  function renderLiveDiagnosticsEntries({ scroll = false } = {}) {
+    const doc = documentRef || globalScope.document || null;
+    const list = liveDiagnosticsState.list;
+    const empty = liveDiagnosticsState.empty;
+    if (!doc || !list || !empty) {
+      return;
+    }
+    list.innerHTML = '';
+    const entries = liveDiagnosticsState.entries;
+    entries.forEach((entry) => {
+      const item = doc.createElement('li');
+      item.className = `live-diagnostics__entry live-diagnostics__entry--${entry.type}`;
+      item.dataset.level = entry.level;
+      const meta = doc.createElement('div');
+      meta.className = 'live-diagnostics__meta';
+      const badge = doc.createElement('span');
+      badge.className = 'live-diagnostics__badge';
+      badge.textContent = `${entry.icon} ${entry.label}`;
+      meta.appendChild(badge);
+      const timestampEl = doc.createElement('time');
+      timestampEl.className = 'live-diagnostics__timestamp';
+      if (typeof timestampEl.setAttribute === 'function') {
+        timestampEl.setAttribute('datetime', new Date(entry.timestamp).toISOString());
+      }
+      timestampEl.textContent = formatEventTimestamp(entry.timestamp);
+      meta.appendChild(timestampEl);
+      item.appendChild(meta);
+      const messageEl = doc.createElement('p');
+      messageEl.className = 'live-diagnostics__message';
+      messageEl.textContent = entry.message;
+      item.appendChild(messageEl);
+      const detailText = formatLiveDiagnosticDetail(entry.detail);
+      if (detailText) {
+        const detailEl = doc.createElement('pre');
+        detailEl.className = 'live-diagnostics__detail';
+        detailEl.textContent = detailText;
+        item.appendChild(detailEl);
+      }
+      list.appendChild(item);
+    });
+    const hasEntries = entries.length > 0;
+    list.hidden = !hasEntries;
+    empty.hidden = hasEntries;
+    if (hasEntries && scroll) {
+      list.scrollTop = list.scrollHeight;
+    }
+  }
+
+  function refreshLiveDiagnosticsUi() {
+    const debugEnabled = isDebugModeEnabled();
+    const button = liveDiagnosticsState.toggleButton;
+    if (button) {
+      const enabled = debugEnabled && liveDiagnosticsState.enabled;
+      button.disabled = !debugEnabled;
+      button.setAttribute('aria-pressed', enabled ? 'true' : 'false');
+      const label = enabled ? 'Hide Live Diagnostics' : 'Show Live Diagnostics';
+      button.textContent = label;
+      const hint = debugEnabled
+        ? enabled
+          ? 'Hide the live diagnostics panel'
+          : 'Show live diagnostics captured during this session'
+        : 'Enable debug mode to unlock live diagnostics';
+      button.dataset.hint = hint;
+      button.setAttribute('aria-label', hint);
+    }
+    const panel = liveDiagnosticsState.panel;
+    if (panel) {
+      const visible = debugEnabled && liveDiagnosticsState.enabled;
+      panel.hidden = !visible;
+      panel.dataset.state = visible ? 'visible' : 'hidden';
+    }
+    renderLiveDiagnosticsEntries({ scroll: false });
+  }
+
+  function setLiveDiagnosticsEnabled(enabled, options = {}) {
+    const debugEnabled = isDebugModeEnabled();
+    const next = Boolean(enabled) && debugEnabled;
+    const previous = liveDiagnosticsState.enabled;
+    liveDiagnosticsState.enabled = next;
+    if (previous !== next || options.forceRefresh) {
+      refreshLiveDiagnosticsUi();
+      if (next) {
+        renderLiveDiagnosticsEntries({ scroll: options.scroll !== false });
+      }
+    }
+    return next;
+  }
+
+  function toggleLiveDiagnostics(options = {}) {
+    return setLiveDiagnosticsEnabled(!liveDiagnosticsState.enabled, options);
+  }
+
+  function clearLiveDiagnosticsEntries() {
+    liveDiagnosticsState.entries.splice(0, liveDiagnosticsState.entries.length);
+    renderLiveDiagnosticsEntries({ scroll: false });
+  }
+
+  function bindLiveDiagnosticsControls(ui) {
+    if (!ui) {
+      return;
+    }
+    const toggle = ui.liveDiagnosticsToggle;
+    if (toggle) {
+      liveDiagnosticsState.toggleButton = toggle;
+      if (!toggle.dataset.liveDiagnosticsBound) {
+        toggle.addEventListener('click', (event) => {
+          if (event?.preventDefault) {
+            event.preventDefault();
+          }
+          toggleLiveDiagnostics({ source: 'ui' });
+        });
+        toggle.dataset.liveDiagnosticsBound = 'true';
+      }
+    }
+    if (ui.liveDiagnosticsPanel) {
+      liveDiagnosticsState.panel = ui.liveDiagnosticsPanel;
+    }
+    if (ui.liveDiagnosticsList) {
+      liveDiagnosticsState.list = ui.liveDiagnosticsList;
+    }
+    if (ui.liveDiagnosticsEmpty) {
+      liveDiagnosticsState.empty = ui.liveDiagnosticsEmpty;
+    }
+    if (ui.liveDiagnosticsClear) {
+      liveDiagnosticsState.clearButton = ui.liveDiagnosticsClear;
+      if (!ui.liveDiagnosticsClear.dataset.liveDiagnosticsBound) {
+        ui.liveDiagnosticsClear.addEventListener('click', (event) => {
+          if (event?.preventDefault) {
+            event.preventDefault();
+          }
+          clearLiveDiagnosticsEntries();
+        });
+        ui.liveDiagnosticsClear.dataset.liveDiagnosticsBound = 'true';
+      }
+    }
+    if (!liveDiagnosticsState.debugListenerCleanup && typeof addDebugModeChangeListener === 'function') {
+      liveDiagnosticsState.debugListenerCleanup = addDebugModeChangeListener((enabled) => {
+        if (!enabled && liveDiagnosticsState.enabled) {
+          setLiveDiagnosticsEnabled(false, { forceRefresh: true, scroll: false });
+        } else {
+          refreshLiveDiagnosticsUi();
+        }
+      });
+    }
+    refreshLiveDiagnosticsUi();
+  }
+
+  function getLiveDiagnosticsEntriesSnapshot() {
+    return liveDiagnosticsState.entries.map((entry) => ({
+      id: entry.id,
+      type: entry.type,
+      label: entry.label,
+      message: entry.message,
+      detail: entry.detail,
+      timestamp: entry.timestamp,
+      level: entry.level,
+    }));
+  }
+
+  function recordLiveDiagnostic(type, message, detail = null, options = {}) {
+    const diagnosticType = normaliseLiveDiagnosticType(type);
+    const descriptor = LIVE_DIAGNOSTIC_CATEGORIES[diagnosticType] || LIVE_DIAGNOSTIC_CATEGORIES.system;
+    const timestamp = Number.isFinite(options.timestamp) ? options.timestamp : Date.now();
+    const entry = {
+      id: `live-diagnostic-${timestamp}-${(liveDiagnosticsState.counter += 1)}`,
+      type: diagnosticType,
+      label: descriptor.label,
+      icon: descriptor.icon,
+      message:
+        typeof message === 'string' && message.trim().length
+          ? message.trim()
+          : `${descriptor.label} issue detected`,
+      detail: serialiseLiveDiagnosticDetail(detail),
+      timestamp,
+      level: normaliseLiveDiagnosticLevel(options.level),
+    };
+    liveDiagnosticsState.entries.push(entry);
+    if (liveDiagnosticsState.entries.length > liveDiagnosticsState.limit) {
+      liveDiagnosticsState.entries.splice(
+        0,
+        liveDiagnosticsState.entries.length - liveDiagnosticsState.limit,
+      );
+    }
+    renderLiveDiagnosticsEntries({ scroll: liveDiagnosticsState.enabled });
+    return entry;
   }
 
   const DEFAULT_KEY_BINDINGS = (() => {
@@ -5167,6 +5459,11 @@
       eventLogEl: byId('eventLog'),
       developerStatsToggle: byId('developerStatsToggle'),
       developerStatsPanel: byId('developerStatsPanel'),
+      liveDiagnosticsToggle: byId('liveDiagnosticsToggle'),
+      liveDiagnosticsPanel: byId('liveDiagnosticsPanel'),
+      liveDiagnosticsList: byId('liveDiagnosticsList'),
+      liveDiagnosticsEmpty: byId('liveDiagnosticsEmpty'),
+      liveDiagnosticsClear: byId('liveDiagnosticsClear'),
       debugModeToggle: byId('debugModeToggle'),
       debugModeStatus: byId('debugModeStatus'),
       blockActionHud: byId('blockActionHud'),
@@ -5232,6 +5529,7 @@
     ensureHudStateBinding(ui);
     bindDebugModeControls(ui);
     bindDeveloperStatsControls(ui);
+    bindLiveDiagnosticsControls(ui);
     bindExperienceEventLog(ui);
     let experience;
     try {
@@ -5751,6 +6049,18 @@
   };
   developerStatsApi.onChange = addDeveloperStatsChangeListener;
   globalScope.InfiniteRails.developerStats = developerStatsApi;
+
+  const diagnosticsApi = globalScope.InfiniteRails.diagnostics || {};
+  diagnosticsApi.isEnabled = () => isDebugModeEnabled() && liveDiagnosticsState.enabled;
+  diagnosticsApi.setEnabled = (value, options = {}) =>
+    setLiveDiagnosticsEnabled(Boolean(value), { ...options, source: options.source ?? 'api' });
+  diagnosticsApi.toggle = (options = {}) =>
+    toggleLiveDiagnostics({ ...options, source: options.source ?? 'api' });
+  diagnosticsApi.clear = () => clearLiveDiagnosticsEntries();
+  diagnosticsApi.record = (type, message, detail, options = {}) =>
+    recordLiveDiagnostic(type, message, detail, options);
+  diagnosticsApi.getEntries = () => getLiveDiagnosticsEntriesSnapshot();
+  globalScope.InfiniteRails.diagnostics = diagnosticsApi;
 
   if (typeof globalScope.addEventListener === 'function') {
     globalScope.addEventListener(

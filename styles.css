@@ -5192,6 +5192,7 @@ body[data-crafting-drag='true'] {
 }
 
 .log-panel__developer-toggle,
+.log-panel__diagnostics-toggle,
 .log-panel__debug-toggle {
   white-space: nowrap;
 }
@@ -5254,6 +5255,172 @@ body[data-debug-mode='verbose'] .log-panel li {
 body[data-debug-mode='verbose'] .event-log__debug {
   background: rgba(9, 24, 48, 0.88);
   border-color: rgba(134, 204, 255, 0.45);
+}
+
+.live-diagnostics {
+  margin-top: 0.85rem;
+  padding: 0.75rem 0.85rem;
+  border-radius: 14px;
+  border: 1px solid rgba(134, 204, 255, 0.28);
+  background: linear-gradient(180deg, rgba(8, 18, 32, 0.95), rgba(6, 14, 26, 0.9));
+  display: grid;
+  gap: 0.7rem;
+}
+
+.live-diagnostics[hidden] {
+  display: none;
+}
+
+.live-diagnostics__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.live-diagnostics__title {
+  margin: 0;
+  font-size: 0.82rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: rgba(178, 230, 255, 0.85);
+}
+
+.live-diagnostics__empty {
+  margin: 0;
+  font-size: 0.8rem;
+  letter-spacing: 0.06em;
+  color: rgba(206, 226, 255, 0.7);
+}
+
+.live-diagnostics__entries {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.55rem;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.live-diagnostics__entries[hidden] {
+  display: none;
+}
+
+.live-diagnostics__entry {
+  border-radius: 10px;
+  padding: 0.6rem 0.75rem 0.65rem;
+  border: 1px solid rgba(134, 204, 255, 0.18);
+  background: rgba(4, 12, 24, 0.8);
+  display: grid;
+  gap: 0.45rem;
+  position: relative;
+  isolation: isolate;
+}
+
+.live-diagnostics__entry::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  border: 2px solid transparent;
+  border-left-color: var(--diagnostic-accent, rgba(134, 204, 255, 0.55));
+  opacity: 0.9;
+}
+
+.live-diagnostics__entry[data-level='warning'] {
+  --diagnostic-accent: rgba(255, 193, 94, 0.8);
+}
+
+.live-diagnostics__entry[data-level='info'] {
+  --diagnostic-accent: rgba(134, 204, 255, 0.7);
+}
+
+.live-diagnostics__entry--model,
+.live-diagnostics__entry--texture,
+.live-diagnostics__entry--ai,
+.live-diagnostics__entry--ui,
+.live-diagnostics__entry--scene,
+.live-diagnostics__entry--hotkey,
+.live-diagnostics__entry--movement {
+  --diagnostic-accent: rgba(134, 204, 255, 0.85);
+}
+
+.live-diagnostics__entry--model {
+  --diagnostic-accent: rgba(127, 191, 255, 0.85);
+}
+
+.live-diagnostics__entry--texture {
+  --diagnostic-accent: rgba(171, 149, 255, 0.85);
+}
+
+.live-diagnostics__entry--ai {
+  --diagnostic-accent: rgba(255, 158, 128, 0.85);
+}
+
+.live-diagnostics__entry--ui {
+  --diagnostic-accent: rgba(142, 255, 214, 0.85);
+}
+
+.live-diagnostics__entry--scene {
+  --diagnostic-accent: rgba(255, 204, 138, 0.85);
+}
+
+.live-diagnostics__entry--hotkey {
+  --diagnostic-accent: rgba(255, 178, 216, 0.85);
+}
+
+.live-diagnostics__entry--movement {
+  --diagnostic-accent: rgba(255, 236, 150, 0.85);
+}
+
+.live-diagnostics__meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.5rem;
+  font-size: 0.7rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgba(196, 224, 255, 0.68);
+}
+
+.live-diagnostics__badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-weight: 600;
+  color: rgba(228, 244, 255, 0.92);
+}
+
+.live-diagnostics__timestamp {
+  font-variant-numeric: tabular-nums;
+  color: rgba(180, 208, 235, 0.75);
+}
+
+.live-diagnostics__message {
+  margin: 0;
+  font-size: 0.85rem;
+  line-height: 1.45;
+  letter-spacing: 0.05em;
+  color: rgba(226, 241, 255, 0.92);
+}
+
+.live-diagnostics__detail {
+  margin: 0;
+  padding: 0.55rem 0.6rem;
+  border-radius: 8px;
+  background: rgba(6, 18, 32, 0.9);
+  border: 1px solid rgba(134, 204, 255, 0.25);
+  font-family: 'JetBrains Mono', 'Fira Code', 'SFMono-Regular', Menlo, Monaco, Consolas, monospace;
+  font-size: 0.72rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: rgba(200, 226, 255, 0.92);
+  max-height: 180px;
+  overflow: auto;
 }
 
 .footer {

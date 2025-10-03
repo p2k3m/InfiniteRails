@@ -638,6 +638,16 @@
               </button>
               <button
                 type="button"
+                class="ghost small log-panel__diagnostics-toggle"
+                id="liveDiagnosticsToggle"
+                aria-pressed="false"
+                aria-controls="liveDiagnosticsPanel"
+                data-hint="Enable debug mode to unlock live diagnostics"
+              >
+                Show Live Diagnostics
+              </button>
+              <button
+                type="button"
                 class="ghost small log-panel__debug-toggle"
                 id="debugModeToggle"
                 aria-pressed="false"
@@ -651,6 +661,21 @@
             Standard diagnostics active.
           </p>
           <ul id="eventLog"></ul>
+          <div
+            class="live-diagnostics"
+            id="liveDiagnosticsPanel"
+            role="region"
+            aria-live="polite"
+            aria-label="Live diagnostics log"
+            hidden
+          >
+            <div class="live-diagnostics__header">
+              <p class="live-diagnostics__title">Live Diagnostics</p>
+              <button type="button" class="ghost small" id="liveDiagnosticsClear">Clear</button>
+            </div>
+            <p class="live-diagnostics__empty" id="liveDiagnosticsEmpty">No diagnostics recorded.</p>
+            <ul class="live-diagnostics__entries" id="liveDiagnosticsList" role="list"></ul>
+          </div>
         </section>
       </aside>
     </main>
