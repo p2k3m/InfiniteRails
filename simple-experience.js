@@ -1387,6 +1387,44 @@
     return hash || 1;
   }
 
+  function createHeightmapMatrix(size, fill = 0) {
+    const dimension = Math.max(0, Math.floor(size));
+    return Array.from({ length: dimension }, () => Array(dimension).fill(fill));
+  }
+
+  function cloneHeightmapMatrix(matrix) {
+    if (!Array.isArray(matrix)) {
+      return [];
+    }
+    return matrix.map((row) => (Array.isArray(row) ? row.slice() : []));
+  }
+
+  function validateHeightmapMatrix(matrix, expectedSize) {
+    if (!Array.isArray(matrix)) {
+      return { valid: false, reason: 'not-array' };
+    }
+    const size = Math.max(0, Math.floor(expectedSize));
+    if (matrix.length !== size) {
+      return { valid: false, reason: 'row-count-mismatch', received: matrix.length, expected: size };
+    }
+    for (let x = 0; x < matrix.length; x += 1) {
+      const row = matrix[x];
+      if (!Array.isArray(row)) {
+        return { valid: false, reason: 'row-not-array', index: x };
+      }
+      if (row.length !== size) {
+        return { valid: false, reason: 'column-count-mismatch', index: x, received: row.length, expected: size };
+      }
+      for (let z = 0; z < row.length; z += 1) {
+        const value = row[z];
+        if (!Number.isFinite(value)) {
+          return { valid: false, reason: 'non-finite', index: x, column: z };
+        }
+      }
+    }
+    return { valid: true, matrix };
+  }
+
   function createShuffledIndexOrder(length, seedSource) {
     const count = Math.max(0, Math.floor(length));
     const order = Array.from({ length: count }, (_, index) => index);
@@ -2078,6 +2116,12 @@
       this.eventsBound = false;
       this.onCanvasPointerLock = this.handleCanvasPointerLockRequest.bind(this);
       this.setupGuideUi();
+      this.pendingHeightmapStream = null;
+      this.heightmapStreamState = 'idle';
+      this.heightmapStreamFailureCount = 0;
+      this.heightmapStreamLastError = null;
+      this.seededHeightmapCache = new Map();
+      this.lastTerrainBuildSummary = null;
     }
 
     emitGameEvent(type, detail = {}) {
@@ -8581,60 +8625,140 @@
       };
     }
 
-    buildTerrain() {
+    ensureWorldRootGroups() {
       const THREE = this.THREE;
-      this.clearChests();
-      this.columns.clear();
-      this.heightMap = Array.from({ length: WORLD_SIZE }, () => Array(WORLD_SIZE).fill(0));
-      this.initialHeightMap = Array.from({ length: WORLD_SIZE }, () => Array(WORLD_SIZE).fill(0));
-      const existingChunks = Array.from(this.terrainGroup.children);
-      existingChunks.forEach((child) => {
-        this.terrainGroup.remove(child);
-        disposeObject3D(child);
-      });
-      this.terrainChunkGroups = [];
-      this.terrainChunkMap.clear();
-      this.dirtyTerrainChunks.clear();
-      if (!this.navigationMeshes) {
-        this.navigationMeshes = new Map();
-      } else {
-        this.navigationMeshes.clear();
+      if (!THREE || typeof THREE.Group !== 'function') {
+        return;
       }
-      if (!this.dirtyNavigationChunks) {
-        this.dirtyNavigationChunks = new Set();
-      } else {
-        this.dirtyNavigationChunks.clear();
+      if (!(this.worldRoot instanceof THREE.Group)) {
+        this.worldRoot = new THREE.Group();
+        this.worldRoot.name = 'WorldRoot';
+        if (this.scene && typeof this.scene.add === 'function') {
+          try {
+            this.scene.add(this.worldRoot);
+          } catch (error) {
+            console.warn('Failed to attach regenerated world root to the scene.', error);
+          }
+        }
       }
-      this.navigationMeshGeneration += 1;
-      const meshInitTimestamp = Date.now();
-      if (!this.navigationMeshSummary) {
-        this.navigationMeshSummary = {
-          chunkCount: 0,
-          walkableCells: 0,
-          reason: 'pending',
-          updatedAt: meshInitTimestamp,
-        };
-      } else {
-        this.navigationMeshSummary.chunkCount = 0;
-        this.navigationMeshSummary.walkableCells = 0;
-        this.navigationMeshSummary.reason = 'pending';
-        this.navigationMeshSummary.updatedAt = meshInitTimestamp;
+      if (!(this.terrainGroup instanceof THREE.Group)) {
+        this.terrainGroup = new THREE.Group();
+        this.terrainGroup.name = 'TerrainGroup';
       }
-      this.lastCullingCameraValid = false;
-      const half = WORLD_SIZE / 2;
+      if (
+        this.worldRoot &&
+        typeof this.worldRoot.add === 'function' &&
+        this.terrainGroup &&
+        this.terrainGroup.parent !== this.worldRoot
+      ) {
+        try {
+          this.worldRoot.add(this.terrainGroup);
+        } catch (error) {
+          console.warn('Failed to attach regenerated terrain group to the world root.', error);
+        }
+      }
+      if (!(this.columns instanceof Map)) {
+        this.columns = new Map();
+      }
+      if (!Array.isArray(this.terrainChunkGroups)) {
+        this.terrainChunkGroups = [];
+      }
+      if (!(this.terrainChunkMap instanceof Map)) {
+        this.terrainChunkMap = new Map();
+      }
+      if (!(this.dirtyTerrainChunks instanceof Set)) {
+        this.dirtyTerrainChunks = new Set();
+      }
+    }
+
+    registerStreamedHeightmap(payload) {
+      if (!payload) {
+        return false;
+      }
+      this.pendingHeightmapStream = payload;
+      return true;
+    }
+
+    consumeStreamedHeightmapPayload(expectedDimensionKey) {
+      const payload = this.pendingHeightmapStream;
+      if (!payload) {
+        return null;
+      }
+      this.pendingHeightmapStream = null;
+      let matrix = null;
+      if (Array.isArray(payload)) {
+        matrix = payload;
+      } else if (Array.isArray(payload?.matrix)) {
+        matrix = payload.matrix;
+      } else if (Array.isArray(payload?.tiles)) {
+        matrix = payload.tiles;
+      } else if (Array.isArray(payload?.heightmap)) {
+        matrix = payload.heightmap;
+      }
+      const dimensionKeyRaw =
+        typeof payload?.dimension === 'string' && payload.dimension.trim().length
+          ? payload.dimension.trim()
+          : typeof payload?.id === 'string' && payload.id.trim().length
+            ? payload.id.trim()
+            : typeof payload?.key === 'string' && payload.key.trim().length
+              ? payload.key.trim()
+              : null;
+      const dimensionKey = dimensionKeyRaw || expectedDimensionKey || null;
+      if (!matrix) {
+        return { matrix: null, dimensionKey, reason: 'stream-empty' };
+      }
+      return { matrix, dimensionKey, reason: null };
+    }
+
+    applyHeightmapBudget(matrix, options) {
+      const minColumnHeight = Math.max(1, Math.floor(options.minColumnHeight ?? MIN_COLUMN_HEIGHT));
+      const maxColumnHeight = Math.max(minColumnHeight, Math.floor(options.maxColumnHeight ?? MAX_COLUMN_HEIGHT));
+      const voxelBudget = Math.max(0, Math.floor(options.voxelBudget ?? DEFAULT_TERRAIN_VOXEL_CAP));
       const totalColumns = WORLD_SIZE * WORLD_SIZE;
-      const minColumnHeight = Math.max(1, Math.floor(this.minColumnHeight ?? MIN_COLUMN_HEIGHT));
-      const maxColumnHeight = Math.max(minColumnHeight, Math.floor(this.maxColumnHeight ?? MAX_COLUMN_HEIGHT));
-      const targetBudget = Number.isFinite(this.maxTerrainVoxels)
-        ? Math.max(0, Math.floor(this.maxTerrainVoxels))
-        : DEFAULT_TERRAIN_VOXEL_CAP;
-      const maxTerrainCap = Math.min(MAX_TERRAIN_VOXELS, DEFAULT_TERRAIN_VOXEL_CAP);
-      const safeBudget = Math.max(totalColumns * minColumnHeight, Math.min(targetBudget, maxTerrainCap));
-      const voxelBudget = Math.min(maxTerrainCap, safeBudget);
-      let remainingVoxels = voxelBudget;
+      const result = createHeightmapMatrix(WORLD_SIZE, minColumnHeight);
+      let remainingVoxels = Math.max(voxelBudget, totalColumns * minColumnHeight);
       let cappedColumns = 0;
       let voxelCount = 0;
-      const profile = this.dimensionTerrainProfile || DEFAULT_TERRAIN_PROFILE;
+      for (let gx = 0; gx < WORLD_SIZE; gx += 1) {
+        for (let gz = 0; gz < WORLD_SIZE; gz += 1) {
+          const columnIndex = gx * WORLD_SIZE + gz;
+          const rawValue = matrix?.[gx]?.[gz];
+          const desiredHeightRaw = Number.isFinite(rawValue) ? rawValue : minColumnHeight;
+          const desiredHeight = Math.max(
+            minColumnHeight,
+            Math.min(maxColumnHeight, Math.round(desiredHeightRaw)),
+          );
+          const columnsRemaining = totalColumns - columnIndex - 1;
+          const reservedForRemaining = Math.max(0, columnsRemaining * minColumnHeight);
+          const budgetForColumn = Math.max(minColumnHeight, remainingVoxels - reservedForRemaining);
+          let columnHeight = Math.min(desiredHeight, maxColumnHeight, budgetForColumn, remainingVoxels);
+          if (columnHeight < minColumnHeight) {
+            columnHeight = Math.min(minColumnHeight, remainingVoxels);
+          }
+          if (columnHeight < desiredHeight) {
+            cappedColumns += 1;
+          }
+          remainingVoxels = Math.max(0, remainingVoxels - columnHeight);
+          result[gx][gz] = columnHeight;
+          voxelCount += columnHeight;
+        }
+      }
+      return {
+        matrix: result,
+        meta: {
+          voxelCount,
+          cappedColumns,
+          remainingVoxels,
+        },
+      };
+    }
+
+    generateProceduralHeightmap(options) {
+      const profile = options?.profile || DEFAULT_TERRAIN_PROFILE;
+      const minColumnHeight = Math.max(1, Math.floor(options?.minColumnHeight ?? MIN_COLUMN_HEIGHT));
+      const maxColumnHeight = Math.max(minColumnHeight, Math.floor(options?.maxColumnHeight ?? MAX_COLUMN_HEIGHT));
+      const voxelBudget = Math.max(0, Math.floor(options?.voxelBudget ?? DEFAULT_TERRAIN_VOXEL_CAP));
+      const dimensionIndex = Number.isFinite(options?.dimensionIndex) ? options.dimensionIndex : 0;
       const baseHeight = Number.isFinite(profile?.baseHeight)
         ? profile.baseHeight
         : DEFAULT_TERRAIN_PROFILE.baseHeight;
@@ -8690,15 +8814,20 @@
       const seedMultiplier = Number.isFinite(profile?.seedMultiplier)
         ? profile.seedMultiplier
         : DEFAULT_TERRAIN_PROFILE.seedMultiplier;
-      const dimensionSeedBase = (this.currentDimensionIndex + 1) * seedMultiplier;
+      const dimensionSeedBase = (dimensionIndex + 1) * seedMultiplier;
       const seedOffsetX = dimensionSeedBase * 0.137;
       const seedOffsetZ = dimensionSeedBase * 0.173;
+      const half = WORLD_SIZE / 2;
+      const matrix = createHeightmapMatrix(WORLD_SIZE, minColumnHeight);
+      const totalColumns = WORLD_SIZE * WORLD_SIZE;
+      let remainingVoxels = Math.max(voxelBudget, totalColumns * minColumnHeight);
+      let cappedColumns = 0;
+      let voxelCount = 0;
       for (let gx = 0; gx < WORLD_SIZE; gx += 1) {
         for (let gz = 0; gz < WORLD_SIZE; gz += 1) {
           const offsetX = gx - half;
           const offsetZ = gz - half;
-          const worldX = offsetX * BLOCK_SIZE;
-          const worldZ = offsetZ * BLOCK_SIZE;
+          const columnIndex = gx * WORLD_SIZE + gz;
           const distance = Math.hypot(offsetX, offsetZ);
           const falloffBase = Math.max(0, 1 - distance / (WORLD_SIZE * falloffRadius));
           const falloff = Math.pow(falloffBase, falloffExponent);
@@ -8725,11 +8854,7 @@
             const ridgeValue = Math.abs(ridgeNoise - 0.5) * 2 * ridgeAmplitude;
             heightSample += ridgeValue;
           }
-          const columnIndex = gx * WORLD_SIZE + gz;
-          const desiredHeight = Math.max(
-            minColumnHeight,
-            Math.round(heightSample),
-          );
+          const desiredHeight = Math.max(minColumnHeight, Math.round(heightSample));
           const cappedHeight = Math.min(desiredHeight, maxColumnHeight);
           const columnsRemaining = totalColumns - columnIndex - 1;
           const reservedForRemaining = Math.max(0, columnsRemaining * minColumnHeight);
@@ -8742,10 +8867,188 @@
             cappedColumns += 1;
           }
           remainingVoxels = Math.max(0, remainingVoxels - columnHeight);
+          matrix[gx][gz] = columnHeight;
+          voxelCount += columnHeight;
+        }
+      }
+      return {
+        matrix,
+        meta: {
+          voxelCount,
+          cappedColumns,
+          remainingVoxels,
+        },
+      };
+    }
+
+    resolveHeightmapMatrix(options) {
+      const {
+        dimensionKey,
+        profile,
+        minColumnHeight,
+        maxColumnHeight,
+        voxelBudget,
+      } = options;
+      const streamCandidate = this.consumeStreamedHeightmapPayload(dimensionKey);
+      let fallbackReason = null;
+      let fallbackFromStream = false;
+      if (streamCandidate?.reason) {
+        fallbackReason = streamCandidate.reason;
+        fallbackFromStream = true;
+      }
+      if (streamCandidate?.matrix) {
+        const validation = validateHeightmapMatrix(streamCandidate.matrix, WORLD_SIZE);
+        if (validation.valid) {
+          const applied = this.applyHeightmapBudget(validation.matrix, {
+            minColumnHeight,
+            maxColumnHeight,
+            voxelBudget,
+          });
+          this.heightmapStreamState = 'streamed';
+          this.heightmapStreamLastError = null;
+          return {
+            matrix: applied.matrix,
+            meta: applied.meta,
+            source: 'streamed',
+            fallbackReason: null,
+            fallbackFromStream: false,
+          };
+        }
+        fallbackReason = validation.reason ?? 'invalid-stream-heightmap';
+        fallbackFromStream = true;
+      }
+      const cacheKey =
+        typeof dimensionKey === 'string' && dimensionKey.trim().length
+          ? dimensionKey.trim()
+          : 'default';
+      let cachedMatrix = null;
+      if (this.seededHeightmapCache instanceof Map && this.seededHeightmapCache.has(cacheKey)) {
+        cachedMatrix = cloneHeightmapMatrix(this.seededHeightmapCache.get(cacheKey));
+      }
+      if (fallbackFromStream) {
+        this.heightmapStreamFailureCount = (this.heightmapStreamFailureCount || 0) + 1;
+        this.heightmapStreamLastError = fallbackReason;
+      }
+      if (cachedMatrix) {
+        const applied = this.applyHeightmapBudget(cachedMatrix, {
+          minColumnHeight,
+          maxColumnHeight,
+          voxelBudget,
+        });
+        this.heightmapStreamState = fallbackFromStream ? 'fallback-cache' : 'seeded-cache';
+        return {
+          matrix: applied.matrix,
+          meta: applied.meta,
+          source: fallbackFromStream ? 'fallback-cache' : 'seeded-cache',
+          fallbackReason,
+          fallbackFromStream,
+        };
+      }
+      const generated = this.generateProceduralHeightmap({
+        profile,
+        minColumnHeight,
+        maxColumnHeight,
+        voxelBudget,
+        dimensionIndex: this.currentDimensionIndex ?? 0,
+      });
+      if (this.seededHeightmapCache instanceof Map) {
+        this.seededHeightmapCache.set(cacheKey, cloneHeightmapMatrix(generated.matrix));
+      }
+      this.heightmapStreamState = fallbackFromStream ? 'fallback-generated' : 'seeded-generated';
+      return {
+        matrix: cloneHeightmapMatrix(generated.matrix),
+        meta: generated.meta,
+        source: fallbackFromStream ? 'fallback-generated' : 'seeded-generated',
+        fallbackReason,
+        fallbackFromStream,
+      };
+    }
+
+    buildTerrain() {
+      const THREE = this.THREE;
+      this.ensureWorldRootGroups();
+      this.clearChests();
+      this.columns.clear();
+      this.heightMap = createHeightmapMatrix(WORLD_SIZE, 0);
+      this.initialHeightMap = createHeightmapMatrix(WORLD_SIZE, 0);
+      const existingChunks = Array.from(this.terrainGroup.children);
+      existingChunks.forEach((child) => {
+        this.terrainGroup.remove(child);
+        disposeObject3D(child);
+      });
+      this.terrainChunkGroups = [];
+      this.terrainChunkMap.clear();
+      this.dirtyTerrainChunks.clear();
+      if (!this.navigationMeshes) {
+        this.navigationMeshes = new Map();
+      } else {
+        this.navigationMeshes.clear();
+      }
+      if (!this.dirtyNavigationChunks) {
+        this.dirtyNavigationChunks = new Set();
+      } else {
+        this.dirtyNavigationChunks.clear();
+      }
+      this.navigationMeshGeneration += 1;
+      const meshInitTimestamp = Date.now();
+      if (!this.navigationMeshSummary) {
+        this.navigationMeshSummary = {
+          chunkCount: 0,
+          walkableCells: 0,
+          reason: 'pending',
+          updatedAt: meshInitTimestamp,
+        };
+      } else {
+        this.navigationMeshSummary.chunkCount = 0;
+        this.navigationMeshSummary.walkableCells = 0;
+        this.navigationMeshSummary.reason = 'pending';
+        this.navigationMeshSummary.updatedAt = meshInitTimestamp;
+      }
+      this.lastCullingCameraValid = false;
+      const half = WORLD_SIZE / 2;
+      const totalColumns = WORLD_SIZE * WORLD_SIZE;
+      const minColumnHeight = Math.max(1, Math.floor(this.minColumnHeight ?? MIN_COLUMN_HEIGHT));
+      const maxColumnHeight = Math.max(minColumnHeight, Math.floor(this.maxColumnHeight ?? MAX_COLUMN_HEIGHT));
+      const targetBudget = Number.isFinite(this.maxTerrainVoxels)
+        ? Math.max(0, Math.floor(this.maxTerrainVoxels))
+        : DEFAULT_TERRAIN_VOXEL_CAP;
+      const maxTerrainCap = Math.min(MAX_TERRAIN_VOXELS, DEFAULT_TERRAIN_VOXEL_CAP);
+      const safeBudget = Math.max(totalColumns * minColumnHeight, Math.min(targetBudget, maxTerrainCap));
+      const voxelBudget = Math.min(maxTerrainCap, safeBudget);
+      const profile = this.dimensionTerrainProfile || DEFAULT_TERRAIN_PROFILE;
+      const dimensionKey =
+        typeof this.dimensionSettings?.id === 'string' && this.dimensionSettings.id.trim().length
+          ? this.dimensionSettings.id.trim()
+          : `dimension-${this.currentDimensionIndex ?? 0}`;
+      const heightmapResult = this.resolveHeightmapMatrix({
+        dimensionKey,
+        profile,
+        minColumnHeight,
+        maxColumnHeight,
+        voxelBudget,
+      });
+      const heightMatrix = Array.isArray(heightmapResult?.matrix)
+        ? heightmapResult.matrix
+        : createHeightmapMatrix(WORLD_SIZE, minColumnHeight);
+      const heightMeta = heightmapResult?.meta || {};
+      let voxelCount = 0;
+      for (let gx = 0; gx < WORLD_SIZE; gx += 1) {
+        for (let gz = 0; gz < WORLD_SIZE; gz += 1) {
+          const offsetX = gx - half;
+          const offsetZ = gz - half;
+          const worldX = offsetX * BLOCK_SIZE;
+          const worldZ = offsetZ * BLOCK_SIZE;
+          const rawHeight = heightMatrix?.[gx]?.[gz];
+          const columnHeight = Math.max(
+            minColumnHeight,
+            Math.min(maxColumnHeight, Math.round(Number.isFinite(rawHeight) ? rawHeight : minColumnHeight)),
+          );
           this.heightMap[gx][gz] = columnHeight;
           this.initialHeightMap[gx][gz] = columnHeight;
           const columnKey = `${gx}|${gz}`;
           const column = [];
+          const chunkKey = this.getTerrainChunkKey(gx, gz);
+          const chunk = this.ensureTerrainChunk(chunkKey);
           for (let level = 0; level < columnHeight; level += 1) {
             const isSurface = level === columnHeight - 1;
             const blockType = isSurface
@@ -8759,22 +9062,21 @@
                 : blockType === 'dirt'
                   ? this.materials.dirt
                   : this.materials.stone;
-          const mesh = new THREE.Mesh(this.blockGeometry, material);
-          mesh.castShadow = isSurface;
-          mesh.receiveShadow = true;
-          mesh.position.set(worldX, level * BLOCK_SIZE + BLOCK_SIZE / 2, worldZ);
-          mesh.visible = true;
-          mesh.userData = {
-            columnKey,
-            level,
-            gx,
-            gz,
+            const mesh = new THREE.Mesh(this.blockGeometry, material);
+            mesh.castShadow = isSurface;
+            mesh.receiveShadow = true;
+            mesh.position.set(worldX, level * BLOCK_SIZE + BLOCK_SIZE / 2, worldZ);
+            mesh.visible = true;
+            mesh.userData = {
+              columnKey,
+              level,
+              gx,
+              gz,
               blockType,
-              chunkKey: this.getTerrainChunkKey(gx, gz),
+              chunkKey,
             };
             mesh.matrixAutoUpdate = false;
             mesh.updateMatrix();
-            const chunk = this.ensureTerrainChunk(mesh.userData.chunkKey);
             chunk.add(mesh);
             column.push(mesh);
             voxelCount += 1;
@@ -8782,9 +9084,41 @@
           this.columns.set(columnKey, column);
         }
       }
+      const cappedColumns = Math.max(0, Math.floor(heightMeta.cappedColumns ?? 0));
+      const chunkGridSize = Math.max(1, Math.ceil(WORLD_SIZE / Math.max(1, this.terrainChunkSize)));
+      const expectedChunkCount = chunkGridSize * chunkGridSize;
+      const existingChunkKeys = new Set(
+        Array.isArray(this.terrainChunkGroups)
+          ? this.terrainChunkGroups.map((chunk) => chunk?.userData?.chunkKey).filter(Boolean)
+          : [],
+      );
+      const missingChunkKeys = [];
+      for (let cx = 0; cx < chunkGridSize; cx += 1) {
+        for (let cz = 0; cz < chunkGridSize; cz += 1) {
+          const key = `${cx}|${cz}`;
+          if (!existingChunkKeys.has(key)) {
+            missingChunkKeys.push(key);
+            const chunk = this.ensureTerrainChunk(key);
+            existingChunkKeys.add(key);
+            if (typeof console !== 'undefined') {
+              console.warn('Restoring missing terrain chunk group.', { chunkKey: key });
+            }
+          }
+        }
+      }
       this.terrainChunkGroups.forEach((chunk) => {
         this.recalculateTerrainChunkBounds(chunk);
       });
+      const emptyChunkKeys = [];
+      const terrainMeshCount = this.terrainChunkGroups.reduce((sum, chunk) => {
+        if (!chunk) {
+          return sum;
+        }
+        if (!chunk.children.length) {
+          emptyChunkKeys.push(chunk?.userData?.chunkKey ?? null);
+        }
+        return sum + chunk.children.length;
+      }, 0);
       const navigationSummary = this.refreshNavigationMeshes({ reason: 'world-load' });
       const navSummaryTimestamp = Date.now();
       if (!this.navigationMeshSummary) {
@@ -8806,19 +9140,21 @@
         );
       }
       this.terrainCullingAccumulator = this.terrainCullingInterval;
-      const voxelsUsed = voxelBudget - remainingVoxels;
+      const voxelsUsed = voxelCount;
+      const budgetRemaining = Math.max(0, voxelBudget - voxelsUsed);
       this.terrainVoxelBudget = voxelBudget;
       this.terrainVoxelUsage = voxelsUsed;
       if (typeof console !== 'undefined') {
         const columnCount = WORLD_SIZE * WORLD_SIZE;
-        const chunkCount = Array.isArray(this.terrainChunkGroups)
-          ? this.terrainChunkGroups.length
-          : 0;
+        const chunkCount = Array.isArray(this.terrainChunkGroups) ? this.terrainChunkGroups.length : 0;
+        console.info(
+          `Terrain heightmap source — ${heightmapResult?.source ?? 'unknown'}. Stream fallback count: ${this.heightmapStreamFailureCount}.`,
+        );
         console.info(
           `World generation summary — ${columnCount} columns created. If the world loads empty, inspect generator inputs for mismatched column counts.`,
         );
         console.info(
-          `Terrain block placement summary — ${voxelCount} blocks placed. For missing terrain, review the heightmap generator and chunk hydration routines.`,
+          `Terrain block placement summary — ${voxelCount} blocks placed across ${terrainMeshCount} meshes. For missing terrain, review the heightmap generator and chunk hydration routines.`,
         );
         console.info(
           `Terrain chunk population summary — ${chunkCount} chunks loaded. Investigate the streaming manager if this number stalls unexpectedly.`,
@@ -8835,10 +9171,43 @@
             `Terrain voxel budget applied: ${cappedColumns} columns trimmed to stay under ${voxelBudget} voxels`,
           );
         }
-        if (voxelBudget < MAX_TERRAIN_VOXELS || remainingVoxels === 0) {
+        if (terrainMeshCount !== voxelCount) {
+          console.warn('Terrain mesh count mismatch detected.', {
+            terrainMeshCount,
+            voxelCount,
+          });
+        }
+        const filteredEmptyChunks = emptyChunkKeys.filter(Boolean);
+        if (filteredEmptyChunks.length) {
+          console.warn('Empty terrain chunks detected after generation.', { emptyChunks: filteredEmptyChunks });
+        }
+        if (voxelBudget < MAX_TERRAIN_VOXELS || budgetRemaining === 0) {
           console.info(`Terrain voxel cap enforced at ${voxelsUsed}/${voxelBudget} blocks.`);
         }
       }
+      this.lastTerrainBuildSummary = {
+        heightmapSource: heightmapResult?.source ?? 'unknown',
+        fallbackReason: heightmapResult?.fallbackReason ?? null,
+        fallbackFromStream: Boolean(heightmapResult?.fallbackFromStream),
+        voxelBudget,
+        voxelsUsed,
+        budgetRemaining,
+        cappedColumns,
+        voxelCount,
+        terrainMeshCount,
+        chunkCount: Array.isArray(this.terrainChunkGroups) ? this.terrainChunkGroups.length : 0,
+        expectedChunkCount,
+        missingChunkKeys,
+        emptyChunkKeys: emptyChunkKeys.filter(Boolean),
+        streamState: this.heightmapStreamState,
+        streamFailureCount: this.heightmapStreamFailureCount,
+        heightmapReportedVoxels: Number.isFinite(heightMeta.voxelCount)
+          ? Math.floor(heightMeta.voxelCount)
+          : null,
+        heightmapReportedRemaining: Number.isFinite(heightMeta.remainingVoxels)
+          ? Math.max(0, Math.floor(heightMeta.remainingVoxels))
+          : null,
+      };
       this.portalAnchorGrid = this.computePortalAnchorGrid();
       const anchorWorldX = (this.portalAnchorGrid.x - WORLD_SIZE / 2) * BLOCK_SIZE;
       const anchorWorldZ = (this.portalAnchorGrid.z - WORLD_SIZE / 2) * BLOCK_SIZE;
