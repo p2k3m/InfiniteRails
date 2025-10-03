@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -110,6 +110,9 @@ describe('renderer mode selection', () => {
     const canvasStub = {
       getContext: () => null,
     };
+    const showError = vi.fn();
+    const setDiagnostic = vi.fn();
+    const setRecoveryAction = vi.fn();
     global.document = {
       createElement: (tagName) => {
         if (tagName !== 'canvas') {
@@ -122,13 +125,22 @@ describe('renderer mode selection', () => {
       location: { search: '' },
       APP_CONFIG: {
         enableAdvancedExperience: true,
+        preferAdvanced: true,
       },
       SimpleExperience: { create: () => ({}) },
-      console: { warn: () => {} },
+      bootstrapOverlay: {
+        showError,
+        setDiagnostic,
+        setRecoveryAction,
+      },
+      console: { warn: () => {}, error: () => {} },
     };
     const shouldStartSimpleMode = instantiateShouldStartSimpleMode(windowStub);
     expect(shouldStartSimpleMode()).toBe(true);
     expect(windowStub.APP_CONFIG.preferAdvanced).toBe(false);
+    expect(windowStub.APP_CONFIG.enableAdvancedExperience).toBe(false);
+    expect(windowStub.APP_CONFIG.forceAdvanced).toBe(false);
+    expect(windowStub.APP_CONFIG.defaultMode).toBe('simple');
     expect(windowStub.APP_CONFIG.webglSupport).toBe(false);
     expect(windowStub.__bootstrapNotices).toEqual([
       {
@@ -137,6 +149,23 @@ describe('renderer mode selection', () => {
           'WebGL is unavailable on this device, so the mission briefing view is shown instead of the full 3D renderer.',
       },
     ]);
+    expect(showError).toHaveBeenCalledTimes(1);
+    expect(showError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: 'WebGL output blocked',
+        message: expect.stringContaining('Enable hardware acceleration in your browser settings.'),
+      }),
+    );
+    expect(setDiagnostic).toHaveBeenCalledWith('renderer', {
+      status: 'warning',
+      message: 'WebGL blocked — launching simplified renderer.',
+    });
+    expect(setRecoveryAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        label: 'Retry WebGL Renderer',
+        action: 'retry-webgl',
+      }),
+    );
   });
 
   it('falls back to the simple renderer on mobile when advanced mobile support is disabled', () => {

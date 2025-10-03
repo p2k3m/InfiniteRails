@@ -5211,6 +5211,88 @@
     };
   }
 
+  let webglSupportOverlayPresented = false;
+
+  function presentWebglBlockedOverlay({ detail = null } = {}) {
+    if (webglSupportOverlayPresented) {
+      return;
+    }
+    webglSupportOverlayPresented = true;
+    const overlayController =
+      typeof bootstrapOverlay !== 'undefined'
+        ? bootstrapOverlay
+        : globalScope && typeof globalScope.bootstrapOverlay === 'object'
+          ? globalScope.bootstrapOverlay
+          : null;
+    const troubleshootingSteps = [
+      'Enable hardware acceleration in your browser settings.',
+      'Disable extensions that block WebGL or force software rendering.',
+      'Update your graphics drivers, then restart your browser.',
+    ];
+    const overlayMessage = [
+      'WebGL output is blocked, so Infinite Rails is launching the simplified renderer.',
+      'To restore the full 3D experience, try:',
+      ...troubleshootingSteps.map((step) => `• ${step}`),
+    ].join('\n');
+    if (overlayController && typeof overlayController.showError === 'function') {
+      try {
+        overlayController.showError({
+          title: 'WebGL output blocked',
+          message: overlayMessage,
+        });
+      } catch (overlayError) {
+        globalScope?.console?.debug?.('Unable to display WebGL blocked overlay.', overlayError);
+      }
+    }
+    if (overlayController && typeof overlayController.setDiagnostic === 'function') {
+      overlayController.setDiagnostic('renderer', {
+        status: 'warning',
+        message: 'WebGL blocked — launching simplified renderer.',
+      });
+    }
+    if (overlayController && typeof overlayController.setRecoveryAction === 'function') {
+      overlayController.setRecoveryAction({
+        label: 'Retry WebGL Renderer',
+        description: 'Reloads the page and attempts to start the advanced renderer again.',
+        action: 'retry-webgl',
+        onSelect: () => {
+          if (typeof logDiagnosticsEvent === 'function') {
+            logDiagnosticsEvent('renderer', 'Player requested WebGL retry from diagnostics overlay.', {
+              level: 'warning',
+              detail: { source: 'global-overlay', reason: 'webgl-retry' },
+            });
+          }
+          const locationRef = globalScope?.location ?? null;
+          if (locationRef && typeof locationRef.reload === 'function') {
+            try {
+              locationRef.reload();
+            } catch (reloadError) {
+              globalScope?.console?.error?.('Failed to reload the page when retrying WebGL.', reloadError);
+            }
+          }
+        },
+      });
+    }
+    const diagnosticDetail = { reason: 'webgl-unavailable', fallbackMode: 'simple' };
+    if (detail && typeof detail === 'object') {
+      Object.keys(detail).forEach((key) => {
+        const value = detail[key];
+        if (typeof value === 'undefined') {
+          return;
+        }
+        diagnosticDetail[key] = value;
+      });
+    }
+    if (typeof logDiagnosticsEvent === 'function') {
+      logDiagnosticsEvent('renderer', 'WebGL unavailable at bootstrap. Falling back to simplified renderer.', {
+        level: 'error',
+        detail: diagnosticDetail,
+      });
+    } else if (globalScope?.console?.warn) {
+      globalScope.console.warn('WebGL unavailable at bootstrap. Falling back to simplified renderer.', diagnosticDetail);
+    }
+  }
+
   function shouldStartSimpleMode() {
     const scope =
       typeof globalScope !== 'undefined'
@@ -5256,6 +5338,7 @@
     }
     const doc = typeof document !== 'undefined' ? document : documentRef;
     let webglSupported = false;
+    let webglProbeError = null;
     if (doc && typeof doc.createElement === 'function') {
       try {
         const canvas = doc.createElement('canvas');
@@ -5264,14 +5347,35 @@
           const gl =
             getContext('webgl2') || getContext('webgl') || getContext('experimental-webgl') || null;
           webglSupported = Boolean(gl);
+          if (!webglSupported) {
+            webglProbeError = new Error('WebGL context request returned null.');
+            webglProbeError.name = 'WebGLUnavailableError';
+          }
+        } else {
+          webglProbeError = new Error('Canvas does not provide a WebGL-capable context.');
+          webglProbeError.name = 'WebGLContextUnavailable';
         }
       } catch (error) {
         webglSupported = false;
+        webglProbeError = error instanceof Error ? error : new Error('WebGL probe failed.');
       }
     }
     config.webglSupport = webglSupported;
     if (!webglSupported) {
+      const failureDetail = {};
+      if (webglProbeError) {
+        if (typeof webglProbeError.name === 'string' && webglProbeError.name.trim().length) {
+          failureDetail.errorName = webglProbeError.name.trim();
+        }
+        if (typeof webglProbeError.message === 'string' && webglProbeError.message.trim().length) {
+          failureDetail.errorMessage = webglProbeError.message.trim();
+        }
+      }
+      presentWebglBlockedOverlay({ detail: failureDetail });
       config.preferAdvanced = false;
+      config.enableAdvancedExperience = false;
+      config.forceAdvanced = false;
+      config.defaultMode = 'simple';
       queueBootstrapFallbackNotice(
         'webgl-unavailable-simple-mode',
         'WebGL is unavailable on this device, so the mission briefing view is shown instead of the full 3D renderer.',
