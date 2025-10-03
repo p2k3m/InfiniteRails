@@ -1787,6 +1787,8 @@
       this.onFirstRunTutorialKeyDown = this.handleFirstRunTutorialKeyDown.bind(this);
       this.assetFailureNotices = new Set();
       this.eventFailureNotices = new Set();
+      this.eventBindingFailureNotices = new Set();
+      this.eventBindingFailures = [];
       this.aiAttachmentFailureAnnounced = false;
       this.boundEventDisposers = [];
       this.boundEventRecords = [];
@@ -2630,6 +2632,7 @@
         mobileControlsActive: Boolean(this.mobileControlsActive),
         touchPreferred: Boolean(this.isTouchPreferred),
         boundEvents: Array.isArray(this.boundEventRecords) ? this.boundEventRecords.length : 0,
+        bindingFailures: Array.isArray(this.eventBindingFailures) ? this.eventBindingFailures.length : 0,
         cameraPerspective: this.cameraPerspective ?? null,
       };
 
@@ -12265,6 +12268,12 @@
       }
       this.boundEventDisposers = [];
       this.boundEventRecords = [];
+      if (this.eventBindingFailureNotices instanceof Set) {
+        this.eventBindingFailureNotices.clear();
+      } else {
+        this.eventBindingFailureNotices = new Set();
+      }
+      this.eventBindingFailures = [];
       const add = (target, eventName, handler, context, eventOptions) => {
         this.addSafeEventListener(target, eventName, handler, { context, eventOptions });
       };
@@ -15636,42 +15645,173 @@
       );
     }
 
-    addSafeEventListener(target, eventName, handler, options = {}) {
-      if (!target || typeof target.addEventListener !== 'function' || typeof handler !== 'function') {
+    noteEventBindingFailure(details = {}) {
+      const {
+        targetLabel = 'unknown',
+        eventName = 'unknown',
+        contextLabel = null,
+        reason = 'unknown',
+        handlerLabel = null,
+        error = null,
+        meta = null,
+      } = details;
+      const timestamp = Date.now();
+      const failureRecord = {
+        targetLabel,
+        eventName,
+        contextLabel,
+        reason,
+        handler: handlerLabel,
+        errorMessage: error?.message ?? null,
+        errorStack: typeof error?.stack === 'string' ? error.stack : null,
+        meta: meta || null,
+        timestamp,
+      };
+      if (!Array.isArray(this.eventBindingFailures)) {
+        this.eventBindingFailures = [];
+      }
+      this.eventBindingFailures.push(failureRecord);
+      if (!(this.eventBindingFailureNotices instanceof Set)) {
+        this.eventBindingFailureNotices = new Set();
+      }
+      const dedupeKey = `${targetLabel}|${eventName}|${contextLabel || ''}|${reason}`;
+      if (this.eventBindingFailureNotices.has(dedupeKey)) {
         return;
       }
+      this.eventBindingFailureNotices.add(dedupeKey);
+      if (typeof console !== 'undefined' && typeof console.error === 'function') {
+        const summaryParts = [`Failed to bind ${eventName}`];
+        if (targetLabel && targetLabel !== 'unknown') {
+          summaryParts.push(`listener to ${targetLabel}`);
+        } else {
+          summaryParts.push('listener');
+        }
+        if (contextLabel) {
+          summaryParts.push(`while ${contextLabel}`);
+        }
+        const message = `[SimpleExperience] ${summaryParts.join(' ')}: ${reason}.`;
+        const logDetails = {
+          target: targetLabel,
+          event: eventName,
+          reason,
+        };
+        if (contextLabel) {
+          logDetails.context = contextLabel;
+        }
+        if (handlerLabel) {
+          logDetails.handler = handlerLabel;
+        }
+        if (meta) {
+          logDetails.meta = meta;
+        }
+        if (error) {
+          logDetails.error = error;
+        }
+        console.error(message, logDetails);
+      }
+    }
+
+    addSafeEventListener(target, eventName, handler, options = {}) {
       const { context = null, eventOptions = undefined } = options;
-      const label = context || `handling ${eventName}`;
+      const normalizedEventName = typeof eventName === 'string' ? eventName : '';
+      const contextLabel = context || (normalizedEventName ? `handling ${normalizedEventName}` : 'handling event');
+      const targetLabel = this.describeEventTarget(target);
+      const handlerLabel = typeof handler === 'function' && handler.name ? handler.name : null;
+
+      if (!normalizedEventName) {
+        this.noteEventBindingFailure({
+          targetLabel,
+          eventName: normalizedEventName || 'unknown',
+          contextLabel,
+          reason: 'invalid-event',
+          handlerLabel,
+        });
+        return false;
+      }
+
+      if (typeof handler !== 'function') {
+        this.noteEventBindingFailure({
+          targetLabel,
+          eventName: normalizedEventName,
+          contextLabel,
+          reason: 'invalid-handler',
+          meta: { handlerType: typeof handler },
+        });
+        return false;
+      }
+
+      if (!target) {
+        this.noteEventBindingFailure({
+          targetLabel,
+          eventName: normalizedEventName,
+          contextLabel,
+          reason: 'missing-target',
+          handlerLabel,
+        });
+        return false;
+      }
+
+      if (typeof target.addEventListener !== 'function') {
+        this.noteEventBindingFailure({
+          targetLabel,
+          eventName: normalizedEventName,
+          contextLabel,
+          reason: 'invalid-target',
+          handlerLabel,
+          meta: { targetType: typeof target },
+        });
+        return false;
+      }
+
       const safeHandler = (...args) => {
         try {
           handler(...args);
         } catch (error) {
-          this.handleEventDispatchError(label, error);
+          this.handleEventDispatchError(contextLabel, error);
         }
       };
-      target.addEventListener(eventName, safeHandler, eventOptions);
-      if (!this.boundEventRecords) {
+
+      try {
+        target.addEventListener(normalizedEventName, safeHandler, eventOptions);
+      } catch (bindError) {
+        this.noteEventBindingFailure({
+          targetLabel,
+          eventName: normalizedEventName,
+          contextLabel,
+          reason: 'bind-error',
+          handlerLabel,
+          error: bindError,
+        });
+        return false;
+      }
+
+      if (!Array.isArray(this.boundEventRecords)) {
         this.boundEventRecords = [];
       }
       this.boundEventRecords.push({
-        targetLabel: this.describeEventTarget(target),
-        eventName,
-        contextLabel: label,
+        targetLabel,
+        eventName: normalizedEventName,
+        contextLabel,
       });
+      if (!Array.isArray(this.boundEventDisposers)) {
+        this.boundEventDisposers = [];
+      }
       this.boundEventDisposers.push(() => {
         if (typeof target.removeEventListener === 'function') {
           try {
-            target.removeEventListener(eventName, safeHandler, eventOptions);
+            target.removeEventListener(normalizedEventName, safeHandler, eventOptions);
           } catch (removeError) {
             if (typeof console !== 'undefined') {
               console.debug('Failed to remove event listener cleanly.', {
-                event: eventName,
+                event: normalizedEventName,
                 removeError,
               });
             }
           }
         }
       });
+
+      return true;
     }
 
     describeEventTarget(target) {
