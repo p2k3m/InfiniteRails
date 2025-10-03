@@ -40,6 +40,8 @@
     metricsErrorLogged: false,
   };
 
+  let activeExperienceInstance = null;
+
   function isDebugModeEnabled() {
     return debugModeState.enabled;
   }
@@ -3562,6 +3564,10 @@
   const nameDisplayEl = documentRef?.getElementById('userNameDisplay') ?? null;
   const locationDisplayEl = documentRef?.getElementById('userLocationDisplay') ?? null;
   const scoreboardStatusEl = documentRef?.getElementById('scoreboardStatus') ?? null;
+  const scoreSyncWarningEl = documentRef?.getElementById('scoreSyncWarning') ?? null;
+  const scoreSyncWarningMessageEl = documentRef?.querySelector(
+    '#scoreSyncWarning .score-sync-warning__message',
+  ) ?? null;
   const googleButtonContainers = documentRef
     ? Array.from(documentRef.querySelectorAll('[data-google-button-container]'))
     : [];
@@ -3588,6 +3594,44 @@
         delete scoreboardStatusEl.dataset.offline;
       }
     }
+  }
+
+  function showGlobalScoreSyncWarning(message) {
+    const instance = activeExperienceInstance;
+    if (instance && typeof instance.showScoreSyncWarning === 'function') {
+      instance.showScoreSyncWarning(message);
+      return;
+    }
+    if (!scoreSyncWarningEl) {
+      return;
+    }
+    const text =
+      typeof message === 'string' && message.trim().length
+        ? message.trim()
+        : 'Leaderboard offline — runs stored locally until connection returns.';
+    if (scoreSyncWarningMessageEl) {
+      scoreSyncWarningMessageEl.textContent = text;
+    } else {
+      scoreSyncWarningEl.textContent = text;
+    }
+    scoreSyncWarningEl.hidden = false;
+    scoreSyncWarningEl.setAttribute('data-visible', 'true');
+  }
+
+  function hideGlobalScoreSyncWarning(message) {
+    const instance = activeExperienceInstance;
+    if (instance && typeof instance.hideScoreSyncWarning === 'function') {
+      instance.hideScoreSyncWarning(message);
+      return;
+    }
+    if (!scoreSyncWarningEl) {
+      return;
+    }
+    if (typeof message === 'string' && message.trim().length && scoreSyncWarningMessageEl) {
+      scoreSyncWarningMessageEl.textContent = message.trim();
+    }
+    scoreSyncWarningEl.hidden = true;
+    scoreSyncWarningEl.removeAttribute('data-visible');
   }
 
   function formatBackendEndpointSummary(context = {}) {
@@ -3778,6 +3822,7 @@
       const fallback = 'Leaderboard offline — runs stored locally until connection returns.';
       const message = deriveBackendMessageFromDetail(detail, fallback);
       updateScoreboardStatus(message, { offline: true });
+      showGlobalScoreSyncWarning(message);
       bootstrapOverlay.setDiagnostic('backend', {
         status: 'error',
         message,
@@ -3795,6 +3840,7 @@
       }
       const message = deriveBackendMessageFromDetail(detail, fallback);
       updateScoreboardStatus(message, { offline: false });
+      hideGlobalScoreSyncWarning(message);
       bootstrapOverlay.setDiagnostic('backend', {
         status: 'ok',
         message,
@@ -4581,6 +4627,8 @@
       scoreboardListEl: byId('scoreboardList'),
       scoreboardStatusEl: byId('scoreboardStatus'),
       refreshScoresButton: byId('refreshScores'),
+      scoreSyncWarningEl: byId('scoreSyncWarning'),
+      scoreSyncWarningMessageEl: query('#scoreSyncWarning .score-sync-warning__message'),
       hotbarEl: byId('hotbar'),
       handOverlayEl: byId('handOverlay'),
       handOverlayIconEl: byId('handOverlayIcon'),
@@ -4687,8 +4735,6 @@
     globalScope.InfiniteRails = globalScope.InfiniteRails || {};
     globalScope.InfiniteRails.rendererMode = mode;
   }
-
-  let activeExperienceInstance = null;
 
   function ensureSimpleExperience(mode) {
     if (activeExperienceInstance) {

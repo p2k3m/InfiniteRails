@@ -116,6 +116,48 @@ body[data-color-mode='light'] {
   --hud-progress-glow: rgba(124, 190, 99, 0.42);
 }
 
+.score-sync-warning {
+  position: fixed;
+  top: 1.25rem;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.75rem 1.65rem;
+  border-radius: 999px;
+  background: linear-gradient(120deg, rgba(243, 178, 82, 0.95), rgba(255, 210, 138, 0.92));
+  color: #271a08;
+  border: 1px solid rgba(255, 244, 210, 0.4);
+  box-shadow: 0 22px 44px rgba(7, 12, 6, 0.45);
+  letter-spacing: 0.05em;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  font-weight: 600;
+  z-index: 1200;
+  pointer-events: none;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.score-sync-warning__icon {
+  font-size: 1.2rem;
+  filter: drop-shadow(0 0 6px rgba(39, 26, 8, 0.35));
+}
+
+.score-sync-warning__message {
+  display: inline-block;
+  max-width: 28rem;
+  line-height: 1.35;
+}
+
+.score-sync-warning:not([hidden]) {
+  opacity: 1;
+}
+
+.score-sync-warning[hidden] {
+  opacity: 0;
+}
+
 @media (prefers-color-scheme: light) {
   body[data-color-mode-preference='auto'] {
     color-scheme: light;
