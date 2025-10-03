@@ -347,6 +347,51 @@ describe('simple experience inventory and crafting flows', () => {
     expect(craftingHelperMatchesEl.getAttribute('data-empty')).toBe('false');
   });
 
+  it('greys out inventory entries and recipes when visuals are missing', () => {
+    const inventoryGridEl = document.createElement('div');
+    const craftingInventoryEl = document.createElement('div');
+    const craftSuggestionsEl = document.createElement('ul');
+
+    const experience = createExperience({
+      ui: {
+        inventoryGridEl,
+        craftingInventoryEl,
+        craftSuggestionsEl,
+      },
+    });
+
+    experience.craftingState.unlocked.clear();
+    experience.craftingRecipes.forEach((recipe, key) => {
+      experience.craftingState.unlocked.set(key, recipe);
+    });
+
+    experience.hotbar = experience.hotbar.map(() => ({ item: null, quantity: 0 }));
+    experience.hotbar[0] = { item: 'stone', quantity: 3 };
+    experience.textureFallbackMissingKeys.add('stone');
+
+    experience.updateInventoryModal();
+    expect(inventoryGridEl.children.length).toBeGreaterThan(0);
+    const inventoryCell = inventoryGridEl.children[0];
+    expect(inventoryCell.dataset.visual).toBe('missing');
+    expect(inventoryCell.dataset.visualSummary).toContain('stone');
+    expect(inventoryCell.innerHTML).toContain('Missing');
+
+    experience.updateCraftingInventoryUi();
+    expect(craftingInventoryEl.children.length).toBeGreaterThan(0);
+    const craftingButton = craftingInventoryEl.children[0];
+    expect(craftingButton.dataset.visual).toBe('missing');
+    expect(craftingButton.dataset.visualSummary).toContain('stone');
+    expect(craftingButton.innerHTML).toContain('Missing');
+
+    experience.updateCraftingSuggestions();
+    expect(craftSuggestionsEl.children.length).toBeGreaterThan(0);
+    const suggestionItem = craftSuggestionsEl.children[0];
+    const suggestionButton = suggestionItem.children[0];
+    expect(suggestionButton.dataset.visual).toBe('missing');
+    expect(suggestionButton.dataset.visualSummary).toContain('Missing texture');
+    expect(suggestionButton.textContent).toContain('Missing texture');
+  });
+
   it('dispatches a recipe-crafted event when crafting succeeds', () => {
     const experience = createExperience();
 

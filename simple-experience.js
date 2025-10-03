@@ -1201,24 +1201,32 @@
       icon: '🟩',
       placeable: true,
       description: 'Surface block with a soil base — perfect for bridging gaps.',
+      textureKeys: ['grass', 'dirt'],
+      materialKeys: ['grass', 'dirt'],
     },
     dirt: {
       label: 'Soil Chunk',
       icon: '🟫',
       placeable: true,
       description: 'Packed earth used for scaffolding and quick terrain fixes.',
+      textureKeys: ['dirt'],
+      materialKeys: ['dirt'],
     },
     stone: {
       label: 'Stone Brick',
       icon: '⬜',
       placeable: true,
       description: 'Dense masonry ideal for sturdy portal frames.',
+      textureKeys: ['stone'],
+      materialKeys: ['stone'],
     },
     stick: {
       label: 'Stick',
       icon: '🪵',
       placeable: false,
       description: 'Basic handle carved from wood — anchors most tools.',
+      textureKeys: [],
+      materialKeys: [],
     },
     'stone-pickaxe': {
       label: 'Stone Pickaxe',
@@ -1226,18 +1234,24 @@
       placeable: false,
       equipment: true,
       description: 'Reliable pickaxe that cracks tougher ores and rails.',
+      textureKeys: ['stone'],
+      materialKeys: ['stone'],
     },
     'portal-charge': {
       label: 'Portal Charge',
       icon: '🌀',
       placeable: false,
       description: 'Volatile energy cell required to ignite the portal.',
+      textureKeys: [],
+      materialKeys: ['portal'],
     },
     'eternal-ingot': {
       label: 'Eternal Ingot',
       icon: '🔥',
       placeable: false,
       description: 'Legendary alloy that stabilises the Netherite rail network.',
+      textureKeys: [],
+      materialKeys: [],
     },
   };
   const DIMENSION_BADGE_SYMBOLS = {
@@ -1457,8 +1471,26 @@
         icon: '⬜',
         placeable: false,
         description: '',
+        textureKeys: [],
+        materialKeys: [],
       }
     );
+  }
+
+  function normaliseVisualKeyList(value) {
+    if (!value) {
+      return [];
+    }
+    if (Array.isArray(value)) {
+      return value
+        .map((entry) => (typeof entry === 'string' ? entry.trim() : ''))
+        .filter((entry) => entry.length > 0);
+    }
+    if (typeof value === 'string') {
+      const trimmed = value.trim();
+      return trimmed ? [trimmed] : [];
+    }
+    return [];
   }
 
   function formatInventoryLabel(item, quantity) {
@@ -14941,6 +14973,93 @@
       return Array.from(aggregate.entries()).map(([item, quantity]) => ({ item, quantity }));
     }
 
+    isTextureUnavailable(key) {
+      if (!key) {
+        return false;
+      }
+      const set = this.textureFallbackMissingKeys;
+      if (!set || typeof set.has !== 'function') {
+        return false;
+      }
+      return set.has(key);
+    }
+
+    isMaterialUnavailable(key) {
+      if (!key) {
+        return false;
+      }
+      const materials = this.materials || {};
+      return !materials[key];
+    }
+
+    getItemVisualStatus(itemId) {
+      const def = getItemDefinition(itemId);
+      const textureKeys = normaliseVisualKeyList(def.textureKeys || def.textureKey);
+      const materialKeys = normaliseVisualKeyList(def.materialKeys || def.materialKey);
+      const missingTextures = textureKeys.filter((key) => this.isTextureUnavailable(key));
+      const missingMaterials = materialKeys.filter((key) => this.isMaterialUnavailable(key));
+      return {
+        missing: missingTextures.length > 0 || missingMaterials.length > 0,
+        missingTextures,
+        missingMaterials,
+      };
+    }
+
+    describeItemVisualStatus(itemId, status = null) {
+      const visualStatus = status || this.getItemVisualStatus(itemId);
+      if (!visualStatus || visualStatus.missing !== true) {
+        return '';
+      }
+      const parts = [];
+      if (Array.isArray(visualStatus.missingTextures) && visualStatus.missingTextures.length) {
+        const label = visualStatus.missingTextures.length > 1 ? 'textures' : 'texture';
+        parts.push(`${label}: ${visualStatus.missingTextures.join(', ')}`);
+      }
+      if (Array.isArray(visualStatus.missingMaterials) && visualStatus.missingMaterials.length) {
+        const label = visualStatus.missingMaterials.length > 1 ? 'materials' : 'material';
+        parts.push(`${label}: ${visualStatus.missingMaterials.join(', ')}`);
+      }
+      const summary = parts.join(' • ');
+      return summary ? `Missing ${summary}` : 'Missing visuals';
+    }
+
+    getRecipeVisualStatus(recipe, key) {
+      const parts = this.getRecipeSequence(recipe, key);
+      const missingIngredients = [];
+      parts.forEach((itemId) => {
+        const status = this.getItemVisualStatus(itemId);
+        if (status.missing) {
+          missingIngredients.push({ itemId, status });
+        }
+      });
+      const outputStatus = recipe?.id ? this.getItemVisualStatus(recipe.id) : { missing: false };
+      return {
+        missing: outputStatus.missing || missingIngredients.length > 0,
+        outputStatus,
+        missingIngredients,
+      };
+    }
+
+    describeRecipeVisualStatus(recipe, key, status = null) {
+      const visualStatus = status || this.getRecipeVisualStatus(recipe, key);
+      if (!visualStatus || !visualStatus.missing) {
+        return '';
+      }
+      const parts = [];
+      if (visualStatus.outputStatus?.missing && recipe?.id) {
+        const outputLabel = getItemDefinition(recipe.id).label;
+        const summary = this.describeItemVisualStatus(recipe.id, visualStatus.outputStatus);
+        parts.push(summary ? `${outputLabel} — ${summary}` : `Missing visuals for ${outputLabel}`);
+      }
+      visualStatus.missingIngredients.forEach(({ itemId, status: ingredientStatus }) => {
+        const ingredientLabel = getItemDefinition(itemId).label;
+        const summary = this.describeItemVisualStatus(itemId, ingredientStatus);
+        parts.push(summary ? `${ingredientLabel} — ${summary}` : `Missing visuals for ${ingredientLabel}`);
+      });
+      const summary = parts.filter(Boolean).join(' • ');
+      return summary || 'Missing visuals';
+    }
+
     updateCraftingInventoryUi() {
       if (!this.craftingInventoryEl) return;
       const fragment = document.createDocumentFragment();
@@ -14952,13 +15071,32 @@
         button.className = 'crafting-inventory__item';
         button.dataset.itemId = item;
         button.dataset.quantity = String(quantity);
-        button.textContent = formatInventoryLabel(item, quantity);
+        const label = formatInventoryLabel(item, quantity);
+        const visualStatus = this.getItemVisualStatus(item);
+        const visualSummary = this.describeItemVisualStatus(item, visualStatus);
+        const summaryMarkup =
+          visualStatus.missing === true
+            ? `<span class="visual-warning">${escapeHtml(visualSummary || 'Missing visuals')}</span>`
+            : '';
+        button.innerHTML = `${escapeHtml(label)}${summaryMarkup}`;
+        button.dataset.visual = visualStatus.missing ? 'missing' : 'ready';
+        if (visualSummary) {
+          button.dataset.visualSummary = visualSummary;
+        } else {
+          delete button.dataset.visualSummary;
+        }
         button.setAttribute('role', 'listitem');
-        button.setAttribute('aria-label', formatInventoryLabel(item, quantity));
+        button.setAttribute(
+          'aria-label',
+          visualSummary ? `${label}. ${visualSummary}.` : label,
+        );
         const def = getItemDefinition(item);
         const hintParts = [];
         if (def.description) {
           hintParts.push(def.description);
+        }
+        if (visualSummary) {
+          hintParts.push(visualSummary);
         }
         hintParts.push(`Tap to queue • Carrying ×${quantity}`);
         button.setAttribute('data-hint', hintParts.join(' — '));
@@ -14980,7 +15118,21 @@
       items.forEach(({ item, quantity }) => {
         const cell = document.createElement('div');
         cell.className = 'inventory-grid__cell';
-        cell.textContent = formatInventoryLabel(item, quantity);
+        const label = formatInventoryLabel(item, quantity);
+        const visualStatus = this.getItemVisualStatus(item);
+        const visualSummary = this.describeItemVisualStatus(item, visualStatus);
+        const summaryMarkup =
+          visualStatus.missing === true
+            ? `<span class="visual-warning">${escapeHtml(visualSummary || 'Missing visuals')}</span>`
+            : '';
+        cell.innerHTML = `<span>${escapeHtml(label)}</span>${summaryMarkup}`;
+        cell.dataset.visual = visualStatus.missing ? 'missing' : 'ready';
+        if (visualSummary) {
+          cell.dataset.visualSummary = visualSummary;
+        } else {
+          delete cell.dataset.visualSummary;
+        }
+        cell.setAttribute('aria-label', visualSummary ? `${label}. ${visualSummary}.` : label);
         this.inventoryGridEl.appendChild(cell);
       });
       if (this.inventoryOverflowEl) {
@@ -15013,11 +15165,27 @@
           button.className = 'inventory-slot';
           button.dataset.itemId = item;
           button.dataset.quantity = String(quantity);
-          button.innerHTML = `<span>${def.label}</span><span class="quantity">×${quantity}</span>`;
-          button.setAttribute('aria-label', `${def.label} ×${quantity}`);
+          const visualStatus = this.getItemVisualStatus(item);
+          const visualSummary = this.describeItemVisualStatus(item, visualStatus);
+          const summaryMarkup =
+            visualStatus.missing === true
+              ? `<span class="visual-warning">${escapeHtml(visualSummary || 'Missing visuals')}</span>`
+              : '';
+          button.innerHTML = `<span>${escapeHtml(def.label)}</span><span class="quantity">×${quantity}</span>${summaryMarkup}`;
+          button.dataset.visual = visualStatus.missing ? 'missing' : 'ready';
+          if (visualSummary) {
+            button.dataset.visualSummary = visualSummary;
+          } else {
+            delete button.dataset.visualSummary;
+          }
+          const ariaLabel = `${def.label} ×${quantity}`;
+          button.setAttribute('aria-label', visualSummary ? `${ariaLabel}. ${visualSummary}.` : ariaLabel);
           const hintParts = [];
           if (def.description) {
             hintParts.push(def.description);
+          }
+          if (visualSummary) {
+            hintParts.push(visualSummary);
           }
           hintParts.push(`Tap to queue • Stored ×${quantity}`);
           button.setAttribute('data-hint', hintParts.join(' — '));
@@ -16115,7 +16283,17 @@
         button.className = 'crafting-suggestions__item';
         button.dataset.recipeKey = key;
         const sequenceText = key.replace(/,/g, ' → ');
-        button.textContent = `${recipe.label} (${sequenceText})`;
+        const recipeVisualStatus = this.getRecipeVisualStatus(recipe, key);
+        const recipeVisualSummary = this.describeRecipeVisualStatus(
+          recipe,
+          key,
+          recipeVisualStatus,
+        );
+        const suggestionLabel = `${recipe.label} (${sequenceText})`;
+        button.textContent =
+          recipeVisualStatus.missing === true
+            ? `${suggestionLabel} • ${recipeVisualSummary || 'Missing visuals'}`
+            : suggestionLabel;
         const eligibility = this.computeRecipeEligibility(recipe, key);
         const statusToken = this.getRecipeEligibilityToken(eligibility);
         const statusLabel = this.describeRecipeEligibility(eligibility);
@@ -16133,6 +16311,12 @@
         } else {
           button.setAttribute('aria-disabled', 'true');
         }
+        button.dataset.visual = recipeVisualStatus.missing ? 'missing' : 'ready';
+        if (recipeVisualSummary) {
+          button.dataset.visualSummary = recipeVisualSummary;
+        } else {
+          delete button.dataset.visualSummary;
+        }
         const hintParts = [];
         if (recipe.description) {
           hintParts.push(recipe.description);
@@ -16140,11 +16324,15 @@
         if (statusLabel) {
           hintParts.push(statusLabel);
         }
+        if (recipeVisualSummary) {
+          hintParts.push(recipeVisualSummary);
+        }
         hintParts.push(`Autofill sequence • +${recipe.score} pts`);
         button.setAttribute('data-hint', hintParts.join(' — '));
         const li = document.createElement('li');
         li.dataset.status = statusToken;
         li.dataset.eligible = button.dataset.eligible;
+        li.dataset.visual = button.dataset.visual;
         li.appendChild(button);
         fragment.appendChild(li);
       });
@@ -16322,6 +16510,12 @@
         button.dataset.recipeKey = key;
         const sequenceParts = this.getRecipeSequence(recipe, key);
         const sequenceText = this.formatRecipeSequence(sequenceParts);
+        const recipeVisualStatus = this.getRecipeVisualStatus(recipe, key);
+        const recipeVisualSummary = this.describeRecipeVisualStatus(
+          recipe,
+          key,
+          recipeVisualStatus,
+        );
         const eligibility = this.computeRecipeEligibility(recipe, key);
         const statusToken = this.getRecipeEligibilityToken(eligibility);
         const statusLabel = this.describeRecipeEligibility(eligibility);
@@ -16339,6 +16533,12 @@
         } else {
           button.setAttribute('aria-disabled', 'true');
         }
+        button.dataset.visual = recipeVisualStatus.missing ? 'missing' : 'ready';
+        if (recipeVisualSummary) {
+          button.dataset.visualSummary = recipeVisualSummary;
+        } else {
+          delete button.dataset.visualSummary;
+        }
         const title = document.createElement('span');
         title.textContent = recipe.label;
         const order = document.createElement('span');
@@ -16351,6 +16551,9 @@
           subtitleParts.push(statusLabel);
         }
         subtitleParts.push(`+${recipe.score} pts`);
+        if (recipeVisualSummary) {
+          subtitleParts.push(recipeVisualSummary);
+        }
         subtitle.textContent = subtitleParts.join(' • ');
         button.innerHTML = '';
         button.append(title, order, subtitle);
@@ -16361,12 +16564,16 @@
         if (statusLabel) {
           hintParts.push(statusLabel);
         }
+        if (recipeVisualSummary) {
+          hintParts.push(recipeVisualSummary);
+        }
         hintParts.push(`Reward: +${recipe.score} pts`);
         hintParts.push(`Order: ${sequenceText}`);
         button.setAttribute('data-hint', hintParts.join(' — '));
         const li = document.createElement('li');
         li.dataset.status = statusToken;
         li.dataset.eligible = button.dataset.eligible;
+        li.dataset.visual = button.dataset.visual;
         li.appendChild(button);
         fragment.appendChild(li);
       });
