@@ -374,6 +374,44 @@ describe('simple experience entity lifecycle', () => {
     expect(experience.golemGroup.children.length).toBeGreaterThan(0);
   });
 
+  it('spawns zombies even when the zombie material is unavailable', async () => {
+    const { experience } = createExperienceForTest();
+
+    experience.start();
+    await Promise.resolve();
+
+    experience.materials.zombie = null;
+    experience.forceNightCycle();
+    experience.lastZombieSpawn = experience.elapsed - 100;
+
+    expect(() => experience.spawnZombie()).not.toThrow();
+    expect(experience.zombies.length).toBeGreaterThan(0);
+    expect(experience.zombieGroup.children.length).toBeGreaterThan(0);
+  });
+
+  it('spawns golems with fallback materials when MeshStandardMaterial is unavailable', async () => {
+    const { experience } = createExperienceForTest();
+
+    experience.start();
+    await Promise.resolve();
+
+    const originalThree = experience.THREE;
+    const fallbackThree = { ...originalThree };
+    delete fallbackThree.MeshStandardMaterial;
+    experience.THREE = fallbackThree;
+
+    try {
+      experience.forceNightCycle();
+      experience.lastGolemSpawn = experience.elapsed - 100;
+
+      expect(() => experience.spawnGolem()).not.toThrow();
+      expect(experience.golems.length).toBeGreaterThan(0);
+      expect(experience.golemGroup.children.length).toBeGreaterThan(0);
+    } finally {
+      experience.THREE = originalThree;
+    }
+  });
+
   it('re-registers entity groups when they are missing', async () => {
     const { experience } = createExperienceForTest();
 
