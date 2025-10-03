@@ -2133,6 +2133,13 @@
       this.firstRunTutorialHideTimer = null;
       this.firstRunTutorialMarkOnDismiss = false;
       this.firstRunTutorialShowBriefingOnDismiss = false;
+      this.renderedFrameCount = 0;
+      this.blankFrameDetectionState = {
+        enabled: true,
+        samples: 0,
+        clearFrameMatches: 0,
+        triggered: false,
+      };
       this.firstRunTutorialSeenCache = null;
       this.onFirstRunTutorialClose = this.handleFirstRunTutorialClose.bind(this);
       this.onFirstRunTutorialKeyDown = this.handleFirstRunTutorialKeyDown.bind(this);
@@ -14729,6 +14736,8 @@
         this.handleRenderLoopError('render', error);
         return;
       }
+      this.renderedFrameCount += 1;
+      this.evaluateRendererVisibility();
       if (!Number.isFinite(this.lastStatePublish) || this.lastStatePublish === null) {
         this.lastStatePublish = 0;
       }
@@ -14738,6 +14747,79 @@
       }
       this.recordFrameStats(timestamp);
       this.scheduleNextFrame();
+    }
+
+    evaluateRendererVisibility() {
+      if (!this.renderer || !this.blankFrameDetectionState || this.blankFrameDetectionState.triggered) {
+        return;
+      }
+      const detection = this.blankFrameDetectionState;
+      if (!detection.enabled) {
+        return;
+      }
+      if (this.renderedFrameCount < 10) {
+        return;
+      }
+      const canvas = this.renderer.domElement;
+      if (!canvas) {
+        detection.enabled = false;
+        return;
+      }
+      const width = canvas.width || canvas.clientWidth;
+      const height = canvas.height || canvas.clientHeight;
+      if (!width || !height) {
+        detection.enabled = false;
+        return;
+      }
+      const gl = typeof this.renderer.getContext === 'function' ? this.renderer.getContext() : null;
+      if (!gl || typeof gl.readPixels !== 'function') {
+        detection.enabled = false;
+        return;
+      }
+      const clearColor = this.renderer.getClearColor(new this.THREE.Color());
+      const clearR = Math.round(clearColor.r * 255);
+      const clearG = Math.round(clearColor.g * 255);
+      const clearB = Math.round(clearColor.b * 255);
+      const samplePoints = [[Math.floor(width * 0.5), Math.floor(height * 0.5)]];
+      const buffer = new Uint8Array(4);
+      let clearMatches = 0;
+      let samplesTaken = 0;
+      for (const [x, y] of samplePoints) {
+        try {
+          gl.readPixels(x, y, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, buffer);
+          samplesTaken += 1;
+          if (buffer[0] === clearR && buffer[1] === clearG && buffer[2] === clearB) {
+            clearMatches += 1;
+          }
+        } catch (error) {
+          detection.enabled = false;
+          return;
+        }
+      }
+      if (samplesTaken === 0) {
+        detection.enabled = false;
+        return;
+      }
+      detection.samples += 1;
+      if (clearMatches >= samplePoints.length - 1) {
+        detection.clearFrameMatches = (detection.clearFrameMatches || 0) + 1;
+      } else {
+        detection.clearFrameMatches = 0;
+      }
+      if (detection.clearFrameMatches >= 3) {
+        detection.triggered = true;
+        detection.enabled = false;
+        this.emitGameEvent('initialisation-error', {
+          stage: 'blank-frame',
+          message: 'Renderer produced blank frames. WebGL output may be blocked by the browser.',
+        });
+        this.presentRendererFailure(
+          'WebGL output appears blocked. Enable hardware acceleration or disable extensions that prevent WebGL, then reload to explore the realms.',
+          { stage: 'blank-frame' },
+        );
+      } else if (detection.samples >= 12) {
+        detection.enabled = false;
+      }
     }
 
     handleVisibilityChange() {
