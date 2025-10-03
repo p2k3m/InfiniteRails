@@ -139,6 +139,7 @@ describe('simple experience terrain generation', () => {
       }
       expect(experience.texturePackErrorCount).toBeGreaterThan(0);
       expect(experience.lastHintMessage).toContain('missing textures for');
+      expect(experience.lastHintMessage).toContain('Texture pack unavailable');
       expect(experience.lastHintMessage).toContain('grass');
       expect(experience.textureFallbackMissingKeys.has('grass')).toBe(true);
       expect(resolvedTexture).toBe(defaultGrassTexture);
@@ -195,6 +196,7 @@ describe('simple experience terrain generation', () => {
       }
       expect(experience.texturePackErrorCount).toBeGreaterThan(0);
       expect(experience.lastHintMessage).toContain('missing textures for');
+      expect(experience.lastHintMessage).toContain('Texture pack unavailable');
       expect(experience.lastHintMessage).toContain('obsidian');
       expect(experience.textureFallbackMissingKeys.has('obsidian')).toBe(true);
       expect(resolvedTexture).toBeInstanceOf(THREE.Texture);
@@ -264,8 +266,10 @@ describe('simple experience terrain generation', () => {
       expect(first).toBeInstanceOf(THREE.Texture);
       expect(second).toBeInstanceOf(THREE.Texture);
       expect(playerHintEl.textContent).toContain('missing textures for');
+      expect(playerHintEl.textContent).toContain('Texture pack unavailable');
       expect(playerHintEl.textContent).toContain('grass');
       expect(footerStatusEl.textContent).toContain('missing textures for');
+      expect(footerStatusEl.textContent).toContain('Texture pack unavailable');
       expect(footerStatusEl.textContent).toContain('grass');
       expect(footerEl.dataset.state).toBe('warning');
       expect(experience.texturePackNoticeShown).toBe(true);
@@ -274,6 +278,51 @@ describe('simple experience terrain generation', () => {
     } finally {
       loadSpy.mockRestore();
       window.APP_CONFIG = {};
+    }
+  });
+
+  it('schedules minute texture pack retries and restarts streaming when the network returns', () => {
+    vi.useFakeTimers();
+
+    const canvas = {
+      width: 512,
+      height: 512,
+      clientWidth: 512,
+      clientHeight: 512,
+      getContext: () => null,
+    };
+
+    const experience = window.SimpleExperience.create({ canvas, ui: {} });
+
+    const timerScope = typeof window.setTimeout === 'function' ? window : globalThis;
+    const setTimeoutSpy = vi.spyOn(timerScope, 'setTimeout');
+    const loadExternalSpy = vi
+      .spyOn(experience, 'loadExternalVoxelTexture')
+      .mockResolvedValue(null);
+    const triggerSpy = vi.spyOn(experience, 'triggerTextureRetry');
+
+    try {
+      experience.noteTexturePackFallback('fallback-texture', { key: 'grass' });
+
+      expect(experience.texturePackUnavailable).toBe(true);
+      expect(experience.textureFallbackMissingKeys.has('grass')).toBe(true);
+      expect(experience.textureRetryHandles.size).toBe(1);
+
+      const scheduledDelays = setTimeoutSpy.mock.calls
+        .map((call) => call[1])
+        .filter((value) => typeof value === 'number');
+      expect(scheduledDelays).toContain(60000);
+
+      experience.handleNetworkOnline();
+
+      expect(triggerSpy).toHaveBeenCalledWith('grass');
+      expect(loadExternalSpy).toHaveBeenCalledWith('grass');
+      expect(experience.textureRetryHandles.size).toBe(0);
+    } finally {
+      triggerSpy.mockRestore();
+      loadExternalSpy.mockRestore();
+      setTimeoutSpy.mockRestore();
+      vi.useRealTimers();
     }
   });
 
