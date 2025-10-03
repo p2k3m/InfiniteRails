@@ -314,4 +314,70 @@ describe('simple experience terrain generation', () => {
     const uniqueRanges = new Set(heightRanges);
     expect(uniqueRanges.size).toBeGreaterThan(1);
   });
+
+  it('uses seeded heightmaps when streamed payloads are invalid', () => {
+    const canvas = {
+      width: 512,
+      height: 512,
+      clientWidth: 512,
+      clientHeight: 512,
+      getContext: () => null,
+    };
+
+    const experience = window.SimpleExperience.create({ canvas, ui: {} });
+    experience.scene = new THREE.Scene();
+    experience.worldRoot = null;
+    experience.terrainGroup = null;
+    experience.terrainChunkGroups = [];
+    experience.terrainChunkMap = new Map();
+    experience.dirtyTerrainChunks = new Set();
+
+    experience.pendingHeightmapStream = { matrix: [[1]] };
+
+    experience.buildTerrain();
+
+    const summary = experience.lastTerrainBuildSummary;
+    expect(summary).toBeTruthy();
+    expect(summary.heightmapSource).toMatch(/fallback|seeded/);
+    expect(summary.streamFailureCount).toBeGreaterThan(0);
+    expect(summary.voxelCount).toBeGreaterThan(0);
+    expect(summary.voxelCount).toBe(summary.terrainMeshCount);
+    expect(summary.chunkCount).toBe(summary.expectedChunkCount);
+    expect(summary.emptyChunkKeys).toHaveLength(0);
+    expect(experience.heightMap.length).toBe(64);
+    expect(experience.worldRoot).toBeInstanceOf(THREE.Group);
+    expect(experience.terrainGroup).toBeInstanceOf(THREE.Group);
+    expect(experience.terrainGroup.children.length).toBe(summary.expectedChunkCount);
+  });
+
+  it('enforces minimum terrain height when streamed heightmaps are empty', () => {
+    const canvas = {
+      width: 512,
+      height: 512,
+      clientWidth: 512,
+      clientHeight: 512,
+      getContext: () => null,
+    };
+
+    const experience = window.SimpleExperience.create({ canvas, ui: {} });
+    experience.terrainGroup = new THREE.Group();
+    experience.terrainChunkGroups = [];
+    experience.terrainChunkMap = new Map();
+    experience.dirtyTerrainChunks = new Set();
+
+    const size = 64;
+    const zeroMatrix = Array.from({ length: size }, () => Array(size).fill(0));
+    experience.pendingHeightmapStream = { matrix: zeroMatrix };
+
+    experience.buildTerrain();
+
+    const summary = experience.lastTerrainBuildSummary;
+    expect(summary).toBeTruthy();
+    expect(summary.heightmapSource).toBe('streamed');
+    expect(summary.voxelCount).toBeGreaterThan(0);
+    const minHeight = Math.min(...experience.heightMap.flat());
+    expect(minHeight).toBeGreaterThan(0);
+    expect(summary.voxelCount).toBe(summary.terrainMeshCount);
+    expect(summary.emptyChunkKeys).toHaveLength(0);
+  });
 });
