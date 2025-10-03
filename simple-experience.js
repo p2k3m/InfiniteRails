@@ -51,6 +51,8 @@
   const HOTBAR_SLOTS = 10;
   const KEY_BINDINGS_STORAGE_KEY = 'infinite-rails-keybindings';
   const SCOREBOARD_STORAGE_KEY = 'infinite-dimension-scoreboard';
+  const SCORE_SYNC_QUEUE_STORAGE_KEY = 'infinite-dimension-score-queue';
+  const SCORE_SYNC_QUEUE_LIMIT = 25;
   const FIRST_RUN_TUTORIAL_STORAGE_KEY = 'infinite-rails-first-run-tutorial';
   const MOVEMENT_ACTIONS = ['moveForward', 'moveBackward', 'moveLeft', 'moveRight'];
   const DEFAULT_KEY_BINDINGS = (() => {
@@ -1602,6 +1604,8 @@
       this.scoreboardPollIntervalSeconds = 45;
       this.scoreboardPollTimer = 0;
       this.scoreboardStorageKey = options.scoreboardStorageKey || SCOREBOARD_STORAGE_KEY;
+      this.scoreSyncQueueKey = options.scoreSyncQueueKey || SCORE_SYNC_QUEUE_STORAGE_KEY;
+      this.scoreSyncQueue = this.restoreScoreSyncQueue();
       const docRef = typeof document !== 'undefined' ? document : null;
       this.scorePanelEl = this.ui.scorePanelEl || docRef?.getElementById('scorePanel') || null;
       this.scoreMetricElements = {
@@ -1611,6 +1615,8 @@
         combat: this.ui.scoreCombatEl || null,
         loot: this.ui.scoreLootEl || null,
       };
+      this.scoreSyncWarningEl = this.ui.scoreSyncWarningEl || null;
+      this.scoreSyncWarningMessageEl = this.ui.scoreSyncWarningMessageEl || null;
       this.scoreMetricFlashTimers = new Map();
       this.craftingScoreEvents = 0;
       this.dimensionScoreEvents = 0;
@@ -3675,6 +3681,16 @@
         });
       }
       this.setScoreboardStatus('Preparing leaderboard…', { offline: false });
+      if (this.hasQueuedScoreSyncEntries()) {
+        this.showScoreSyncWarning(
+          'Leaderboard offline — queued runs will sync once the connection returns.',
+        );
+        if (this.apiBaseUrl) {
+          this.flushScoreSync(true);
+        }
+      } else {
+        this.hideScoreSyncWarning();
+      }
     }
 
     setScoreboardStatus(message, options = {}) {
@@ -3821,6 +3837,7 @@
         }
       }
       this.emitGameEvent('score-sync-offline', detail);
+      this.showScoreSyncWarning(statusMessage);
     }
 
     clearOfflineSyncNotice(source, options = {}) {
@@ -3829,6 +3846,17 @@
           ? options.message.trim()
           : null;
       this.setScoreboardStatus(message, { offline: false });
+      if (this.hasQueuedScoreSyncEntries()) {
+        const queuedMessage = message
+          ? `${message} — syncing queued runs…`
+          : 'Sync pending — queued runs will upload when the service responds.';
+        this.showScoreSyncWarning(queuedMessage);
+        if (this.apiBaseUrl && !this.scoreSyncInFlight) {
+          this.flushScoreSync(true);
+        }
+      } else {
+        this.hideScoreSyncWarning(message);
+      }
       if (!this.offlineSyncActive) {
         return;
       }
@@ -4113,6 +4141,181 @@
       this.mergeScoreEntries([entry]);
       this.emitGameEvent('score-updated', { summary: entry });
       return entry;
+    }
+
+    restoreScoreSyncQueue() {
+      if (typeof localStorage === 'undefined' || !this.scoreSyncQueueKey) {
+        return [];
+      }
+      try {
+        const raw = localStorage.getItem(this.scoreSyncQueueKey);
+        if (!raw) {
+          return [];
+        }
+        const parsed = JSON.parse(raw);
+        if (!Array.isArray(parsed)) {
+          return [];
+        }
+        const records = parsed
+          .map((item) => {
+            if (!item || typeof item !== 'object') {
+              return null;
+            }
+            const entry = item.entry && typeof item.entry === 'object' ? item.entry : null;
+            if (!entry) {
+              return null;
+            }
+            const clonedEntry = this.cloneScoreSyncEntry(entry);
+            if (!clonedEntry) {
+              return null;
+            }
+            const reason =
+              typeof item.reason === 'string' && item.reason.trim().length ? item.reason.trim() : null;
+            const identifier =
+              typeof item.identifier === 'string' && item.identifier.trim().length
+                ? item.identifier.trim().toLowerCase()
+                : this.getScoreEntryIdentifier(clonedEntry);
+            const queuedAt = Number.isFinite(item.queuedAt) ? item.queuedAt : Date.now();
+            return {
+              entry: clonedEntry,
+              reason,
+              identifier,
+              queuedAt,
+            };
+          })
+          .filter(Boolean);
+        return records;
+      } catch (error) {
+        console.warn('Unable to restore queued leaderboard sync entries', error);
+        return [];
+      }
+    }
+
+    persistScoreSyncQueue() {
+      if (typeof localStorage === 'undefined' || !this.scoreSyncQueueKey) {
+        return;
+      }
+      try {
+        if (!this.scoreSyncQueue || !this.scoreSyncQueue.length) {
+          localStorage.removeItem(this.scoreSyncQueueKey);
+          return;
+        }
+        const snapshot = this.scoreSyncQueue
+          .map((record) => {
+            if (!record || typeof record !== 'object' || !record.entry) {
+              return null;
+            }
+            return {
+              entry: record.entry,
+              reason: record.reason ?? null,
+              queuedAt: Number.isFinite(record.queuedAt) ? record.queuedAt : Date.now(),
+              identifier: record.identifier ?? this.getScoreEntryIdentifier(record.entry),
+            };
+          })
+          .filter(Boolean);
+        if (!snapshot.length) {
+          localStorage.removeItem(this.scoreSyncQueueKey);
+          return;
+        }
+        localStorage.setItem(this.scoreSyncQueueKey, JSON.stringify(snapshot));
+      } catch (error) {
+        console.warn('Unable to persist queued leaderboard sync entries', error);
+      }
+    }
+
+    cloneScoreSyncEntry(entry) {
+      if (!entry || typeof entry !== 'object') {
+        return null;
+      }
+      try {
+        return JSON.parse(JSON.stringify(entry));
+      } catch (error) {
+        console.warn('Unable to clone leaderboard entry for queueing', error);
+        return null;
+      }
+    }
+
+    hasQueuedScoreSyncEntries() {
+      return Array.isArray(this.scoreSyncQueue) && this.scoreSyncQueue.length > 0;
+    }
+
+    enqueueScoreSyncEntry(entry, options = {}) {
+      if (!entry || typeof entry !== 'object') {
+        return;
+      }
+      const cloned = this.cloneScoreSyncEntry(entry);
+      if (!cloned) {
+        return;
+      }
+      const reason =
+        typeof options.reason === 'string' && options.reason.trim().length ? options.reason.trim() : null;
+      const identifier = this.getScoreEntryIdentifier(cloned);
+      const queuedAt = Date.now();
+      const record = { entry: cloned, reason, identifier, queuedAt };
+      if (!Array.isArray(this.scoreSyncQueue)) {
+        this.scoreSyncQueue = [];
+      }
+      if (identifier) {
+        const index = this.scoreSyncQueue.findIndex((item) => item?.identifier === identifier);
+        if (index >= 0) {
+          this.scoreSyncQueue[index] = record;
+        } else {
+          this.scoreSyncQueue.push(record);
+        }
+      } else {
+        this.scoreSyncQueue.push(record);
+      }
+      if (this.scoreSyncQueue.length > SCORE_SYNC_QUEUE_LIMIT) {
+        this.scoreSyncQueue.splice(0, this.scoreSyncQueue.length - SCORE_SYNC_QUEUE_LIMIT);
+      }
+      this.persistScoreSyncQueue();
+    }
+
+    shiftScoreSyncQueue() {
+      if (!Array.isArray(this.scoreSyncQueue) || !this.scoreSyncQueue.length) {
+        return null;
+      }
+      const record = this.scoreSyncQueue.shift();
+      this.persistScoreSyncQueue();
+      return record;
+    }
+
+    peekScoreSyncQueue() {
+      if (!Array.isArray(this.scoreSyncQueue) || !this.scoreSyncQueue.length) {
+        return null;
+      }
+      return this.scoreSyncQueue[0];
+    }
+
+    showScoreSyncWarning(message) {
+      if (!this.scoreSyncWarningEl) {
+        return;
+      }
+      const text =
+        typeof message === 'string' && message.trim().length
+          ? message.trim()
+          : 'Leaderboard offline — runs stored locally until connection returns.';
+      if (this.scoreSyncWarningMessageEl) {
+        this.scoreSyncWarningMessageEl.textContent = text;
+      } else {
+        this.scoreSyncWarningEl.textContent = text;
+      }
+      this.scoreSyncWarningEl.hidden = false;
+      this.scoreSyncWarningEl.setAttribute('data-visible', 'true');
+    }
+
+    hideScoreSyncWarning(message, options = {}) {
+      if (!this.scoreSyncWarningEl) {
+        return;
+      }
+      if (!options.force && this.hasQueuedScoreSyncEntries()) {
+        return;
+      }
+      if (typeof message === 'string' && message.trim().length && this.scoreSyncWarningMessageEl) {
+        this.scoreSyncWarningMessageEl.textContent = message.trim();
+      }
+      this.scoreSyncWarningEl.hidden = true;
+      this.scoreSyncWarningEl.removeAttribute('data-visible');
     }
 
     createRunSummary(reason) {
@@ -4454,18 +4657,32 @@
     }
 
     async flushScoreSync(force = false) {
-      if (!this.apiBaseUrl || (!force && this.scoreSyncInFlight)) {
+      if (!this.apiBaseUrl || this.scoreSyncInFlight) {
         return;
       }
-      if (!this.pendingScoreSyncReason) {
-        const now = performance.now();
+      const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+      let queueRecord = this.peekScoreSyncQueue();
+      let usingQueuedEntry = Boolean(queueRecord);
+      if (!usingQueuedEntry && !this.pendingScoreSyncReason) {
         if (!force && now - this.lastScoreSyncAt < this.scoreSyncCooldownSeconds * 1000) {
           return;
         }
       }
-      const reason = this.pendingScoreSyncReason ?? 'auto';
-      this.pendingScoreSyncReason = null;
-      const entry = this.createRunSummary(reason);
+      let reason;
+      let entry;
+      if (usingQueuedEntry && queueRecord && queueRecord.entry) {
+        reason =
+          typeof queueRecord.reason === 'string' && queueRecord.reason.trim().length
+            ? queueRecord.reason.trim()
+            : 'queued';
+        entry = queueRecord.entry;
+      } else {
+        reason = this.pendingScoreSyncReason ?? 'auto';
+        this.pendingScoreSyncReason = null;
+        entry = this.createRunSummary(reason);
+        queueRecord = null;
+        usingQueuedEntry = false;
+      }
       const baseUrl = this.apiBaseUrl.replace(/\/$/, '');
       const url = `${baseUrl}/scores`;
       try {
@@ -4500,9 +4717,16 @@
         this.mergeScoreEntries(entries);
         this.lastScoreSyncAt = performance.now();
         this.scoreSyncHeartbeat = 0;
+        if (usingQueuedEntry) {
+          this.shiftScoreSyncQueue();
+        }
         const statusMessage = 'Leaderboard synced';
         this.setScoreboardStatus(statusMessage, { offline: false });
         this.clearOfflineSyncNotice('sync', { message: statusMessage });
+        this.pendingScoreSyncReason = null;
+        if (!this.hasQueuedScoreSyncEntries()) {
+          this.hideScoreSyncWarning(statusMessage);
+        }
         console.error(
           'Score sync diagnostic — confirm the leaderboard API accepted the update. Inspect the network panel if the leaderboard remains stale.',
           {
@@ -4510,6 +4734,13 @@
             score: entry.score,
           },
         );
+        if (this.hasQueuedScoreSyncEntries() && this.apiBaseUrl) {
+          setTimeout(() => {
+            if (!this.scoreSyncInFlight) {
+              this.flushScoreSync(true);
+            }
+          }, 600);
+        }
       } catch (error) {
         const statusCode = Number.isFinite(error?.status) ? error.status : null;
         const summary = this.formatBackendEndpointSummary({ method: 'POST', endpoint: url, status: statusCode });
@@ -4521,6 +4752,14 @@
           summary,
         });
         this.pendingScoreSyncReason = reason;
+        if (!usingQueuedEntry) {
+          this.enqueueScoreSyncEntry(entry, { reason });
+          queueRecord = this.peekScoreSyncQueue();
+        } else if (queueRecord) {
+          queueRecord.reason = reason;
+          queueRecord.queuedAt = Date.now();
+          this.persistScoreSyncQueue();
+        }
         this.handleLeaderboardOffline(error, {
           source: 'sync',
           reason,
