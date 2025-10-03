@@ -151,7 +151,7 @@ describe('SimpleExperience audio fallbacks', () => {
     const windowStub = getWindowStub();
     windowStub.INFINITE_RAILS_EMBEDDED_ASSETS.audioSamples = {};
     const dispatchSpy = vi.spyOn(windowStub, 'dispatchEvent').mockImplementation(() => {});
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     class AudioStub {
       static played = [];
@@ -234,9 +234,9 @@ describe('SimpleExperience audio fallbacks', () => {
     expect(AudioStub.played[0]).toMatch(/^data:audio\/wav;base64,/);
     expect(AudioStub.played[0]).not.toBe('data:audio/wav;base64,ZmFrZQ==');
 
-    const warnMessages = warnSpy.mock.calls.map(([message]) => String(message));
+    const errorMessages = errorSpy.mock.calls.map(([message]) => String(message));
     expect(
-      warnMessages.some((message) =>
+      errorMessages.some((message) =>
         message.includes('Audio sample "bubble" is unavailable. Playing fallback alert tone instead.'),
       ),
     ).toBe(true);
@@ -246,5 +246,6 @@ describe('SimpleExperience audio fallbacks', () => {
     );
 
     delete windowStub.Audio;
+    errorSpy.mockRestore();
   });
 });

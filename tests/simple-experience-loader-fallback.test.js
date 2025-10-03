@@ -15,7 +15,7 @@ describe('simple experience model loader fallback', () => {
     experience.footerStatusEl = { textContent: '' };
     experience.footerEl = { dataset: {} };
 
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     const originalThree = experience.THREE;
     const threeStub = Object.create(originalThree);
@@ -33,7 +33,7 @@ describe('simple experience model loader fallback', () => {
     try {
       payload = await experience.loadModel('steve');
     } finally {
-      warnSpy.mockRestore();
+      errorSpy.mockRestore();
     }
 
     expect(payload).toBeTruthy();

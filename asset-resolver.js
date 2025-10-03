@@ -29,10 +29,10 @@
     if (error) {
       details.error = error;
     }
-    if (typeof consoleRef.warn === 'function') {
-      consoleRef.warn(message, details);
-    } else if (typeof consoleRef.error === 'function') {
+    if (typeof consoleRef.error === 'function') {
       consoleRef.error(message, details);
+    } else if (typeof consoleRef.warn === 'function') {
+      consoleRef.warn(message, details);
     }
   }
 
