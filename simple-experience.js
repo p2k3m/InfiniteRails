@@ -7094,6 +7094,62 @@
         });
     }
 
+    isModelLoaderUnavailableError(error) {
+      const visited = new Set();
+      const inspect = (candidate) => {
+        if (!candidate || visited.has(candidate)) {
+          return false;
+        }
+        visited.add(candidate);
+        const message =
+          typeof candidate.message === 'string' && candidate.message.trim().length
+            ? candidate.message.trim().toLowerCase()
+            : '';
+        if (message) {
+          if (message.includes('gltfloader script loaded but did not register')) {
+            return true;
+          }
+          if (message.includes('unable to load gltfloader')) {
+            return true;
+          }
+          if (message.includes('cannot initialise gltfloader')) {
+            return true;
+          }
+          if (
+            message.includes('gltfloader') &&
+            (message.includes('unavailable') ||
+              message.includes('failed') ||
+              message.includes('error') ||
+              message.includes('missing'))
+          ) {
+            return true;
+          }
+        }
+        const code = typeof candidate.code === 'string' ? candidate.code.trim().toUpperCase() : '';
+        if (code === 'GLTF_LOADER_UNAVAILABLE' || code === 'MODEL_LOADER_UNAVAILABLE') {
+          return true;
+        }
+        if (candidate.cause && inspect(candidate.cause)) {
+          return true;
+        }
+        if (Array.isArray(candidate.errors)) {
+          return candidate.errors.some((entry) => inspect(entry));
+        }
+        return false;
+      };
+      return inspect(error);
+    }
+
+    buildModelLoaderFallbackMessage(key) {
+      const friendly = this.describeAssetKey(key);
+      if (typeof friendly === 'string' && friendly.trim().length) {
+        const label = friendly.trim();
+        const capitalised = `${label.charAt(0).toUpperCase()}${label.slice(1)}`;
+        return `${capitalised} unavailable — model loader offline. Showing placeholder visuals.`;
+      }
+      return 'Model loader unavailable — placeholder visuals active.';
+    }
+
     loadModel(key, overrideUrl) {
       const THREE = this.THREE;
       const url = overrideUrl ? resolveAssetUrl(overrideUrl) : MODEL_URLS[key];
@@ -7169,7 +7225,12 @@
         .catch((error) => {
           const attemptsTried = this.assetRetryState.get(key) || this.assetRetryLimit;
           this.assetRetryState.delete(key);
-          this.completeAssetTimer('models', key, { success: false, url });
+          const loaderUnavailable = this.isModelLoaderUnavailableError(error);
+          this.completeAssetTimer('models', key, {
+            success: false,
+            url,
+            loaderUnavailable,
+          });
           if (error && typeof error === 'object') {
             error.__assetFailureHandled = true;
           }
@@ -7177,7 +7238,18 @@
             `Failed to load model "${key}" from ${url} after ${attemptsTried} attempt(s).`,
             error,
           );
-          this.handleAssetLoadFailure(key, error);
+          const fallbackOptions = loaderUnavailable
+            ? { fallbackMessage: this.buildModelLoaderFallbackMessage(key) }
+            : undefined;
+          this.handleAssetLoadFailure(key, error, fallbackOptions);
+          if (loaderUnavailable) {
+            const fallbackScene = this.createModelFallbackMesh(key, { reason: 'loader-unavailable' });
+            if (fallbackScene) {
+              const fallbackPayload = { scene: fallbackScene, animations: [] };
+              this.loadedModels.set(key, fallbackPayload);
+              return fallbackPayload;
+            }
+          }
           this.modelPromises.delete(key);
           throw error;
         });
