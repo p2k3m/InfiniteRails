@@ -180,6 +180,32 @@ describe('deployment workflow asset coverage', () => {
     expect(missing).toEqual([]);
   });
 
+  it('ensures manifest assets are world-readable without extra write or execute bits', () => {
+    const invalid = manifestAssets.filter((asset) => {
+      const filePath = path.join(repoRoot, asset);
+      let stats;
+      try {
+        stats = fs.statSync(filePath);
+      } catch (error) {
+        return true;
+      }
+      if (!stats.isFile()) {
+        return true;
+      }
+
+      const mode = stats.mode & 0o777;
+      const hasOwnerRead = (mode & 0o400) !== 0;
+      const hasGroupRead = (mode & 0o040) !== 0;
+      const hasOtherRead = (mode & 0o004) !== 0;
+      const hasUnexpectedWrite = (mode & 0o022) !== 0;
+      const hasExecute = (mode & 0o111) !== 0;
+
+      return !hasOwnerRead || !hasGroupRead || !hasOtherRead || hasUnexpectedWrite || hasExecute;
+    });
+
+    expect(invalid).toEqual([]);
+  });
+
   it('does not include duplicate entries', () => {
     expect(manifestAssets.length).toBe(manifestAssetSet.size);
   });
