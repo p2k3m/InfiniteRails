@@ -731,5 +731,10 @@ describe('renderer mode selection', () => {
       expect(tryStartSimpleFallback(new Error('missing'), { reason: 'no-simple' })).toBe(false);
       expect(getAttempted()).toBe(false);
     });
+
+    it('invokes the fallback bootstrap when a start-error event is emitted', () => {
+      const pattern = /addEventListener\('infinite-rails:start-error'[\s\S]*?tryStartSimpleFallback\(/;
+      expect(pattern.test(scriptSource)).toBe(true);
+    });
   });
 });

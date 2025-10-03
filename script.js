@@ -1683,6 +1683,32 @@
     return false;
   }
 
+  function resolveRendererModeForFallback(detail) {
+    const resolveValue = (value) =>
+      typeof value === 'string' && value.trim().length ? value.trim() : null;
+    const directDetail =
+      resolveValue(detail?.mode) ||
+      resolveValue(detail?.rendererMode) ||
+      resolveValue(detail?.currentMode) ||
+      resolveValue(detail?.detail?.mode);
+    if (directDetail) {
+      return directDetail;
+    }
+    const apiMode = resolveValue(globalScope?.InfiniteRails?.rendererMode);
+    if (apiMode) {
+      return apiMode;
+    }
+    const stateMode = resolveValue(globalScope?.__INFINITE_RAILS_RENDERER_MODE__);
+    if (stateMode) {
+      return stateMode;
+    }
+    const snapshotMode = resolveValue(globalScope?.__INFINITE_RAILS_STATE__?.rendererMode);
+    if (snapshotMode) {
+      return snapshotMode;
+    }
+    return null;
+  }
+
   function applyRendererReadyState(detail = null, options = {}) {
     bootstrapOverlay.setDiagnostic('renderer', {
       status: 'ok',
@@ -2201,12 +2227,7 @@
           timestamp: Number.isFinite(detail?.timestamp) ? detail.timestamp : undefined,
         });
       }
-      const activeMode =
-        typeof detail.mode === 'string' && detail.mode.trim().length
-          ? detail.mode.trim()
-          : typeof globalScope.__INFINITE_RAILS_RENDERER_MODE__ === 'string'
-            ? globalScope.__INFINITE_RAILS_RENDERER_MODE__
-            : null;
+      const activeMode = resolveRendererModeForFallback(detail);
       if (activeMode !== 'simple') {
         const fallbackContext = {
           reason: 'renderer-failure',
@@ -2545,6 +2566,24 @@
         detail,
         timestamp: Number.isFinite(detail?.timestamp) ? detail.timestamp : undefined,
       });
+      const activeMode = resolveRendererModeForFallback(detail);
+      if (activeMode !== 'simple') {
+        const fallbackContext = { reason: 'start-error', mode: activeMode || 'unknown' };
+        if (stage) {
+          fallbackContext.stage = stage;
+        }
+        let fallbackError = null;
+        if (detail?.error instanceof Error) {
+          fallbackError = detail.error;
+        } else if (errorMessage) {
+          const syntheticError = new Error(errorMessage);
+          if (errorName) {
+            syntheticError.name = errorName;
+          }
+          fallbackError = syntheticError;
+        }
+        tryStartSimpleFallback(fallbackError, fallbackContext);
+      }
     });
     globalScope.addEventListener('infinite-rails:initialisation-error', (event) => {
       const detail = event?.detail && typeof event.detail === 'object' ? event.detail : {};
