@@ -736,5 +736,10 @@ describe('renderer mode selection', () => {
       const pattern = /addEventListener\('infinite-rails:start-error'[\s\S]*?tryStartSimpleFallback\(/;
       expect(pattern.test(scriptSource)).toBe(true);
     });
+
+    it('invokes the fallback bootstrap when an initialisation-error event is emitted', () => {
+      const pattern = /addEventListener\('infinite-rails:initialisation-error'[\s\S]*?tryStartSimpleFallback\(/;
+      expect(pattern.test(scriptSource)).toBe(true);
+    });
   });
 });
