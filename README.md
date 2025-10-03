@@ -49,6 +49,7 @@ Two automated suites ship with the repository:
 
 1. `npm test` runs the Vitest unit suite that exercises the pure utility modules (scoreboard helpers, portal mechanics, and combat maths).
 2. `npm run test:e2e` launches the Playwright smoke test that boots the sandbox, validates HUD panels, and confirms there are no console regressions.
+3. `npm run test:pre-release` executes both suites sequentially and is wired into the release hooks so `npm version`/`npm publish` fail fast if either suite regresses.
 
 Playwright downloads its browser binaries on demand. If the end-to-end check fails with a message similar to “Executable doesn't exist … run `npx playwright install`”, execute that command once and rerun the test. When the host machine is missing system-level browser dependencies (common inside constrained CI sandboxes), the script now reports the missing packages and exits gracefully so the rest of the toolchain can continue. The download step is skipped automatically in CI because the workflow caches the Playwright bundle.
 
