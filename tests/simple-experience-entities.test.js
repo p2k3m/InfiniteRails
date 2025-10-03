@@ -424,6 +424,80 @@ describe('simple experience entity lifecycle', () => {
     expect(experience.zombieGroup.children.length).toBeGreaterThan(0);
   });
 
+  it('repositions zombies onto a safe navmesh when their spawn chunk lacks coverage', async () => {
+    const { experience } = createExperienceForTest();
+
+    experience.start();
+    await Promise.resolve();
+
+    experience.forceNightCycle();
+    experience.lastZombieSpawn = experience.elapsed - 100;
+
+    const fallbackNavmesh = {
+      key: 'player',
+      walkableCellCount: 1,
+      cells: [
+        {
+          worldX: 1,
+          worldZ: -2,
+          surfaceY: 3,
+        },
+      ],
+    };
+
+    const ensureChunkSpy = vi
+      .spyOn(experience, 'ensureNavigationMeshForChunk')
+      .mockImplementation((chunkKey, options) => {
+        if (chunkKey === 'player') {
+          return fallbackNavmesh;
+        }
+        return null;
+      });
+
+    const ensureWorldSpy = vi
+      .spyOn(experience, 'ensureNavigationMeshForWorldPosition')
+      .mockReturnValue(null);
+
+    const playerPosSpy = vi.spyOn(experience, 'getPlayerWorldPosition').mockImplementation(() => {
+      return new experience.THREE.Vector3(0, 0, 0);
+    });
+
+    const chunkKeySpy = vi
+      .spyOn(experience, 'getChunkKeyForWorldPosition')
+      .mockImplementation((x, z) => {
+        if (Math.abs(x) < 1e-6 && Math.abs(z) < 1e-6) {
+          return 'player';
+        }
+        return 'spawn';
+      });
+
+    const groundSpy = vi.spyOn(experience, 'sampleGroundHeight').mockReturnValue(0);
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0.25);
+
+    try {
+      expect(() => experience.spawnZombie()).not.toThrow();
+
+      expect(ensureChunkSpy).toHaveBeenCalledWith('spawn', expect.objectContaining({ reason: 'zombie-spawn' }));
+      expect(ensureChunkSpy).toHaveBeenCalledWith(
+        'player',
+        expect.objectContaining({ reason: 'zombie-spawn-fallback' }),
+      );
+      expect(experience.zombies.length).toBeGreaterThan(0);
+      const zombie = experience.zombies[experience.zombies.length - 1];
+      expect(zombie.navChunkKey).toBe('player');
+      expect(zombie.mesh.position.x).toBeCloseTo(fallbackNavmesh.cells[0].worldX, 5);
+      expect(zombie.mesh.position.z).toBeCloseTo(fallbackNavmesh.cells[0].worldZ, 5);
+      expect(zombie.mesh.position.y).toBeCloseTo(fallbackNavmesh.cells[0].surfaceY + 0.9, 5);
+    } finally {
+      randomSpy.mockRestore();
+      groundSpy.mockRestore();
+      ensureChunkSpy.mockRestore();
+      ensureWorldSpy.mockRestore();
+      playerPosSpy.mockRestore();
+      chunkKeySpy.mockRestore();
+    }
+  });
+
   it('spawns golems with fallback materials when MeshStandardMaterial is unavailable', async () => {
     const { experience } = createExperienceForTest();
 
