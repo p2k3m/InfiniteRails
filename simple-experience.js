@@ -2073,6 +2073,9 @@
       this.navigationMeshGeneration = 0;
       this.navigationMeshBuildCounter = 0;
       this.navigationMeshSummary = { chunkCount: 0, walkableCells: 0, reason: 'init', updatedAt: 0 };
+      this.navigationMeshMaintenanceHandle = null;
+      this.navigationMeshMaintenanceCancel = null;
+      this.navigationMeshMaintenanceReason = null;
       this.chunkFrustum = new THREE.Frustum();
       this.chunkFrustumMatrix = new THREE.Matrix4();
       this.terrainCullingAccumulator = 0;
@@ -4991,6 +4994,7 @@
     stop() {
       this.cancelQueuedModelPreload();
       this.cancelAllAssetDelayWarnings();
+      this.cancelNavigationMeshMaintenance();
       if (this.animationFrame !== null) {
         cancelAnimationFrame(this.animationFrame);
         this.animationFrame = null;
@@ -9717,6 +9721,7 @@
         this.terrainChunkGroups = [];
         this.terrainChunkMap.clear();
         this.dirtyTerrainChunks.clear();
+        this.cancelNavigationMeshMaintenance();
         if (!this.navigationMeshes) {
           this.navigationMeshes = new Map();
         } else {
@@ -10140,15 +10145,112 @@
       chunk.userData = data;
     }
 
+    cancelNavigationMeshMaintenance(clearReason = true) {
+      if (this.navigationMeshMaintenanceHandle !== null) {
+        const globalScope = typeof globalThis !== 'undefined' ? globalThis : undefined;
+        const scope = typeof window !== 'undefined' ? window : globalScope;
+        const cancelIdle = scope?.cancelIdleCallback;
+        const clearTimer =
+          typeof scope?.clearTimeout === 'function'
+            ? scope.clearTimeout.bind(scope)
+            : typeof globalScope?.clearTimeout === 'function'
+              ? globalScope.clearTimeout.bind(globalScope)
+              : clearTimeout;
+        if (typeof this.navigationMeshMaintenanceCancel === 'function') {
+          try {
+            this.navigationMeshMaintenanceCancel(this.navigationMeshMaintenanceHandle);
+          } catch (error) {
+            if (typeof cancelIdle === 'function') {
+              try {
+                cancelIdle(this.navigationMeshMaintenanceHandle);
+              } catch (_) {
+                clearTimer(this.navigationMeshMaintenanceHandle);
+              }
+            } else {
+              clearTimer(this.navigationMeshMaintenanceHandle);
+            }
+          }
+        } else if (typeof cancelIdle === 'function') {
+          try {
+            cancelIdle(this.navigationMeshMaintenanceHandle);
+          } catch (_) {
+            clearTimer(this.navigationMeshMaintenanceHandle);
+          }
+        } else {
+          clearTimer(this.navigationMeshMaintenanceHandle);
+        }
+        this.navigationMeshMaintenanceHandle = null;
+        this.navigationMeshMaintenanceCancel = null;
+      }
+      if (clearReason) {
+        this.navigationMeshMaintenanceReason = null;
+      }
+    }
+
+    scheduleNavigationMeshMaintenance(reason = 'terrain-update') {
+      if (!(this.dirtyTerrainChunks instanceof Set)) {
+        this.dirtyTerrainChunks = new Set();
+      }
+      const dirtyTerrain = this.dirtyTerrainChunks.size > 0;
+      const dirtyNavigation =
+        this.dirtyNavigationChunks instanceof Set && this.dirtyNavigationChunks.size > 0;
+      this.navigationMeshMaintenanceReason = reason;
+      if (!dirtyTerrain && !dirtyNavigation) {
+        this.cancelNavigationMeshMaintenance(false);
+        return false;
+      }
+      if (this.navigationMeshMaintenanceHandle !== null) {
+        return false;
+      }
+      const globalScope = typeof globalThis !== 'undefined' ? globalThis : undefined;
+      const scope = typeof window !== 'undefined' ? window : globalScope;
+      const requestIdle = scope?.requestIdleCallback;
+      const cancelIdle = scope?.cancelIdleCallback;
+      const setTimer =
+        typeof scope?.setTimeout === 'function'
+          ? scope.setTimeout.bind(scope)
+          : typeof globalScope?.setTimeout === 'function'
+            ? globalScope.setTimeout.bind(globalScope)
+            : setTimeout;
+      const clearTimer =
+        typeof scope?.clearTimeout === 'function'
+          ? scope.clearTimeout.bind(scope)
+          : typeof globalScope?.clearTimeout === 'function'
+            ? globalScope.clearTimeout.bind(globalScope)
+            : clearTimeout;
+      const invokeMaintenance = () => {
+        this.navigationMeshMaintenanceHandle = null;
+        this.navigationMeshMaintenanceCancel = null;
+        this.refreshDirtyTerrainChunks({ reason });
+      };
+      if (typeof requestIdle === 'function') {
+        try {
+          this.navigationMeshMaintenanceHandle = requestIdle(invokeMaintenance, { timeout: 120 });
+          if (typeof cancelIdle === 'function') {
+            this.navigationMeshMaintenanceCancel = cancelIdle.bind(scope);
+          }
+          return true;
+        } catch (error) {
+          console.debug('requestIdleCallback scheduling for navmesh maintenance failed; falling back.', error);
+        }
+      }
+      this.navigationMeshMaintenanceCancel = clearTimer;
+      this.navigationMeshMaintenanceHandle = setTimer(invokeMaintenance, 0);
+      return true;
+    }
+
     markTerrainChunkDirty(chunkKey) {
       if (!chunkKey || !this.terrainChunkMap.has(chunkKey)) return;
       this.dirtyTerrainChunks.add(chunkKey);
       if (this.dirtyNavigationChunks) {
         this.dirtyNavigationChunks.add(chunkKey);
       }
+      this.scheduleNavigationMeshMaintenance('terrain-update');
     }
 
-    refreshDirtyTerrainChunks() {
+    refreshDirtyTerrainChunks(options = {}) {
+      this.cancelNavigationMeshMaintenance(false);
+      const reason = options.reason ?? this.navigationMeshMaintenanceReason ?? 'terrain-update';
       const dirtyNavCount = this.dirtyNavigationChunks?.size ?? 0;
       if (!this.dirtyTerrainChunks.size && !dirtyNavCount) return;
       const keys = new Set();
@@ -10179,7 +10281,7 @@
         if (this.dirtyTerrainChunks.has(key)) {
           this.recalculateTerrainChunkBounds(chunk);
         }
-        const navmesh = this.rebuildNavigationMeshForChunk(key, { reason: 'terrain-update' });
+        const navmesh = this.rebuildNavigationMeshForChunk(key, { reason });
         if (navmesh) {
           navMeshesUpdated += 1;
         }
@@ -10199,21 +10301,22 @@
           this.navigationMeshSummary = {
             chunkCount,
             walkableCells: totalWalkable,
-            reason: 'terrain-update',
+            reason,
             updatedAt: timestamp,
           };
         } else {
           this.navigationMeshSummary.chunkCount = chunkCount;
           this.navigationMeshSummary.walkableCells = totalWalkable;
-          this.navigationMeshSummary.reason = 'terrain-update';
+          this.navigationMeshSummary.reason = reason;
           this.navigationMeshSummary.updatedAt = timestamp;
         }
         if (typeof console !== 'undefined') {
           console.info(
-            `Navigation mesh delta refresh — ${navMeshesUpdated} chunk meshes rebuilt (${totalWalkable} walkable surfaces tracked).`,
+            `Navigation mesh delta refresh — ${navMeshesUpdated} chunk meshes rebuilt (${totalWalkable} walkable surfaces tracked, reason: ${reason}).`,
           );
         }
       }
+      this.navigationMeshMaintenanceReason = null;
     }
 
     ensureNavigationMeshForWorldPosition(x, z, options = {}) {
@@ -14212,9 +14315,14 @@
       const id = (this.zombieIdCounter += 1);
       const angle = Math.random() * Math.PI * 2;
       const radius = WORLD_SIZE * 0.45;
-      const x = Math.cos(angle) * radius;
-      const z = Math.sin(angle) * radius;
-      const ground = this.sampleGroundHeight(x, z);
+      const spawnInfo = {
+        x: Math.cos(angle) * radius,
+        z: Math.sin(angle) * radius,
+        surfaceY: null,
+        chunkKey: null,
+      };
+      spawnInfo.surfaceY = this.sampleGroundHeight(spawnInfo.x, spawnInfo.z);
+      spawnInfo.chunkKey = this.getChunkKeyForWorldPosition(spawnInfo.x, spawnInfo.z);
       if (!this.zombieGeometry) {
         this.zombieGeometry = new THREE.BoxGeometry(0.9, 1.8, 0.9);
       }
@@ -14239,19 +14347,57 @@
       const mesh = new THREE.Mesh(this.zombieGeometry, material);
       mesh.castShadow = true;
       mesh.receiveShadow = true;
-      mesh.position.set(x, ground + 0.9, z);
-      const spawnChunkKey = this.getChunkKeyForWorldPosition(x, z);
+      let spawnChunkKey = spawnInfo.chunkKey;
+      let spawnNavmesh = null;
       if (spawnChunkKey) {
-        this.ensureNavigationMeshForChunk(spawnChunkKey, { reason: 'zombie-spawn' });
+        spawnNavmesh = this.ensureNavigationMeshForChunk(spawnChunkKey, { reason: 'zombie-spawn' });
       } else {
-        this.ensureNavigationMeshForWorldPosition(x, z, { reason: 'zombie-spawn-fallback' });
-        if (typeof console !== 'undefined') {
-          console.warn('Zombie spawned outside navmesh coverage — verify spawn radius and terrain bounds.', {
-            x,
-            z,
+        spawnNavmesh = this.ensureNavigationMeshForWorldPosition(spawnInfo.x, spawnInfo.z, {
+          reason: 'zombie-spawn-fallback',
+        });
+      }
+      if (!spawnNavmesh || !spawnNavmesh.walkableCellCount) {
+        const playerPosition = this.getPlayerWorldPosition(this.tmpVector3);
+        const fallbackChunkKey = this.getChunkKeyForWorldPosition(playerPosition.x, playerPosition.z);
+        if (fallbackChunkKey) {
+          const fallbackNavmesh = this.ensureNavigationMeshForChunk(fallbackChunkKey, {
+            reason: 'zombie-spawn-fallback',
+          });
+          if (fallbackNavmesh?.walkableCellCount && Array.isArray(fallbackNavmesh.cells)) {
+            const index = Math.min(
+              fallbackNavmesh.walkableCellCount - 1,
+              Math.floor(Math.random() * fallbackNavmesh.walkableCellCount),
+            );
+            const fallbackCell = fallbackNavmesh.cells[index] || null;
+            if (fallbackCell) {
+              spawnChunkKey = fallbackChunkKey;
+              spawnNavmesh = fallbackNavmesh;
+              spawnInfo.x = fallbackCell.worldX;
+              spawnInfo.z = fallbackCell.worldZ;
+              spawnInfo.chunkKey = fallbackChunkKey;
+              spawnInfo.surfaceY = Number.isFinite(fallbackCell.surfaceY)
+                ? fallbackCell.surfaceY
+                : this.sampleGroundHeight(fallbackCell.worldX, fallbackCell.worldZ);
+            }
+          }
+        } else {
+          spawnNavmesh = this.ensureNavigationMeshForWorldPosition(playerPosition.x, playerPosition.z, {
+            reason: 'zombie-spawn-fallback',
+          });
+        }
+        if ((!spawnNavmesh || !spawnNavmesh.walkableCellCount) && typeof console !== 'undefined') {
+          console.warn('Zombie spawn fallback engaged — navmesh coverage unavailable at candidate location.', {
+            attemptedChunk: spawnInfo.chunkKey ?? null,
+            fallbackChunk: spawnChunkKey ?? null,
+            x: spawnInfo.x,
+            z: spawnInfo.z,
           });
         }
       }
+      const surfaceY = Number.isFinite(spawnInfo.surfaceY)
+        ? spawnInfo.surfaceY
+        : this.sampleGroundHeight(spawnInfo.x, spawnInfo.z);
+      mesh.position.set(spawnInfo.x, surfaceY + 0.9, spawnInfo.z);
       zombieGroup.add(mesh);
       const zombie = {
         id,

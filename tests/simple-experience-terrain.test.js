@@ -418,4 +418,45 @@ describe('simple experience terrain generation', () => {
     expect(summary.chunkCount).toBe(summary.expectedChunkCount);
     expect(summary.voxelCount).toBe(summary.terrainMeshCount);
   });
+
+  it('rebuilds navigation meshes after terrain edits even when the render loop is idle', () => {
+    const canvas = {
+      width: 512,
+      height: 512,
+      clientWidth: 512,
+      clientHeight: 512,
+      getContext: () => null,
+    };
+
+    const experience = window.SimpleExperience.create({ canvas, ui: {} });
+    const worldSize = experience.heightMap.length;
+    experience.heightMap = Array.from({ length: worldSize }, () => Array(worldSize).fill(2));
+    experience.terrainGroup = new THREE.Group();
+    experience.terrainChunkGroups = [];
+    experience.terrainChunkMap = new Map();
+    const chunkKey = '0|0';
+    experience.ensureTerrainChunk(chunkKey);
+
+    vi.useFakeTimers();
+    try {
+      const rebuildSpy = vi.spyOn(experience, 'rebuildNavigationMeshForChunk');
+
+      experience.markTerrainChunkDirty(chunkKey);
+
+      expect(experience.dirtyTerrainChunks.has(chunkKey)).toBe(true);
+      expect(experience.navigationMeshMaintenanceHandle).not.toBeNull();
+
+      vi.runOnlyPendingTimers();
+
+      expect(rebuildSpy).toHaveBeenCalledWith(
+        chunkKey,
+        expect.objectContaining({ reason: 'terrain-update' }),
+      );
+      expect(experience.navigationMeshes.has(chunkKey)).toBe(true);
+      expect(experience.navigationMeshSummary.reason).toBe('terrain-update');
+      expect(experience.navigationMeshMaintenanceHandle).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
