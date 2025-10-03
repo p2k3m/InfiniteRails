@@ -48,8 +48,10 @@
   const PORTAL_SHADER_FALLBACK_ANNOUNCEMENT =
     'Portal shader offline — emissive fallback active.';
   const ZOMBIE_CONTACT_RANGE = 1.35;
+  const ZOMBIE_COLLISION_RADIUS = 0.62;
   const ZOMBIE_SPAWN_INTERVAL = 8;
   const ZOMBIE_MAX_PER_DIMENSION = 4;
+  const GOLEM_COLLISION_RADIUS = 0.95;
   const HOTBAR_SLOTS = 10;
   const KEY_BINDINGS_STORAGE_KEY = 'infinite-rails-keybindings';
   const SCOREBOARD_STORAGE_KEY = 'infinite-dimension-scoreboard';
@@ -1955,6 +1957,8 @@
       this.tmpVector = new THREE.Vector3();
       this.tmpVector2 = new THREE.Vector3();
       this.tmpVector3 = new THREE.Vector3();
+      this.mobCollisionVector = new THREE.Vector3();
+      this.mobCollisionVector2 = new THREE.Vector3();
       this.tmpQuaternion = new THREE.Quaternion();
       this.movementBindingDiagnostics = {
         pending: false,
@@ -14261,6 +14265,9 @@
       const tmpStep = this.tmpVector2;
       for (const zombie of this.zombies) {
         const { mesh } = zombie;
+        if (!Number.isFinite(zombie.collisionRadius)) {
+          zombie.collisionRadius = ZOMBIE_COLLISION_RADIUS;
+        }
         const currentChunkKey = this.getChunkKeyForWorldPosition(mesh.position.x, mesh.position.z);
         if (currentChunkKey) {
           this.ensureNavigationMeshForChunk(currentChunkKey, { reason: 'zombie-chase' });
@@ -14299,6 +14306,16 @@
           this.updateAnimationRig(zombie.animation, delta);
         }
       }
+      const playerBounds = this.getPlayerPhysicsBounds();
+      this.resolveMobCollectionCollisions(this.zombies, {
+        type: 'zombie',
+        fallbackRadius: ZOMBIE_COLLISION_RADIUS,
+        playerBounds,
+        extraTargets: Array.isArray(this.golems) ? this.golems : [],
+        extraCollection: this.golems,
+        extraTargetRadius: GOLEM_COLLISION_RADIUS,
+        extraTargetType: 'golem',
+      });
     }
 
     isNight() {
@@ -14402,6 +14419,7 @@
       const zombie = {
         id,
         mesh,
+        collisionRadius: ZOMBIE_COLLISION_RADIUS,
         speed: 2.4,
         lastAttack: this.elapsed,
         placeholder: true,
@@ -14456,6 +14474,231 @@
         }
       }
       return best;
+    }
+
+    getMobCollisionRadius(mob, fallbackRadius = 0.5) {
+      const safeFallback = Math.max(0.1, Number.isFinite(fallbackRadius) ? fallbackRadius : 0.5);
+      if (!mob) {
+        return safeFallback;
+      }
+      const directRadius = Number.isFinite(mob.collisionRadius) ? mob.collisionRadius : null;
+      const meshRadius = Number.isFinite(mob?.mesh?.userData?.collisionRadius)
+        ? mob.mesh.userData.collisionRadius
+        : null;
+      const radius = directRadius ?? meshRadius ?? safeFallback;
+      if (!Number.isFinite(radius) || radius <= 0) {
+        mob.collisionRadius = safeFallback;
+        return safeFallback;
+      }
+      return radius;
+    }
+
+    resolveMobPlayerCollision(mob, playerBounds, options = {}) {
+      if (!mob || !playerBounds || !playerBounds.position) {
+        return false;
+      }
+      const position = mob.mesh?.position || null;
+      if (!position || typeof position.x !== 'number' || typeof position.z !== 'number') {
+        throw new Error('Mob position unavailable for collision resolution.');
+      }
+      if (typeof position.addScaledVector !== 'function') {
+        throw new Error('Mob position vector missing addScaledVector helper.');
+      }
+      const radius = this.getMobCollisionRadius(mob, options.fallbackRadius);
+      const playerRadius = Number.isFinite(playerBounds.radius) ? playerBounds.radius : this.playerPhysicsRadius;
+      if (!Number.isFinite(playerRadius) || playerRadius <= 0) {
+        throw new Error('Player collision radius unavailable.');
+      }
+      const target = this.mobCollisionVector;
+      const playerPosition = playerBounds.position;
+      target.set(
+        position.x - (playerPosition.x ?? 0),
+        0,
+        position.z - (playerPosition.z ?? 0),
+      );
+      let distance = target.length();
+      if (!Number.isFinite(distance)) {
+        throw new Error('Mob/player distance invalid.');
+      }
+      if (distance === 0) {
+        target.set(Math.random() - 0.5 || 0.5, 0, Math.random() - 0.5 || -0.5);
+        distance = target.length();
+      }
+      const minDistance = radius + playerRadius;
+      if (minDistance <= 0) {
+        throw new Error('Minimum collision distance invalid.');
+      }
+      if (distance >= minDistance || distance <= 0) {
+        return false;
+      }
+      target.multiplyScalar(1 / distance);
+      const push = Math.min(minDistance - distance + 1e-4, minDistance);
+      position.addScaledVector(target, push);
+      return true;
+    }
+
+    resolveMobPairCollision(primary, secondary, options = {}) {
+      if (!primary || !secondary || primary === secondary) {
+        return false;
+      }
+      const positionA = primary.mesh?.position || null;
+      const positionB = secondary.mesh?.position || null;
+      if (!positionA || !positionB || typeof positionA.x !== 'number' || typeof positionB.x !== 'number') {
+        throw new Error('Mob positions unavailable for collision resolution.');
+      }
+      if (typeof positionA.addScaledVector !== 'function' || typeof positionB.addScaledVector !== 'function') {
+        throw new Error('Mob position vectors missing addScaledVector helper.');
+      }
+      const radiusA = this.getMobCollisionRadius(primary, options.fallbackRadiusA);
+      const radiusB = this.getMobCollisionRadius(secondary, options.fallbackRadiusB);
+      const direction = this.mobCollisionVector;
+      direction.set(positionA.x - positionB.x, 0, positionA.z - positionB.z);
+      let distance = direction.length();
+      if (!Number.isFinite(distance)) {
+        throw new Error('Mob separation distance invalid.');
+      }
+      if (distance === 0) {
+        direction.set(Math.random() - 0.5 || 0.5, 0, Math.random() - 0.5 || -0.5);
+        distance = direction.length();
+      }
+      const minDistance = radiusA + radiusB;
+      if (minDistance <= 0) {
+        throw new Error('Mob collision radii invalid.');
+      }
+      if (distance >= minDistance || distance <= 0) {
+        return false;
+      }
+      direction.multiplyScalar(1 / distance);
+      const correction = minDistance - distance;
+      const maxCorrection = minDistance;
+      const applied = Math.min(correction + 1e-4, maxCorrection);
+      const half = applied * 0.5;
+      positionA.addScaledVector(direction, half);
+      if (options.allowSecondaryAdjustment !== false) {
+        positionB.addScaledVector(direction, -half);
+      }
+      return true;
+    }
+
+    resolveMobCollectionCollisions(mobs, options = {}) {
+      if (!Array.isArray(mobs) || mobs.length === 0) {
+        return;
+      }
+      const type = options.type || 'mob';
+      const fallbackRadius = Number.isFinite(options.fallbackRadius) ? options.fallbackRadius : 0.5;
+      const playerBounds = options.playerBounds || null;
+      const extras = Array.isArray(options.extraTargets) ? options.extraTargets.slice() : [];
+      const extraCollection = options.extraCollection || extras;
+      const extraRadius = Number.isFinite(options.extraTargetRadius)
+        ? options.extraTargetRadius
+        : fallbackRadius;
+      const extraType = options.extraTargetType || 'mob';
+      const allowExtraAdjustment = options.allowSecondaryAdjustmentForExtra !== false;
+      const active = mobs.slice();
+      for (let i = 0; i < active.length; i += 1) {
+        const mob = active[i];
+        if (!mob || !mobs.includes(mob)) {
+          continue;
+        }
+        if (playerBounds) {
+          try {
+            this.resolveMobPlayerCollision(mob, playerBounds, { fallbackRadius });
+          } catch (error) {
+            this.handleMobCollisionFailure(type, mob, error);
+            continue;
+          }
+        }
+        for (let j = i + 1; j < active.length; j += 1) {
+          const other = active[j];
+          if (!other || !mobs.includes(other)) {
+            continue;
+          }
+          try {
+            this.resolveMobPairCollision(mob, other, {
+              fallbackRadiusA: fallbackRadius,
+              fallbackRadiusB: fallbackRadius,
+            });
+          } catch (error) {
+            this.handleMobCollisionFailure(type, mob, error);
+            this.handleMobCollisionFailure(type, other, error);
+            if (!mobs.includes(mob)) {
+              break;
+            }
+          }
+        }
+        if (!mobs.includes(mob)) {
+          continue;
+        }
+        for (const extra of extras) {
+          if (!extra) {
+            continue;
+          }
+          if (Array.isArray(extraCollection) && !extraCollection.includes(extra)) {
+            continue;
+          }
+          if (extra === mob) {
+            continue;
+          }
+          try {
+            this.resolveMobPairCollision(mob, extra, {
+              fallbackRadiusA: fallbackRadius,
+              fallbackRadiusB: extraRadius,
+              allowSecondaryAdjustment: allowExtraAdjustment,
+            });
+          } catch (error) {
+            this.handleMobCollisionFailure(type, mob, error);
+            this.handleMobCollisionFailure(extraType, extra, error);
+            if (!mobs.includes(mob)) {
+              break;
+            }
+          }
+        }
+      }
+    }
+
+    handleMobCollisionFailure(type, mob, error) {
+      if (!mob) {
+        return;
+      }
+      if (typeof console !== 'undefined' && typeof console.warn === 'function') {
+        console.warn('Mob collision handling failed — rebuilding entity.', {
+          type,
+          id: mob?.id ?? null,
+          error,
+        });
+      }
+      if (type === 'zombie' && !Array.isArray(this.zombies)) {
+        this.zombies = [];
+      }
+      if (type === 'golem' && !Array.isArray(this.golems)) {
+        this.golems = [];
+      }
+      if (type === 'zombie') {
+        this.removeZombie(mob);
+        if (this.isNight() && this.zombies.length < ZOMBIE_MAX_PER_DIMENSION) {
+          try {
+            this.spawnZombie();
+          } catch (spawnError) {
+            if (typeof console !== 'undefined' && typeof console.error === 'function') {
+              console.error('Failed to respawn zombie after collision failure.', spawnError);
+            }
+          }
+        }
+        return;
+      }
+      if (type === 'golem') {
+        this.removeGolem(mob);
+        const shouldSpawnGuard = this.isNight() || this.zombies.length > 0;
+        if (shouldSpawnGuard && this.golems.length < GOLEM_MAX_PER_DIMENSION) {
+          try {
+            this.spawnGolem();
+          } catch (spawnError) {
+            if (typeof console !== 'undefined' && typeof console.error === 'function') {
+              console.error('Failed to respawn golem after collision failure.', spawnError);
+            }
+          }
+        }
+      }
     }
 
     ensureEntityGroup(kind) {
@@ -14702,6 +14945,7 @@
       const golem = {
         id: `golem-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
         mesh: actor,
+        collisionRadius: GOLEM_COLLISION_RADIUS,
         cooldown: 0,
         speed: 3.1,
         placeholder: true,
@@ -14732,6 +14976,9 @@
       const playerPosition = this.getPlayerWorldPosition(this.tmpVector3);
       this.ensureNavigationMeshForWorldPosition(playerPosition.x, playerPosition.z);
       for (const golem of this.golems) {
+        if (!Number.isFinite(golem.collisionRadius)) {
+          golem.collisionRadius = GOLEM_COLLISION_RADIUS;
+        }
         golem.cooldown = Math.max(0, golem.cooldown - delta);
         const target = this.findNearestZombie(golem.mesh.position) ?? null;
         const destination = target?.mesh?.position ?? playerPosition;
@@ -14781,6 +15028,12 @@
           this.updateAnimationRig(golem.animation, delta);
         }
       }
+      const playerBounds = this.getPlayerPhysicsBounds();
+      this.resolveMobCollectionCollisions(this.golems, {
+        type: 'golem',
+        fallbackRadius: GOLEM_COLLISION_RADIUS,
+        playerBounds,
+      });
       const beforeCullCount = this.golems.length;
       this.golems = this.golems.filter((golem) => {
         const keep = golem.mesh.parent === this.golemGroup;
@@ -14819,6 +15072,33 @@
       }
       this.golemGroup?.clear?.();
       this.golems = [];
+    }
+
+    removeGolem(target) {
+      if (!target) return;
+      if (!Array.isArray(this.golems)) {
+        this.golems = [];
+      }
+      const index = this.golems.indexOf(target);
+      if (index >= 0) {
+        this.golems.splice(index, 1);
+      }
+      if (target.animation) {
+        this.disposeAnimationRig(target.animation);
+        target.animation = null;
+      }
+      if (target.mesh && this.golemGroup?.remove) {
+        try {
+          this.golemGroup.remove(target.mesh);
+        } catch (error) {
+          if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+            console.debug('Failed to detach golem mesh during removal.', error);
+          }
+        }
+      }
+      if (target.mesh) {
+        disposeObject3D(target.mesh);
+      }
     }
 
     damagePlayer(amount) {
