@@ -4294,6 +4294,26 @@
     }
     activeExperienceInstance = experience;
     globalScope.__INFINITE_RAILS_ACTIVE_EXPERIENCE__ = experience;
+    let assetPreloadPromise = null;
+    if (experience && typeof experience.enableStrictAssetValidation === 'function') {
+      try {
+        experience.enableStrictAssetValidation();
+      } catch (error) {
+        if (globalScope.console?.debug) {
+          globalScope.console.debug('Failed to enable strict asset validation.', error);
+        }
+      }
+    }
+    if (experience && typeof experience.preloadRequiredAssets === 'function') {
+      try {
+        assetPreloadPromise = experience.preloadRequiredAssets();
+      } catch (error) {
+        assetPreloadPromise = Promise.reject(error);
+        if (globalScope.console?.error) {
+          globalScope.console.error('Critical asset preload failure detected.', error);
+        }
+      }
+    }
     if (developerStatsState.enabled) {
       developerStatsState.lastUpdateAt = 0;
       const metrics = collectDeveloperMetrics();
@@ -4312,23 +4332,71 @@
     if (typeof experience.publishStateSnapshot === 'function') {
       experience.publishStateSnapshot('bootstrap');
     }
-    if (typeof bootstrapOverlay !== 'undefined') {
-      if (typeof bootstrapOverlay.setDiagnostic === 'function') {
-        bootstrapOverlay.setDiagnostic('renderer', {
-          status: 'ok',
-          message: 'Renderer ready — press Start Expedition to begin.',
-        });
-        bootstrapOverlay.setDiagnostic('assets', {
+    const overlayController = typeof bootstrapOverlay !== 'undefined' ? bootstrapOverlay : null;
+    const hideBootstrapOverlay = () => {
+      if (!overlayController || typeof overlayController.hide !== 'function') {
+        return;
+      }
+      const overlayState = overlayController.state ?? {};
+      if (overlayState.mode !== 'error') {
+        overlayController.hide({ force: true });
+      }
+    };
+    if (overlayController && typeof overlayController.setDiagnostic === 'function') {
+      overlayController.setDiagnostic('renderer', {
+        status: 'ok',
+        message: 'Renderer ready — press Start Expedition to begin.',
+      });
+      if (assetPreloadPromise && typeof assetPreloadPromise.then === 'function') {
+        overlayController.setDiagnostic('assets', {
           status: 'pending',
-          message: 'World assets will stream after launch.',
+          message: 'Preloading world assets…',
+        });
+      } else {
+        overlayController.setDiagnostic('assets', {
+          status: 'ok',
+          message: 'World assets ready.',
         });
       }
-      if (typeof bootstrapOverlay.hide === 'function') {
-        const overlayState = bootstrapOverlay.state ?? {};
-        if (overlayState.mode !== 'error') {
-          bootstrapOverlay.hide({ force: true });
-        }
+    }
+    if (assetPreloadPromise && typeof assetPreloadPromise.then === 'function') {
+      if (ui.startButton) {
+        ui.startButton.disabled = true;
+        ui.startButton.setAttribute('data-preloading', 'true');
       }
+      assetPreloadPromise
+        .then(() => {
+          if (ui.startButton) {
+            ui.startButton.disabled = false;
+            ui.startButton.removeAttribute('data-preloading');
+          }
+          if (overlayController?.setDiagnostic) {
+            overlayController.setDiagnostic('assets', {
+              status: 'ok',
+              message: 'World assets ready.',
+            });
+          }
+          hideBootstrapOverlay();
+        })
+        .catch((error) => {
+          if (globalScope.console?.error) {
+            globalScope.console.error('Critical asset preload failed.', error);
+          }
+          if (overlayController?.setDiagnostic) {
+            overlayController.setDiagnostic('assets', {
+              status: 'error',
+              message: 'Failed to preload world assets.',
+            });
+          }
+          if (overlayController?.showError) {
+            overlayController.showError({
+              title: 'Assets failed to load',
+              message: 'Critical assets failed to preload. Reload to try again.',
+            });
+          }
+        });
+    } else {
+      hideBootstrapOverlay();
     }
     if (typeof logDiagnosticsEvent === 'function') {
       logDiagnosticsEvent('startup', 'Renderer initialised; awaiting player input.', {
@@ -4364,7 +4432,7 @@
       });
       ui.landingGuideButton.dataset.simpleExperienceGuideBound = 'true';
     }
-    if (typeof bootstrapOverlay !== 'undefined') {
+    if (typeof bootstrapOverlay !== 'undefined' && (!assetPreloadPromise || typeof assetPreloadPromise.then !== 'function')) {
       bootstrapOverlay.hide({ force: true });
     }
     return experience;
