@@ -2033,6 +2033,9 @@
       this.portalFrameSlots = new Map();
       this.portalFrameRequiredCount = PORTAL_BLOCK_REQUIREMENT;
       this.portalFrameInteriorValid = false;
+      this.portalFrameFootprintValid = false;
+      this.portalFrameValidationMessage = '';
+      this.portalFrameHighlightMeshes = new Set();
       this.portalHiddenInterior = [];
       this.portalFootprintObstructed = false;
       this.portalFootprintObstructionSummary = '';
@@ -5711,6 +5714,13 @@
             });
           }
         })(),
+        portalInvalid: new THREE.MeshStandardMaterial({
+          color: new THREE.Color('#ff4d4f'),
+          emissive: new THREE.Color('#ff8a80'),
+          emissiveIntensity: 0.35,
+          roughness: 0.6,
+          metalness: 0.1,
+        }),
       };
       this.queueExternalTextureUpgrade('grass', materials.grass);
       this.queueExternalTextureUpgrade('dirt', materials.dirt);
@@ -11176,6 +11186,9 @@
       this.restorePortalInteriorBlocks();
       this.portalHiddenInterior = [];
       this.portalReady = false;
+      this.portalFrameFootprintValid = false;
+      this.portalFrameValidationMessage = '';
+      this.highlightPortalFrameIssues([]);
       const anchor = this.portalAnchorGrid || this.computePortalAnchorGrid();
       const layout = this.portalFrameLayout || this.createPortalFrameLayout();
       const initial = this.initialHeightMap;
@@ -11398,6 +11411,180 @@
     collectPortalFrameSlotObstructions(slot, padding = 0.05) {
       const bounds = this.getPortalFrameSlotBounds(slot, padding);
       return this.collectEntitiesWithinBounds(bounds);
+    }
+
+    getPortalSlotMesh(slot) {
+      if (!slot) {
+        return null;
+      }
+      const gridX = Number.isFinite(slot.gridX) ? slot.gridX : null;
+      const gridZ = Number.isFinite(slot.gridZ) ? slot.gridZ : null;
+      if (gridX === null || gridZ === null) {
+        return null;
+      }
+      const baseHeight = Number.isFinite(slot.baseHeight)
+        ? slot.baseHeight
+        : this.initialHeightMap?.[gridX]?.[gridZ] ?? 0;
+      const targetIndex = baseHeight + slot.relY;
+      if (!Number.isInteger(targetIndex) || targetIndex < 0) {
+        return null;
+      }
+      const columnKey = `${gridX}|${gridZ}`;
+      const column = this.columns.get(columnKey) ?? [];
+      return column[targetIndex] ?? null;
+    }
+
+    clearPortalFrameHighlights() {
+      if (!(this.portalFrameHighlightMeshes instanceof Set)) {
+        this.portalFrameHighlightMeshes = new Set();
+        return;
+      }
+      this.portalFrameHighlightMeshes.forEach((mesh) => {
+        if (!mesh) return;
+        const original = mesh.userData?.portalHighlightOriginalMaterial;
+        if (original) {
+          mesh.material = original;
+          delete mesh.userData.portalHighlightOriginalMaterial;
+        } else if (mesh.userData?.blockType) {
+          mesh.material = this.getMaterialForBlock(mesh.userData.blockType);
+        }
+      });
+      this.portalFrameHighlightMeshes.clear();
+    }
+
+    highlightPortalFrameIssues(slots = []) {
+      this.clearPortalFrameHighlights();
+      if (!Array.isArray(slots) || !slots.length) {
+        return;
+      }
+      const highlightMeshes = new Set();
+      slots.forEach((slot) => {
+        const mesh = this.getPortalSlotMesh(slot);
+        if (!mesh) {
+          return;
+        }
+        if (!mesh.userData) {
+          mesh.userData = {};
+        }
+        if (!mesh.userData.portalHighlightOriginalMaterial) {
+          mesh.userData.portalHighlightOriginalMaterial = mesh.material;
+        }
+        mesh.material = this.materials.portalInvalid || this.getMaterialForBlock('stone');
+        highlightMeshes.add(mesh);
+      });
+      this.portalFrameHighlightMeshes = highlightMeshes;
+    }
+
+    validatePortalFrameFootprint(filledCount = this.portalBlocksPlaced) {
+      if (!this.portalFrameSlots.size) {
+        return { valid: false, message: '', highlightSlots: [] };
+      }
+      const highlightSet = new Set();
+      let missingRequired = 0;
+      let wrongMaterial = 0;
+      const columnStats = new Map();
+
+      const addColumnStat = (slot) => {
+        const key = `${slot.gridX}|${slot.gridZ}`;
+        let stat = columnStats.get(key);
+        if (!stat) {
+          stat = { slots: [], bottomY: null, topY: null };
+          columnStats.set(key, stat);
+        }
+        stat.slots.push(slot);
+        return stat;
+      };
+
+      this.portalFrameSlots.forEach((slot) => {
+        const stat = addColumnStat(slot);
+        const mesh = this.getPortalSlotMesh(slot);
+        if (!mesh) {
+          missingRequired += 1;
+          return;
+        }
+        const blockType = mesh.userData?.blockType ?? null;
+        if (blockType !== 'stone') {
+          wrongMaterial += 1;
+          highlightSet.add(slot);
+        }
+        const positionY = mesh.position?.y;
+        if (Number.isFinite(positionY)) {
+          if (slot.relY === 0 && stat.bottomY === null) {
+            stat.bottomY = positionY;
+          }
+          if (slot.relY === 3) {
+            stat.topY = positionY;
+          }
+        }
+      });
+
+      const bottomValues = [];
+      columnStats.forEach((stat) => {
+        if (Number.isFinite(stat.bottomY)) {
+          bottomValues.push(stat.bottomY);
+        }
+      });
+      let unevenFoundation = false;
+      if (bottomValues.length > 1) {
+        const minBottom = Math.min(...bottomValues);
+        const maxBottom = Math.max(...bottomValues);
+        if (Math.abs(maxBottom - minBottom) > 0.01) {
+          unevenFoundation = true;
+          columnStats.forEach((stat) => {
+            if (!Number.isFinite(stat.bottomY)) {
+              return;
+            }
+            if (Math.abs(stat.bottomY - minBottom) > 0.01) {
+              stat.slots.forEach((slot) => highlightSet.add(slot));
+            }
+          });
+        }
+      }
+
+      const topValues = [];
+      columnStats.forEach((stat) => {
+        if (Number.isFinite(stat.topY)) {
+          topValues.push(stat.topY);
+        }
+      });
+      let unevenTop = false;
+      if (topValues.length > 1) {
+        const minTop = Math.min(...topValues);
+        const maxTop = Math.max(...topValues);
+        if (Math.abs(maxTop - minTop) > 0.01) {
+          unevenTop = true;
+          columnStats.forEach((stat) => {
+            if (!Number.isFinite(stat.topY)) {
+              return;
+            }
+            if (Math.abs(stat.topY - minTop) > 0.01) {
+              stat.slots.forEach((slot) => highlightSet.add(slot));
+            }
+          });
+        }
+      }
+
+      let message = '';
+      const hasPortalBlocks = filledCount > 0 || wrongMaterial > 0;
+      if (wrongMaterial > 0) {
+        message = 'Portal frame must be built from stone blocks in a 4×3 ring.';
+      } else if (hasPortalBlocks && (unevenFoundation || unevenTop)) {
+        message = 'Portal frame must form a level 4×3 ring — realign the blocks.';
+      }
+
+      const required = this.portalFrameRequiredCount || PORTAL_BLOCK_REQUIREMENT;
+      const valid =
+        filledCount >= required &&
+        missingRequired === 0 &&
+        wrongMaterial === 0 &&
+        !unevenFoundation &&
+        !unevenTop;
+
+      return {
+        valid,
+        message,
+        highlightSlots: Array.from(highlightSet),
+      };
     }
 
     isEntityWithinPortalBounds(entry, bounds) {
@@ -11652,6 +11839,18 @@
         }
       });
       this.portalBlocksPlaced = filled;
+      const previousMessage = this.portalFrameValidationMessage;
+      const validation = this.validatePortalFrameFootprint(filled);
+      this.portalFrameFootprintValid = validation.valid;
+      this.portalFrameValidationMessage = validation.message || '';
+      this.highlightPortalFrameIssues(validation.highlightSlots);
+      if (
+        validation.message &&
+        validation.message !== previousMessage &&
+        typeof this.showHint === 'function'
+      ) {
+        this.showHint(validation.message);
+      }
       this.checkPortalActivation();
     }
 
@@ -11773,7 +11972,11 @@
 
     checkPortalActivation() {
       const required = this.portalFrameRequiredCount || PORTAL_BLOCK_REQUIREMENT;
-      const ready = required > 0 && this.portalFrameInteriorValid && this.portalBlocksPlaced >= required;
+      const ready =
+        required > 0 &&
+        this.portalFrameInteriorValid &&
+        this.portalFrameFootprintValid &&
+        this.portalBlocksPlaced >= required;
       if (this.portalActivated) {
         if (!ready) {
           this.deactivatePortal();
@@ -17803,6 +18006,11 @@
         statusState = 'blocked';
         statusLabel = 'Portal Blocked';
         statusMessage = obstructionState.summary || 'Gateway occupied';
+      } else if (!this.portalFrameFootprintValid && this.portalFrameValidationMessage) {
+        progressLabel = 'Align the portal frame';
+        statusState = 'blocked';
+        statusLabel = 'Portal Frame Invalid';
+        statusMessage = this.portalFrameValidationMessage;
       } else if (!this.portalFrameInteriorValid && this.portalBlocksPlaced > 0) {
         progressLabel = 'Clear the portal interior';
         statusState = 'blocked';
@@ -17818,6 +18026,12 @@
       if (this.portalReady && !this.portalActivated) {
         displayProgress = 1;
       } else if (obstructionState.blocked && !this.portalActivated) {
+        displayProgress = Math.min(displayProgress, 0.5);
+      } else if (
+        !this.portalFrameFootprintValid &&
+        !this.portalActivated &&
+        this.portalFrameValidationMessage
+      ) {
         displayProgress = Math.min(displayProgress, 0.5);
       } else if (!this.portalFrameInteriorValid && !this.portalActivated) {
         displayProgress = Math.min(displayProgress, 0.5);

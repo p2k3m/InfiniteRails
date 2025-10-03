@@ -741,6 +741,148 @@ describe('simple experience entity lifecycle', () => {
     expect(experience.scheduleScoreSync).not.toHaveBeenCalledWith('portal-primed');
   });
 
+  it('highlights misaligned portal frames and prompts the player', async () => {
+    const { experience } = createExperienceForTest();
+    experience.start();
+    await Promise.resolve();
+
+    const showHintSpy = vi.spyOn(experience, 'showHint').mockImplementation(() => {});
+
+    try {
+      const worldSize = experience.heightMap.length;
+      experience.initialHeightMap = Array.from({ length: worldSize }, () => Array(worldSize).fill(0));
+      experience.heightMap = experience.initialHeightMap.map((row) => row.slice());
+      experience.portalAnchorGrid = experience.computePortalAnchorGrid();
+      const anchor = experience.portalAnchorGrid;
+      const gridZ = Math.max(0, Math.min(worldSize - 1, anchor.z));
+      const leftX = Math.max(0, Math.min(worldSize - 1, anchor.x - 1));
+      const centerX = Math.max(0, Math.min(worldSize - 1, anchor.x));
+      const rightX = Math.max(0, Math.min(worldSize - 1, anchor.x + 1));
+
+      experience.initialHeightMap[leftX][gridZ] = 1;
+      experience.heightMap[leftX][gridZ] = 1;
+
+      experience.resetPortalFrameState();
+
+      const BLOCK_SIZE = 1;
+      const buildColumn = (gridX) => {
+        const columnKey = `${gridX}|${gridZ}`;
+        const column = [];
+        const baseHeight = experience.initialHeightMap?.[gridX]?.[gridZ] ?? 0;
+        for (let level = 0; level < baseHeight; level += 1) {
+          const mesh = new experience.THREE.Mesh(experience.blockGeometry, experience.materials.stone);
+          mesh.position.set(
+            (gridX - worldSize / 2) * BLOCK_SIZE,
+            level * BLOCK_SIZE + BLOCK_SIZE / 2,
+            (gridZ - worldSize / 2) * BLOCK_SIZE,
+          );
+          mesh.userData = { columnKey, level, gx: gridX, gz: gridZ, blockType: 'stone' };
+          column[level] = mesh;
+        }
+        const slots = Array.from(experience.portalFrameSlots.values()).filter(
+          (slot) => slot.gridX === gridX && slot.gridZ === gridZ,
+        );
+        slots.forEach((slot) => {
+          const slotBase = Number.isFinite(slot.baseHeight)
+            ? slot.baseHeight
+            : experience.initialHeightMap?.[gridX]?.[gridZ] ?? 0;
+          const level = slotBase + slot.relY;
+          const mesh = new experience.THREE.Mesh(experience.blockGeometry, experience.materials.stone);
+          mesh.position.set(
+            (gridX - worldSize / 2) * BLOCK_SIZE,
+            level * BLOCK_SIZE + BLOCK_SIZE / 2,
+            (gridZ - worldSize / 2) * BLOCK_SIZE,
+          );
+          mesh.userData = { columnKey, level, gx: gridX, gz: gridZ, blockType: 'stone' };
+          column[level] = mesh;
+        });
+        experience.columns.set(columnKey, column);
+        experience.heightMap[gridX][gridZ] = column.length;
+        experience.updatePortalFrameStateForColumn(gridX, gridZ);
+      };
+
+      [leftX, centerX, rightX].forEach((gridX) => buildColumn(gridX));
+
+      expect(experience.portalBlocksPlaced).toBe(experience.portalFrameRequiredCount);
+      expect(experience.portalFrameFootprintValid).toBe(false);
+      expect(experience.portalFrameValidationMessage).toContain('4×3');
+      expect(experience.portalFrameHighlightMeshes.size).toBeGreaterThan(0);
+      experience.portalFrameHighlightMeshes.forEach((mesh) => {
+        expect(mesh.material).toBe(experience.materials.portalInvalid);
+      });
+      const snapshot = experience.getPortalStatusSnapshot();
+      expect(snapshot.state).toBe('blocked');
+      expect(snapshot.statusMessage).toContain('4×3');
+      const hint = showHintSpy.mock.calls.at(-1)?.[0] ?? '';
+      expect(hint).toContain('4×3');
+    } finally {
+      showHintSpy.mockRestore();
+    }
+  });
+
+  it('accepts a level 4×3 stone frame as a valid portal footprint', async () => {
+    const { experience } = createExperienceForTest();
+    experience.start();
+    await Promise.resolve();
+
+    const showHintSpy = vi.spyOn(experience, 'showHint').mockImplementation(() => {});
+
+    try {
+      const worldSize = experience.heightMap.length;
+      experience.initialHeightMap = Array.from({ length: worldSize }, () => Array(worldSize).fill(0));
+      experience.heightMap = experience.initialHeightMap.map((row) => row.slice());
+      experience.portalAnchorGrid = experience.computePortalAnchorGrid();
+      const anchor = experience.portalAnchorGrid;
+      const gridZ = Math.max(0, Math.min(worldSize - 1, anchor.z));
+      const leftX = Math.max(0, Math.min(worldSize - 1, anchor.x - 1));
+      const centerX = Math.max(0, Math.min(worldSize - 1, anchor.x));
+      const rightX = Math.max(0, Math.min(worldSize - 1, anchor.x + 1));
+
+      experience.resetPortalFrameState();
+
+      const BLOCK_SIZE = 1;
+      const buildColumn = (gridX) => {
+        const columnKey = `${gridX}|${gridZ}`;
+        const column = [];
+        const baseHeight = experience.initialHeightMap?.[gridX]?.[gridZ] ?? 0;
+        const slots = Array.from(experience.portalFrameSlots.values()).filter(
+          (slot) => slot.gridX === gridX && slot.gridZ === gridZ,
+        );
+        slots.forEach((slot) => {
+          const slotBase = Number.isFinite(slot.baseHeight)
+            ? slot.baseHeight
+            : experience.initialHeightMap?.[gridX]?.[gridZ] ?? 0;
+          const level = slotBase + slot.relY;
+          const mesh = new experience.THREE.Mesh(experience.blockGeometry, experience.materials.stone);
+          mesh.position.set(
+            (gridX - worldSize / 2) * BLOCK_SIZE,
+            level * BLOCK_SIZE + BLOCK_SIZE / 2,
+            (gridZ - worldSize / 2) * BLOCK_SIZE,
+          );
+          mesh.userData = { columnKey, level, gx: gridX, gz: gridZ, blockType: 'stone' };
+          column[level] = mesh;
+        });
+        experience.columns.set(columnKey, column);
+        experience.heightMap[gridX][gridZ] = column.length;
+        experience.updatePortalFrameStateForColumn(gridX, gridZ);
+      };
+
+      [leftX, centerX, rightX].forEach((gridX) => buildColumn(gridX));
+
+      expect(experience.portalBlocksPlaced).toBe(experience.portalFrameRequiredCount);
+      expect(experience.portalFrameFootprintValid).toBe(true);
+      expect(experience.portalFrameValidationMessage).toBe('');
+      expect(experience.portalFrameHighlightMeshes.size).toBe(0);
+      expect(experience.portalReady).toBe(true);
+      const snapshot = experience.getPortalStatusSnapshot();
+      expect(snapshot.state).toBe('ready');
+      expect(snapshot.statusMessage.toLowerCase()).toContain('ignite');
+      expect(showHintSpy).not.toHaveBeenCalledWith(expect.stringContaining('4×3'));
+    } finally {
+      showHintSpy.mockRestore();
+    }
+  });
+
   it('pulses chest scale and glow when the player is nearby', () => {
     const { experience } = createExperienceForTest();
     const THREE = window.THREE;
