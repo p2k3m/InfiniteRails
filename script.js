@@ -5420,7 +5420,7 @@
           ? globalScope.bootstrapOverlay
           : null;
     const troubleshootingSteps = [
-      'Enable hardware acceleration in your browser settings.',
+      "Open your browser settings (for example, chrome://settings/system) and enable 'Use hardware acceleration when available.' If the toggle stays disabled, follow the browser help steps at https://support.google.com/chrome/answer/95759.",
       'Disable extensions that block WebGL or force software rendering.',
       'Update your graphics drivers, then restart your browser.',
     ];
