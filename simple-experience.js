@@ -16525,24 +16525,29 @@
       }
       const targets = this.scoreMetricElements || {};
       const element = targets[normalizedKey];
-      if (!element) {
-        return;
-      }
-      const timers = this.scoreMetricFlashTimers || (this.scoreMetricFlashTimers = new Map());
-      if (timers.has(element)) {
-        clearTimeout(timers.get(element));
-        timers.delete(element);
-      }
-      element.classList.remove('score-overlay__metric-value--flash');
-      void element.offsetWidth;
-      element.classList.add('score-overlay__metric-value--flash');
-      element.dataset.delta = `+${this.formatPointValue(amount)} pts`;
-      const timer = setTimeout(() => {
+      if (element) {
+        const timers = this.scoreMetricFlashTimers || (this.scoreMetricFlashTimers = new Map());
+        if (timers.has(element)) {
+          clearTimeout(timers.get(element));
+          timers.delete(element);
+        }
         element.classList.remove('score-overlay__metric-value--flash');
-        delete element.dataset.delta;
-        timers.delete(element);
-      }, 900);
-      timers.set(element, timer);
+        void element.offsetWidth;
+        element.classList.add('score-overlay__metric-value--flash');
+        element.dataset.delta = `+${this.formatPointValue(amount)} pts`;
+        const timer = setTimeout(() => {
+          element.classList.remove('score-overlay__metric-value--flash');
+          delete element.dataset.delta;
+          timers.delete(element);
+        }, 900);
+        timers.set(element, timer);
+      }
+      if (typeof this.updateHud === 'function') {
+        this.updateHud();
+      }
+      if (typeof this.publishStateSnapshot === 'function') {
+        this.publishStateSnapshot('score-event');
+      }
     }
 
     formatPointValue(value) {
