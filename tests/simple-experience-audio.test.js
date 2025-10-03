@@ -145,3 +145,106 @@ describe('SimpleExperience audio bootstrapping', () => {
     expect(experience.activeAmbientTrack).toBeNull();
   });
 });
+
+describe('SimpleExperience audio fallbacks', () => {
+  it('plays an alert tone and logs an error when the requested sample is missing', async () => {
+    const windowStub = getWindowStub();
+    windowStub.INFINITE_RAILS_EMBEDDED_ASSETS.audioSamples = {};
+    const dispatchSpy = vi.spyOn(windowStub, 'dispatchEvent').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    class AudioStub {
+      static played = [];
+
+      constructor(src) {
+        this.src = src;
+        this.loop = false;
+        this.currentTime = 0;
+        this._volume = 1;
+        this._listeners = new Map();
+        AudioStub.played.push(src);
+      }
+
+      set volume(value) {
+        this._volume = value;
+      }
+
+      get volume() {
+        return this._volume;
+      }
+
+      addEventListener(event, handler) {
+        const listeners = this._listeners.get(event) || [];
+        listeners.push(handler);
+        this._listeners.set(event, listeners);
+      }
+
+      removeEventListener(event, handler) {
+        const listeners = this._listeners.get(event);
+        if (!listeners) {
+          return;
+        }
+        if (!handler) {
+          this._listeners.delete(event);
+          return;
+        }
+        const index = listeners.indexOf(handler);
+        if (index >= 0) {
+          listeners.splice(index, 1);
+        }
+        if (!listeners.length) {
+          this._listeners.delete(event);
+        }
+      }
+
+      pause() {}
+
+      play() {
+        const fire = (event) => {
+          const listeners = this._listeners.get(event) || [];
+          listeners.slice().forEach((listener) => {
+            try {
+              listener();
+            } catch (error) {
+              // Ignore listener errors in test stub.
+            }
+          });
+        };
+        fire('play');
+        fire('playing');
+        fire('canplay');
+        fire('canplaythrough');
+        return Promise.resolve().then(() => {
+          fire('ended');
+        });
+      }
+    }
+
+    windowStub.Audio = AudioStub;
+
+    const { experience } = createExperience();
+    const controller = experience.createAudioController();
+
+    controller.play('bubble');
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(AudioStub.played).toHaveLength(1);
+    expect(AudioStub.played[0]).toMatch(/^data:audio\/wav;base64,/);
+    expect(AudioStub.played[0]).not.toBe('data:audio/wav;base64,ZmFrZQ==');
+
+    const warnMessages = warnSpy.mock.calls.map(([message]) => String(message));
+    expect(
+      warnMessages.some((message) =>
+        message.includes('Audio sample "bubble" is unavailable. Playing fallback alert tone instead.'),
+      ),
+    ).toBe(true);
+
+    expect(dispatchSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'infinite-rails:audio-error' }),
+    );
+
+    delete windowStub.Audio;
+  });
+});
