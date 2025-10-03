@@ -15,6 +15,88 @@ Globals:
         SCORES_INDEX_NAME: ScoreIndex
 
 Resources:
+  AssetsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders:
+              - "*"
+            AllowedMethods:
+              - GET
+              - HEAD
+            AllowedOrigins:
+              - "*"
+            MaxAge: 86400
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+
+  AssetsCloudFrontOAI:
+    Type: AWS::CloudFront::CloudFrontOriginAccessIdentity
+    Properties:
+      CloudFrontOriginAccessIdentityConfig:
+        Comment: Read-only access for Infinite Rails assets distribution
+
+  AssetsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref AssetsBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowCloudFrontOriginAccessIdentityRead
+            Effect: Allow
+            Principal:
+              CanonicalUser: !GetAtt AssetsCloudFrontOAI.S3CanonicalUserId
+            Action:
+              - s3:GetObject
+            Resource:
+              - !Sub "${AssetsBucket.Arn}/assets/*.gltf"
+              - !Sub "${AssetsBucket.Arn}/assets/*.glb"
+              - !Sub "${AssetsBucket.Arn}/assets/*.bin"
+              - !Sub "${AssetsBucket.Arn}/assets/*.png"
+              - !Sub "${AssetsBucket.Arn}/assets/*.jpg"
+              - !Sub "${AssetsBucket.Arn}/assets/*.jpeg"
+              - !Sub "${AssetsBucket.Arn}/assets/*.ktx2"
+              - !Sub "${AssetsBucket.Arn}/assets/*.webp"
+              - !Sub "${AssetsBucket.Arn}/assets/*.basis"
+
+  AssetsDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        DefaultRootObject: index.html
+        HttpVersion: http2
+        PriceClass: PriceClass_All
+        Origins:
+          - DomainName: !GetAtt AssetsBucket.RegionalDomainName
+            Id: AssetsS3Origin
+            S3OriginConfig:
+              OriginAccessIdentity: !Sub "origin-access-identity/cloudfront/${AssetsCloudFrontOAI}"
+        DefaultCacheBehavior:
+          AllowedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+          CachedMethods:
+            - GET
+            - HEAD
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6 # Managed-CachingOptimized
+          Compress: true
+          OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac # Managed-CORS-S3Origin
+          TargetOriginId: AssetsS3Origin
+          ViewerProtocolPolicy: redirect-to-https
+
   ApiGateway:
     Type: AWS::Serverless::Api
     Properties:
@@ -120,6 +202,15 @@ Resources:
             Method: options
 
 Outputs:
+  AssetsBucketName:
+    Description: S3 bucket that stores Infinite Rails static assets.
+    Value: !Ref AssetsBucket
+  AssetsDistributionId:
+    Description: CloudFront distribution serving the Infinite Rails assets bucket.
+    Value: !Ref AssetsDistribution
+  AssetsDistributionDomainName:
+    Description: Domain name for the Infinite Rails assets CloudFront distribution.
+    Value: !GetAtt AssetsDistribution.DomainName
   ApiEndpoint:
     Description: Invoke URL for the Infinite Dimension API Gateway stage.
     Value: !Sub 'https://${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com/Prod'
