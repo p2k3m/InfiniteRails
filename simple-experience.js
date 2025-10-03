@@ -12080,20 +12080,20 @@
       return this.registerDimensionLifecycleHook('enter', handler);
     }
 
-    runDimensionExitHooks(context = {}) {
+    async runDimensionExitHooks(context = {}) {
       const payload = this.createDimensionTransitionPayload(context);
       this.clearZombies();
       this.clearGolems();
       this.clearChests();
-      this.invokeDimensionLifecycleHooks('exit', payload);
+      await this.invokeDimensionLifecycleHooks('exit', payload);
     }
 
-    runDimensionEnterHooks(context = {}) {
+    async runDimensionEnterHooks(context = {}) {
       const payload = this.createDimensionTransitionPayload(context);
       this.positionPlayer();
       this.evaluateBossChallenge();
       this.lastGolemSpawn = this.elapsed;
-      this.invokeDimensionLifecycleHooks('enter', payload);
+      await this.invokeDimensionLifecycleHooks('enter', payload);
     }
 
     createDimensionTransitionPayload(context = {}) {
@@ -12121,7 +12121,7 @@
       };
     }
 
-    invokeDimensionLifecycleHooks(phase, payload) {
+    async invokeDimensionLifecycleHooks(phase, payload) {
       const registry = this.dimensionLifecycleHooks?.[phase];
       if (!registry || typeof registry.forEach !== 'function') {
         return;
@@ -12129,7 +12129,10 @@
       const hooks = Array.from(registry);
       for (const hook of hooks) {
         try {
-          hook(payload);
+          const result = hook(payload);
+          if (result && typeof result.then === 'function') {
+            await result;
+          }
         } catch (error) {
           if (typeof console !== 'undefined' && typeof console.warn === 'function') {
             console.warn(`Dimension ${phase} hook failed`, error);
@@ -12138,7 +12141,7 @@
       }
     }
 
-    advanceDimension() {
+    async advanceDimension() {
       if (!this.portalActivated || this.victoryAchieved) return;
       this.portalActivations += 1;
       if (this.currentDimensionIndex >= DIMENSION_THEME.length - 1) {
@@ -12162,18 +12165,19 @@
             description: nextSettings?.description ?? '',
             rules: rulesSummary,
           });
-          transitionResult = result;
-          if (result?.pointsAwarded !== undefined) {
-            pointsAwarded = result.pointsAwarded;
+          const resolvedResult = await Promise.resolve(result);
+          transitionResult = resolvedResult ?? null;
+          if (transitionResult?.pointsAwarded !== undefined) {
+            pointsAwarded = transitionResult.pointsAwarded;
           }
-          if (result?.log) {
-            portalLog = result.log;
+          if (transitionResult?.log) {
+            portalLog = transitionResult.log;
           }
         } catch (error) {
           console.warn('Portal transition mechanics failed', error);
         }
       }
-      this.runDimensionExitHooks({
+      await this.runDimensionExitHooks({
         previousDimension: previousSettings,
         nextDimension: nextSettings,
         transition: transitionResult,
@@ -12199,7 +12203,8 @@
         intent: 'arrival',
         rulesOverride: arrivalRules,
       });
-      this.runDimensionEnterHooks({
+      this.rebindDimensionContext();
+      await this.runDimensionEnterHooks({
         previousDimension: previousSettings,
         nextDimension: this.dimensionSettings,
         transition: transitionResult,
@@ -12221,6 +12226,50 @@
         summary: this.createRunSummary('dimension-advanced'),
       });
       this.publishStateSnapshot('dimension-advanced');
+    }
+
+    rebindDimensionContext() {
+      try {
+        this.ensurePlayerPhysicsBody();
+      } catch (error) {
+        console.warn('Failed to ensure player physics body after dimension transition.', error);
+      }
+      try {
+        if (this.cameraPerspective) {
+          this.applyCameraPerspective(this.cameraPerspective);
+        } else if (this.camera) {
+          this.refreshCameraBaseOffset();
+        }
+      } catch (error) {
+        console.warn('Failed to reapply camera bindings after dimension transition.', error);
+      }
+      try {
+        this.ensurePlayerArmsVisible();
+      } catch (error) {
+        console.warn('Failed to refresh player arm visibility after dimension transition.', error);
+      }
+      try {
+        this.initializeMobileControls();
+      } catch (error) {
+        console.warn('Failed to reinitialise mobile controls after dimension transition.', error);
+      }
+      try {
+        this.bindEvents();
+      } catch (error) {
+        console.warn('Failed to ensure UI events remain bound after dimension transition.', error);
+      }
+      try {
+        this.updatePointerHintForInputMode();
+      } catch (error) {
+        console.warn('Failed to refresh pointer hint after dimension transition.', error);
+      }
+      try {
+        if (typeof this.refreshFirstRunTutorialContent === 'function') {
+          this.refreshFirstRunTutorialContent();
+        }
+      } catch (error) {
+        console.warn('Failed to refresh tutorial content after dimension transition.', error);
+      }
     }
 
     triggerVictory() {
@@ -19071,7 +19120,7 @@
       return this.portalActivated;
     }
 
-    debugAdvanceDimension() {
+    async debugAdvanceDimension() {
       const previousIndex = this.currentDimensionIndex;
       if (!this.portalActivated) {
         this.debugIgnitePortal();
@@ -19079,7 +19128,7 @@
       if (!this.portalActivated) {
         return false;
       }
-      this.advanceDimension();
+      await this.advanceDimension();
       return this.currentDimensionIndex !== previousIndex;
     }
   }
