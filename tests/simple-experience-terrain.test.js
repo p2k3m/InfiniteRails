@@ -348,6 +348,8 @@ describe('simple experience terrain generation', () => {
     expect(experience.worldRoot).toBeInstanceOf(THREE.Group);
     expect(experience.terrainGroup).toBeInstanceOf(THREE.Group);
     expect(experience.terrainGroup.children.length).toBe(summary.expectedChunkCount);
+    expect(summary.integrity?.valid).toBe(true);
+    expect(summary.integrity?.issues ?? []).toHaveLength(0);
   });
 
   it('enforces minimum terrain height when streamed heightmaps are empty', () => {
@@ -379,5 +381,41 @@ describe('simple experience terrain generation', () => {
     expect(minHeight).toBeGreaterThan(0);
     expect(summary.voxelCount).toBe(summary.terrainMeshCount);
     expect(summary.emptyChunkKeys).toHaveLength(0);
+    expect(summary.integrity?.valid).toBe(true);
+    expect(summary.integrity?.issues ?? []).toHaveLength(0);
+  });
+
+  it('falls back to seeded terrain when streamed payload dimension mismatches', () => {
+    const canvas = {
+      width: 512,
+      height: 512,
+      clientWidth: 512,
+      clientHeight: 512,
+      getContext: () => null,
+    };
+
+    const experience = window.SimpleExperience.create({ canvas, ui: {} });
+    experience.scene = new THREE.Scene();
+    experience.dimensionSettings = { id: 'skyland' };
+    experience.currentDimensionIndex = 0;
+    experience.terrainGroup = null;
+    experience.terrainChunkGroups = [];
+    experience.terrainChunkMap = new Map();
+    experience.dirtyTerrainChunks = new Set();
+
+    const mismatchedMatrix = Array.from({ length: 64 }, () => Array(64).fill(4));
+    experience.pendingHeightmapStream = { dimension: 'underworld', matrix: mismatchedMatrix };
+
+    experience.buildTerrain();
+
+    const summary = experience.lastTerrainBuildSummary;
+    expect(summary).toBeTruthy();
+    expect(summary.heightmapSource).toMatch(/fallback|seeded/);
+    expect(summary.fallbackReason).toBe('dimension-mismatch');
+    expect(summary.fallbackFromStream).toBe(true);
+    expect(summary.integrity?.valid).toBe(true);
+    expect(summary.integrity?.issues ?? []).toHaveLength(0);
+    expect(summary.chunkCount).toBe(summary.expectedChunkCount);
+    expect(summary.voxelCount).toBe(summary.terrainMeshCount);
   });
 });
