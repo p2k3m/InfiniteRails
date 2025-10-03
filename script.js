@@ -5213,6 +5213,201 @@
 
   let webglSupportOverlayPresented = false;
 
+  function renderStandaloneWebglFallbackOverlay({
+    title,
+    intro,
+    troubleshootingSteps,
+    detail = null,
+  }) {
+    const doc = typeof document !== 'undefined' ? document : documentRef;
+    if (!doc || typeof doc.createElement !== 'function') {
+      return null;
+    }
+    const body =
+      doc.body ||
+      (typeof doc.getElementsByTagName === 'function'
+        ? doc.getElementsByTagName('body')[0] || null
+        : null);
+    if (!body || typeof body.appendChild !== 'function') {
+      return null;
+    }
+    let existingOverlay = null;
+    if (typeof doc.getElementById === 'function') {
+      try {
+        existingOverlay = doc.getElementById('webglBlockedOverlay');
+      } catch (error) {
+        existingOverlay = null;
+      }
+    }
+    if (existingOverlay) {
+      if (typeof existingOverlay.remove === 'function') {
+        existingOverlay.remove();
+      } else if (
+        existingOverlay.parentNode &&
+        typeof existingOverlay.parentNode.removeChild === 'function'
+      ) {
+        existingOverlay.parentNode.removeChild(existingOverlay);
+      }
+    }
+
+    const overlay = doc.createElement('div');
+    overlay.id = 'webglBlockedOverlay';
+    overlay.className = 'webgl-fallback-overlay';
+    if (typeof overlay.setAttribute === 'function') {
+      overlay.setAttribute('role', 'alertdialog');
+      overlay.setAttribute('aria-live', 'assertive');
+      overlay.setAttribute('aria-modal', 'true');
+    }
+    overlay.style.position = 'fixed';
+    overlay.style.inset = '0';
+    overlay.style.display = 'flex';
+    overlay.style.alignItems = 'center';
+    overlay.style.justifyContent = 'center';
+    overlay.style.background = 'rgba(10, 14, 23, 0.92)';
+    overlay.style.backdropFilter = 'blur(6px)';
+    overlay.style.padding = '24px';
+    overlay.style.zIndex = '2147483647';
+    overlay.style.color = '#f8fafc';
+
+    const panel = doc.createElement('div');
+    panel.className = 'webgl-fallback-overlay__panel';
+    panel.style.background = '#0f172a';
+    panel.style.borderRadius = '16px';
+    panel.style.boxShadow = '0 20px 60px rgba(15, 23, 42, 0.45)';
+    panel.style.maxWidth = '520px';
+    panel.style.width = '100%';
+    panel.style.padding = '32px';
+    panel.style.fontFamily =
+      "'Inter', 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif";
+
+    const heading = doc.createElement('h2');
+    heading.textContent = title;
+    heading.style.margin = '0 0 16px';
+    heading.style.fontSize = '1.5rem';
+    heading.style.lineHeight = '1.2';
+    panel.appendChild(heading);
+
+    const introParagraph = doc.createElement('p');
+    introParagraph.textContent = intro;
+    introParagraph.style.margin = '0 0 16px';
+    introParagraph.style.fontSize = '1rem';
+    introParagraph.style.lineHeight = '1.5';
+    panel.appendChild(introParagraph);
+
+    if (Array.isArray(troubleshootingSteps) && troubleshootingSteps.length > 0) {
+      const stepsIntro = doc.createElement('p');
+      stepsIntro.textContent = 'To restore the full 3D experience, try:';
+      stepsIntro.style.margin = '0 0 8px';
+      stepsIntro.style.fontSize = '1rem';
+      stepsIntro.style.lineHeight = '1.5';
+      panel.appendChild(stepsIntro);
+
+      const list = doc.createElement('ul');
+      list.style.margin = '0 0 20px 0';
+      list.style.padding = '0 0 0 1.25rem';
+      list.style.listStyle = 'disc';
+      troubleshootingSteps.forEach((step) => {
+        if (typeof step !== 'string' || !step) {
+          return;
+        }
+        const item = doc.createElement('li');
+        item.textContent = step;
+        item.style.margin = '0 0 6px 0';
+        item.style.fontSize = '0.95rem';
+        item.style.lineHeight = '1.5';
+        list.appendChild(item);
+      });
+      panel.appendChild(list);
+    }
+
+    const fallbackNote = doc.createElement('p');
+    fallbackNote.textContent =
+      'The simplified mission briefing has been launched automatically so you can keep playing.';
+    fallbackNote.style.margin = '0 0 24px';
+    fallbackNote.style.fontSize = '0.95rem';
+    fallbackNote.style.lineHeight = '1.5';
+    panel.appendChild(fallbackNote);
+
+    const actionRow = doc.createElement('div');
+    actionRow.style.display = 'flex';
+    actionRow.style.flexWrap = 'wrap';
+    actionRow.style.gap = '12px';
+    actionRow.style.alignItems = 'center';
+    panel.appendChild(actionRow);
+
+    const retryButton = doc.createElement('button');
+    retryButton.type = 'button';
+    retryButton.textContent = 'Retry WebGL Renderer';
+    retryButton.className = 'webgl-fallback-overlay__retry';
+    retryButton.style.background = '#38bdf8';
+    retryButton.style.color = '#0f172a';
+    retryButton.style.border = '0';
+    retryButton.style.borderRadius = '999px';
+    retryButton.style.padding = '12px 20px';
+    retryButton.style.fontWeight = '600';
+    retryButton.style.cursor = 'pointer';
+    retryButton.style.boxShadow = '0 8px 20px rgba(56, 189, 248, 0.35)';
+    retryButton.setAttribute?.('data-action', 'retry-webgl');
+
+    const handleRetry = () => {
+      if (typeof logDiagnosticsEvent === 'function') {
+        try {
+          logDiagnosticsEvent('renderer', 'Player requested WebGL retry from standalone overlay.', {
+            level: 'warning',
+            detail: { source: 'standalone-overlay', reason: 'webgl-retry' },
+          });
+        } catch (error) {
+          globalScope?.console?.debug?.('Failed to log WebGL retry request.', error);
+        }
+      }
+      const locationRef = globalScope?.location ?? null;
+      if (locationRef && typeof locationRef.reload === 'function') {
+        try {
+          locationRef.reload();
+        } catch (reloadError) {
+          globalScope?.console?.error?.('Failed to reload the page when retrying WebGL.', reloadError);
+        }
+      }
+    };
+
+    if (typeof retryButton.addEventListener === 'function') {
+      retryButton.addEventListener('click', handleRetry);
+    } else {
+      retryButton.onclick = handleRetry;
+    }
+
+    actionRow.appendChild(retryButton);
+
+    const supportHint = doc.createElement('span');
+    supportHint.textContent = 'Need more help? Visit chrome://gpu to verify WebGL availability.';
+    supportHint.style.fontSize = '0.85rem';
+    supportHint.style.lineHeight = '1.4';
+    supportHint.style.color = '#cbd5f5';
+    actionRow.appendChild(supportHint);
+
+    overlay.appendChild(panel);
+    body.appendChild(overlay);
+
+    if (typeof body.setAttribute === 'function') {
+      body.setAttribute('data-webgl-fallback-mode', 'simple');
+    }
+
+    overlay.__webglFallback = {
+      troubleshootingSteps: Array.isArray(troubleshootingSteps)
+        ? troubleshootingSteps.filter((step) => typeof step === 'string' && step)
+        : [],
+      detail: detail || null,
+    };
+
+    if (typeof focusElementSilently === 'function') {
+      focusElementSilently(retryButton);
+    } else if (typeof retryButton.focus === 'function') {
+      retryButton.focus();
+    }
+
+    return overlay;
+  }
+
   function presentWebglBlockedOverlay({ detail = null } = {}) {
     if (webglSupportOverlayPresented) {
       return;
@@ -5229,17 +5424,20 @@
       'Disable extensions that block WebGL or force software rendering.',
       'Update your graphics drivers, then restart your browser.',
     ];
+    const overlayIntro = 'WebGL output is blocked, so Infinite Rails is launching the simplified renderer.';
     const overlayMessage = [
-      'WebGL output is blocked, so Infinite Rails is launching the simplified renderer.',
+      overlayIntro,
       'To restore the full 3D experience, try:',
       ...troubleshootingSteps.map((step) => `• ${step}`),
     ].join('\n');
+    let overlayRendered = false;
     if (overlayController && typeof overlayController.showError === 'function') {
       try {
         overlayController.showError({
           title: 'WebGL output blocked',
           message: overlayMessage,
         });
+        overlayRendered = true;
       } catch (overlayError) {
         globalScope?.console?.debug?.('Unable to display WebGL blocked overlay.', overlayError);
       }
@@ -5281,6 +5479,14 @@
           return;
         }
         diagnosticDetail[key] = value;
+      });
+    }
+    if (!overlayRendered) {
+      renderStandaloneWebglFallbackOverlay({
+        title: 'WebGL output blocked',
+        intro: overlayIntro,
+        troubleshootingSteps,
+        detail: diagnosticDetail,
       });
     }
     if (typeof logDiagnosticsEvent === 'function') {
