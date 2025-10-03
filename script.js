@@ -4956,41 +4956,35 @@
       return activeExperienceInstance;
     }
     if (!globalScope.SimpleExperience?.create) {
-      if (typeof bootstrapOverlay !== 'undefined') {
-        bootstrapOverlay.showError({
-          title: 'Renderer unavailable',
-          message: 'Simplified renderer is missing from the build output.',
-        });
-        bootstrapOverlay.setDiagnostic('renderer', {
-          status: 'error',
-          message: 'Simplified renderer is missing from the build output.',
-        });
-      }
-      if (typeof logDiagnosticsEvent === 'function') {
-        logDiagnosticsEvent('startup', 'Simplified renderer is missing from the build output.', {
-          level: 'error',
-        });
-      }
+      presentCriticalErrorOverlay({
+        title: 'Renderer unavailable',
+        message: 'Simplified renderer is missing from the build output.',
+        diagnosticScope: 'renderer',
+        diagnosticStatus: 'error',
+        diagnosticMessage: 'Simplified renderer is missing from the build output.',
+        logScope: 'startup',
+        logMessage: 'Simplified renderer is missing from the build output.',
+        detail: {
+          reason: 'missing-simple-experience',
+        },
+      });
       return null;
     }
     const doc = documentRef || globalScope.document || null;
     const canvas = doc?.getElementById?.('gameCanvas') ?? null;
     if (!canvas) {
-      if (typeof bootstrapOverlay !== 'undefined') {
-        bootstrapOverlay.showError({
-          title: 'Renderer unavailable',
-          message: 'Game canvas could not be located. Reload the page to retry.',
-        });
-        bootstrapOverlay.setDiagnostic('renderer', {
-          status: 'error',
-          message: 'Game canvas could not be located. Reload to retry.',
-        });
-      }
-      if (typeof logDiagnosticsEvent === 'function') {
-        logDiagnosticsEvent('startup', 'Game canvas could not be located. Reload the page to retry.', {
-          level: 'error',
-        });
-      }
+      presentCriticalErrorOverlay({
+        title: 'Renderer unavailable',
+        message: 'Game canvas could not be located. Reload the page to retry.',
+        diagnosticScope: 'renderer',
+        diagnosticStatus: 'error',
+        diagnosticMessage: 'Game canvas could not be located. Reload the page to retry.',
+        logScope: 'startup',
+        logMessage: 'Game canvas could not be located. Reload the page to retry.',
+        detail: {
+          reason: 'missing-canvas',
+        },
+      });
       return null;
     }
     ensureHudDefaults(doc);
@@ -5012,29 +5006,27 @@
       if (globalScope.console?.error) {
         globalScope.console.error('Failed to initialise simplified renderer.', error);
       }
-      if (typeof bootstrapOverlay !== 'undefined') {
-        bootstrapOverlay.showError({
-          title: 'Renderer unavailable',
-          message: 'Failed to initialise the renderer. Check your connection and reload.',
-        });
-        bootstrapOverlay.setDiagnostic('renderer', {
-          status: 'error',
-          message: 'Failed to initialise the renderer. Check your connection and reload.',
-        });
-      }
-      if (typeof logDiagnosticsEvent === 'function') {
-        logDiagnosticsEvent('startup', 'Failed to initialise the renderer. Check your connection and reload.', {
-          level: 'error',
-          detail: {
-            errorMessage:
-              typeof error?.message === 'string' && error.message.trim().length
-                ? error.message.trim()
-                : undefined,
-            errorName:
-              typeof error?.name === 'string' && error.name.trim().length ? error.name.trim() : undefined,
-          },
-        });
-      }
+      const errorMessage =
+        typeof error?.message === 'string' && error.message.trim().length
+          ? error.message.trim()
+          : 'Failed to initialise the renderer. Check your connection and reload.';
+      const errorName = typeof error?.name === 'string' && error.name.trim().length ? error.name.trim() : undefined;
+      const errorStack = typeof error?.stack === 'string' && error.stack.trim().length ? error.stack.trim() : undefined;
+      presentCriticalErrorOverlay({
+        title: 'Renderer unavailable',
+        message: 'Failed to initialise the renderer. Check your connection and reload.',
+        diagnosticScope: 'renderer',
+        diagnosticStatus: 'error',
+        diagnosticMessage: 'Failed to initialise the renderer. Check your connection and reload.',
+        logScope: 'startup',
+        logMessage: 'Failed to initialise the renderer. Check your connection and reload.',
+        detail: {
+          reason: 'simple-experience-create',
+          errorMessage,
+          errorName,
+          stack: errorStack,
+        },
+      });
       throw error;
     }
     activeExperienceInstance = experience;
@@ -5127,16 +5119,31 @@
           if (globalScope.console?.error) {
             globalScope.console.error('Critical asset preload failed.', error);
           }
+          const errorMessage =
+            typeof error?.message === 'string' && error.message.trim().length
+              ? error.message.trim()
+              : 'Critical assets failed to preload. Reload to try again.';
+          const errorName = typeof error?.name === 'string' && error.name.trim().length ? error.name.trim() : undefined;
+          const errorStack = typeof error?.stack === 'string' && error.stack.trim().length ? error.stack.trim() : undefined;
+          presentCriticalErrorOverlay({
+            title: 'Assets failed to load',
+            message: 'Critical assets failed to preload. Reload to try again.',
+            diagnosticScope: 'assets',
+            diagnosticStatus: 'error',
+            diagnosticMessage: 'Critical assets failed to preload. Reload to try again.',
+            logScope: 'assets',
+            logMessage: 'Critical assets failed to preload. Reload to try again.',
+            detail: {
+              reason: 'asset-preload',
+              errorMessage,
+              errorName,
+              stack: errorStack,
+            },
+          });
           if (overlayController?.setDiagnostic) {
             overlayController.setDiagnostic('assets', {
               status: 'error',
               message: 'Failed to preload world assets.',
-            });
-          }
-          if (overlayController?.showError) {
-            overlayController.showError({
-              title: 'Assets failed to load',
-              message: 'Critical assets failed to preload. Reload to try again.',
             });
           }
         });
