@@ -55,6 +55,235 @@ function instantiateSimpleFallback(scope) {
 
 const originalDocument = global.document;
 
+function createMockDocument() {
+  const elementsById = new Map();
+  let doc = null;
+
+  function register(node) {
+    if (!node) {
+      return;
+    }
+    const id = node.attributes?.id;
+    if (typeof id === 'string' && id) {
+      elementsById.set(id, node);
+    }
+  }
+
+  function unregister(node) {
+    if (!node) {
+      return;
+    }
+    const id = node.attributes?.id;
+    if (typeof id === 'string' && id) {
+      elementsById.delete(id);
+    }
+  }
+
+  function createNode(tagName) {
+    const node = {
+      tagName: String(tagName || '').toUpperCase(),
+      ownerDocument: null,
+      parentNode: null,
+      children: [],
+      attributes: {},
+      style: {},
+      textContent: '',
+      __listeners: {},
+      appendChild(child) {
+        if (!child || child === this) {
+          return child;
+        }
+        if (child.parentNode && child.parentNode !== this && typeof child.parentNode.removeChild === 'function') {
+          child.parentNode.removeChild(child);
+        }
+        this.children.push(child);
+        child.parentNode = this;
+        child.ownerDocument = doc;
+        register(child);
+        return child;
+      },
+      removeChild(child) {
+        const index = this.children.indexOf(child);
+        if (index !== -1) {
+          this.children.splice(index, 1);
+          child.parentNode = null;
+          unregister(child);
+        }
+        return child;
+      },
+      remove() {
+        if (this.parentNode && typeof this.parentNode.removeChild === 'function') {
+          this.parentNode.removeChild(this);
+        }
+      },
+      setAttribute(name, value) {
+        const key = String(name);
+        this.attributes[key] = String(value);
+        if (key === 'id') {
+          register(this);
+        }
+      },
+      getAttribute(name) {
+        const key = String(name);
+        return Object.prototype.hasOwnProperty.call(this.attributes, key) ? this.attributes[key] : null;
+      },
+      toggleAttribute(name, force) {
+        if (force === true) {
+          this.setAttribute(name, '');
+          return true;
+        }
+        if (force === false) {
+          if (Object.prototype.hasOwnProperty.call(this.attributes, name)) {
+            delete this.attributes[name];
+          }
+          return false;
+        }
+        if (Object.prototype.hasOwnProperty.call(this.attributes, name)) {
+          delete this.attributes[name];
+          return false;
+        }
+        this.setAttribute(name, '');
+        return true;
+      },
+      addEventListener(type, handler) {
+        const key = String(type);
+        if (!this.__listeners[key]) {
+          this.__listeners[key] = [];
+        }
+        this.__listeners[key].push(handler);
+      },
+      dispatchEvent(event) {
+        const key = String(event?.type || '');
+        const listeners = this.__listeners[key] || [];
+        listeners.forEach((listener) => {
+          if (typeof listener === 'function') {
+            listener.call(this, event);
+          }
+        });
+        if (key === 'click' && typeof this.onclick === 'function') {
+          this.onclick.call(this, event);
+        }
+      },
+      focus() {
+        this.__focused = true;
+      },
+      querySelector(selector) {
+        if (!selector) {
+          return null;
+        }
+        if (selector.startsWith('#')) {
+          return doc.getElementById(selector.slice(1));
+        }
+        for (const child of this.children) {
+          const match = child.querySelector(selector);
+          if (match) {
+            return match;
+          }
+        }
+        return null;
+      },
+    };
+    Object.defineProperty(node, 'id', {
+      get() {
+        return this.attributes.id || '';
+      },
+      set(value) {
+        if (typeof value === 'string' && value) {
+          this.attributes.id = value;
+          register(this);
+        } else {
+          delete this.attributes.id;
+          unregister(this);
+        }
+      },
+    });
+    Object.defineProperty(node, 'className', {
+      get() {
+        return this.attributes.class || '';
+      },
+      set(value) {
+        if (typeof value === 'string' && value) {
+          this.attributes.class = value;
+        } else {
+          delete this.attributes.class;
+        }
+      },
+    });
+    Object.defineProperty(node, 'innerText', {
+      get() {
+        return this.textContent;
+      },
+      set(value) {
+        this.textContent = typeof value === 'string' ? value : '';
+      },
+    });
+    return node;
+  }
+
+  doc = {
+    createElement(tagName) {
+      const node = createNode(tagName);
+      node.ownerDocument = doc;
+      return node;
+    },
+    getElementById(id) {
+      return elementsById.get(id) || null;
+    },
+  };
+
+  const body = createNode('body');
+  body.ownerDocument = doc;
+  body.appendChild = function (child) {
+    if (!child) {
+      return child;
+    }
+    if (child.parentNode && child.parentNode !== this && typeof child.parentNode.removeChild === 'function') {
+      child.parentNode.removeChild(child);
+    }
+    this.children.push(child);
+    child.parentNode = this;
+    child.ownerDocument = doc;
+    register(child);
+    return child;
+  };
+  body.removeChild = function (child) {
+    const index = this.children.indexOf(child);
+    if (index !== -1) {
+      this.children.splice(index, 1);
+      child.parentNode = null;
+      unregister(child);
+    }
+    return child;
+  };
+  body.querySelector = function (selector) {
+    if (selector && selector.startsWith('#')) {
+      return doc.getElementById(selector.slice(1));
+    }
+    for (const child of this.children) {
+      const match = child.querySelector(selector);
+      if (match) {
+        return match;
+      }
+    }
+    return null;
+  };
+  body.setAttribute = function (name, value) {
+    this.attributes[String(name)] = String(value);
+  };
+  body.getAttribute = function (name) {
+    return this.attributes[String(name)] ?? null;
+  };
+
+  const documentElement = createNode('html');
+  documentElement.ownerDocument = doc;
+  documentElement.appendChild(body);
+
+  doc.body = body;
+  doc.documentElement = documentElement;
+
+  return doc;
+}
+
 afterEach(() => {
   if (originalDocument === undefined) {
     delete global.document;
@@ -166,6 +395,43 @@ describe('renderer mode selection', () => {
         action: 'retry-webgl',
       }),
     );
+  });
+
+  it('creates a standalone troubleshooting overlay when the bootstrap overlay is unavailable', () => {
+    const mockDocument = createMockDocument();
+    const canvasStub = { getContext: () => null };
+    const originalCreateElement = mockDocument.createElement.bind(mockDocument);
+    mockDocument.createElement = (tagName) => {
+      if (tagName === 'canvas') {
+        return canvasStub;
+      }
+      return originalCreateElement(tagName);
+    };
+    global.document = mockDocument;
+    const windowStub = {
+      location: { search: '' },
+      document: mockDocument,
+      APP_CONFIG: {
+        enableAdvancedExperience: true,
+        preferAdvanced: true,
+      },
+      SimpleExperience: { create: () => ({}) },
+      console: { warn: () => {}, error: () => {}, debug: () => {} },
+    };
+    const { shouldStartSimpleMode } = instantiateShouldStartSimpleMode(windowStub);
+    expect(shouldStartSimpleMode()).toBe(true);
+    const overlay = mockDocument.getElementById('webglBlockedOverlay');
+    expect(overlay).toBeTruthy();
+    expect(mockDocument.body.getAttribute('data-webgl-fallback-mode')).toBe('simple');
+    expect(overlay.__webglFallback?.troubleshootingSteps).toEqual([
+      'Enable hardware acceleration in your browser settings.',
+      'Disable extensions that block WebGL or force software rendering.',
+      'Update your graphics drivers, then restart your browser.',
+    ]);
+    expect(overlay.__webglFallback?.detail).toMatchObject({
+      reason: 'webgl-unavailable',
+      fallbackMode: 'simple',
+    });
   });
 
   it('preflights WebGL support at bootstrap and skips the advanced renderer when blocked', () => {
