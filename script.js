@@ -5293,6 +5293,94 @@
     }
   }
 
+  function normaliseWebglFallbackDetail(error) {
+    if (!error || typeof error !== 'object') {
+      return null;
+    }
+    const detail = {};
+    const name = typeof error.name === 'string' ? error.name.trim() : '';
+    if (name) {
+      detail.errorName = name;
+    }
+    const message = typeof error.message === 'string' ? error.message.trim() : '';
+    if (message) {
+      detail.errorMessage = message;
+    }
+    return Object.keys(detail).length ? detail : null;
+  }
+
+  function updateRendererStateForWebglFallback() {
+    const state = globalScope?.__INFINITE_RAILS_STATE__;
+    if (!state || typeof state !== 'object') {
+      return;
+    }
+    try {
+      state.rendererMode = 'simple';
+      state.reason = 'webgl-unavailable';
+      state.updatedAt = Date.now();
+    } catch (error) {
+      globalScope?.console?.debug?.('Failed to update renderer state for WebGL fallback.', error);
+    }
+  }
+
+  function applyWebglFallbackConfig(config, probeError) {
+    const existingDetail =
+      config && config.__webglFallbackDetail && typeof config.__webglFallbackDetail === 'object'
+        ? config.__webglFallbackDetail
+        : null;
+    let fallbackDetail = existingDetail || normaliseWebglFallbackDetail(probeError);
+    if (config) {
+      config.webglSupport = false;
+      if (!config.__webglFallbackApplied) {
+        config.__webglFallbackApplied = true;
+        if (fallbackDetail) {
+          config.__webglFallbackDetail = fallbackDetail;
+        }
+        config.preferAdvanced = false;
+        config.enableAdvancedExperience = false;
+        config.forceAdvanced = false;
+        config.defaultMode = 'simple';
+        queueBootstrapFallbackNotice(
+          'webgl-unavailable-simple-mode',
+          'WebGL is unavailable on this device, so the mission briefing view is shown instead of the full 3D renderer.',
+        );
+      } else if (!existingDetail && fallbackDetail) {
+        config.__webglFallbackDetail = fallbackDetail;
+      }
+    }
+    presentWebglBlockedOverlay({ detail: fallbackDetail });
+    updateRendererStateForWebglFallback();
+    return fallbackDetail;
+  }
+
+  function probeWebglSupport(doc) {
+    if (!doc || typeof doc.createElement !== 'function') {
+      const probeError = new Error('Document unavailable for WebGL probe.');
+      probeError.name = 'WebGLProbeUnavailable';
+      return { supported: false, error: probeError };
+    }
+    try {
+      const canvas = doc.createElement('canvas');
+      const getContext = typeof canvas?.getContext === 'function' ? canvas.getContext.bind(canvas) : null;
+      if (!getContext) {
+        const error = new Error('Canvas does not provide a WebGL-capable context.');
+        error.name = 'WebGLContextUnavailable';
+        return { supported: false, error };
+      }
+      const context =
+        getContext('webgl2') || getContext('webgl') || getContext('experimental-webgl') || null;
+      if (!context) {
+        const error = new Error('WebGL context request returned null.');
+        error.name = 'WebGLUnavailableError';
+        return { supported: false, error };
+      }
+      return { supported: true, error: null };
+    } catch (error) {
+      const probeError = error instanceof Error ? error : new Error('WebGL probe failed.');
+      return { supported: false, error: probeError };
+    }
+  }
+
   function shouldStartSimpleMode() {
     const scope =
       typeof globalScope !== 'undefined'
@@ -5304,6 +5392,10 @@
     const search = scope.location?.search || '';
     const params = new URLSearchParams(search);
     const queryMode = params.get('mode');
+    if (config.__webglFallbackApplied) {
+      applyWebglFallbackConfig(config, config.__webglFallbackDetail || null);
+      return true;
+    }
     if (queryMode === 'simple') {
       return true;
     }
@@ -5337,52 +5429,52 @@
       return true;
     }
     const doc = typeof document !== 'undefined' ? document : documentRef;
-    let webglSupported = false;
-    let webglProbeError = null;
-    if (doc && typeof doc.createElement === 'function') {
-      try {
-        const canvas = doc.createElement('canvas');
-        const getContext = canvas?.getContext?.bind(canvas);
-        if (typeof getContext === 'function') {
-          const gl =
-            getContext('webgl2') || getContext('webgl') || getContext('experimental-webgl') || null;
-          webglSupported = Boolean(gl);
-          if (!webglSupported) {
-            webglProbeError = new Error('WebGL context request returned null.');
-            webglProbeError.name = 'WebGLUnavailableError';
-          }
-        } else {
-          webglProbeError = new Error('Canvas does not provide a WebGL-capable context.');
-          webglProbeError.name = 'WebGLContextUnavailable';
-        }
-      } catch (error) {
-        webglSupported = false;
-        webglProbeError = error instanceof Error ? error : new Error('WebGL probe failed.');
-      }
-    }
-    config.webglSupport = webglSupported;
-    if (!webglSupported) {
-      const failureDetail = {};
-      if (webglProbeError) {
-        if (typeof webglProbeError.name === 'string' && webglProbeError.name.trim().length) {
-          failureDetail.errorName = webglProbeError.name.trim();
-        }
-        if (typeof webglProbeError.message === 'string' && webglProbeError.message.trim().length) {
-          failureDetail.errorMessage = webglProbeError.message.trim();
-        }
-      }
-      presentWebglBlockedOverlay({ detail: failureDetail });
-      config.preferAdvanced = false;
-      config.enableAdvancedExperience = false;
-      config.forceAdvanced = false;
-      config.defaultMode = 'simple';
-      queueBootstrapFallbackNotice(
-        'webgl-unavailable-simple-mode',
-        'WebGL is unavailable on this device, so the mission briefing view is shown instead of the full 3D renderer.',
-      );
+    const { supported, error } = probeWebglSupport(doc);
+    config.webglSupport = supported;
+    if (!supported) {
+      applyWebglFallbackConfig(config, error);
       return true;
     }
     return !config.preferAdvanced;
+  }
+
+  function runWebglPreflightCheck() {
+    const scope =
+      typeof globalScope !== 'undefined'
+        ? globalScope
+        : typeof window !== 'undefined'
+          ? window
+          : globalThis;
+    const config = scope.APP_CONFIG || (scope.APP_CONFIG = {});
+    const search = scope.location?.search || '';
+    let queryMode = null;
+    if (typeof URLSearchParams === 'function') {
+      try {
+        queryMode = new URLSearchParams(search).get('mode');
+      } catch (error) {
+        if (globalScope?.console?.debug) {
+          globalScope.console.debug('Failed to parse query params for WebGL preflight.', error);
+        }
+      }
+    }
+    if (config.__webglFallbackApplied) {
+      applyWebglFallbackConfig(config, config.__webglFallbackDetail || null);
+      return true;
+    }
+    if (queryMode === 'simple') {
+      return false;
+    }
+    if (config.forceSimpleMode || config.enableAdvancedExperience === false) {
+      return false;
+    }
+    const doc = typeof document !== 'undefined' ? document : documentRef;
+    const { supported, error } = probeWebglSupport(doc);
+    config.webglSupport = supported;
+    if (!supported) {
+      applyWebglFallbackConfig(config, error);
+      return true;
+    }
+    return false;
   }
 
   function internalCreateScoreboardUtilsFallback() {
@@ -6413,14 +6505,20 @@
 
   synchroniseBootstrapWithExistingState();
 
-  ensureThree()
-    .then(() => {
-      bootstrap();
-    })
-    .catch((error) => {
-      reportThreeLoadFailure(error, { reason: 'ensureThree-rejection' });
-      if (!simpleFallbackAttempted) {
-        tryStartSimpleFallback(error, { reason: 'ensureThree-failure' });
-      }
-    });
+  const skipAdvancedBootstrap = runWebglPreflightCheck();
+
+  if (skipAdvancedBootstrap) {
+    bootstrap();
+  } else {
+    ensureThree()
+      .then(() => {
+        bootstrap();
+      })
+      .catch((error) => {
+        reportThreeLoadFailure(error, { reason: 'ensureThree-rejection' });
+        if (!simpleFallbackAttempted) {
+          tryStartSimpleFallback(error, { reason: 'ensureThree-failure' });
+        }
+      });
+  }
 })();

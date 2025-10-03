@@ -30,7 +30,7 @@ function instantiateShouldStartSimpleMode(windowStub) {
       '\nconst documentRef = window.document ?? null;' +
       '\nconst document = window.document ?? undefined;' +
       shouldStartSimpleModeSource +
-      '\nreturn shouldStartSimpleMode;'
+      '\nreturn { shouldStartSimpleMode, runWebglPreflightCheck };'
   );
   return factory(windowStub, URLSearchParams);
 }
@@ -74,7 +74,7 @@ describe('renderer mode selection', () => {
       },
       SimpleExperience: { create: () => ({}) },
     };
-    const shouldStartSimpleMode = instantiateShouldStartSimpleMode(windowStub);
+    const { shouldStartSimpleMode } = instantiateShouldStartSimpleMode(windowStub);
     expect(shouldStartSimpleMode()).toBe(false);
   });
 
@@ -88,7 +88,7 @@ describe('renderer mode selection', () => {
       },
       SimpleExperience: { create: () => ({}) },
     };
-    const shouldStartSimpleMode = instantiateShouldStartSimpleMode(windowStub);
+    const { shouldStartSimpleMode } = instantiateShouldStartSimpleMode(windowStub);
     expect(shouldStartSimpleMode()).toBe(true);
   });
 
@@ -102,7 +102,7 @@ describe('renderer mode selection', () => {
       },
       SimpleExperience: { create: () => ({}) },
     };
-    const shouldStartSimpleMode = instantiateShouldStartSimpleMode(windowStub);
+    const { shouldStartSimpleMode } = instantiateShouldStartSimpleMode(windowStub);
     expect(shouldStartSimpleMode()).toBe(true);
   });
 
@@ -135,7 +135,7 @@ describe('renderer mode selection', () => {
       },
       console: { warn: () => {}, error: () => {} },
     };
-    const shouldStartSimpleMode = instantiateShouldStartSimpleMode(windowStub);
+    const { shouldStartSimpleMode } = instantiateShouldStartSimpleMode(windowStub);
     expect(shouldStartSimpleMode()).toBe(true);
     expect(windowStub.APP_CONFIG.preferAdvanced).toBe(false);
     expect(windowStub.APP_CONFIG.enableAdvancedExperience).toBe(false);
@@ -168,6 +168,74 @@ describe('renderer mode selection', () => {
     );
   });
 
+  it('preflights WebGL support at bootstrap and skips the advanced renderer when blocked', () => {
+    const canvasStub = {
+      getContext: () => null,
+    };
+    const showError = vi.fn();
+    const setDiagnostic = vi.fn();
+    const setRecoveryAction = vi.fn();
+    global.document = {
+      createElement: (tagName) => {
+        if (tagName !== 'canvas') {
+          throw new Error(`Unexpected element request: ${tagName}`);
+        }
+        return canvasStub;
+      },
+    };
+    const windowStub = {
+      location: { search: '' },
+      APP_CONFIG: {
+        enableAdvancedExperience: true,
+        preferAdvanced: true,
+      },
+      SimpleExperience: { create: () => ({}) },
+      bootstrapOverlay: {
+        showError,
+        setDiagnostic,
+        setRecoveryAction,
+      },
+      console: { warn: () => {}, error: () => {}, debug: () => {} },
+      __INFINITE_RAILS_STATE__: {
+        isRunning: false,
+        world: [],
+        updatedAt: 0,
+        reason: 'bootstrap',
+      },
+    };
+    const { runWebglPreflightCheck, shouldStartSimpleMode } = instantiateShouldStartSimpleMode(windowStub);
+    const skipAdvanced = runWebglPreflightCheck();
+    expect(skipAdvanced).toBe(true);
+    expect(windowStub.APP_CONFIG.__webglFallbackApplied).toBe(true);
+    expect(windowStub.APP_CONFIG.preferAdvanced).toBe(false);
+    expect(windowStub.APP_CONFIG.enableAdvancedExperience).toBe(false);
+    expect(windowStub.APP_CONFIG.forceAdvanced).toBe(false);
+    expect(windowStub.APP_CONFIG.defaultMode).toBe('simple');
+    expect(windowStub.APP_CONFIG.webglSupport).toBe(false);
+    expect(windowStub.__bootstrapNotices).toEqual([
+      {
+        key: 'webgl-unavailable-simple-mode',
+        message:
+          'WebGL is unavailable on this device, so the mission briefing view is shown instead of the full 3D renderer.',
+      },
+    ]);
+    expect(showError).toHaveBeenCalledTimes(1);
+    expect(setDiagnostic).toHaveBeenCalledWith('renderer', {
+      status: 'warning',
+      message: 'WebGL blocked — launching simplified renderer.',
+    });
+    expect(setRecoveryAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        label: 'Retry WebGL Renderer',
+        action: 'retry-webgl',
+      }),
+    );
+    expect(windowStub.__INFINITE_RAILS_STATE__.reason).toBe('webgl-unavailable');
+    expect(windowStub.__INFINITE_RAILS_STATE__.rendererMode).toBe('simple');
+    expect(shouldStartSimpleMode()).toBe(true);
+    expect(showError).toHaveBeenCalledTimes(1);
+  });
+
   it('falls back to the simple renderer on mobile when advanced mobile support is disabled', () => {
     const matchMediaStub = (query) => ({ matches: query === '(pointer: coarse)' });
     const canvasStub = { getContext: () => ({}) };
@@ -191,7 +259,7 @@ describe('renderer mode selection', () => {
       SimpleExperience: { create: () => ({}) },
       console: { debug: () => {}, warn: () => {} },
     };
-    const shouldStartSimpleMode = instantiateShouldStartSimpleMode(windowStub);
+    const { shouldStartSimpleMode } = instantiateShouldStartSimpleMode(windowStub);
     expect(shouldStartSimpleMode()).toBe(true);
     expect(windowStub.APP_CONFIG.enableAdvancedExperience).toBe(false);
     expect(windowStub.APP_CONFIG.preferAdvanced).toBe(false);
@@ -229,7 +297,7 @@ describe('renderer mode selection', () => {
       },
       SimpleExperience: { create: () => ({}) },
     };
-    const shouldStartSimpleMode = instantiateShouldStartSimpleMode(windowStub);
+    const { shouldStartSimpleMode } = instantiateShouldStartSimpleMode(windowStub);
     expect(shouldStartSimpleMode()).toBe(false);
     expect(windowStub.APP_CONFIG.enableAdvancedExperience).toBe(true);
     expect(windowStub.APP_CONFIG.preferAdvanced).toBe(true);
