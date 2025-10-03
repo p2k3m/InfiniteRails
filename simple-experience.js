@@ -1,10 +1,112 @@
 (function () {
+  function clamp01(value) {
+    if (!Number.isFinite(value)) {
+      return 0;
+    }
+    if (value <= 0) {
+      return 0;
+    }
+    if (value >= 1) {
+      return 1;
+    }
+    return value;
+  }
+
+  function normaliseHexString(hex) {
+    if (typeof hex !== 'string') {
+      return '';
+    }
+    const trimmed = hex.trim().replace(/^#/, '');
+    if (trimmed.length === 3) {
+      return trimmed
+        .split('')
+        .map((char) => char + char)
+        .join('');
+    }
+    return trimmed;
+  }
+
+  function parseHexColor(hex, fallback) {
+    const normalised = normaliseHexString(hex);
+    if (normalised.length === 6) {
+      const value = Number.parseInt(normalised, 16);
+      if (Number.isFinite(value)) {
+        return {
+          r: (value >> 16) & 255,
+          g: (value >> 8) & 255,
+          b: value & 255,
+        };
+      }
+    }
+    return {
+      r: fallback?.r ?? 0,
+      g: fallback?.g ?? 0,
+      b: fallback?.b ?? 0,
+    };
+  }
+
+  function mixRgb(colorA, colorB, ratio) {
+    const amount = clamp01(ratio);
+    const inverse = 1 - amount;
+    return {
+      r: Math.round(colorA.r * inverse + colorB.r * amount),
+      g: Math.round(colorA.g * inverse + colorB.g * amount),
+      b: Math.round(colorA.b * inverse + colorB.b * amount),
+    };
+  }
+
+  function rgbToCss(color) {
+    return `rgb(${color.r}, ${color.g}, ${color.b})`;
+  }
+
+  const FALLBACK_PROCEDURAL_RGB = Object.freeze({
+    grass: { r: 111, g: 191, b: 115 },
+    cloud: { r: 229, g: 247, b: 255 },
+    shadow: { r: 63, g: 122, b: 58 },
+    sky: { r: 138, g: 212, b: 255 },
+  });
+
+  function buildProceduralColorSet(palette = {}) {
+    return {
+      grass: parseHexColor(palette.base, FALLBACK_PROCEDURAL_RGB.grass),
+      cloud: parseHexColor(palette.highlight, FALLBACK_PROCEDURAL_RGB.cloud),
+      shadow: parseHexColor(palette.shadow, FALLBACK_PROCEDURAL_RGB.shadow),
+      sky: parseHexColor(palette.accent, FALLBACK_PROCEDURAL_RGB.sky),
+    };
+  }
+
+  function createSkyGrassDataTexture(THREE, colorSet) {
+    const width = 2;
+    const height = 2;
+    const data = new Uint8Array(width * height * 4);
+    const topColor = mixRgb(colorSet.sky, colorSet.cloud, 0.4);
+    const bottomColor = mixRgb(colorSet.grass, colorSet.shadow, 0.25);
+    for (let y = 0; y < height; y += 1) {
+      const color = y === 0 ? topColor : bottomColor;
+      for (let x = 0; x < width; x += 1) {
+        const index = (y * width + x) * 4;
+        data[index] = color.r;
+        data[index + 1] = color.g;
+        data[index + 2] = color.b;
+        data[index + 3] = 255;
+      }
+    }
+    const texture = new THREE.DataTexture(data, width, height, THREE.RGBAFormat, THREE.UnsignedByteType);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.magFilter = THREE.NearestFilter;
+    texture.minFilter = THREE.NearestFilter;
+    texture.wrapS = THREE.RepeatWrapping;
+    texture.wrapT = THREE.RepeatWrapping;
+    texture.needsUpdate = true;
+    return texture;
+  }
+
   const WORLD_SIZE = 64;
   const DEFAULT_PROCEDURAL_VOXEL_PALETTE = {
-    base: '#9a9a9a',
-    highlight: '#c7c7c7',
-    shadow: '#6e6e6e',
-    accent: '#b5b5b5',
+    base: '#6fbf73',
+    highlight: '#e5f7ff',
+    shadow: '#3f7a3a',
+    accent: '#8ad4ff',
   };
   const BLOCK_SIZE = 1;
   const EMBEDDED_TEXTURE_DATA = {
@@ -6630,21 +6732,43 @@
       }
       const THREE = this.THREE;
       const size = 32;
+      const colorSet = buildProceduralColorSet(palette);
       const canvas = document.createElement('canvas');
       canvas.width = size;
       canvas.height = size;
       const ctx = canvas.getContext('2d');
       if (!ctx) {
-        const fallback = new THREE.Texture();
+        const fallback = createSkyGrassDataTexture(THREE, colorSet);
         this.textureCache.set(key, fallback);
         return fallback;
       }
-      const colors = [palette.base, palette.highlight, palette.shadow, palette.accent].filter(Boolean);
+      const horizon = Math.floor(size * 0.55);
+      const skySegment = Math.max(1, horizon);
+      const groundSegment = Math.max(1, size - horizon);
+      const grassHighlight = mixRgb(colorSet.grass, colorSet.cloud, 0.18);
       for (let y = 0; y < size; y += 1) {
+        const isSky = y < horizon;
+        const segmentLength = isSky ? skySegment : groundSegment;
+        const offset = isSky ? y : y - horizon;
+        const denominator = segmentLength <= 1 ? 1 : segmentLength - 1;
+        const progress = clamp01(denominator === 0 ? 0 : offset / denominator);
+        const startColor = isSky ? colorSet.sky : colorSet.grass;
+        const endColor = isSky ? colorSet.cloud : colorSet.shadow;
+        const baseColor = mixRgb(startColor, endColor, progress);
         for (let x = 0; x < size; x += 1) {
-          const noise = Math.sin(x * 12.3 + y * 7.1) * 43758.5453;
-          const index = Math.floor(Math.abs(noise) * colors.length) % colors.length;
-          ctx.fillStyle = colors[index] ?? palette.base;
+          const noise = Math.abs(Math.sin(x * 7.1 + y * 3.3)) * 0.35;
+          const noiseTarget = isSky ? colorSet.cloud : colorSet.shadow;
+          let tinted = mixRgb(baseColor, noiseTarget, clamp01(noise));
+          if (isSky) {
+            const cloudNoise = Math.abs(Math.cos(x * 0.42 + y * 0.28));
+            const cloudAmount = clamp01((cloudNoise - 0.65) * 0.8);
+            tinted = mixRgb(tinted, colorSet.cloud, cloudAmount * 0.6);
+          } else {
+            const highlightNoise = Math.abs(Math.cos((x + 11.7) * 0.24 + y * 0.19));
+            const highlightAmount = clamp01((highlightNoise - 0.45) * 0.7);
+            tinted = mixRgb(tinted, grassHighlight, highlightAmount * 0.4);
+          }
+          ctx.fillStyle = rgbToCss(tinted);
           ctx.fillRect(x, y, 1, 1);
         }
       }
