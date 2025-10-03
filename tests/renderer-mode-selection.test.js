@@ -64,6 +64,27 @@ function instantiateSimpleFallback(scope) {
   return factory(scope);
 }
 
+const errorBoundaryStart = scriptSource.indexOf('const ERROR_BOUNDARY_DEFAULTS =');
+const errorBoundaryEnd = scriptSource.indexOf('function formatAssetLogLabel', errorBoundaryStart);
+if (errorBoundaryStart === -1 || errorBoundaryEnd === -1 || errorBoundaryEnd <= errorBoundaryStart) {
+  throw new Error('Failed to locate error boundary helpers in script.js');
+}
+
+function instantiateErrorBoundary(scope) {
+  const errorBoundarySource = scriptSource.slice(errorBoundaryStart, errorBoundaryEnd);
+  const factory = new Function(
+    'scope',
+    "'use strict';" +
+      'const globalScope = scope;' +
+      'const presentCriticalErrorOverlay = scope.presentCriticalErrorOverlay ?? (() => {});' +
+      'const resolveRendererModeForFallback = scope.resolveRendererModeForFallback ?? (() => null);' +
+      'const tryStartSimpleFallback = scope.tryStartSimpleFallback ?? (() => {});' +
+      errorBoundarySource +
+      '\nreturn { handleErrorBoundary, wasErrorHandledByBoundary };'
+  );
+  return factory(scope);
+}
+
 const originalDocument = global.document;
 
 function createMockDocument() {
@@ -740,6 +761,55 @@ describe('renderer mode selection', () => {
     it('invokes the fallback bootstrap when an initialisation-error event is emitted', () => {
       const pattern = /addEventListener\('infinite-rails:initialisation-error'[\s\S]*?tryStartSimpleFallback\(/;
       expect(pattern.test(scriptSource)).toBe(true);
+    });
+  });
+
+  describe('error boundary fallback integration', () => {
+    it('invokes the simple fallback when an error boundary fires in advanced mode', () => {
+      const presentCriticalErrorOverlay = vi.fn();
+      const tryStartSimpleFallback = vi.fn(() => true);
+      const scope = {
+        console: { debug: vi.fn(), warn: vi.fn(), error: vi.fn() },
+        presentCriticalErrorOverlay,
+        resolveRendererModeForFallback: vi.fn(() => 'advanced'),
+        tryStartSimpleFallback,
+      };
+      const { handleErrorBoundary } = instantiateErrorBoundary(scope);
+      const boundaryError = new Error('Renderer exploded');
+      handleErrorBoundary(boundaryError, {
+        boundary: 'bootstrap',
+        detail: { reason: 'renderer-failure', stage: 'init' },
+        title: 'Renderer unavailable',
+      });
+      expect(presentCriticalErrorOverlay).toHaveBeenCalledTimes(1);
+      expect(tryStartSimpleFallback).toHaveBeenCalledTimes(1);
+      const [fallbackError, fallbackContext] = tryStartSimpleFallback.mock.calls[0];
+      expect(fallbackError).toBe(boundaryError);
+      expect(fallbackContext).toMatchObject({
+        reason: 'renderer-failure',
+        boundary: 'bootstrap',
+        stage: 'bootstrap',
+        mode: 'advanced',
+        source: 'error-boundary',
+      });
+    });
+
+    it('skips the fallback when already operating in simple mode', () => {
+      const presentCriticalErrorOverlay = vi.fn();
+      const tryStartSimpleFallback = vi.fn();
+      const scope = {
+        console: { debug: vi.fn(), warn: vi.fn(), error: vi.fn() },
+        presentCriticalErrorOverlay,
+        resolveRendererModeForFallback: vi.fn(() => 'simple'),
+        tryStartSimpleFallback,
+      };
+      const { handleErrorBoundary } = instantiateErrorBoundary(scope);
+      handleErrorBoundary(new Error('simple failure'), {
+        boundary: 'runtime',
+        detail: { reason: 'simple-mode-error' },
+      });
+      expect(presentCriticalErrorOverlay).toHaveBeenCalledTimes(1);
+      expect(tryStartSimpleFallback).not.toHaveBeenCalled();
     });
   });
 });
