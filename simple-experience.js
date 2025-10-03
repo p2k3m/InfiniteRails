@@ -88,6 +88,7 @@
       toggleCrafting: ['KeyE'],
       toggleInventory: ['KeyI'],
       openGuide: ['F1'],
+      toggleTutorial: ['Slash', 'F4'],
       openSettings: ['F2'],
       openLeaderboard: ['F3'],
       closeMenus: ['Escape'],
@@ -1737,6 +1738,7 @@
       this.assetRecoveryRetryButton = this.ui.assetRecoveryRetryButton || null;
       this.assetRecoveryReloadButton = this.ui.assetRecoveryReloadButton || null;
       this.startButtonEl = this.ui.startButton || null;
+      this.openTutorialButton = this.ui.openTutorialButton || null;
       this.openGuideButton = this.ui.openGuideButton || null;
       this.guideModalEl = this.ui.guideModal || null;
       this.guideCloseButtons = Array.isArray(this.ui.guideCloseButtons)
@@ -1772,6 +1774,10 @@
       this.firstRunTutorialBackdrop = this.ui?.firstRunTutorialBackdrop || null;
       this.firstRunTutorialCloseButton = this.ui?.firstRunTutorialCloseButton || null;
       this.firstRunTutorialPrimaryButton = this.ui?.firstRunTutorialPrimaryButton || null;
+      this.firstRunTutorialMoveDetail = this.ui?.firstRunTutorialMoveDetail || null;
+      this.firstRunTutorialGatherDetail = this.ui?.firstRunTutorialGatherDetail || null;
+      this.firstRunTutorialCraftDetail = this.ui?.firstRunTutorialCraftDetail || null;
+      this.firstRunTutorialNoteEl = this.ui?.firstRunTutorialNote || null;
       this.firstRunTutorialControlsBound = false;
       this.firstRunTutorialHideTimer = null;
       this.firstRunTutorialMarkOnDismiss = false;
@@ -2184,6 +2190,7 @@
       this.onCraftSuggestionBlur = this.handleCraftSuggestionBlur.bind(this);
       this.onCraftSequenceFocus = this.handleCraftSequenceFocus.bind(this);
       this.onCraftSequenceBlur = this.handleCraftSequenceBlur.bind(this);
+      this.onOpenTutorial = this.handleOpenTutorial.bind(this);
       this.onOpenGuide = this.handleOpenGuide.bind(this);
       this.onCloseGuide = this.handleCloseGuide.bind(this);
       this.onGuideModalClick = this.handleGuideModalClick.bind(this);
@@ -2217,6 +2224,7 @@
       this.eventsBound = false;
       this.onCanvasPointerLock = this.handleCanvasPointerLockRequest.bind(this);
       this.setupGuideUi();
+      this.setupTutorialUi();
       this.pendingHeightmapStream = null;
       this.heightmapStreamState = 'idle';
       this.heightmapStreamFailureCount = 0;
@@ -2840,6 +2848,28 @@
       this.updateGuideAria();
     }
 
+    setupTutorialUi() {
+      this.refreshFirstRunTutorialContent();
+      this.updateTutorialTriggerState();
+      if (this.openTutorialButton && !this.openTutorialButton.dataset.simpleTutorialBound) {
+        this.addSafeEventListener(this.openTutorialButton, 'click', this.onOpenTutorial, {
+          context: 'toggling tutorial overlay',
+        });
+        this.openTutorialButton.dataset.simpleTutorialBound = 'true';
+        if (!this.openTutorialButton.hasAttribute('aria-pressed')) {
+          this.openTutorialButton.setAttribute('aria-pressed', 'false');
+        }
+      }
+    }
+
+    updateTutorialTriggerState() {
+      if (!this.openTutorialButton) {
+        return;
+      }
+      const visible = this.firstRunTutorialEl ? this.firstRunTutorialEl.hidden === false : false;
+      this.openTutorialButton.setAttribute('aria-pressed', visible ? 'true' : 'false');
+    }
+
     getGuideSlides() {
       return Array.isArray(this.guideSlides) ? this.guideSlides : [];
     }
@@ -3150,6 +3180,20 @@
       }
     }
 
+    handleOpenTutorial(event) {
+      if (event?.preventDefault) {
+        event.preventDefault();
+      }
+      const visible = this.firstRunTutorialEl ? this.firstRunTutorialEl.hidden === false : false;
+      if (visible) {
+        const markSeen = this.firstRunTutorialMarkOnDismiss;
+        const showBriefingAfter = this.firstRunTutorialShowBriefingOnDismiss;
+        this.hideFirstRunTutorial({ markSeen, showBriefingAfter });
+        return;
+      }
+      this.showFirstRunTutorial({ autoFocus: true });
+    }
+
     handleOpenGuide(event) {
       if (event?.preventDefault) {
         event.preventDefault();
@@ -3373,6 +3417,60 @@
       }
     }
 
+    refreshFirstRunTutorialContent() {
+      const moveDetail = this.firstRunTutorialMoveDetail || null;
+      const gatherDetail = this.firstRunTutorialGatherDetail || null;
+      const craftDetail = this.firstRunTutorialCraftDetail || null;
+      const noteEl = this.firstRunTutorialNoteEl || null;
+      if (!moveDetail && !gatherDetail && !craftDetail && !noteEl) {
+        return;
+      }
+      const prefersTouch = Boolean(this.isTouchPreferred);
+      if (prefersTouch) {
+        if (moveDetail) {
+          moveDetail.innerHTML =
+            'Drag the <strong>left joystick</strong> or tap the arrow pads to travel, and swipe the viewport to look around.';
+        }
+        if (gatherDetail) {
+          gatherDetail.innerHTML =
+            'Tap the <strong>✦</strong> action button or the highlighted object to harvest resources and trigger switches.';
+        }
+        if (craftDetail) {
+          craftDetail.innerHTML =
+            'Tap the <strong>hammer</strong> icon to craft. Place blocks with the <strong>✦</strong> action button while aiming and ignite portals with the <strong>⧉</strong> control.';
+        }
+        if (noteEl) {
+          noteEl.innerHTML = 'Need a refresher later? Tap the <strong>Tutorial</strong> button in the HUD anytime.';
+        }
+        return;
+      }
+      const movementKeys = formatKeyListForSentence(
+        this.getCombinedActionLabels(MOVEMENT_ACTIONS, { limitPerAction: 1 }),
+        { fallback: 'W, A, S, or D' },
+      );
+      const interactKeys = formatKeyListForSentence(this.getActionKeyLabels('interact', { limit: 3 }), { fallback: 'F' });
+      const craftingKeys = formatKeyListForSentence(this.getActionKeyLabels('toggleCrafting', { limit: 2 }), {
+        fallback: 'E',
+      });
+      const placeKeys = formatKeyListForSentence(this.getActionKeyLabels('placeBlock', { limit: 2 }), { fallback: 'Q' });
+      const portalKeys = formatKeyListForSentence(this.getActionKeyLabels('buildPortal', { limit: 2 }), { fallback: 'R' });
+      const tutorialKeys = formatKeyListForSentence(this.getActionKeyLabels('toggleTutorial', { limit: 2 }), {
+        fallback: '?',
+      });
+      if (moveDetail) {
+        moveDetail.innerHTML = `Use <strong>${movementKeys}</strong> to travel, and move the mouse to survey the realm.`;
+      }
+      if (gatherDetail) {
+        gatherDetail.innerHTML = `Face a resource tile, then press <strong>${interactKeys}</strong> or click to harvest, open chests, and trigger switches.`;
+      }
+      if (craftDetail) {
+        craftDetail.innerHTML = `Tap the <strong>hammer</strong> icon or press <strong>${craftingKeys}</strong> to craft. Place blocks with <strong>${placeKeys}</strong> and ignite portals with <strong>${portalKeys}</strong>.`;
+      }
+      if (noteEl) {
+        noteEl.innerHTML = `Need a refresher later? Press <strong>${tutorialKeys}</strong> or use the <strong>Tutorial</strong> button in the HUD.`;
+      }
+    }
+
     maybeShowFirstRunTutorial() {
       if (!this.firstRunTutorialEl) {
         return false;
@@ -3389,6 +3487,7 @@
       if (!overlay) {
         return false;
       }
+      this.refreshFirstRunTutorialContent();
       const scope = typeof window !== 'undefined' ? window : typeof globalThis !== 'undefined' ? globalThis : null;
       if (scope && this.firstRunTutorialHideTimer) {
         scope.clearTimeout(this.firstRunTutorialHideTimer);
@@ -3404,6 +3503,7 @@
       if (body?.classList) {
         body.classList.add('first-run-tutorial-active');
       }
+      this.updateTutorialTriggerState();
       const raf =
         typeof requestAnimationFrame === 'function'
           ? requestAnimationFrame
@@ -3449,6 +3549,7 @@
         if (showBriefingAfter) {
           this.showBriefingOverlay();
         }
+        this.updateTutorialTriggerState();
         return false;
       }
       const scope = typeof window !== 'undefined' ? window : typeof globalThis !== 'undefined' ? globalThis : null;
@@ -3471,6 +3572,7 @@
           this.focusGameViewport();
         }
         this.firstRunTutorialHideTimer = null;
+        this.updateTutorialTriggerState();
       };
       if (scope?.setTimeout) {
         this.firstRunTutorialHideTimer = scope.setTimeout(finalise, 220);
@@ -7028,6 +7130,7 @@
         this.virtualJoystickEl && setInertState(this.virtualJoystickEl, true);
         this.mobileControlsActive = false;
         this.updatePointerHintForInputMode();
+        this.refreshFirstRunTutorialContent();
         return;
       }
       const shouldActivate = Boolean(this.isTouchPreferred);
@@ -7040,6 +7143,7 @@
           this.virtualJoystickEl && setInertState(this.virtualJoystickEl, true);
           this.updatePointerHintForInputMode();
         }
+        this.refreshFirstRunTutorialContent();
         return;
       }
       this.teardownMobileControls();
@@ -7047,6 +7151,7 @@
       controls.dataset.active = shouldActivate ? 'true' : 'false';
       if (!shouldActivate) {
         this.updatePointerHintForInputMode();
+        this.refreshFirstRunTutorialContent();
         return;
       }
       this.hidePointerHint(true);
@@ -7137,6 +7242,7 @@
         });
       }
       this.mobileControlsActive = true;
+      this.refreshFirstRunTutorialContent();
     }
 
     verifyMobileControlsDom() {
@@ -7230,6 +7336,7 @@
       if (prefersTouch !== this.mobileControlsActive) {
         this.initializeMobileControls();
       }
+      this.refreshFirstRunTutorialContent();
     }
 
     getPointerInputTargets() {
@@ -7311,6 +7418,7 @@
       if (!this.mobileControlsActive) {
         this.initializeMobileControls();
       }
+      this.refreshFirstRunTutorialContent();
     }
 
     handleGlobalTouchStart() {
@@ -7320,6 +7428,7 @@
       if (!this.mobileControlsActive) {
         this.initializeMobileControls();
       }
+      this.refreshFirstRunTutorialContent();
     }
 
     teardownMobileControls() {
@@ -11913,8 +12022,11 @@
         nextKeys = fallback ? [...fallback] : [];
       }
       const changed = this.applyKeyBinding(action.trim(), nextKeys);
-      if (changed && persist) {
-        this.persistKeyBindings();
+      if (changed) {
+        if (persist) {
+          this.persistKeyBindings();
+        }
+        this.refreshFirstRunTutorialContent();
       }
       return changed;
     }
@@ -11932,8 +12044,11 @@
           changed = true;
         }
       });
-      if (changed && persist) {
-        this.persistKeyBindings();
+      if (changed) {
+        if (persist) {
+          this.persistKeyBindings();
+        }
+        this.refreshFirstRunTutorialContent();
       }
       return changed;
     }
@@ -11944,6 +12059,7 @@
       if (persist) {
         this.persistKeyBindings();
       }
+      this.refreshFirstRunTutorialContent();
       return cloneKeyBindingMap(this.keyBindings);
     }
 
@@ -12577,6 +12693,17 @@
         this.toggleGuideModal(open, { focusTarget: this.guideCloseButtons?.[0] || null });
         event.preventDefault();
       }
+      if (this.isKeyForAction(code, 'toggleTutorial') && !event.repeat) {
+        const visible = this.firstRunTutorialEl ? this.firstRunTutorialEl.hidden === false : false;
+        if (visible) {
+          const markSeen = this.firstRunTutorialMarkOnDismiss;
+          const showBriefingAfter = this.firstRunTutorialShowBriefingOnDismiss;
+          this.hideFirstRunTutorial({ markSeen, showBriefingAfter });
+        } else {
+          this.showFirstRunTutorial({ autoFocus: true });
+        }
+        event.preventDefault();
+      }
       if (this.isKeyForAction(code, 'closeMenus')) {
         this.toggleCraftingModal(false);
         this.toggleInventoryModal(false);
@@ -12811,6 +12938,7 @@
         this.initializeMobileControls();
       }
       this.updatePointerHintForInputMode();
+      this.refreshFirstRunTutorialContent();
     }
 
     handleBeforeUnload() {
