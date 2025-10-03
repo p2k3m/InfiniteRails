@@ -4337,7 +4337,7 @@
       });
       this.refreshCameraBaseOffset();
       if (typeof console !== 'undefined') {
-        console.error(
+        console.info(
           'Scene population check fired — validate terrain, rails, portals, mobs, and chests render correctly. Re-run asset bootstrap if visuals are missing.',
         );
       }
@@ -8034,7 +8034,7 @@
       });
       this.playerMixer = this.playerAnimationRig?.mixer || null;
       this.playerIdleAction = this.playerAnimationRig?.actions?.idle || null;
-      console.error(
+      console.info(
         'Avatar visibility confirmed — verify animation rig initialises correctly if the player appears static.',
       );
       this.ensurePlayerArmsVisible();
@@ -8172,7 +8172,7 @@
       }
       this.updateDayNightCycle();
       this.updateDimensionInfoPanel();
-      console.error(
+      console.info(
         `Dimension activation notice — ${theme.name} assets should now be visible. If the environment loads empty, confirm theme registration and manifest entries for this dimension.`,
       );
     }
@@ -8435,7 +8435,7 @@
         this.navigationMeshSummary.updatedAt = navSummaryTimestamp;
       }
       if (typeof console !== 'undefined') {
-        console.error(
+        console.info(
           `Navigation mesh initialization summary — ${navigationSummary.chunkCount} chunk meshes prepared with ${navigationSummary.walkableCells} walkable surfaces. If mobs stop moving, inspect chunk hydration and navmesh rebuilding.`,
         );
       }
@@ -8448,13 +8448,13 @@
         const chunkCount = Array.isArray(this.terrainChunkGroups)
           ? this.terrainChunkGroups.length
           : 0;
-        console.error(
+        console.info(
           `World generation summary — ${columnCount} columns created. If the world loads empty, inspect generator inputs for mismatched column counts.`,
         );
-        console.error(
+        console.info(
           `Terrain block placement summary — ${voxelCount} blocks placed. For missing terrain, review the heightmap generator and chunk hydration routines.`,
         );
-        console.error(
+        console.info(
           `Terrain chunk population summary — ${chunkCount} chunks loaded. Investigate the streaming manager if this number stalls unexpectedly.`,
         );
         if (chunkCount <= 0 || voxelCount <= 0) {
