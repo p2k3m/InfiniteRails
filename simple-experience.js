@@ -9865,32 +9865,57 @@
       this.ensurePlayerArmsVisible();
     }
 
-    async loadPlayerCharacter() {
+    async loadPlayerCharacter(options = {}) {
       if (!this.playerRig) return;
       const THREE = this.THREE;
       const sessionId = this.activeSessionId;
+      const maxAttempts = Number.isFinite(options?.maxAttempts)
+        ? Math.max(1, Math.floor(options.maxAttempts))
+        : 3;
       this.ensurePlayerAvatarPlaceholder('boot');
       let asset = null;
-      try {
-        asset = await this.cloneModelScene('steve');
-      } catch (error) {
-        console.error('Failed to load Steve model.', error);
-        asset = null;
-      }
-      if (sessionId !== this.activeSessionId) {
-        if (asset?.scene) {
-          disposeObject3D(asset.scene);
+      let attempt = 0;
+      while (attempt < maxAttempts) {
+        attempt += 1;
+        let candidate = null;
+        try {
+          candidate = await this.cloneModelScene('steve');
+        } catch (error) {
+          candidate = null;
         }
-        return;
+        if (sessionId !== this.activeSessionId) {
+          if (candidate?.scene) {
+            disposeObject3D(candidate.scene);
+          }
+          return;
+        }
+        const isPlaceholder = candidate?.scene?.userData?.placeholder === true;
+        if (candidate?.scene && !isPlaceholder) {
+          asset = candidate;
+          break;
+        }
+        const message =
+          attempt < maxAttempts
+            ? `Explorer avatar still loading (attempt ${attempt} of ${maxAttempts}) — placeholder visuals active until detailed models return.`
+            : `Explorer avatar unavailable after ${maxAttempts} attempt(s) — placeholder visuals remain active.`;
+        this.handleAssetLoadFailure('steve', null, { fallbackMessage: message });
+        if (candidate?.scene) {
+          disposeObject3D(candidate.scene);
+        }
+        if (attempt >= maxAttempts) {
+          break;
+        }
+        const delayMs =
+          typeof this.computeAssetRetryDelay === 'function'
+            ? this.computeAssetRetryDelay(attempt)
+            : 700;
+        await this.delay(delayMs);
+        if (sessionId !== this.activeSessionId) {
+          return;
+        }
       }
       if (!asset?.scene) {
-        console.error('Model load failed, using fallback cube');
-        const fallback = this.ensurePlayerAvatarPlaceholder('failed');
-        if (fallback) {
-          console.error(
-            'Avatar visibility fallback active — Steve forced visible without standard model. Inspect character load pipeline to restore the default avatar.',
-          );
-        }
+        console.warn('Player avatar model unavailable after retries — using placeholder rig.');
         return;
       }
       const model = asset.scene;
