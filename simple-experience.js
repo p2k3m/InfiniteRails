@@ -1642,6 +1642,7 @@
       this.onFirstRunTutorialKeyDown = this.handleFirstRunTutorialKeyDown.bind(this);
       this.assetFailureNotices = new Set();
       this.eventFailureNotices = new Set();
+      this.aiAttachmentFailureAnnounced = false;
       this.boundEventDisposers = [];
       this.boundEventRecords = [];
       this.bindAssetRecoveryControls();
@@ -12672,13 +12673,68 @@
         this[property] = group;
       }
       const worldRoot = this.worldRoot || this.scene;
-      if (group.parent && group.parent !== worldRoot && typeof group.parent.remove === 'function') {
-        group.parent.remove(group);
+      if (!worldRoot || typeof worldRoot.add !== 'function') {
+        this.handleEntityAttachmentFailure(kind, {
+          reason: worldRoot ? 'world-root-invalid' : 'world-root-unavailable',
+        });
+        return null;
       }
-      if (worldRoot && group.parent !== worldRoot && typeof worldRoot.add === 'function') {
-        worldRoot.add(group);
+      if (group.parent && group.parent !== worldRoot && typeof group.parent.remove === 'function') {
+        try {
+          group.parent.remove(group);
+        } catch (error) {
+          this.handleEntityAttachmentFailure(kind, { reason: 'group-detach-failed', error });
+          return null;
+        }
+      }
+      if (group.parent !== worldRoot) {
+        try {
+          worldRoot.add(group);
+        } catch (error) {
+          this.handleEntityAttachmentFailure(kind, { reason: 'group-attach-failed', error });
+          return null;
+        }
+      }
+      if (group.parent !== worldRoot) {
+        this.handleEntityAttachmentFailure(kind, { reason: 'group-parent-mismatch' });
+        return null;
       }
       return group;
+    }
+
+    handleEntityAttachmentFailure(kind, context = {}) {
+      if (this.aiAttachmentFailureAnnounced) {
+        return;
+      }
+      this.aiAttachmentFailureAnnounced = true;
+      const label = typeof kind === 'string' && kind.trim().length ? kind.trim() : 'entity';
+      const friendly = label.replace(/[-_]+/g, ' ').trim() || 'entity';
+      const capitalised = `${friendly.charAt(0).toUpperCase()}${friendly.slice(1)}`;
+      const message =
+        `${capitalised} AI offline — AI scripts could not attach ${friendly} actors to the world. Reload the page to continue your run.`;
+      if (typeof console !== 'undefined' && typeof console.error === 'function') {
+        const logContext = { kind: label, reason: context.reason ?? 'unknown' };
+        if (context.error) {
+          logContext.error = context.error;
+        }
+        console.error('AI scripts failed to attach to entity group.', logContext);
+      }
+      if (typeof this.emitGameEvent === 'function') {
+        const detail = { kind: label, reason: context.reason ?? 'unknown' };
+        if (context.error instanceof Error) {
+          detail.errorMessage = context.error.message;
+          detail.errorName = context.error.name;
+        }
+        this.emitGameEvent('ai-attachment-failed', detail);
+      }
+      const failureDetails = {
+        stage: `ai:${label}`,
+        errorName: 'AI_ENTITY_ATTACHMENT_FAILED',
+      };
+      if (context.error instanceof Error) {
+        failureDetails.error = context.error;
+      }
+      this.presentRendererFailure(message, failureDetails);
     }
 
     createGolemActor() {
