@@ -143,6 +143,7 @@
   const POINTER_LOCK_RETRY_HINT_MESSAGE = 'Browser blocked mouse capture — retrying…';
   const POINTER_LOCK_CHANGE_EVENTS = ['pointerlockchange', 'mozpointerlockchange', 'webkitpointerlockchange'];
   const POINTER_LOCK_ERROR_EVENTS = ['pointerlockerror', 'mozpointerlockerror', 'webkitpointerlockerror'];
+  const HUD_INTERACTION_TIMEOUT_MS = 4500;
   const FALLBACK_HEALTH = 10;
   const FALLBACK_BREATH = 10;
   const PORTAL_BLOCK_REQUIREMENT = 10;
@@ -2548,6 +2549,8 @@
       this.prefersReducedMotion = this.detectReducedMotion();
       this.audio = this.createAudioController();
       this.activeAmbientTrack = null;
+      this.hudInteractionTimeout = null;
+      this.hudInteractionActive = false;
       this.onPointerLockChange = this.handlePointerLockChange.bind(this);
       this.onPointerLockError = this.handlePointerLockError.bind(this);
       this.onMouseUp = this.handleMouseUp.bind(this);
@@ -4426,6 +4429,7 @@
           this.updatePointerHintForInputMode(message);
           this.schedulePointerHintAutoHide(8);
         }
+        this.setHudInteractionState(true, { timeoutMs: 0 });
         return;
       }
       this.pointerLockFallbackActive = true;
@@ -4461,6 +4465,7 @@
         this.updatePointerHintForInputMode(message);
         this.schedulePointerHintAutoHide(8);
       }
+      this.setHudInteractionState(true, { timeoutMs: 0 });
     }
 
     beginPointerFallbackDrag(event) {
@@ -4479,6 +4484,7 @@
       this.pointerFallbackDragging = false;
       this.pointerFallbackLast = null;
       this.pointerFallbackButton = null;
+      this.refreshHudInteractionState();
     }
 
     initializeScoreboardUi() {
@@ -5632,6 +5638,7 @@
     }
 
     stop() {
+      this.setHudInteractionState(false);
       this.cancelQueuedModelPreload();
       this.cancelAllAssetDelayWarnings();
       this.cancelNavigationMeshMaintenance();
@@ -8290,6 +8297,7 @@
       if (this.virtualJoystickThumb) {
         this.virtualJoystickThumb.style.transform = 'translate(0px, 0px)';
       }
+      this.refreshHudInteractionState();
     }
 
     handleJoystickPointerDown(event) {
@@ -8370,6 +8378,7 @@
       if (action === 'up' || action === 'down' || action === 'left' || action === 'right') {
         this.touchButtonStates[action] = false;
       }
+      this.refreshHudInteractionState();
     }
 
     handlePortalButton(event) {
@@ -8434,6 +8443,7 @@
       this.markInteraction();
       this.touchLookPointerId = null;
       this.touchLookLast = null;
+      this.refreshHudInteractionState();
     }
 
     applyTextureAnisotropy() {
@@ -8530,6 +8540,116 @@
             console.debug('Audio context resume threw during interaction.', error);
           }
         }
+      }
+      this.setHudInteractionState(true, { timeoutMs: HUD_INTERACTION_TIMEOUT_MS });
+    }
+
+    isPlayerInteracting() {
+      if (!this.started) {
+        return false;
+      }
+      if (this.pointerLocked) {
+        return true;
+      }
+      if (this.pointerLockFallbackActive) {
+        if (this.pointerFallbackDragging) {
+          return true;
+        }
+        if (this.pointerFallbackButton !== null) {
+          return true;
+        }
+      }
+      if (this.keys?.size) {
+        return true;
+      }
+      if (this.touchLookPointerId !== null) {
+        return true;
+      }
+      if (this.joystickPointerId !== null) {
+        return true;
+      }
+      if (this.joystickVector?.lengthSq && this.joystickVector.lengthSq() > 0.0001) {
+        return true;
+      }
+      const touchStates = this.touchButtonStates;
+      if (touchStates && (touchStates.up || touchStates.down || touchStates.left || touchStates.right)) {
+        return true;
+      }
+      return false;
+    }
+
+    clearHudInteractionTimer() {
+      if (!this.hudInteractionTimeout) {
+        return;
+      }
+      const scope = typeof window !== 'undefined' ? window : typeof globalThis !== 'undefined' ? globalThis : null;
+      const clearTimer =
+        scope && typeof scope.clearTimeout === 'function'
+          ? scope.clearTimeout.bind(scope)
+          : typeof clearTimeout === 'function'
+            ? clearTimeout
+            : null;
+      if (typeof clearTimer === 'function') {
+        clearTimer(this.hudInteractionTimeout);
+      }
+      this.hudInteractionTimeout = null;
+    }
+
+    setHudInteractionState(active, options = {}) {
+      const doc = typeof document !== 'undefined' ? document : null;
+      const body = doc?.body || null;
+      if (!body) {
+        return;
+      }
+      this.clearHudInteractionTimer();
+      if (active) {
+        if (!this.hudInteractionActive) {
+          body.classList.add('hud-inactive');
+          this.hudInteractionActive = true;
+        }
+        let timeout = options?.timeoutMs;
+        if (timeout === undefined || timeout === null) {
+          timeout = HUD_INTERACTION_TIMEOUT_MS;
+        }
+        if (Number.isFinite(timeout) && timeout > 0) {
+          const scope = typeof window !== 'undefined' ? window : typeof globalThis !== 'undefined' ? globalThis : null;
+          const setTimer =
+            scope && typeof scope.setTimeout === 'function'
+              ? scope.setTimeout.bind(scope)
+              : typeof setTimeout === 'function'
+                ? setTimeout
+                : null;
+          if (typeof setTimer === 'function') {
+            this.hudInteractionTimeout = setTimer(() => {
+              this.hudInteractionTimeout = null;
+              this.setHudInteractionState(false, { source: 'timeout' });
+            }, timeout);
+          }
+        }
+        return;
+      }
+      if (this.isPlayerInteracting()) {
+        if (!this.hudInteractionActive) {
+          body.classList.add('hud-inactive');
+          this.hudInteractionActive = true;
+        }
+        return;
+      }
+      if (this.hudInteractionActive) {
+        body.classList.remove('hud-inactive');
+        this.hudInteractionActive = false;
+      }
+    }
+
+    refreshHudInteractionState(options = {}) {
+      if (this.isPlayerInteracting()) {
+        const timeout =
+          options && Number.isFinite(options.timeoutMs) ? options.timeoutMs : 0;
+        this.setHudInteractionState(true, { timeoutMs: timeout });
+        return;
+      }
+      if (options?.immediate) {
+        this.setHudInteractionState(false);
       }
     }
 
@@ -13848,6 +13968,7 @@
         this.markInteraction();
         this.cancelPointerHintAutoHide();
         this.hidePointerHint(true);
+        this.setHudInteractionState(true, { timeoutMs: 0 });
         return;
       }
       this.markInteraction();
@@ -13857,6 +13978,7 @@
       } else {
         this.showDesktopPointerTutorialHint();
       }
+      this.refreshHudInteractionState();
     }
 
     handlePointerLockError(event) {
@@ -14029,6 +14151,7 @@
         return;
       }
       this.endPointerFallbackDrag();
+      this.refreshHudInteractionState();
     }
 
     handleKeyDown(event) {
@@ -14128,6 +14251,7 @@
       if (code) {
         this.keys.delete(code);
       }
+      this.refreshHudInteractionState();
     }
 
     queueMovementBindingValidation(actionLabel) {
