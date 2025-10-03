@@ -1847,6 +1847,10 @@
       this.textureRetryAttempts = new Map();
       this.textureRetryHandles = new Map();
       this.textureUpgradeTargets = new Map();
+      this.texturePackUnavailable = false;
+      this.texturePackRetryIntervalMs = Number.isFinite(options.texturePackRetryIntervalMs)
+        ? Math.max(1000, Math.floor(options.texturePackRetryIntervalMs))
+        : 60000;
       this.lastTextureFallbackMessage = '';
       this.texturePackErrorNoticeThreshold = Math.max(
         1,
@@ -2225,6 +2229,7 @@
       this.onVictoryClose = this.handleVictoryClose.bind(this);
       this.onVictoryShare = this.handleVictoryShare.bind(this);
       this.onBeforeUnload = this.handleBeforeUnload.bind(this);
+      this.onNetworkOnline = this.handleNetworkOnline.bind(this);
       this.onPointerPreferenceChange = this.handlePointerPreferenceChange.bind(this);
       this.onGlobalPointerDown = this.handleGlobalPointerDown.bind(this);
       this.onGlobalTouchStart = this.handleGlobalTouchStart.bind(this);
@@ -6165,13 +6170,14 @@
       const missingKeys = Array.from(this.textureFallbackMissingKeys || []).filter(
         (entry) => typeof entry === 'string' && entry.trim().length,
       );
+      const prefix = this.texturePackUnavailable ? 'Texture pack unavailable' : 'Texture pack offline';
       if (!missingKeys.length) {
-        return 'Texture pack offline — using procedural colours until streaming recovers.';
+        return `${prefix} — using procedural colours until streaming recovers.`;
       }
       const sorted = missingKeys.sort();
       const labels = sorted.map((entry) => this.describeVoxelTextureKey(entry));
       const list = this.formatTextureNameList(labels);
-      return `Texture pack offline — missing textures for ${list}. Procedural colours active until streaming recovers.`;
+      return `${prefix} — missing textures for ${list}. Procedural colours active until streaming recovers.`;
     }
 
     refreshTextureFallbackNotice() {
@@ -6206,6 +6212,7 @@
 
     dismissTextureFallbackNotice() {
       const previousMessage = this.lastTextureFallbackMessage;
+      this.texturePackUnavailable = false;
       this.texturePackNoticeShown = false;
       this.lastTextureFallbackMessage = '';
       if (!previousMessage) {
@@ -6302,10 +6309,15 @@
       }
       const nextAttempt = attemptsSoFar + 1;
       this.textureRetryAttempts.set(normalised, nextAttempt);
-      const delay = this.computeAssetRetryDelay(nextAttempt);
+      const intervalMs =
+        Number.isFinite(this.texturePackRetryIntervalMs) && this.texturePackRetryIntervalMs > 0
+          ? Math.max(1000, Math.floor(this.texturePackRetryIntervalMs))
+          : 60000;
+      const delay = intervalMs;
+      const delaySeconds = Math.max(1, Math.round(delay / 1000));
       if (typeof console !== 'undefined' && typeof console.warn === 'function') {
         console.warn(
-          `Retrying ${normalised} texture stream (attempt ${nextAttempt} of ${this.assetRetryLimit}) after a loading error.`,
+          `Retrying ${normalised} texture stream (attempt ${nextAttempt} of ${this.assetRetryLimit}) after a loading error in ${delaySeconds} second(s).`,
           {
             key: normalised,
             attempt: nextAttempt,
@@ -6331,6 +6343,37 @@
       this.textureRetryHandles.set(normalised, handle);
     }
 
+    retryMissingTextureStreams(context = {}) {
+      const keys = Array.from(this.textureFallbackMissingKeys || []).filter(
+        (entry) => typeof entry === 'string' && entry.trim().length,
+      );
+      if (!keys.length) {
+        return;
+      }
+      const reason = typeof context?.reason === 'string' ? context.reason : 'manual';
+      if (typeof console !== 'undefined' && typeof console.info === 'function') {
+        console.info('Retrying texture pack streams for missing textures.', {
+          keys,
+          reason,
+        });
+      }
+      keys.forEach((key) => {
+        const normalised = typeof key === 'string' ? key.trim() : '';
+        if (!normalised) {
+          return;
+        }
+        if (this.pendingTextureLoads?.has?.(normalised)) {
+          return;
+        }
+        this.clearScheduledTextureRetry(normalised);
+        this.triggerTextureRetry(normalised);
+      });
+    }
+
+    handleNetworkOnline() {
+      this.retryMissingTextureStreams({ reason: 'network-online' });
+    }
+
     noteTexturePackRecovery(key, context = {}) {
       const normalised = typeof key === 'string' ? key.trim() : '';
       if (!normalised) {
@@ -6352,6 +6395,7 @@
         });
       }
       if (this.textureFallbackMissingKeys.size === 0) {
+        this.texturePackUnavailable = false;
         this.dismissTextureFallbackNotice();
       } else if (wasMissing) {
         this.refreshTextureFallbackNotice();
@@ -6420,6 +6464,7 @@
       if (key) {
         this.textureFallbackMissingKeys.add(key);
       }
+      this.texturePackUnavailable = true;
       this.emitGameEvent('texture-pack-fallback', {
         reason,
         failures: this.texturePackErrorCount,
@@ -12875,6 +12920,7 @@
       add(document, 'mouseup', this.onMouseUp, 'handling pointer releases');
       add(window, 'resize', this.onResize, 'resizing the renderer');
       add(window, 'beforeunload', this.onBeforeUnload, 'saving session state before unload');
+      add(window, 'online', this.onNetworkOnline, 'retrying texture streams after network recovery');
       add(this.canvas, 'wheel', this.onCanvasWheel, 'scrolling the viewport', { passive: false });
       const pointerTargets = this.getPointerInputTargets();
       pointerTargets.forEach((target) => {
