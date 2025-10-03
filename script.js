@@ -6631,6 +6631,87 @@
     };
   }
 
+  function applySimpleFallbackConfig(config) {
+    if (!config || typeof config !== 'object') {
+      return;
+    }
+    config.forceSimpleMode = true;
+    config.enableAdvancedExperience = false;
+    config.preferAdvanced = false;
+    config.forceAdvanced = false;
+    config.defaultMode = 'simple';
+  }
+
+  function startSimpleFallbackBootstrap(scope, error, context) {
+    simpleFallbackAttempted = true;
+    const config = scope.APP_CONFIG || (scope.APP_CONFIG = {});
+    applySimpleFallbackConfig(config);
+    if (typeof queueBootstrapFallbackNotice === 'function') {
+      const noticeReason =
+        typeof context?.reason === 'string' && context.reason.trim().length
+          ? `forced-simple-mode:${context.reason.trim()}`
+          : 'forced-simple-mode';
+      queueBootstrapFallbackNotice(
+        noticeReason,
+        'Falling back to the simple renderer after a bootstrap failure.',
+      );
+    }
+    if (typeof logDiagnosticsEvent === 'function') {
+      const detail = context && typeof context === 'object' ? { ...context } : undefined;
+      if (detail && error instanceof Error && typeof detail.errorMessage !== 'string') {
+        detail.errorMessage = error.message;
+      }
+      logDiagnosticsEvent('startup', 'Falling back to the simple renderer after a bootstrap failure.', {
+        level: 'warning',
+        detail,
+      });
+    }
+    const navigationTriggered = ensureSimpleModeQueryParam(scope);
+    if (navigationTriggered) {
+      return true;
+    }
+    try {
+      if (typeof scope.bootstrap === 'function') {
+        scope.bootstrap();
+      }
+    } catch (bootstrapError) {
+      if (scope.console?.error) {
+        scope.console.error('Simple fallback bootstrap failed.', bootstrapError);
+      }
+      const fallbackFailureDetail = {
+        errorMessage:
+          typeof bootstrapError?.message === 'string' && bootstrapError.message.trim().length
+            ? bootstrapError.message.trim()
+            : undefined,
+        errorName:
+          typeof bootstrapError?.name === 'string' && bootstrapError.name.trim().length
+            ? bootstrapError.name.trim()
+            : undefined,
+        reason: 'simple-fallback-bootstrap',
+      };
+      if (context && typeof context === 'object' && Object.keys(context).length) {
+        fallbackFailureDetail.context = { ...context };
+      }
+      if (typeof logDiagnosticsEvent === 'function') {
+        logDiagnosticsEvent('startup', 'Simple fallback bootstrap failed.', {
+          level: 'error',
+          detail: fallbackFailureDetail,
+        });
+      }
+      handleErrorBoundary(bootstrapError, {
+        boundary: 'bootstrap',
+        stage: 'simple-fallback.bootstrap',
+        title: 'Fallback bootstrap failed',
+        userMessage: 'Fallback renderer failed to start. Reload to try again.',
+        diagnosticMessage: 'Simple fallback bootstrap failed.',
+        logMessage: 'Simple fallback bootstrap failed.',
+        detail: fallbackFailureDetail,
+        rethrow: false,
+      });
+    }
+    return true;
+  }
+
   function tryStartSimpleFallback(error, context = {}) {
     cancelRendererStartWatchdog();
     if (simpleFallbackAttempted) {
@@ -6648,23 +6729,11 @@
           ? window
           : globalThis;
     scope.__LAST_FALLBACK_CONTEXT__ = { error: error?.message ?? null, context };
-    if (context?.reason === 'ensureThree-failure') {
-      const config = scope.APP_CONFIG || (scope.APP_CONFIG = {});
-      config.forceSimpleMode = false;
-      config.enableAdvancedExperience = true;
-      config.preferAdvanced = true;
-      if (!scope.THREE && scope.THREE_GLOBAL) {
-        scope.THREE = scope.THREE_GLOBAL;
-      }
-      try {
-        setRendererModeIndicator('advanced');
-        ensureSimpleExperience('advanced');
-      } catch (recoverError) {
-        if (scope.console?.error) {
-          scope.console.error('Failed to recover Three.js bootstrap', recoverError);
-        }
-      }
-      return false;
+    if (context?.reason === 'ensureThree-failure' && scope.console?.warn) {
+      scope.console.warn('Three.js failed to load. Switching to simplified renderer.', {
+        error,
+        context,
+      });
     }
     const hasSimpleExperience = Boolean(scope.SimpleExperience?.create);
     if (!hasSimpleExperience) {
@@ -6692,64 +6761,7 @@
       }
       return false;
     }
-    simpleFallbackAttempted = true;
-    const config = scope.APP_CONFIG || (scope.APP_CONFIG = {});
-    config.forceSimpleMode = true;
-    config.enableAdvancedExperience = false;
-    config.preferAdvanced = false;
-    config.defaultMode = 'simple';
-    if (typeof queueBootstrapFallbackNotice === 'function') {
-      queueBootstrapFallbackNotice(
-        'forced-simple-mode',
-        'Falling back to the simple renderer after a bootstrap failure.',
-      );
-    }
-    if (typeof logDiagnosticsEvent === 'function') {
-      logDiagnosticsEvent('startup', 'Falling back to the simple renderer after a bootstrap failure.', {
-        level: 'warning',
-      });
-    }
-    const navigationTriggered = ensureSimpleModeQueryParam(scope);
-    if (navigationTriggered) {
-      return true;
-    }
-    try {
-      if (typeof scope.bootstrap === 'function') {
-        scope.bootstrap();
-      }
-    } catch (bootstrapError) {
-      if (scope.console?.error) {
-        scope.console.error('Simple fallback bootstrap failed.', bootstrapError);
-      }
-      const fallbackFailureDetail = {
-        errorMessage:
-          typeof bootstrapError?.message === 'string' && bootstrapError.message.trim().length
-            ? bootstrapError.message.trim()
-            : undefined,
-        errorName:
-          typeof bootstrapError?.name === 'string' && bootstrapError.name.trim().length
-            ? bootstrapError.name.trim()
-            : undefined,
-        reason: 'simple-fallback-bootstrap',
-      };
-      if (typeof logDiagnosticsEvent === 'function') {
-        logDiagnosticsEvent('startup', 'Simple fallback bootstrap failed.', {
-          level: 'error',
-          detail: fallbackFailureDetail,
-        });
-      }
-      handleErrorBoundary(bootstrapError, {
-        boundary: 'bootstrap',
-        stage: 'simple-fallback.bootstrap',
-        title: 'Fallback bootstrap failed',
-        userMessage: 'Fallback renderer failed to start. Reload to try again.',
-        diagnosticMessage: 'Simple fallback bootstrap failed.',
-        logMessage: 'Simple fallback bootstrap failed.',
-        detail: fallbackFailureDetail,
-        rethrow: false,
-      });
-    }
-    return true;
+    return startSimpleFallbackBootstrap(scope, error, context);
   }
 
   function createScoreboardUtilsFallback() {
