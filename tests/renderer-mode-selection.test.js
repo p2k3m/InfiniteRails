@@ -40,7 +40,7 @@ const ensureSimpleModeEnd = scriptSource.indexOf('function applyRendererReadySta
 if (ensureSimpleModeStart === -1 || ensureSimpleModeEnd === -1 || ensureSimpleModeEnd <= ensureSimpleModeStart) {
   throw new Error('Failed to locate ensureSimpleModeQueryParam definition in script.js');
 }
-const fallbackStart = scriptSource.indexOf('let simpleFallbackAttempted = false;');
+const fallbackStart = scriptSource.indexOf('const DEFAULT_RENDERER_START_TIMEOUT_MS =');
 const fallbackEnd = scriptSource.indexOf('function createScoreboardUtilsFallback', fallbackStart);
 if (fallbackStart === -1 || fallbackEnd === -1 || fallbackEnd <= fallbackStart) {
   throw new Error('Failed to locate simple fallback bootstrap helpers in script.js');
@@ -59,7 +59,15 @@ function instantiateSimpleFallback(scope) {
       'const isDebugModeEnabled = scope.isDebugModeEnabled ?? (() => false);' +
       ensureSimpleModeSource +
       fallbackSource +
-      '\nreturn { tryStartSimpleFallback, getAttempted: () => simpleFallbackAttempted };'
+      `
+return {
+  tryStartSimpleFallback,
+  getAttempted: () => simpleFallbackAttempted,
+  scheduleRendererStartWatchdog,
+  cancelRendererStartWatchdog,
+  getRendererStartWatchdogState,
+};
+`
   );
   return factory(scope);
 }
@@ -731,6 +739,72 @@ describe('renderer mode selection', () => {
       expect(scope.APP_CONFIG.preferAdvanced).toBe(false);
       expect(scope.APP_CONFIG.defaultMode).toBe('simple');
       expect(scope.bootstrap).not.toHaveBeenCalled();
+    });
+
+    it('automatically switches to simple mode when the advanced start watchdog fires', () => {
+      const showLoading = vi.fn();
+      const replaceState = vi.fn((state, title, url) => {
+        const parsed = new URL(url);
+        scope.location.href = parsed.toString();
+        scope.location.search = parsed.search;
+        scope.location.pathname = parsed.pathname;
+        scope.location.hash = parsed.hash;
+        scope.location.origin = parsed.origin;
+        scope.location.protocol = parsed.protocol;
+        scope.location.host = parsed.host;
+        scope.location.hostname = parsed.hostname;
+      });
+      const bootstrap = vi.fn();
+      const pendingTimeouts = [];
+      const setTimeoutMock = vi.fn((handler, delay) => {
+        pendingTimeouts.push(handler);
+        return pendingTimeouts.length;
+      });
+      const clearTimeoutMock = vi.fn();
+      const scope = {
+        APP_CONFIG: { enableAdvancedExperience: true, preferAdvanced: true },
+        SimpleExperience: { create: () => ({}) },
+        console: { warn: vi.fn(), error: () => {}, debug: () => {} },
+        bootstrap,
+        history: { state: { foo: 'bar' }, replaceState },
+        location: {
+          href: 'https://example.com/play?foo=bar',
+          origin: 'https://example.com',
+          protocol: 'https:',
+          host: 'example.com',
+          hostname: 'example.com',
+          search: '?foo=bar',
+          pathname: '/play',
+          hash: '',
+        },
+        bootstrapOverlay: {
+          showLoading,
+          showError: vi.fn(),
+          setDiagnostic: vi.fn(),
+          setRecoveryAction: vi.fn(),
+          state: { mode: 'loading' },
+        },
+        setTimeout: setTimeoutMock,
+        clearTimeout: clearTimeoutMock,
+      };
+      const { scheduleRendererStartWatchdog, getRendererStartWatchdogState } = instantiateSimpleFallback(scope);
+      scheduleRendererStartWatchdog('advanced');
+      expect(setTimeoutMock).toHaveBeenCalledTimes(1);
+      expect(getRendererStartWatchdogState()).toMatchObject({ mode: 'advanced' });
+      const [timeoutHandler, timeoutDelay] = setTimeoutMock.mock.calls[0];
+      expect(typeof timeoutHandler).toBe('function');
+      expect(timeoutDelay).toBeGreaterThan(0);
+      timeoutHandler();
+      expect(scope.console.warn).toHaveBeenCalledWith(
+        expect.stringContaining('Advanced renderer start timed out'),
+      );
+      expect(scope.APP_CONFIG.forceSimpleMode).toBe(true);
+      expect(scope.APP_CONFIG.enableAdvancedExperience).toBe(false);
+      expect(scope.APP_CONFIG.preferAdvanced).toBe(false);
+      expect(scope.APP_CONFIG.defaultMode).toBe('simple');
+      expect(replaceState).toHaveBeenCalledTimes(1);
+      expect(bootstrap).toHaveBeenCalledTimes(1);
+      expect(getRendererStartWatchdogState()).toMatchObject({ handle: null, mode: null });
     });
 
     it('returns false when the simple sandbox is unavailable', () => {
