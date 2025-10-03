@@ -446,7 +446,7 @@ describe('simple experience entity lifecycle', () => {
     ensureWorldSpy.mockClear();
 
     const playerPosition = new experience.THREE.Vector3(3, 0, 3);
-    vi.spyOn(experience, 'getCameraWorldPosition').mockImplementation(function (target) {
+    vi.spyOn(experience, 'getPlayerWorldPosition').mockImplementation(function (target) {
       if (target?.copy) {
         target.copy(playerPosition);
         return target;
@@ -774,14 +774,14 @@ describe('simple experience entity lifecycle', () => {
 
     const farPosition = new THREE.Vector3(6, 1.6, 6);
     const nearPosition = new THREE.Vector3(0.4, 1.6, 0.4);
-    vi.spyOn(experience, 'getCameraWorldPosition').mockImplementation((target) => target.copy(farPosition));
+    vi.spyOn(experience, 'getPlayerWorldPosition').mockImplementation((target) => target.copy(farPosition));
 
     const baseScale = mesh.scale.x;
     experience.updateLootChests(0.016);
     const farDeviation = Math.abs(mesh.scale.x - baseScale);
     const farGlow = glowMaterial.emissiveIntensity;
 
-    experience.getCameraWorldPosition.mockImplementation((target) => target.copy(nearPosition));
+    experience.getPlayerWorldPosition.mockImplementation((target) => target.copy(nearPosition));
     experience.updateLootChests(0.2);
 
     const nearDeviation = Math.abs(mesh.scale.x - baseScale);

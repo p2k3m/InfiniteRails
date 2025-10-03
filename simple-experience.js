@@ -1654,6 +1654,10 @@
       this.zombieGroup = null;
       this.portalMechanics = PORTAL_MECHANICS;
       this.playerRig = null;
+      this.playerPhysicsBody = null;
+      this.playerPhysicsRadius = 0.6;
+      this.playerPhysicsHeight = PLAYER_EYE_HEIGHT + 0.4;
+      this.playerPhysicsCenterOffset = -PLAYER_EYE_HEIGHT * 0.5;
       this.cameraBoom = null;
       this.handGroup = null;
       this.handMaterials = [];
@@ -5006,6 +5010,7 @@
       this.playerRig.add(this.cameraBoom);
       this.cameraBoom.add(this.camera);
       this.scene.add(this.playerRig);
+      this.ensurePlayerPhysicsBody();
       this.camera.position.set(0, 0, 0);
       this.updateCameraFrustum(width, height);
 
@@ -10443,7 +10448,7 @@
         this.eternalIngot.light.position.copy(mesh.position);
         this.eternalIngot.light.intensity = 1 + Math.sin(this.eternalIngotSpin * 5) * 0.25;
       }
-      const playerPosition = this.getCameraWorldPosition(this.tmpVector3);
+      const playerPosition = this.getPlayerWorldPosition(this.tmpVector3);
       if (playerPosition.distanceTo(mesh.position) < 1.4) {
         this.collectEternalIngot();
       }
@@ -10807,7 +10812,7 @@
 
     findInteractableChest(range = CHEST_INTERACT_RANGE) {
       if (!this.chests.length) return null;
-      const playerPosition = this.getCameraWorldPosition(this.tmpVector3);
+      const playerPosition = this.getPlayerWorldPosition(this.tmpVector3);
       let best = null;
       let bestDistance = range;
       for (const chest of this.chests) {
@@ -10862,7 +10867,7 @@
       if (!this.chests.length) return;
       const THREE = this.THREE;
       this.chestPulseTime += delta;
-      const playerPosition = this.getCameraWorldPosition(this.tmpVector3);
+      const playerPosition = this.getPlayerWorldPosition(this.tmpVector3);
       let nearest = null;
       let nearestDistance = Infinity;
       for (const chest of this.chests) {
@@ -11125,8 +11130,8 @@
 
     isPlayerNearPortalFrame() {
       const anchorWorld = this.getPortalAnchorWorldPosition(this.tmpVector3);
-      const cameraPosition = this.getCameraWorldPosition(this.tmpVector2);
-      const distance = anchorWorld.distanceTo ? anchorWorld.distanceTo(cameraPosition) : null;
+      const playerPosition = this.getPlayerWorldPosition(this.tmpVector2);
+      const distance = anchorWorld.distanceTo ? anchorWorld.distanceTo(playerPosition) : null;
       if (distance === null || Number.isNaN(distance)) {
         return false;
       }
@@ -11262,15 +11267,23 @@
           obstructions.push(entry);
         }
       };
-      if (this.playerRig?.position) {
-        const playerPosition = this.playerRig.position;
+      const playerBounds = this.getPlayerPhysicsBounds();
+      if (playerBounds?.position) {
+        const playerPosition = playerBounds.position;
+        const radius = Number.isFinite(playerBounds.radius) ? playerBounds.radius : 0.6;
+        const bottom = Number.isFinite(playerBounds.bottom)
+          ? playerBounds.bottom
+          : playerPosition.y - PLAYER_EYE_HEIGHT;
+        const top = Number.isFinite(playerBounds.top)
+          ? playerBounds.top
+          : playerPosition.y + 0.2;
         addIfBlocking({
           kind: 'player',
           description: 'player',
           position: playerPosition,
-          radius: 0.6,
-          bottom: playerPosition.y - PLAYER_EYE_HEIGHT,
-          top: playerPosition.y + 0.2,
+          radius,
+          bottom,
+          top,
         });
       }
       if (Array.isArray(this.zombies)) {
@@ -11581,8 +11594,8 @@
 
     isPlayerNearPortal() {
       if (!this.portalMesh || !this.camera) return false;
-      const cameraPosition = this.getCameraWorldPosition(this.tmpVector3);
-      const distance = this.portalMesh.position.distanceTo(cameraPosition);
+      const playerPosition = this.getPlayerWorldPosition(this.tmpVector3);
+      const distance = this.portalMesh.position.distanceTo(playerPosition);
       return distance <= PORTAL_INTERACTION_RANGE;
     }
 
@@ -11813,6 +11826,7 @@
     }
 
     positionPlayer() {
+      this.ensurePlayerPhysicsBody();
       const spawnColumn = `${Math.floor(WORLD_SIZE / 2)}|${Math.floor(WORLD_SIZE / 2)}`;
       const column = this.columns.get(spawnColumn);
       if (column && column.length) {
@@ -12726,6 +12740,18 @@
           }
         }
       }
+      const physicsBody = this.ensurePlayerPhysicsBody();
+      const physicsBounds = this.getPlayerPhysicsBounds();
+      const physicsPositionSummary = physicsBounds?.position ? summariseVector(physicsBounds.position) : null;
+      const physicsRadiusSummary = Number.isFinite(physicsBounds?.radius)
+        ? Number.parseFloat(physicsBounds.radius.toFixed(3))
+        : null;
+      const physicsTopSummary = Number.isFinite(physicsBounds?.top)
+        ? Number.parseFloat(physicsBounds.top.toFixed(3))
+        : null;
+      const physicsBottomSummary = Number.isFinite(physicsBounds?.bottom)
+        ? Number.parseFloat(physicsBounds.bottom.toFixed(3))
+        : null;
       const anchorSummary = summariseVector(anchor);
       const message =
         'Movement diagnostics: input registered but no displacement detected. Verify keyboard listeners and avatar rig transforms.';
@@ -12745,6 +12771,13 @@
           present: Boolean(this.camera),
           position: cameraSummary,
         },
+        physics: {
+          present: Boolean(physicsBody),
+          position: physicsPositionSummary,
+          radius: physicsRadiusSummary,
+          top: physicsTopSummary,
+          bottom: physicsBottomSummary,
+        },
         avatarWorldPosition: avatarWorldSummary,
         anchorPosition: anchorSummary,
       };
@@ -12756,6 +12789,7 @@
         warn('Keyboard listener coverage', report.keyboardListeners);
         warn('Rig status', report.rig);
         warn('Camera status', report.camera);
+        warn('Physics body status', report.physics);
         warn('Avatar mesh position', report.avatarWorldPosition);
         warn('Anchor position', report.anchorPosition);
         warn('Displacement squared', report.displacementSq);
@@ -12882,6 +12916,7 @@
     }
 
     resetPosition() {
+      this.ensurePlayerPhysicsBody();
       this.velocity.set(0, 0, 0);
       this.verticalVelocity = 0;
       this.isGrounded = false;
@@ -12889,6 +12924,7 @@
     }
 
     attachPlayerToSimulation() {
+      this.ensurePlayerPhysicsBody();
       this.resetPosition();
       this.isGrounded = true;
       this.prevTime = null;
@@ -13248,6 +13284,7 @@
     }
 
     updateMovement(delta) {
+      this.ensurePlayerPhysicsBody();
       const THREE = this.THREE;
       const forward = this.tmpForward;
       const right = this.tmpRight;
@@ -13616,7 +13653,7 @@
         this.spawnZombie();
         this.lastZombieSpawn = this.elapsed;
       }
-      const playerPosition = this.getCameraWorldPosition(this.tmpVector3);
+      const playerPosition = this.getPlayerWorldPosition(this.tmpVector3);
       this.ensureNavigationMeshForWorldPosition(playerPosition.x, playerPosition.z);
       const tmpDir = this.tmpVector;
       const tmpStep = this.tmpVector2;
@@ -14008,7 +14045,7 @@
       if (this.golems.length >= GOLEM_MAX_PER_DIMENSION) return;
       const actor = this.createGolemActor();
       if (!actor) return;
-      const base = this.getCameraWorldPosition(this.tmpVector3);
+      const base = this.getPlayerWorldPosition(this.tmpVector3);
       const angle = Math.random() * Math.PI * 2;
       const radius = 6 + Math.random() * 4;
       const x = base.x + Math.cos(angle) * radius;
@@ -14047,7 +14084,7 @@
       }
       if (!this.golems.length) return;
       const THREE = this.THREE;
-      const playerPosition = this.getCameraWorldPosition(this.tmpVector3);
+      const playerPosition = this.getPlayerWorldPosition(this.tmpVector3);
       this.ensureNavigationMeshForWorldPosition(playerPosition.x, playerPosition.z);
       for (const golem of this.golems) {
         golem.cooldown = Math.max(0, golem.cooldown - delta);
@@ -14370,6 +14407,155 @@
       if (collectedAny) {
         this.updateHud();
       }
+    }
+
+    ensurePlayerPhysicsBody() {
+      const THREE = this.THREE;
+      const rig = this.playerRig;
+      if (!THREE || !rig || typeof THREE.Object3D !== 'function') {
+        return this.playerPhysicsBody || null;
+      }
+      const radius = Number.isFinite(this.playerPhysicsRadius) ? this.playerPhysicsRadius : 0.6;
+      const height = Number.isFinite(this.playerPhysicsHeight)
+        ? this.playerPhysicsHeight
+        : PLAYER_EYE_HEIGHT + 0.2;
+      const centerOffset = Number.isFinite(this.playerPhysicsCenterOffset)
+        ? this.playerPhysicsCenterOffset
+        : -PLAYER_EYE_HEIGHT * 0.5;
+      if (!this.playerPhysicsBody || this.playerPhysicsBody.isObject3D !== true) {
+        if (
+          this.playerPhysicsBody &&
+          this.playerPhysicsBody.parent &&
+          typeof this.playerPhysicsBody.parent.remove === 'function'
+        ) {
+          try {
+            this.playerPhysicsBody.parent.remove(this.playerPhysicsBody);
+          } catch (error) {
+            if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+              console.debug('Failed to detach stale player physics body.', error);
+            }
+          }
+        }
+        const body = new THREE.Object3D();
+        body.name = 'PlayerPhysicsBody';
+        body.visible = false;
+        body.position.set(0, centerOffset, 0);
+        body.userData = { radius, height, centerOffset };
+        this.playerPhysicsBody = body;
+      } else {
+        if (this.playerPhysicsBody.userData) {
+          this.playerPhysicsBody.userData.radius = radius;
+          this.playerPhysicsBody.userData.height = height;
+          this.playerPhysicsBody.userData.centerOffset = centerOffset;
+        }
+        if (this.playerPhysicsBody.position) {
+          this.playerPhysicsBody.position.set(0, centerOffset, 0);
+        }
+      }
+      if (this.playerPhysicsBody.parent !== rig && typeof rig.add === 'function') {
+        rig.add(this.playerPhysicsBody);
+      }
+      return this.playerPhysicsBody;
+    }
+
+    getPlayerWorldPosition(target) {
+      const THREE = this.THREE;
+      const destination =
+        target ||
+        (THREE && typeof THREE.Vector3 === 'function'
+          ? new THREE.Vector3()
+          : { x: 0, y: 0, z: 0 });
+      const body = this.ensurePlayerPhysicsBody();
+      if (body?.getWorldPosition) {
+        body.getWorldPosition(destination);
+        return destination;
+      }
+      const rigPosition = this.playerRig?.position || null;
+      if (rigPosition) {
+        if (typeof destination.copy === 'function' && typeof rigPosition.copy === 'function') {
+          destination.copy(rigPosition);
+        } else {
+          destination.x = rigPosition.x ?? 0;
+          destination.y = rigPosition.y ?? 0;
+          destination.z = rigPosition.z ?? 0;
+        }
+        const offset = Number.isFinite(this.playerPhysicsCenterOffset)
+          ? this.playerPhysicsCenterOffset
+          : -PLAYER_EYE_HEIGHT * 0.5;
+        if (destination.y !== undefined && destination.y !== null) {
+          destination.y += offset;
+        }
+        return destination;
+      }
+      return this.getCameraWorldPosition(destination);
+    }
+
+    getPlayerPhysicsBounds() {
+      const THREE = this.THREE;
+      const cloneVector = (source) => {
+        if (!source) return null;
+        if (typeof source.clone === 'function') {
+          return source.clone();
+        }
+        if (THREE && typeof THREE.Vector3 === 'function') {
+          return new THREE.Vector3(source.x ?? 0, source.y ?? 0, source.z ?? 0);
+        }
+        return {
+          x: Number.isFinite(source.x) ? source.x : 0,
+          y: Number.isFinite(source.y) ? source.y : 0,
+          z: Number.isFinite(source.z) ? source.z : 0,
+        };
+      };
+      const body = this.ensurePlayerPhysicsBody();
+      const radius = Number.isFinite(body?.userData?.radius)
+        ? body.userData.radius
+        : Number.isFinite(this.playerPhysicsRadius)
+          ? this.playerPhysicsRadius
+          : 0.6;
+      const height = Number.isFinite(body?.userData?.height)
+        ? body.userData.height
+        : Number.isFinite(this.playerPhysicsHeight)
+          ? this.playerPhysicsHeight
+          : PLAYER_EYE_HEIGHT + 0.2;
+      const halfHeight = height / 2;
+      let center = null;
+      if (body?.getWorldPosition) {
+        if (THREE && typeof THREE.Vector3 === 'function') {
+          center = new THREE.Vector3();
+          body.getWorldPosition(center);
+        } else {
+          const tmp = { x: 0, y: 0, z: 0 };
+          body.getWorldPosition(tmp);
+          center = {
+            x: Number.isFinite(tmp.x) ? tmp.x : 0,
+            y: Number.isFinite(tmp.y) ? tmp.y : 0,
+            z: Number.isFinite(tmp.z) ? tmp.z : 0,
+          };
+        }
+      } else if (this.playerRig?.position) {
+        center = cloneVector(this.playerRig.position);
+        const offset = Number.isFinite(this.playerPhysicsCenterOffset)
+          ? this.playerPhysicsCenterOffset
+          : -PLAYER_EYE_HEIGHT * 0.5;
+        if (center && typeof center.y === 'number') {
+          center.y += offset;
+        }
+      } else {
+        const fallback = this.getCameraWorldPosition(
+          THREE && typeof THREE.Vector3 === 'function' ? new THREE.Vector3() : { x: 0, y: 0, z: 0 },
+        );
+        center = cloneVector(fallback);
+      }
+      if (!center) {
+        return null;
+      }
+      return {
+        position: center,
+        radius,
+        top: center.y + halfHeight,
+        bottom: center.y - halfHeight,
+        height,
+      };
     }
 
     getCameraWorldPosition(target) {
@@ -18172,7 +18358,8 @@
       const navigationSummary = this.navigationMeshSummary || null;
       const activeChunks = new Set();
       const details = [];
-      const playerPosition = this.playerRig?.position ?? null;
+      const playerBounds = this.getPlayerPhysicsBounds();
+      const playerPosition = playerBounds?.position ?? null;
       for (const zombie of zombies) {
         const chunkKey =
           zombie.navChunkKey ??
