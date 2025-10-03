@@ -1520,6 +1520,11 @@
       this.pendingTextureLoads = new Map();
       this.texturePackErrorCount = 0;
       this.texturePackNoticeShown = false;
+      this.textureFallbackMissingKeys = new Set();
+      this.textureRetryAttempts = new Map();
+      this.textureRetryHandles = new Map();
+      this.textureUpgradeTargets = new Map();
+      this.lastTextureFallbackMessage = '';
       this.texturePackErrorNoticeThreshold = Math.max(
         1,
         Number.isFinite(options.texturePackErrorNoticeThreshold)
@@ -5249,6 +5254,236 @@
       return texture;
     }
 
+    describeVoxelTextureKey(key) {
+      if (typeof key !== 'string') {
+        return 'voxel';
+      }
+      const normalised = key.trim();
+      if (!normalised) {
+        return 'voxel';
+      }
+      const mapping = {
+        grass: 'grass',
+        dirt: 'dirt',
+        stone: 'stone',
+        obsidian: 'obsidian',
+        sand: 'sand',
+        gravel: 'gravel',
+      };
+      return mapping[normalised] || normalised;
+    }
+
+    formatTextureNameList(labels) {
+      if (!Array.isArray(labels) || !labels.length) {
+        return '';
+      }
+      if (labels.length === 1) {
+        return labels[0];
+      }
+      if (labels.length === 2) {
+        return `${labels[0]} and ${labels[1]}`;
+      }
+      const head = labels.slice(0, -1).join(', ');
+      return `${head}, and ${labels[labels.length - 1]}`;
+    }
+
+    buildTextureFallbackMessage() {
+      const missingKeys = Array.from(this.textureFallbackMissingKeys || []).filter(
+        (entry) => typeof entry === 'string' && entry.trim().length,
+      );
+      if (!missingKeys.length) {
+        return 'Texture pack offline — using procedural colours until streaming recovers.';
+      }
+      const sorted = missingKeys.sort();
+      const labels = sorted.map((entry) => this.describeVoxelTextureKey(entry));
+      const list = this.formatTextureNameList(labels);
+      return `Texture pack offline — missing textures for ${list}. Procedural colours active until streaming recovers.`;
+    }
+
+    refreshTextureFallbackNotice() {
+      const message = this.buildTextureFallbackMessage();
+      if (!message) {
+        return;
+      }
+      const isFirstNotice = this.texturePackNoticeShown !== true;
+      if (typeof console !== 'undefined' && typeof console.error === 'function') {
+        if (isFirstNotice || message !== this.lastTextureFallbackMessage) {
+          console.error(message, {
+            failures: this.texturePackErrorCount,
+            missingKeys: Array.from(this.textureFallbackMissingKeys || []),
+          });
+        }
+      }
+      if (this.playerHintEl) {
+        this.playerHintEl.textContent = message;
+        this.playerHintEl.classList?.add?.('visible');
+        this.playerHintEl.setAttribute?.('data-variant', 'warning');
+      }
+      if (this.footerStatusEl) {
+        this.footerStatusEl.textContent = message;
+      }
+      if (this.footerEl?.dataset) {
+        this.footerEl.dataset.state = 'warning';
+      }
+      this.lastHintMessage = message;
+      this.lastTextureFallbackMessage = message;
+      this.texturePackNoticeShown = true;
+    }
+
+    dismissTextureFallbackNotice() {
+      const previousMessage = this.lastTextureFallbackMessage;
+      this.texturePackNoticeShown = false;
+      this.lastTextureFallbackMessage = '';
+      if (!previousMessage) {
+        return;
+      }
+      if (this.playerHintEl && this.playerHintEl.textContent === previousMessage) {
+        this.playerHintEl.classList?.remove?.('visible');
+        this.playerHintEl.textContent = '';
+        this.playerHintEl.removeAttribute?.('data-variant');
+      }
+      if (this.footerStatusEl && this.footerStatusEl.textContent === previousMessage) {
+        this.footerStatusEl.textContent = '';
+      }
+      if (this.footerEl?.dataset?.state === 'warning') {
+        delete this.footerEl.dataset.state;
+      }
+      if (this.lastHintMessage === previousMessage) {
+        this.lastHintMessage = '';
+      }
+    }
+
+    clearScheduledTextureRetry(key) {
+      const normalised = typeof key === 'string' ? key.trim() : '';
+      if (!normalised || !this.textureRetryHandles?.has?.(normalised)) {
+        return;
+      }
+      const handle = this.textureRetryHandles.get(normalised);
+      const scope = typeof window !== 'undefined' ? window : typeof globalThis !== 'undefined' ? globalThis : null;
+      const clearTimer = typeof scope?.clearTimeout === 'function' ? scope.clearTimeout.bind(scope) : clearTimeout;
+      clearTimer(handle);
+      this.textureRetryHandles.delete(normalised);
+    }
+
+    handleTextureRetryExhausted(key, context = {}) {
+      const normalised = typeof key === 'string' ? key.trim() : '';
+      if (!normalised) {
+        return;
+      }
+      this.textureRetryAttempts.set(normalised, this.assetRetryLimit);
+      this.clearScheduledTextureRetry(normalised);
+      if (typeof console !== 'undefined' && typeof console.warn === 'function') {
+        console.warn(`Texture stream for ${normalised} failed after ${this.assetRetryLimit} attempt(s).`, {
+          key: normalised,
+          reason: context?.reason || 'unknown',
+          url: context?.url ?? null,
+        });
+      }
+      const fallbackMessage = this.buildTextureFallbackMessage();
+      this.recordAssetFailure(`texture:${normalised}`, {
+        fallbackMessage,
+        error: context?.error || null,
+      });
+      this.emitGameEvent('texture-retry-exhausted', {
+        key: normalised,
+        reason: context?.reason || 'unknown',
+        url: context?.url ?? null,
+      });
+    }
+
+    triggerTextureRetry(key) {
+      const normalised = typeof key === 'string' ? key.trim() : '';
+      if (!normalised) {
+        return;
+      }
+      const attemptNumber = this.textureRetryAttempts.get(normalised) || 1;
+      this.emitGameEvent('texture-retry-attempt', {
+        key: normalised,
+        attempt: attemptNumber,
+      });
+      const material = this.textureUpgradeTargets.get(normalised) || null;
+      if (material) {
+        this.queueExternalTextureUpgrade(normalised, material);
+        return;
+      }
+      this.loadExternalVoxelTexture(normalised);
+    }
+
+    scheduleTextureRetry(key, context = {}) {
+      const normalised = typeof key === 'string' ? key.trim() : '';
+      if (!normalised) {
+        return;
+      }
+      const reason = context?.reason || 'unknown';
+      if (reason === 'unsupported-environment' || reason === 'missing-sources') {
+        return;
+      }
+      if (this.textureRetryHandles.has(normalised)) {
+        return;
+      }
+      const attemptsSoFar = this.textureRetryAttempts.get(normalised) || 0;
+      if (attemptsSoFar >= this.assetRetryLimit) {
+        this.handleTextureRetryExhausted(normalised, context);
+        return;
+      }
+      const nextAttempt = attemptsSoFar + 1;
+      this.textureRetryAttempts.set(normalised, nextAttempt);
+      const delay = this.computeAssetRetryDelay(nextAttempt);
+      if (typeof console !== 'undefined' && typeof console.warn === 'function') {
+        console.warn(
+          `Retrying ${normalised} texture stream (attempt ${nextAttempt} of ${this.assetRetryLimit}) after a loading error.`,
+          {
+            key: normalised,
+            attempt: nextAttempt,
+            delay,
+            reason,
+            url: context?.url ?? null,
+          },
+        );
+      }
+      this.emitGameEvent('texture-retry-scheduled', {
+        key: normalised,
+        attempt: nextAttempt,
+        delayMs: delay,
+        reason,
+        url: context?.url ?? null,
+      });
+      const scope = typeof window !== 'undefined' ? window : typeof globalThis !== 'undefined' ? globalThis : null;
+      const setTimer = typeof scope?.setTimeout === 'function' ? scope.setTimeout.bind(scope) : setTimeout;
+      const handle = setTimer(() => {
+        this.textureRetryHandles.delete(normalised);
+        this.triggerTextureRetry(normalised);
+      }, delay);
+      this.textureRetryHandles.set(normalised, handle);
+    }
+
+    noteTexturePackRecovery(key, context = {}) {
+      const normalised = typeof key === 'string' ? key.trim() : '';
+      if (!normalised) {
+        return;
+      }
+      const wasMissing = this.textureFallbackMissingKeys.delete(normalised);
+      this.textureRetryAttempts.delete(normalised);
+      this.clearScheduledTextureRetry(normalised);
+      if (wasMissing) {
+        if (typeof console !== 'undefined' && typeof console.info === 'function') {
+          console.info(`Texture streaming restored for ${normalised}.`, {
+            key: normalised,
+            url: context?.url ?? null,
+          });
+        }
+        this.emitGameEvent('texture-pack-recovered', {
+          key: normalised,
+          url: context?.url ?? null,
+        });
+      }
+      if (this.textureFallbackMissingKeys.size === 0) {
+        this.dismissTextureFallbackNotice();
+      } else if (wasMissing) {
+        this.refreshTextureFallbackNotice();
+      }
+    }
+
     getExternalTextureSources(key) {
       if (typeof window === 'undefined') {
         return [];
@@ -5307,41 +5542,27 @@
 
     noteTexturePackFallback(reason = 'unknown', context = {}) {
       this.texturePackErrorCount = (this.texturePackErrorCount || 0) + 1;
+      const key = typeof context?.key === 'string' ? context.key.trim() : '';
+      if (key) {
+        this.textureFallbackMissingKeys.add(key);
+      }
       this.emitGameEvent('texture-pack-fallback', {
         reason,
         failures: this.texturePackErrorCount,
-        key: context.key || null,
+        key: key || null,
         url: context.url || null,
+        missingKeys: Array.from(this.textureFallbackMissingKeys || []),
       });
-      if (
+      const shouldShowNotice =
         this.texturePackNoticeShown ||
-        this.texturePackErrorCount < this.texturePackErrorNoticeThreshold
-      ) {
-        return;
+        this.textureFallbackMissingKeys.size > 0 ||
+        this.texturePackErrorCount >= this.texturePackErrorNoticeThreshold;
+      if (shouldShowNotice) {
+        this.refreshTextureFallbackNotice();
       }
-      const message =
-        'Texture pack offline — using procedural colours until streaming recovers.';
-      if (typeof console !== 'undefined' && typeof console.error === 'function') {
-        console.error(message, {
-          failures: this.texturePackErrorCount,
-          reason,
-          key: context.key || null,
-          url: context.url || null,
-        });
+      if (key && reason === 'fallback-texture') {
+        this.scheduleTextureRetry(key, { reason, url: context.url || null });
       }
-      if (this.playerHintEl) {
-        this.playerHintEl.textContent = message;
-        this.playerHintEl.classList?.add?.('visible');
-        this.playerHintEl.setAttribute?.('data-variant', 'warning');
-      }
-      if (this.footerStatusEl) {
-        this.footerStatusEl.textContent = message;
-      }
-      if (this.footerEl) {
-        this.footerEl.dataset.state = 'warning';
-      }
-      this.lastHintMessage = message;
-      this.texturePackNoticeShown = true;
     }
 
     loadExternalVoxelTexture(key) {
@@ -5424,6 +5645,7 @@
             return useCachedFallbackTexture({ url }) ?? null;
           }
           this.prepareExternalTexture(result.texture);
+          this.noteTexturePackRecovery(key, { url: result.url || null });
           console.error(
             `Texture streaming check — ${key} resolved via ${result.url}. If textures appear blank, verify CDN availability and fallback cache configuration.`,
           );
@@ -5443,6 +5665,13 @@
     }
 
     queueExternalTextureUpgrade(key, material) {
+      if (typeof key === 'string' && key.trim()) {
+        if (material) {
+          this.textureUpgradeTargets.set(key.trim(), material);
+        } else {
+          this.textureUpgradeTargets.delete(key.trim());
+        }
+      }
       const promise = this.loadExternalVoxelTexture(key);
       if (!promise) {
         return;
@@ -13224,6 +13453,11 @@
 
     describeAssetKey(key) {
       const normalisedKey = typeof key === 'string' && key.trim().length ? key : 'asset';
+      if (normalisedKey.startsWith('texture:')) {
+        const textureKey = normalisedKey.slice('texture:'.length);
+        const label = this.describeVoxelTextureKey(textureKey);
+        return `${label} textures`;
+      }
       const mapping = {
         arm: 'first-person hands',
         steve: 'explorer avatar',

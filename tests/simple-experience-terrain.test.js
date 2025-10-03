@@ -122,6 +122,8 @@ describe('simple experience terrain generation', () => {
       });
     try {
       const experience = window.SimpleExperience.create({ canvas, ui: {} });
+      experience.assetRetryBackoffMs = 5;
+      experience.assetRetryBackoffMaxMs = 5;
       const materials = experience.materials;
       const defaultGrassTexture = materials.grass.map;
 
@@ -131,13 +133,14 @@ describe('simple experience terrain generation', () => {
       const resolvedTexture = await loadPromise;
       await Promise.resolve();
 
-      const loadWasAttempted = loadSpy.mock.calls.length > 0;
-      if (loadWasAttempted) {
+      const loadAttempted = loadSpy.mock.calls.length > 0;
+      if (loadAttempted) {
         expect(loadSpy).toHaveBeenCalled();
-      } else {
-        expect(experience.texturePackErrorCount).toBeGreaterThan(0);
-        expect(experience.lastHintMessage).toContain('Texture pack offline');
       }
+      expect(experience.texturePackErrorCount).toBeGreaterThan(0);
+      expect(experience.lastHintMessage).toContain('missing textures for');
+      expect(experience.lastHintMessage).toContain('grass');
+      expect(experience.textureFallbackMissingKeys.has('grass')).toBe(true);
       expect(resolvedTexture).toBe(defaultGrassTexture);
       expect(materials.grass.map).toBe(defaultGrassTexture);
       expect(experience.textureCache.get('grass')).toBe(defaultGrassTexture);
@@ -174,6 +177,8 @@ describe('simple experience terrain generation', () => {
 
     try {
       const experience = window.SimpleExperience.create({ canvas, ui: {} });
+      experience.assetRetryBackoffMs = 5;
+      experience.assetRetryBackoffMaxMs = 5;
 
       experience.textureCache.delete('obsidian');
       experience.defaultVoxelTexturePalettes.delete('obsidian');
@@ -187,10 +192,11 @@ describe('simple experience terrain generation', () => {
       const loadAttempted = loadSpy.mock.calls.length > 0;
       if (loadAttempted) {
         expect(loadSpy).toHaveBeenCalled();
-      } else {
-        expect(experience.texturePackErrorCount).toBeGreaterThan(0);
-        expect(experience.lastHintMessage).toContain('Texture pack offline');
       }
+      expect(experience.texturePackErrorCount).toBeGreaterThan(0);
+      expect(experience.lastHintMessage).toContain('missing textures for');
+      expect(experience.lastHintMessage).toContain('obsidian');
+      expect(experience.textureFallbackMissingKeys.has('obsidian')).toBe(true);
       expect(resolvedTexture).toBeInstanceOf(THREE.Texture);
       expect(resolvedTexture.isTexture).toBe(true);
       expect(experience.textureCache.get('obsidian')).toBe(resolvedTexture);
@@ -247,6 +253,8 @@ describe('simple experience terrain generation', () => {
         ui: { playerHintEl, footerEl, footerStatusEl },
         texturePackErrorNoticeThreshold: 2,
       });
+      experience.assetRetryBackoffMs = 5;
+      experience.assetRetryBackoffMaxMs = 5;
 
       const first = await experience.loadExternalVoxelTexture('grass');
       await Promise.resolve();
@@ -255,11 +263,14 @@ describe('simple experience terrain generation', () => {
 
       expect(first).toBeInstanceOf(THREE.Texture);
       expect(second).toBeInstanceOf(THREE.Texture);
-      expect(playerHintEl.textContent).toContain('Texture pack offline');
-      expect(footerStatusEl.textContent).toContain('Texture pack offline');
+      expect(playerHintEl.textContent).toContain('missing textures for');
+      expect(playerHintEl.textContent).toContain('grass');
+      expect(footerStatusEl.textContent).toContain('missing textures for');
+      expect(footerStatusEl.textContent).toContain('grass');
       expect(footerEl.dataset.state).toBe('warning');
       expect(experience.texturePackNoticeShown).toBe(true);
       expect(experience.texturePackErrorCount).toBeGreaterThanOrEqual(2);
+      expect(experience.textureFallbackMissingKeys.has('grass')).toBe(true);
     } finally {
       loadSpy.mockRestore();
       window.APP_CONFIG = {};
