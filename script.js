@@ -1070,6 +1070,26 @@
         }
       }
     }
+    const severity =
+      diagnosticStatus === 'error'
+        ? 'error'
+        : diagnosticStatus === 'warning'
+          ? 'warning'
+          : diagnosticStatus === 'ok'
+            ? 'success'
+            : 'info';
+    const hudMessage =
+      typeof message === 'string' && message.trim().length
+        ? message.trim()
+        : typeof diagnosticMessage === 'string' && diagnosticMessage.trim().length
+          ? diagnosticMessage.trim()
+          : 'An unexpected error occurred.';
+    showHudAlert({
+      title,
+      message: hudMessage,
+      severity,
+      autoHideMs: severity === 'success' || severity === 'info' ? 6000 : null,
+    });
     if (
       diagnosticScope &&
       typeof bootstrapOverlay?.setDiagnostic === 'function'
@@ -1165,6 +1185,7 @@
       message: 'World assets loaded.',
     });
     bootstrapOverlay.hide({ force: true });
+    hideHudAlert();
     if (typeof logDiagnosticsEvent === 'function' && options.log !== false) {
       const logMessage =
         typeof options.logMessage === 'string' && options.logMessage.trim().length
@@ -1257,6 +1278,90 @@
     ui: null,
     lastSignature: null,
   };
+
+  const hudAlertBinding = {
+    element: null,
+    titleEl: null,
+    messageEl: null,
+    hideTimer: null,
+  };
+
+  function resolveHudAlertElements() {
+    const doc = typeof document !== 'undefined' ? document : documentRef;
+    if (!doc) {
+      return hudAlertBinding;
+    }
+    const { element } = hudAlertBinding;
+    if (element && element.isConnected) {
+      return hudAlertBinding;
+    }
+    hudAlertBinding.element = doc.getElementById('hudAlert');
+    hudAlertBinding.titleEl = doc.getElementById('hudAlertTitle');
+    hudAlertBinding.messageEl = doc.getElementById('hudAlertMessage');
+    return hudAlertBinding;
+  }
+
+  function hideHudAlert() {
+    const binding = resolveHudAlertElements();
+    if (!binding.element) {
+      return;
+    }
+    if (binding.hideTimer) {
+      clearTimeout(binding.hideTimer);
+      binding.hideTimer = null;
+    }
+    binding.element.hidden = true;
+    binding.element.setAttribute('aria-hidden', 'true');
+    if (typeof binding.element.removeAttribute === 'function') {
+      binding.element.removeAttribute('data-severity');
+    }
+    if (binding.titleEl) {
+      binding.titleEl.textContent = '';
+      binding.titleEl.hidden = true;
+    }
+    if (binding.messageEl) {
+      binding.messageEl.textContent = '';
+      binding.messageEl.hidden = true;
+    }
+  }
+
+  function showHudAlert({
+    title = '',
+    message = '',
+    severity = 'error',
+    autoHideMs = null,
+  } = {}) {
+    const binding = resolveHudAlertElements();
+    if (!binding.element) {
+      return;
+    }
+    if (binding.hideTimer) {
+      clearTimeout(binding.hideTimer);
+      binding.hideTimer = null;
+    }
+    const safeTitle = typeof title === 'string' ? title.trim() : '';
+    const safeMessage = typeof message === 'string' ? message.trim() : '';
+    const severityKey = typeof severity === 'string' ? severity.trim().toLowerCase() : '';
+    const allowedSeverities = new Set(['error', 'warning', 'success', 'info']);
+    const appliedSeverity = allowedSeverities.has(severityKey) ? severityKey : 'info';
+    binding.element.hidden = false;
+    binding.element.setAttribute('aria-hidden', 'false');
+    binding.element.setAttribute('data-severity', appliedSeverity);
+    if (binding.titleEl) {
+      binding.titleEl.textContent = safeTitle;
+      binding.titleEl.hidden = !safeTitle;
+    }
+    if (binding.messageEl) {
+      binding.messageEl.textContent = safeMessage;
+      binding.messageEl.hidden = !safeMessage;
+    }
+    if (Number.isFinite(autoHideMs) && autoHideMs > 0) {
+      binding.hideTimer = setTimeout(() => {
+        binding.hideTimer = null;
+        hideHudAlert();
+      }, autoHideMs);
+    }
+  }
 
   function createHeartMarkupFromHealth(health) {
     const numeric = Number.isFinite(health) ? Math.max(0, Math.round(health)) : 0;
@@ -1598,6 +1703,11 @@
         status: 'warning',
         message,
       });
+      showHudAlert({
+        title: 'Asset fallback active',
+        message,
+        severity: 'warning',
+      });
       if (typeof logDiagnosticsEvent === 'function') {
         logDiagnosticsEvent('assets', message, {
           level: 'warning',
@@ -1712,6 +1822,12 @@
         status: 'pending',
         message: 'Retrying missing assets…',
       });
+      showHudAlert({
+        title: 'Retrying missing assets',
+        message: 'Retrying missing assets…',
+        severity: 'info',
+        autoHideMs: 7000,
+      });
       if (typeof logDiagnosticsEvent === 'function') {
         logDiagnosticsEvent('assets', 'Retrying missing assets…', {
           level: 'info',
@@ -1725,6 +1841,12 @@
       bootstrapOverlay.setDiagnostic('assets', {
         status: 'pending',
         message: `Retry queued for ${label}.`,
+      });
+      showHudAlert({
+        title: 'Retry queued',
+        message: `Retry queued for ${label}.`,
+        severity: 'info',
+        autoHideMs: 8000,
       });
       if (typeof logDiagnosticsEvent === 'function') {
         logDiagnosticsEvent('assets', `Retry queued for ${label}.`, {
@@ -1745,6 +1867,12 @@
         status: 'ok',
         message,
       });
+      showHudAlert({
+        title: 'Assets recovered',
+        message,
+        severity: 'success',
+        autoHideMs: 7000,
+      });
       if (typeof logDiagnosticsEvent === 'function') {
         logDiagnosticsEvent('assets', message, {
           level: 'success',
@@ -1757,6 +1885,11 @@
       bootstrapOverlay.setDiagnostic('assets', {
         status: 'error',
         message: 'Reload requested to restore missing assets.',
+      });
+      showHudAlert({
+        title: 'Reload required',
+        message: 'Reload requested to restore missing assets.',
+        severity: 'error',
       });
       if (typeof logDiagnosticsEvent === 'function') {
         logDiagnosticsEvent('assets', 'Reload requested to restore missing assets.', {
@@ -3345,6 +3478,11 @@
         }
       }
     }
+    showHudAlert({
+      title: 'Renderer unavailable',
+      message: 'Unable to load the 3D renderer. Reload the page to try again.',
+      severity: 'error',
+    });
   }
 
   let threeLoaderPromise = null;
@@ -4486,6 +4624,74 @@
       return;
     }
 
+    let hudAlert = doc.getElementById('hudAlert');
+    if (!hudAlert) {
+      hudAlert = doc.createElement('div');
+      hudAlert.id = 'hudAlert';
+      hudAlert.className = 'hud-alert hud-autogenerated';
+      hudAlert.setAttribute('role', 'alert');
+      hudAlert.setAttribute('aria-live', 'assertive');
+      hudAlert.hidden = true;
+      const icon = doc.createElement('span');
+      icon.className = 'hud-alert__icon';
+      icon.setAttribute('aria-hidden', 'true');
+      const content = doc.createElement('div');
+      content.className = 'hud-alert__content';
+      const titleEl = doc.createElement('span');
+      titleEl.className = 'hud-alert__title';
+      titleEl.id = 'hudAlertTitle';
+      titleEl.hidden = true;
+      const messageEl = doc.createElement('span');
+      messageEl.className = 'hud-alert__message';
+      messageEl.id = 'hudAlertMessage';
+      messageEl.hidden = true;
+      content.appendChild(titleEl);
+      content.appendChild(messageEl);
+      hudAlert.appendChild(icon);
+      hudAlert.appendChild(content);
+      hudLayer.insertBefore(hudAlert, hudLayer.firstChild || null);
+    } else {
+      if (!hudAlert.classList.contains('hud-alert')) {
+        hudAlert.classList.add('hud-alert');
+      }
+      if (!hudAlert.hasAttribute('role')) {
+        hudAlert.setAttribute('role', 'alert');
+      }
+      if (!hudAlert.hasAttribute('aria-live')) {
+        hudAlert.setAttribute('aria-live', 'assertive');
+      }
+      let icon = hudAlert.querySelector('.hud-alert__icon');
+      if (!icon) {
+        icon = doc.createElement('span');
+        icon.className = 'hud-alert__icon';
+        icon.setAttribute('aria-hidden', 'true');
+        hudAlert.insertBefore(icon, hudAlert.firstChild || null);
+      }
+      let content = hudAlert.querySelector('.hud-alert__content');
+      if (!content) {
+        content = doc.createElement('div');
+        content.className = 'hud-alert__content';
+        hudAlert.appendChild(content);
+      }
+      let titleEl = doc.getElementById('hudAlertTitle');
+      if (!titleEl) {
+        titleEl = doc.createElement('span');
+        titleEl.id = 'hudAlertTitle';
+        titleEl.className = 'hud-alert__title';
+        titleEl.hidden = true;
+        content.insertBefore(titleEl, content.firstChild || null);
+      }
+      let messageEl = doc.getElementById('hudAlertMessage');
+      if (!messageEl) {
+        messageEl = doc.createElement('span');
+        messageEl.id = 'hudAlertMessage';
+        messageEl.className = 'hud-alert__message';
+        messageEl.hidden = true;
+        content.appendChild(messageEl);
+      }
+      hudAlert.hidden = hudAlert.hidden !== undefined ? hudAlert.hidden : true;
+    }
+
     const ensureStatusGroup = () => {
       let statusCard = hudLayer.querySelector('.hud-card--status');
       if (!statusCard) {
@@ -4658,6 +4864,9 @@
       guideDotsContainer: doc.querySelector('[data-guide-dots]'),
       introModal: byId('introModal'),
       hudRootEl: byId('gameHud'),
+      hudAlertEl: byId('hudAlert'),
+      hudAlertTitleEl: byId('hudAlertTitle'),
+      hudAlertMessageEl: byId('hudAlertMessage'),
       gameBriefing: byId('gameBriefing'),
       dismissBriefingButton: byId('dismissBriefing'),
       firstRunTutorial: byId('firstRunTutorial'),

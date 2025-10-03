@@ -292,6 +292,19 @@
           </div>
         </div>
         <div class="hud-layer" id="gameHud">
+          <div
+            class="hud-alert"
+            id="hudAlert"
+            role="alert"
+            aria-live="assertive"
+            hidden
+          >
+            <span class="hud-alert__icon" aria-hidden="true"></span>
+            <div class="hud-alert__content">
+              <span class="hud-alert__title" id="hudAlertTitle"></span>
+              <span class="hud-alert__message" id="hudAlertMessage"></span>
+            </div>
+          </div>
           <div class="hud-layer__corner hud-layer__corner--top-left">
             <div class="hud-card hud-card--status" data-hint="Monitor vitals and access crafting tools.">
               <div class="hud-status" aria-label="Player vitals" role="group" data-hint="Health, oxygen, and time remainers.">
