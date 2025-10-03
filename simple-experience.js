@@ -332,6 +332,78 @@
     }
   }
 
+  function focusElementSilently(target) {
+    if (!target || typeof target.focus !== 'function') {
+      return false;
+    }
+    try {
+      target.focus({ preventScroll: true });
+      return true;
+    } catch (error) {
+      try {
+        target.focus();
+        return true;
+      } catch (nestedError) {
+        return false;
+      }
+    }
+  }
+
+  function moveFocusAwayFromElement(element, doc, fallbackFocus) {
+    if (!element || !doc) {
+      return true;
+    }
+    const contains = typeof element.contains === 'function' ? element.contains.bind(element) : null;
+    if (!contains) {
+      return true;
+    }
+    const active = doc.activeElement || null;
+    if (!active || !contains(active)) {
+      return true;
+    }
+    if (fallbackFocus) {
+      let handled = false;
+      if (typeof fallbackFocus === 'function') {
+        try {
+          const result = fallbackFocus();
+          handled = result !== false;
+        } catch (error) {
+          handled = false;
+        }
+      } else {
+        handled = focusElementSilently(fallbackFocus);
+      }
+      if (handled && !contains(doc.activeElement || null)) {
+        return true;
+      }
+    }
+    if (doc.body && doc.body !== active && focusElementSilently(doc.body) && !contains(doc.activeElement || null)) {
+      return true;
+    }
+    if (typeof active.blur === 'function') {
+      active.blur();
+    }
+    return !contains(doc.activeElement || null);
+  }
+
+  function safelySetAriaHidden(element, hidden, options = {}) {
+    if (!element || typeof element.setAttribute !== 'function') {
+      return false;
+    }
+    const doc = element.ownerDocument || (typeof document !== 'undefined' ? document : null);
+    if (!hidden) {
+      element.setAttribute('aria-hidden', 'false');
+      return true;
+    }
+    const fallbackFocus = options.fallbackFocus || null;
+    const cleared = moveFocusAwayFromElement(element, doc, fallbackFocus);
+    if (!cleared) {
+      return false;
+    }
+    element.setAttribute('aria-hidden', 'true');
+    return true;
+  }
+
   const overlayIsolationState = {
     stack: [],
     originals: new Map(),
@@ -2962,7 +3034,7 @@
       if (this.guideModalEl) {
         const visible = this.guideModalEl.hidden === false;
         this.guideModalVisible = visible;
-        this.guideModalEl.setAttribute('aria-hidden', visible ? 'false' : 'true');
+        safelySetAriaHidden(this.guideModalEl, !visible);
         if (!visible) {
           setInertState(this.guideModalEl, true);
           releaseOverlayIsolation(this.guideModalEl);
@@ -3310,7 +3382,7 @@
         this.guideModalEl.hidden = false;
         setInertState(this.guideModalEl, false);
         activateOverlayIsolation(this.guideModalEl);
-        this.guideModalEl.setAttribute('aria-hidden', 'false');
+        safelySetAriaHidden(this.guideModalEl, false);
         if (typeof document !== 'undefined' && typeof document.exitPointerLock === 'function') {
           document.exitPointerLock();
         }
@@ -3345,7 +3417,19 @@
         this.guideModalEl.hidden = true;
         setInertState(this.guideModalEl, true);
         releaseOverlayIsolation(this.guideModalEl);
-        this.guideModalEl.setAttribute('aria-hidden', 'true');
+        const fallbackFocus = restore
+          ? () => {
+              try {
+                restore.focus({ preventScroll: true });
+              } catch (error) {
+                restore.focus();
+              }
+            }
+          : () => {
+              this.focusGameViewport();
+              return true;
+            };
+        safelySetAriaHidden(this.guideModalEl, true, { fallbackFocus });
         if (!focusHandled) {
           if (restore) {
             restore.focus({ preventScroll: true });

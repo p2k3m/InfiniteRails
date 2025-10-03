@@ -103,6 +103,78 @@
     }
   }
 
+  function focusElementSilently(target) {
+    if (!target || typeof target.focus !== 'function') {
+      return false;
+    }
+    try {
+      target.focus({ preventScroll: true });
+      return true;
+    } catch (error) {
+      try {
+        target.focus();
+        return true;
+      } catch (nestedError) {
+        return false;
+      }
+    }
+  }
+
+  function moveFocusAwayFromElement(element, doc, fallbackFocus) {
+    if (!element || !doc) {
+      return true;
+    }
+    const contains = typeof element.contains === 'function' ? element.contains.bind(element) : null;
+    if (!contains) {
+      return true;
+    }
+    const active = doc.activeElement || null;
+    if (!active || !contains(active)) {
+      return true;
+    }
+    if (fallbackFocus) {
+      let handled = false;
+      if (typeof fallbackFocus === 'function') {
+        try {
+          const result = fallbackFocus();
+          handled = result !== false;
+        } catch (error) {
+          handled = false;
+        }
+      } else {
+        handled = focusElementSilently(fallbackFocus);
+      }
+      if (handled && !contains(doc.activeElement || null)) {
+        return true;
+      }
+    }
+    if (doc.body && doc.body !== active && focusElementSilently(doc.body) && !contains(doc.activeElement || null)) {
+      return true;
+    }
+    if (typeof active.blur === 'function') {
+      active.blur();
+    }
+    return !contains(doc.activeElement || null);
+  }
+
+  function safelySetAriaHidden(element, hidden, options = {}) {
+    if (!element || typeof element.setAttribute !== 'function') {
+      return false;
+    }
+    const doc = element.ownerDocument || (typeof document !== 'undefined' ? document : null);
+    if (!hidden) {
+      element.setAttribute('aria-hidden', 'false');
+      return true;
+    }
+    const fallbackFocus = options.fallbackFocus || null;
+    const cleared = moveFocusAwayFromElement(element, doc, fallbackFocus);
+    if (!cleared) {
+      return false;
+    }
+    element.setAttribute('aria-hidden', 'true');
+    return true;
+  }
+
   const COLOR_MODE_STORAGE_KEY = 'infinite-rails-color-mode';
   const colorModeState = {
     preference: 'auto',
@@ -1311,7 +1383,7 @@
       binding.hideTimer = null;
     }
     binding.element.hidden = true;
-    binding.element.setAttribute('aria-hidden', 'true');
+    safelySetAriaHidden(binding.element, true);
     if (typeof binding.element.removeAttribute === 'function') {
       binding.element.removeAttribute('data-severity');
     }
@@ -1345,7 +1417,7 @@
     const allowedSeverities = new Set(['error', 'warning', 'success', 'info']);
     const appliedSeverity = allowedSeverities.has(severityKey) ? severityKey : 'info';
     binding.element.hidden = false;
-    binding.element.setAttribute('aria-hidden', 'false');
+    safelySetAriaHidden(binding.element, false);
     binding.element.setAttribute('data-severity', appliedSeverity);
     if (binding.titleEl) {
       binding.titleEl.textContent = safeTitle;
