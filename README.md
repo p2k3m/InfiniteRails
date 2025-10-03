@@ -274,8 +274,11 @@ This repository ships with a GitHub Actions workflow that deploys the static sit
 
 1. Workflow validates that all required AWS secrets exist. Missing secrets trigger an actionable failure with setup steps.
 2. AWS credentials are configured via `aws-actions/configure-aws-credentials`.
-3. Repository contents (excluding version control and workflow files) are synchronised to the target S3 bucket.
-4. The workflow automatically discovers the CloudFront distribution attached to the S3 origin, invalidates its cache, waits for the flush to finish, and exposes both the distribution ID and URL as job outputs. The URL is also written to the run summary for quick access.
+3. `asset-manifest.json` is validated to ensure every required bundle, vendor shim, and GLTF/audio asset exists locally and is covered by the deploy sync rules.
+4. Repository contents (excluding version control and workflow files) are synchronised to the target S3 bucket.
+5. The workflow automatically discovers the CloudFront distribution attached to the S3 origin, invalidates its cache, waits for the flush to finish, and exposes both the distribution ID and URL as job outputs. The URL is also written to the run summary for quick access.
+
+The manifest lives at the repository root (`asset-manifest.json`) and serves as the canonical checklist of production assets. Update it whenever you add or retire a runtime bundle, vendor shim, or static asset that must ship with the experience. The deployment tests and workflow both fail fast if the manifest is missing entries or points at non-existent files.
 
 > **Always invalidate the CDN on every deploy.**
 >

@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "assets": [
+    "index.html",
+    "styles.css",
+    "script.js",
+    "simple-experience.js",
+    "asset-resolver.js",
+    "audio-aliases.js",
+    "audio-captions.js",
+    "combat-utils.js",
+    "crafting.js",
+    "portal-mechanics.js",
+    "scoreboard-utils.js",
+    "assets/offline-assets.js",
+    "assets/audio-samples.json",
+    "assets/favicon.svg",
+    "assets/infinite-dimension-logo.svg",
+    "assets/manu-logo.svg",
+    "assets/arm.gltf",
+    "assets/steve.gltf",
+    "assets/zombie.gltf",
+    "assets/iron_golem.gltf",
+    "vendor/three.min.js",
+    "vendor/GLTFLoader.js",
+    "vendor/howler-stub.js"
+  ]
+}
