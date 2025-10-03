@@ -7775,6 +7775,54 @@
       }
     }
 
+    getAnimationLabelKeywords(options = {}) {
+      return {
+        idle: options.idleKeywords || ['idle', 'breath', 'stand', 'rest'],
+        walk: options.walkKeywords || ['walk', 'run', 'move', 'locomotion'],
+        attack: options.attackKeywords || ['attack', 'punch', 'hit', 'swing', 'strike'],
+      };
+    }
+
+    resolveMissingAnimationChannels(animations, requiredKeywords = {}) {
+      if (!requiredKeywords || typeof requiredKeywords !== 'object') {
+        return [];
+      }
+      const clips = Array.isArray(animations) ? animations : [];
+      const missing = [];
+      Object.entries(requiredKeywords).forEach(([label, keywords]) => {
+        if (!Array.isArray(keywords) || keywords.length === 0) {
+          return;
+        }
+        const lowerKeywords = keywords.map((keyword) => `${keyword}`.toLowerCase()).filter((keyword) => keyword.length);
+        if (!lowerKeywords.length) {
+          return;
+        }
+        const hasMatch = clips.some((clip) => {
+          if (!clip) {
+            return false;
+          }
+          const clipName = typeof clip.name === 'string' ? clip.name.toLowerCase() : '';
+          const nameMatches = clipName.length
+            ? lowerKeywords.some((keyword) => clipName.includes(keyword))
+            : false;
+          if (nameMatches) {
+            return true;
+          }
+          if (!Array.isArray(clip.tracks) || clip.tracks.length === 0) {
+            return false;
+          }
+          return clip.tracks.some((track) => {
+            const trackName = typeof track?.name === 'string' ? track.name.toLowerCase() : '';
+            return trackName.length ? lowerKeywords.some((keyword) => trackName.includes(keyword)) : false;
+          });
+        });
+        if (!hasMatch) {
+          missing.push(label);
+        }
+      });
+      return missing;
+    }
+
     prepareAnimationRig(key, model, animations = [], options = {}) {
       const THREE = this.THREE;
       if (!THREE || !model) {
@@ -7794,11 +7842,7 @@
         }
         return null;
       };
-      const keywordsMap = {
-        idle: options.idleKeywords || ['idle', 'breath', 'stand'],
-        walk: options.walkKeywords || ['walk', 'run', 'move'],
-        attack: options.attackKeywords || ['attack', 'punch', 'hit', 'swing', 'strike'],
-      };
+      const keywordsMap = this.getAnimationLabelKeywords(options);
       const fallbackClip = (label) => {
         if (options.fallbackClips && options.fallbackClips[label]) {
           return options.fallbackClips[label];
@@ -8252,11 +8296,6 @@
         }
         return;
       }
-      if (this.playerAvatar) {
-        this.playerRig.remove(this.playerAvatar);
-        disposeObject3D(this.playerAvatar);
-        this.playerAvatar = null;
-      }
       const model = asset.scene;
       model.name = 'PlayerAvatar';
       model.position.set(0, -PLAYER_EYE_HEIGHT, 0);
@@ -8267,6 +8306,82 @@
           child.receiveShadow = true;
         }
       });
+
+      if (this.playerAnimationRig) {
+        this.disposeAnimationRig(this.playerAnimationRig);
+        this.playerAnimationRig = null;
+      } else if (this.playerMixer) {
+        this.playerMixer.stopAllAction();
+        this.playerMixer = null;
+        this.playerIdleAction = null;
+      }
+
+      const animationKeywords = this.getAnimationLabelKeywords();
+      const missingChannels = this.resolveMissingAnimationChannels(asset.animations, {
+        idle: animationKeywords.idle,
+        walk: animationKeywords.walk,
+      });
+      if (missingChannels.length) {
+        const formattedMissing = missingChannels
+          .map((channel) => `${channel}`.trim())
+          .filter((channel) => channel.length)
+          .map((channel) => channel.charAt(0).toUpperCase() + channel.slice(1));
+        const missingLabel = formattedMissing.join(', ') || 'Idle, Walk';
+        console.error(
+          `Player model missing animation channel(s): ${missingLabel}. Falling back to placeholder avatar mesh.`,
+        );
+        disposeObject3D(model);
+        if (this.playerAvatar && !this.playerAvatar.userData?.placeholder) {
+          if (this.camera && this.camera.parent === this.playerAvatar) {
+            try {
+              this.playerAvatar.remove(this.camera);
+              if (this.cameraBoom && typeof this.cameraBoom.add === 'function') {
+                this.cameraBoom.add(this.camera);
+              } else if (this.playerRig && typeof this.playerRig.add === 'function') {
+                this.playerRig.add(this.camera);
+              }
+            } catch (error) {
+              if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+                console.debug('Unable to detach camera from invalid avatar model.', error);
+              }
+            }
+          }
+          try {
+            if (this.playerRig && typeof this.playerRig.remove === 'function') {
+              this.playerRig.remove(this.playerAvatar);
+            }
+          } catch (error) {
+            if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+              console.debug('Unable to remove invalid avatar model from rig.', error);
+            }
+          }
+          disposeObject3D(this.playerAvatar);
+          this.playerAvatar = null;
+        }
+        if (this.playerAnimationRig) {
+          this.disposeAnimationRig(this.playerAnimationRig);
+        }
+        this.playerAnimationRig = null;
+        this.playerMixer = null;
+        this.playerIdleAction = null;
+        this.playerHeadAttachment = null;
+        const animationError = new Error(`Missing animation channel(s): ${missingLabel}`);
+        animationError.code = 'PLAYER_ANIMATION_CHANNELS_MISSING';
+        this.handleAssetLoadFailure('steve', animationError, {
+          fallbackMessage: `Explorer avatar animation data incomplete — using fallback mesh until ${missingLabel} animation returns.`,
+        });
+        if (this.playerAvatar?.userData) {
+          this.playerAvatar.userData.placeholderSource = 'missing-animations';
+        }
+        return;
+      }
+
+      if (this.playerAvatar) {
+        this.playerRig.remove(this.playerAvatar);
+        disposeObject3D(this.playerAvatar);
+        this.playerAvatar = null;
+      }
+
       this.playerRig.add(model);
       this.playerAvatar = model;
 
@@ -8277,15 +8392,6 @@
       }
 
       this.applyCameraPerspective(this.cameraPerspective);
-
-      if (this.playerAnimationRig) {
-        this.disposeAnimationRig(this.playerAnimationRig);
-        this.playerAnimationRig = null;
-      } else if (this.playerMixer) {
-        this.playerMixer.stopAllAction();
-        this.playerMixer = null;
-        this.playerIdleAction = null;
-      }
 
       this.playerAnimationRig = this.prepareAnimationRig('steve', model, asset.animations, {
         defaultState: 'idle',
