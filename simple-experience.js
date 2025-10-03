@@ -55,6 +55,24 @@
   const SCORE_SYNC_QUEUE_LIMIT = 25;
   const FIRST_RUN_TUTORIAL_STORAGE_KEY = 'infinite-rails-first-run-tutorial';
   const MOVEMENT_ACTIONS = ['moveForward', 'moveBackward', 'moveLeft', 'moveRight'];
+  const LEGACY_KEYBOARD_CODE_MAP = Object.freeze({
+    ArrowUp: 'ArrowUp',
+    ArrowDown: 'ArrowDown',
+    ArrowLeft: 'ArrowLeft',
+    ArrowRight: 'ArrowRight',
+    Up: 'ArrowUp',
+    Down: 'ArrowDown',
+    Left: 'ArrowLeft',
+    Right: 'ArrowRight',
+    Escape: 'Escape',
+    Esc: 'Escape',
+    Spacebar: 'Space',
+    Space: 'Space',
+    ' ': 'Space',
+    Enter: 'Enter',
+    Return: 'Enter',
+    Tab: 'Tab',
+  });
   const DEFAULT_KEY_BINDINGS = (() => {
     const map = {
       moveForward: ['KeyW', 'ArrowUp'],
@@ -439,6 +457,43 @@
       });
     });
     return merged;
+  }
+
+  function normalizeKeyboardEventCode(event) {
+    if (!event) {
+      return '';
+    }
+    const code = typeof event.code === 'string' ? event.code : '';
+    if (code) {
+      return code;
+    }
+    const rawKey = typeof event.key === 'string' ? event.key : '';
+    if (!rawKey) {
+      return '';
+    }
+    if (LEGACY_KEYBOARD_CODE_MAP[rawKey]) {
+      return LEGACY_KEYBOARD_CODE_MAP[rawKey];
+    }
+    const trimmed = rawKey.trim();
+    if (LEGACY_KEYBOARD_CODE_MAP[trimmed]) {
+      return LEGACY_KEYBOARD_CODE_MAP[trimmed];
+    }
+    if (!trimmed) {
+      return '';
+    }
+    if (/^[a-z]$/i.test(trimmed)) {
+      return `Key${trimmed.toUpperCase()}`;
+    }
+    if (/^[0-9]$/.test(trimmed)) {
+      return `Digit${trimmed}`;
+    }
+    if (/^F[0-9]{1,2}$/i.test(trimmed)) {
+      return trimmed.toUpperCase();
+    }
+    if (/^Numpad[0-9]$/i.test(trimmed)) {
+      return `Numpad${trimmed.slice(-1)}`;
+    }
+    return '';
   }
 
   function formatKeyLabel(code) {
@@ -12454,7 +12509,7 @@
         event.__infiniteRailsHandled = true;
       }
       this.markInteraction();
-      const code = typeof event.code === 'string' ? event.code : '';
+      const code = normalizeKeyboardEventCode(event);
       if (code) {
         this.keys.add(code);
       }
@@ -12528,7 +12583,7 @@
         event.__infiniteRailsHandled = true;
       }
       this.markInteraction();
-      const code = typeof event.code === 'string' ? event.code : '';
+      const code = normalizeKeyboardEventCode(event);
       if (code) {
         this.keys.delete(code);
       }
