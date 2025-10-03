@@ -125,6 +125,7 @@ This document unifies the design brief (“Comprehensive Analysis and Enhancemen
 1. Enhance `.github/workflows/deploy.yml` to validate that textures/GLTF assets exist before syncing.
 2. Add a post-deploy health check that pings the live site, measures frame time via automated browser tooling, and records results in the run summary.
 3. Document troubleshooting steps for missing AWS secrets and CDN cache invalidation failures.
+4. Purge the CloudFront cache after every deploy so new models, textures, and scripts propagate immediately instead of lingering behind stale CDN entries.
 
 ---
 
