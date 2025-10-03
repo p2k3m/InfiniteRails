@@ -3180,14 +3180,36 @@
           focusTarget.focus({ preventScroll: true });
         }
       } else {
+        const doc =
+          (typeof document !== 'undefined' ? document : null) ||
+          this.guideModalEl?.ownerDocument ||
+          null;
+        const restoreCandidate =
+          options?.returnFocus === false ? null : this.lastGuideTrigger || this.openGuideButton;
+        const restore =
+          restoreCandidate &&
+          typeof restoreCandidate.focus === 'function' &&
+          !(typeof this.guideModalEl.contains === 'function' && this.guideModalEl.contains(restoreCandidate))
+            ? restoreCandidate
+            : null;
+        let focusHandled = false;
+        if (doc?.activeElement && this.guideModalEl.contains?.(doc.activeElement)) {
+          if (restore) {
+            restore.focus({ preventScroll: true });
+          } else {
+            this.focusGameViewport();
+          }
+          focusHandled = true;
+        }
         this.guideModalEl.hidden = true;
         setInertState(this.guideModalEl, true);
         this.guideModalEl.setAttribute('aria-hidden', 'true');
-        const restore = options?.returnFocus === false ? null : this.lastGuideTrigger || this.openGuideButton;
-        if (restore && typeof restore.focus === 'function') {
-          restore.focus({ preventScroll: true });
-        } else {
-          this.focusGameViewport();
+        if (!focusHandled) {
+          if (restore) {
+            restore.focus({ preventScroll: true });
+          } else {
+            this.focusGameViewport();
+          }
         }
       }
       this.guideModalVisible = nextVisible;
