@@ -60,15 +60,8 @@ Resources:
             Action:
               - s3:GetObject
             Resource:
-              - !Sub "${AssetsBucket.Arn}/assets/*.gltf"
-              - !Sub "${AssetsBucket.Arn}/assets/*.glb"
-              - !Sub "${AssetsBucket.Arn}/assets/*.bin"
-              - !Sub "${AssetsBucket.Arn}/assets/*.png"
-              - !Sub "${AssetsBucket.Arn}/assets/*.jpg"
-              - !Sub "${AssetsBucket.Arn}/assets/*.jpeg"
-              - !Sub "${AssetsBucket.Arn}/assets/*.ktx2"
-              - !Sub "${AssetsBucket.Arn}/assets/*.webp"
-              - !Sub "${AssetsBucket.Arn}/assets/*.basis"
+              - !Sub "${AssetsBucket.Arn}/assets/*"
+              - !Sub "${AssetsBucket.Arn}/textures/*"
 
   AssetsDistribution:
     Type: AWS::CloudFront::Distribution
