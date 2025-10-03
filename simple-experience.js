@@ -1020,6 +1020,164 @@
     return cachedGltfLoaderPromise;
   }
 
+  function buildHierarchyMap(nodes = [], map = new Map()) {
+    nodes.forEach((node, index) => {
+      const name = typeof node?.name === 'string' ? node.name : null;
+      if (!name) {
+        return;
+      }
+      const children = Array.isArray(node.children)
+        ? node.children.map((childIndex) => nodes[childIndex]?.name).filter(Boolean)
+        : [];
+      map.set(name, { index, node, children });
+    });
+    return map;
+  }
+
+  function describeHierarchyChildren(hierarchyMap, name) {
+    if (!hierarchyMap.has(name)) {
+      return [];
+    }
+    return hierarchyMap.get(name).children.slice();
+  }
+
+  function validateSteveAvatarRig(gltf) {
+    const parserJson = gltf?.parser?.json || null;
+    const nodes = Array.isArray(parserJson?.nodes) ? parserJson.nodes : [];
+    const meshes = Array.isArray(parserJson?.meshes) ? parserJson.meshes : [];
+    const hierarchyMap = buildHierarchyMap(nodes);
+
+    const requiredNodes = [
+      'SteveRoot',
+      'Hips',
+      'Torso',
+      'HeadPivot',
+      'Head',
+      'LeftArm',
+      'LeftSleeve',
+      'LeftHand',
+      'RightArm',
+      'RightSleeve',
+      'RightHand',
+      'LeftLeg',
+      'LeftThigh',
+      'LeftBoot',
+      'RightLeg',
+      'RightThigh',
+      'RightBoot',
+      'Hair',
+      'Fringe',
+      'LeftEye',
+      'RightEye',
+    ];
+
+    const missingNodes = requiredNodes.filter((name) => !hierarchyMap.has(name));
+
+    const meshNameByIndex = new Map(
+      meshes.map((mesh, index) => [index, typeof mesh?.name === 'string' ? mesh.name : null]),
+    );
+
+    const meshExpectations = new Map([
+      ['Torso', 'CubeShirt'],
+      ['Head', 'CubeSkin'],
+      ['LeftSleeve', 'CubeShirt'],
+      ['LeftHand', 'CubeSkin'],
+      ['RightSleeve', 'CubeShirt'],
+      ['RightHand', 'CubeSkin'],
+      ['LeftThigh', 'CubeJeans'],
+      ['LeftBoot', 'CubeBoot'],
+      ['RightThigh', 'CubeJeans'],
+      ['RightBoot', 'CubeBoot'],
+      ['Hair', 'CubeHair'],
+      ['Fringe', 'CubeHair'],
+      ['LeftEye', 'CubeEye'],
+      ['RightEye', 'CubeEye'],
+    ]);
+
+    const meshAssignments = {};
+    const meshMismatches = [];
+    meshExpectations.forEach((expectedMeshName, nodeName) => {
+      const nodeEntry = hierarchyMap.get(nodeName) || null;
+      const meshIndex = typeof nodeEntry?.node?.mesh === 'number' ? nodeEntry.node.mesh : null;
+      const meshName = meshNameByIndex.get(meshIndex) || null;
+      meshAssignments[nodeName] = meshName;
+      if (expectedMeshName && meshName !== expectedMeshName) {
+        meshMismatches.push({ node: nodeName, expected: expectedMeshName, actual: meshName });
+      }
+    });
+
+    const hierarchyExpectations = new Map([
+      ['SteveRoot', ['Hips']],
+      ['Hips', ['Torso', 'LeftArm', 'RightArm', 'LeftLeg', 'RightLeg']],
+      ['Torso', ['HeadPivot']],
+      ['HeadPivot', ['Head', 'Hair', 'Fringe', 'LeftEye', 'RightEye']],
+      ['LeftArm', ['LeftSleeve', 'LeftHand']],
+      ['RightArm', ['RightSleeve', 'RightHand']],
+      ['LeftLeg', ['LeftThigh', 'LeftBoot']],
+      ['RightLeg', ['RightThigh', 'RightBoot']],
+    ]);
+
+    const hierarchyIssues = [];
+    hierarchyExpectations.forEach((expectedChildren, nodeName) => {
+      const actualChildren = describeHierarchyChildren(hierarchyMap, nodeName);
+      expectedChildren.forEach((childName) => {
+        if (!actualChildren.includes(childName)) {
+          hierarchyIssues.push({ node: nodeName, child: childName, actualChildren });
+        }
+      });
+    });
+
+    const hierarchy = {};
+    hierarchyMap.forEach((entry, name) => {
+      hierarchy[name] = entry.children.slice();
+    });
+
+    const errors = [];
+    if (!parserJson) {
+      errors.push('GLTF parser JSON unavailable for validation.');
+    }
+    if (missingNodes.length) {
+      errors.push(`Missing required nodes: ${missingNodes.join(', ')}`);
+    }
+    if (hierarchyIssues.length) {
+      const issueDescriptions = hierarchyIssues.map(
+        ({ node, child, actualChildren }) =>
+          `${node} missing expected child ${child} (children: ${actualChildren.join(', ') || 'none'})`,
+      );
+      errors.push(...issueDescriptions);
+    }
+    if (meshMismatches.length) {
+      meshMismatches.forEach(({ node, expected, actual }) => {
+        errors.push(
+          `${node} references mesh ${actual || 'unknown'} instead of expected ${expected}.`,
+        );
+      });
+    }
+
+    const metadata = {
+      valid: errors.length === 0,
+      nodes: requiredNodes,
+      hierarchy,
+      meshAssignments,
+      meshExpectations: Object.fromEntries(meshExpectations),
+      meshNameByIndex: Object.fromEntries(meshNameByIndex),
+      missingNodes,
+      hierarchyIssues,
+      meshMismatches,
+      errors,
+    };
+
+    if (!metadata.valid) {
+      const reason = errors[0] || 'Unknown rig validation failure.';
+      const error = new Error(`Steve avatar rig validation failed: ${reason}`);
+      error.code = 'STEVE_RIG_VALIDATION_FAILED';
+      error.metadata = metadata;
+      throw error;
+    }
+
+    return metadata;
+  }
+
   function disposeObject3D(object) {
     if (!object || typeof object.traverse !== 'function') return;
     object.traverse((child) => {
@@ -7192,7 +7350,29 @@
                 child.receiveShadow = true;
               }
             });
-            return { scene: gltf.scene, animations: gltf.animations || [] };
+            const payload = { scene: gltf.scene, animations: gltf.animations || [] };
+            if (key === 'steve') {
+              const metadata = validateSteveAvatarRig(gltf);
+              if (metadata) {
+                const rigMetadata = Object.freeze({
+                  ...metadata,
+                  meshAssignments: { ...metadata.meshAssignments },
+                  hierarchy: { ...metadata.hierarchy },
+                  meshExpectations: { ...metadata.meshExpectations },
+                  meshNameByIndex: { ...metadata.meshNameByIndex },
+                  missingNodes: metadata.missingNodes.slice(),
+                  meshMismatches: metadata.meshMismatches.slice(),
+                  hierarchyIssues: metadata.hierarchyIssues.slice(),
+                  errors: metadata.errors.slice(),
+                });
+                payload.metadata = { avatarRig: rigMetadata };
+                payload.scene.userData = {
+                  ...(payload.scene.userData || {}),
+                  avatarRigMetadata: rigMetadata,
+                };
+              }
+            }
+            return payload;
           })
           .catch((error) => {
             if (attemptNumber < this.assetRetryLimit) {
@@ -7443,7 +7623,14 @@
             child.receiveShadow = true;
           }
         });
-        return { scene: clone, animations: payload.animations };
+        const metadata = payload.metadata ? { ...payload.metadata } : null;
+        if (metadata?.avatarRig) {
+          clone.userData = {
+            ...(clone.userData || {}),
+            avatarRigMetadata: metadata.avatarRig,
+          };
+        }
+        return metadata ? { scene: clone, animations: payload.animations, metadata } : { scene: clone, animations: payload.animations };
       } catch (error) {
         if (!error || error.__assetFailureHandled !== true) {
           this.handleAssetLoadFailure(key, error);
