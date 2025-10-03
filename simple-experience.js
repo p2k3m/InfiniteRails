@@ -698,6 +698,26 @@
     golem: resolveAssetUrl('assets/iron_golem.gltf'),
   };
 
+  const MODEL_URL_LOOKUP = (() => {
+    const entries = Object.entries(MODEL_URLS)
+      .map(([key, url]) => [typeof url === 'string' ? url : null, key])
+      .filter(([url]) => typeof url === 'string' && url.length > 0);
+    const map = new Map(entries);
+    return {
+      byUrl(value) {
+        if (typeof value !== 'string' || !value) {
+          return null;
+        }
+        const trimmed = value.trim();
+        if (!trimmed) {
+          return null;
+        }
+        return map.get(trimmed) || null;
+      },
+      entries,
+    };
+  })();
+
   const BASE_TERRAIN_REFERENCES = ['grass-block', 'dirt', 'stone', 'rail-segment', 'portal-anchor'];
   const BASE_MOB_REFERENCES = ['player-avatar', 'zombie', 'iron-golem'];
   const BASE_OBJECT_REFERENCES = [
@@ -1580,6 +1600,10 @@
         ? Math.max(1000, options.assetDelayIndicatorThresholdMs)
         : 1000;
       this.assetLoadLog = [];
+      this.criticalAssetPreloadPromise = null;
+      this.criticalAssetPreloadFailed = false;
+      this.criticalAssetPreloadComplete = false;
+      this.enforceAssetPreloadStrictness = false;
       this.assetFailureCounts = new Map();
       this.assetRetryState = new Map();
       this.assetRecoveryPendingKeys = new Set();
@@ -1928,6 +1952,11 @@
 
     start() {
       if (this.started || this.rendererUnavailable) return;
+      if (this.criticalAssetPreloadFailed) {
+        const failureMessage = this.rendererFailureMessage || 'Critical assets failed to load. Reload to try again.';
+        this.presentRendererFailure(failureMessage, { stage: 'asset-load' });
+        return;
+      }
       if (!this.verifyWebglSupport()) {
         return;
       }
@@ -5553,6 +5582,22 @@
         url: context.url || null,
         missingKeys: Array.from(this.textureFallbackMissingKeys || []),
       });
+      if (this.enforceAssetPreloadStrictness && key && !this.criticalAssetPreloadFailed) {
+        const failureKey = `texture:${key}`;
+        if (!this.assetFailureCounts.has(failureKey)) {
+          const fallbackMessage = `Texture "${key}" failed to load. Reload to try again.`;
+          this.recordAssetFailure(failureKey, {
+            fallbackMessage,
+            error: context?.error || null,
+          });
+        }
+        const abortMessage = `Texture "${key}" failed to load. Reload to try again.`;
+        this.abortDueToAssetFailure(abortMessage, {
+          stage: reason === 'fallback-texture' ? 'texture-load' : 'texture-environment',
+          error: context?.error || null,
+          key: failureKey,
+        });
+      }
       const shouldShowNotice =
         this.texturePackNoticeShown ||
         this.textureFallbackMissingKeys.size > 0 ||
@@ -7121,6 +7166,174 @@
         });
       this.modelPromises.set(key, promise);
       return promise;
+    }
+
+    enableStrictAssetValidation() {
+      this.enforceAssetPreloadStrictness = true;
+    }
+
+    collectCriticalTextureKeys() {
+      const keys = new Set();
+      const register = (value) => {
+        if (typeof value !== 'string') {
+          return;
+        }
+        const trimmed = value.trim();
+        if (!trimmed) {
+          return;
+        }
+        const withoutPrefix = trimmed.startsWith('texture:') ? trimmed.slice('texture:'.length) : trimmed;
+        if (!withoutPrefix || /[/.]/.test(withoutPrefix)) {
+          return;
+        }
+        keys.add(withoutPrefix);
+      };
+      Object.keys(BASE_TEXTURE_REFERENCES).forEach(register);
+      Object.values(BASE_TEXTURE_REFERENCES).forEach(register);
+      Object.values(DIMENSION_ASSET_MANIFEST || {}).forEach((entry) => {
+        const textureManifest = entry?.assets?.textures;
+        if (!textureManifest || typeof textureManifest !== 'object') {
+          return;
+        }
+        Object.keys(textureManifest).forEach(register);
+        Object.values(textureManifest).forEach(register);
+      });
+      return Array.from(keys);
+    }
+
+    collectCriticalModelEntries() {
+      const entries = [];
+      const seen = new Set();
+      const addEntry = (key, url = null) => {
+        if (typeof key !== 'string') {
+          return;
+        }
+        const trimmedKey = key.trim();
+        if (!trimmedKey || seen.has(trimmedKey)) {
+          return;
+        }
+        seen.add(trimmedKey);
+        entries.push({ key: trimmedKey, url: url || MODEL_URLS[trimmedKey] || null });
+      };
+      Object.entries(MODEL_URLS).forEach(([key, url]) => addEntry(key, url));
+      Object.values(DIMENSION_ASSET_MANIFEST || {}).forEach((entry) => {
+        const manifestModels = entry?.assets?.models;
+        if (!manifestModels || typeof manifestModels !== 'object') {
+          return;
+        }
+        Object.entries(manifestModels).forEach(([manifestKey, reference]) => {
+          const value = typeof reference === 'string' ? reference.trim() : '';
+          const knownKey = value ? MODEL_URL_LOOKUP.byUrl(value) : null;
+          if (knownKey) {
+            addEntry(knownKey, MODEL_URLS[knownKey]);
+            return;
+          }
+          if (typeof manifestKey === 'string' && manifestKey.trim()) {
+            addEntry(manifestKey.trim(), value || null);
+          }
+        });
+      });
+      return entries;
+    }
+
+    preloadRequiredAssets() {
+      if (this.criticalAssetPreloadPromise) {
+        return this.criticalAssetPreloadPromise;
+      }
+      this.enableStrictAssetValidation();
+      const textureKeys = this.collectCriticalTextureKeys();
+      const modelEntries = this.collectCriticalModelEntries();
+      const tasks = [];
+      textureKeys.forEach((key) => {
+        tasks.push(
+          this.loadExternalVoxelTexture(key)
+            .then((texture) => {
+              if (!texture || (this.textureFallbackMissingKeys?.has?.(key) && this.enforceAssetPreloadStrictness)) {
+                const error = new Error(`Texture "${key}" failed to load.`);
+                if (this.enforceAssetPreloadStrictness) {
+                  this.recordAssetFailure(`texture:${key}`, {
+                    fallbackMessage: `Texture "${key}" failed to load. Reload to try again.`,
+                    error,
+                  });
+                  this.abortDueToAssetFailure(`Texture "${key}" failed to load. Reload to try again.`, {
+                    stage: 'texture-preload',
+                    error,
+                    key: `texture:${key}`,
+                  });
+                }
+                throw error;
+              }
+              return texture;
+            })
+            .catch((error) => {
+              throw error instanceof Error ? error : new Error(`Texture "${key}" failed to load.`);
+            }),
+        );
+      });
+      modelEntries.forEach(({ key, url }) => {
+        tasks.push(
+          this.loadModel(key, url).catch((error) => {
+            throw error instanceof Error ? error : new Error(`Model "${key}" failed to load.`);
+          }),
+        );
+      });
+      if (!tasks.length) {
+        this.criticalAssetPreloadFailed = false;
+        this.criticalAssetPreloadComplete = true;
+        this.criticalAssetPreloadPromise = Promise.resolve(true);
+        return this.criticalAssetPreloadPromise;
+      }
+      this.criticalAssetPreloadPromise = Promise.allSettled(tasks).then((results) => {
+        const failure = results.find((result) => result.status === 'rejected');
+        if (failure) {
+          this.criticalAssetPreloadFailed = true;
+          this.criticalAssetPreloadComplete = false;
+          const reason = failure.reason instanceof Error
+            ? failure.reason
+            : new Error('Critical asset preload failed.');
+          throw reason;
+        }
+        this.criticalAssetPreloadFailed = false;
+        this.criticalAssetPreloadComplete = true;
+        return true;
+      });
+      return this.criticalAssetPreloadPromise;
+    }
+
+    abortDueToAssetFailure(message, context = {}) {
+      this.criticalAssetPreloadFailed = true;
+      this.criticalAssetPreloadComplete = false;
+      const detailMessage = typeof message === 'string' && message.trim().length
+        ? message.trim()
+        : 'Critical assets failed to load. Reload to try again.';
+      const scope =
+        (typeof window !== 'undefined' && window) ||
+        (typeof globalThis !== 'undefined' && globalThis) ||
+        null;
+      if (this.animationFrame !== null) {
+        const cancelFrame =
+          typeof scope?.cancelAnimationFrame === 'function'
+            ? scope.cancelAnimationFrame.bind(scope)
+            : typeof cancelAnimationFrame === 'function'
+              ? cancelAnimationFrame
+              : null;
+        if (cancelFrame) {
+          cancelFrame(this.animationFrame);
+        }
+        this.animationFrame = null;
+      }
+      this.cancelQueuedModelPreload();
+      if (!this.rendererUnavailable || context?.force === true) {
+        this.presentRendererFailure(detailMessage, {
+          stage: context.stage || 'asset-load',
+          error: context.error || null,
+          errorName: context.error?.name || undefined,
+          errorStack: context.error?.stack || undefined,
+        });
+      } else {
+        this.rendererFailureMessage = detailMessage;
+      }
+      this.started = false;
     }
 
     async cloneModelScene(key, overrideUrl) {
@@ -13393,6 +13606,17 @@
         message: fallbackMessage,
         failureCount: this.assetFailureCounts.get(typeof key === 'string' && key ? key : 'asset') || 1,
       });
+      if (this.enforceAssetPreloadStrictness && !this.criticalAssetPreloadFailed) {
+        const friendly = this.describeAssetKey(key);
+        const message =
+          (fallbackMessage || '').trim() ||
+          (friendly ? `Critical asset ${friendly} failed to load. Reload to try again.` : 'Critical assets failed to load. Reload to try again.');
+        this.abortDueToAssetFailure(message, {
+          stage: 'asset-load',
+          error: error || null,
+          key: typeof key === 'string' && key ? key : 'asset',
+        });
+      }
     }
 
     noteAssetRetry(key, attemptNumber, error, url) {
