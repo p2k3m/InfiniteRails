@@ -1500,6 +1500,29 @@
       detail,
       timestamp: options.timestamp,
     });
+    if (typeof tryStartSimpleFallback === 'function') {
+      try {
+        const activeMode =
+          typeof resolveRendererModeForFallback === 'function' ? resolveRendererModeForFallback(detail) : null;
+        if (activeMode !== 'simple') {
+          const fallbackReason =
+            typeof detail?.reason === 'string' && detail.reason.trim().length
+              ? detail.reason.trim()
+              : boundaryKey;
+          const fallbackContext = {
+            reason: fallbackReason,
+            boundary: boundaryKey,
+            stage,
+            mode: activeMode || 'unknown',
+            source: 'error-boundary',
+          };
+          const fallbackError = error instanceof Error ? error : new Error(normalised.message);
+          tryStartSimpleFallback(fallbackError, fallbackContext);
+        }
+      } catch (fallbackError) {
+        globalScope?.console?.debug?.('Failed to trigger simple renderer fallback after boundary error.', fallbackError);
+      }
+    }
     markErrorAsHandled(error);
   }
 
