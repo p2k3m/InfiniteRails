@@ -4377,6 +4377,34 @@ body.sidebar-open .player-hint {
   grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
 }
 
+.inventory-grid__cell {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.inventory-grid__cell[data-visual='missing'],
+.inventory-slot[data-visual='missing'],
+.crafting-inventory__item[data-visual='missing'],
+.crafting-suggestions__item[data-visual='missing'],
+.crafting-search__result[data-visual='missing'] {
+  opacity: 0.55;
+}
+
+.visual-warning {
+  display: block;
+  font-size: 0.65rem;
+  color: rgba(198, 210, 225, 0.85);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  margin-top: 0.35rem;
+}
+
+.inventory-grid__cell[data-visual='missing'] .visual-warning,
+.inventory-slot[data-visual='missing'] .visual-warning,
+.crafting-inventory__item[data-visual='missing'] .visual-warning {
+  color: rgba(198, 210, 225, 0.9);
+}
+
 .crafting-inventory__item {
   border-radius: 14px;
   border: 1px solid rgba(73, 242, 255, 0.2);
