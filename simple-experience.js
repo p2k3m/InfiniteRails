@@ -2120,7 +2120,9 @@
       this.hotbar = Array.from({ length: HOTBAR_SLOTS }, () => ({ item: null, quantity: 0 }));
       this.selectedHotbarIndex = 0;
       this.satchel = new Map();
+      this.respawnInventorySnapshot = null;
       this.refreshEquippedItem();
+      this.captureRespawnInventorySnapshot();
       this.craftingState = {
         sequence: [],
         unlocked: new Map(),
@@ -14436,15 +14438,37 @@
     }
 
     clearZombies() {
+      if (!Array.isArray(this.zombies)) {
+        this.zombies = [];
+      }
+      const group = this.zombieGroup;
       for (const zombie of this.zombies) {
         if (zombie.animation) {
           this.disposeAnimationRig(zombie.animation);
           zombie.animation = null;
         }
-        this.zombieGroup.remove(zombie.mesh);
-        disposeObject3D(zombie.mesh);
+        if (group?.remove && zombie.mesh) {
+          try {
+            group.remove(zombie.mesh);
+          } catch (error) {
+            if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+              console.debug('Failed to detach zombie mesh during cleanup.', error);
+            }
+          }
+        }
+        if (zombie.mesh) {
+          disposeObject3D(zombie.mesh);
+        }
       }
-      this.zombieGroup.clear();
+      if (group?.clear) {
+        try {
+          group.clear();
+        } catch (error) {
+          if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+            console.debug('Failed to clear zombie group during cleanup.', error);
+          }
+        }
+      }
       this.zombies = [];
     }
 
@@ -15118,7 +15142,15 @@
     }
 
     handleDefeat() {
-      this.health = FALLBACK_HEALTH;
+      const maxHealth = Number.isFinite(this.maxHealth)
+        ? Math.max(0, Math.round(this.maxHealth))
+        : FALLBACK_HEALTH;
+      this.health = maxHealth || FALLBACK_HEALTH;
+      const breathCapacity = Number.isFinite(this.playerBreathCapacity)
+        ? Math.max(1, Math.round(this.playerBreathCapacity))
+        : FALLBACK_BREATH;
+      this.playerBreath = breathCapacity;
+      this.restoreRespawnInventorySnapshot();
       const penalty = Math.min(4, Math.max(0, this.score ?? 0));
       if (penalty > 0) {
         this.addScoreBreakdown('penalties', penalty);
@@ -15131,7 +15163,7 @@
       this.lastZombieSpawn = this.elapsed;
       this.clearGolems();
       this.lastGolemSpawn = this.elapsed;
-      this.updateHud();
+      this.updateHud({ reason: 'respawn' });
       this.scheduleScoreSync('respawn');
       this.audio.play('bubble', { volume: 0.45 });
       console.error(
@@ -15647,6 +15679,75 @@
       this.updateHotbarExpansionUi();
       this.updateCraftButtonState();
       this.refreshEquippedItem();
+      this.captureRespawnInventorySnapshot();
+    }
+
+    captureRespawnInventorySnapshot() {
+      if (!Array.isArray(this.hotbar) || !(this.satchel instanceof Map)) {
+        return;
+      }
+      const hotbarSnapshot = this.hotbar.map((slot = { item: null, quantity: 0 }) => ({
+        item: slot && typeof slot.item === 'string' ? slot.item : slot?.item ?? null,
+        quantity: Number.isFinite(slot?.quantity) ? Math.max(0, slot.quantity) : 0,
+      }));
+      const satchelSnapshot = [];
+      this.satchel.forEach((quantity, item) => {
+        const safeItem = typeof item === 'string' ? item : null;
+        if (!safeItem) {
+          return;
+        }
+        const safeQuantity = Number.isFinite(quantity) ? Math.max(0, quantity) : 0;
+        satchelSnapshot.push([safeItem, safeQuantity]);
+      });
+      const selectedIndex = Number.isInteger(this.selectedHotbarIndex) ? this.selectedHotbarIndex : 0;
+      this.respawnInventorySnapshot = {
+        hotbar: hotbarSnapshot,
+        satchel: satchelSnapshot,
+        selectedHotbarIndex: selectedIndex,
+      };
+    }
+
+    restoreRespawnInventorySnapshot() {
+      const snapshot = this.respawnInventorySnapshot;
+      if (!snapshot) {
+        return;
+      }
+      let restored = false;
+      if (Array.isArray(snapshot.hotbar) && Array.isArray(this.hotbar)) {
+        const length = this.hotbar.length;
+        for (let i = 0; i < length; i += 1) {
+          const target = this.hotbar[i];
+          const source = snapshot.hotbar[i] || { item: null, quantity: 0 };
+          const item = typeof source.item === 'string' ? source.item : source.item ?? null;
+          const quantity = Number.isFinite(source.quantity) ? Math.max(0, source.quantity) : 0;
+          if (target) {
+            target.item = item;
+            target.quantity = quantity;
+          } else {
+            this.hotbar[i] = { item, quantity };
+          }
+        }
+        restored = true;
+      }
+      if (Array.isArray(snapshot.satchel) && this.satchel instanceof Map) {
+        this.satchel.clear();
+        snapshot.satchel.forEach(([item, quantity]) => {
+          const safeItem = typeof item === 'string' ? item : null;
+          const safeQuantity = Number.isFinite(quantity) ? Math.max(0, quantity) : 0;
+          if (safeItem && safeQuantity > 0) {
+            this.satchel.set(safeItem, safeQuantity);
+          }
+        });
+        restored = true;
+      }
+      if (Number.isInteger(snapshot.selectedHotbarIndex) && Array.isArray(this.hotbar) && this.hotbar.length) {
+        const clamped = Math.max(0, Math.min(this.hotbar.length - 1, snapshot.selectedHotbarIndex));
+        this.selectedHotbarIndex = clamped;
+        restored = true;
+      }
+      if (restored) {
+        this.updateInventoryUi();
+      }
     }
 
     updateHotbarUi() {

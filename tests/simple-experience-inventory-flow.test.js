@@ -431,4 +431,45 @@ describe('simple experience inventory and crafting flows', () => {
     expect(experience.scheduleScoreSync).toHaveBeenCalledWith('recipe-crafted');
     expect(experience.getInventoryCountForItem(recipe.id)).toBeGreaterThanOrEqual(1);
   });
+
+  it('restores inventory and vitals immediately after a respawn', () => {
+    const experience = createExperience();
+
+    experience.maxHealth = 14;
+    experience.playerBreathCapacity = 18;
+
+    experience.hotbar = experience.hotbar.map(() => ({ item: null, quantity: 0 }));
+    experience.hotbar[0] = { item: 'stone', quantity: 3 };
+    experience.hotbar[1] = { item: 'stick', quantity: 1 };
+    experience.satchel.clear();
+    experience.satchel.set('stone', 5);
+    experience.satchel.set('portal-charge', 2);
+    experience.selectedHotbarIndex = 1;
+
+    experience.captureRespawnInventorySnapshot();
+
+    const updateInventorySpy = vi.spyOn(experience, 'updateInventoryUi').mockImplementation(() => {});
+    const updateHudSpy = vi.spyOn(experience, 'updateHud').mockImplementation(() => {});
+
+    experience.hotbar.forEach((slot) => {
+      slot.item = null;
+      slot.quantity = 0;
+    });
+    experience.satchel.clear();
+    experience.selectedHotbarIndex = 0;
+    experience.health = 0;
+    experience.playerBreath = 0;
+
+    experience.handleDefeat();
+
+    expect(experience.health).toBe(14);
+    expect(experience.playerBreath).toBe(18);
+    expect(experience.hotbar[0]).toEqual({ item: 'stone', quantity: 3 });
+    expect(experience.hotbar[1]).toEqual({ item: 'stick', quantity: 1 });
+    expect(experience.satchel.get('stone')).toBe(5);
+    expect(experience.satchel.get('portal-charge')).toBe(2);
+    expect(experience.selectedHotbarIndex).toBe(1);
+    expect(updateInventorySpy).toHaveBeenCalled();
+    expect(updateHudSpy).toHaveBeenCalledWith(expect.objectContaining({ reason: 'respawn' }));
+  });
 });
