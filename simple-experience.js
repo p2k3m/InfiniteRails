@@ -7,24 +7,17 @@
     accent: '#b5b5b5',
   };
   const BLOCK_SIZE = 1;
-  const DEFAULT_TEXTURE_BASE_URL = 'https://infinite-rails-textures.s3.amazonaws.com/blocks';
+  const EMBEDDED_TEXTURE_DATA = {
+    grass: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAGUlEQVR4nGOMn2/KQApgIkn1qIZRDUNKAwDeMQFTRB/l3QAAAABJRU5ErkJggg==',
+    dirt: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAGUlEQVR4nGNsS3BmIAUwkaR6VMOohiGlAQC/vgFJA9SUHwAAAABJRU5ErkJggg==',
+    stone: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAGUlEQVR4nGNsaGhgIAUwkaR6VMOohiGlAQDJTAGgLgFHggAAAABJRU5ErkJggg==',
+    rails: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAaElEQVR4nGPUkhH4zzCAgHHnxln/5eWVGJZOboALnr30DM7Or6lgoKU8CzZXff35C6+rqSnPhFclHQDjaBrA5qrRNEBXB4ymAbwq6QBG08BoGhhNA6NpYDQNjKaB0TQwmgZG08BoGgAA0SM0+BZHEZkAAAAASUVORK5CYII=',
+  };
   const DEFAULT_TEXTURE_MANIFEST = {
-    grass: [
-      `${DEFAULT_TEXTURE_BASE_URL}/grass.png`,
-      'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAGUlEQVR4nGOMn2/KQApgIkn1qIZRDUNKAwDeMQFTRB/l3QAAAABJRU5ErkJggg==',
-    ],
-    dirt: [
-      `${DEFAULT_TEXTURE_BASE_URL}/dirt.png`,
-      'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAGUlEQVR4nGNsS3BmIAUwkaR6VMOohiGlAQC/vgFJA9SUHwAAAABJRU5ErkJggg==',
-    ],
-    stone: [
-      `${DEFAULT_TEXTURE_BASE_URL}/stone.png`,
-      'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAGUlEQVR4nGNsaGhgIAUwkaR6VMOohiGlAQDJTAGgLgFHggAAAABJRU5ErkJggg==',
-    ],
-    rails: [
-      `${DEFAULT_TEXTURE_BASE_URL}/rails.png`,
-      'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAaElEQVR4nGPUkhH4zzCAgHHnxln/5eWVGJZOboALnr30DM7Or6lgoKU8CzZXff35C6+rqSnPhFclHQDjaBrA5qrRNEBXB4ymAbwq6QBG08BoGhhNA6NpYDQNjKaB0TQwmgZG08BoGgAA0SM0+BZHEZkAAAAASUVORK5CYII=',
-    ],
+    grass: [EMBEDDED_TEXTURE_DATA.grass],
+    dirt: [EMBEDDED_TEXTURE_DATA.dirt],
+    stone: [EMBEDDED_TEXTURE_DATA.stone],
+    rails: [EMBEDDED_TEXTURE_DATA.rails],
   };
   const TEXTURE_PACK_ERROR_NOTICE_THRESHOLD = 3;
   const MIN_COLUMN_HEIGHT = 1;
@@ -5691,23 +5684,31 @@
           }
           this.prepareExternalTexture(result.texture);
           const resolvedUrl = result.url || '';
-          const usedEmbeddedFallback = typeof resolvedUrl === 'string' && resolvedUrl.startsWith('data:');
-          if (usedEmbeddedFallback) {
+          const sourceIndex = typeof resolvedUrl === 'string' ? sources.indexOf(resolvedUrl) : -1;
+          const wasPrimarySource = sourceIndex <= 0;
+          const usedEmbeddedTexture = typeof resolvedUrl === 'string' && resolvedUrl.startsWith('data:');
+          const logMode = usedEmbeddedTexture ? (wasPrimarySource ? 'default' : 'fallback') : 'check';
+          if (usedEmbeddedTexture && !wasPrimarySource) {
             this.noteTexturePackFallback('embedded-texture', { key, url: resolvedUrl });
             this.scheduleTextureRetry(key, { reason: 'embedded-texture', url: resolvedUrl });
           } else {
             this.noteTexturePackRecovery(key, { url: resolvedUrl || null });
           }
-          const logger = usedEmbeddedFallback ? console.warn : console.info;
+          const logger = logMode === 'fallback' ? console.warn : console.info;
           if (typeof logger === 'function') {
-            const sourceDescription = usedEmbeddedFallback
-              ? 'an embedded fallback texture'
+            const sourceDescription = usedEmbeddedTexture
+              ? wasPrimarySource
+                ? 'the embedded default texture'
+                : 'an embedded fallback texture'
               : resolvedUrl;
-            const advisory = usedEmbeddedFallback
-              ? 'External sources failed, using embedded texture data.'
-              : 'External texture stream succeeded.';
+            const advisory =
+              logMode === 'fallback'
+                ? 'External sources failed, using embedded texture data.'
+                : logMode === 'default'
+                  ? 'Embedded default texture applied immediately. Configure APP_CONFIG.textureManifest to override this asset.'
+                  : 'External texture stream succeeded.';
             logger(
-              `Texture streaming ${usedEmbeddedFallback ? 'fallback' : 'check'} — ${key} resolved via ${sourceDescription}. ${advisory} If textures appear blank, verify CDN availability and fallback cache configuration.`,
+              `Texture streaming ${logMode} — ${key} resolved via ${sourceDescription}. ${advisory} If textures appear blank, verify CDN availability and fallback cache configuration.`,
             );
           }
           this.completeAssetTimer('textures', key, { success: true, url: result.url });
