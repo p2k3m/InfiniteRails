@@ -117,6 +117,7 @@ jobs:
             --include "portal-mechanics.js" \
             --include "scoreboard-utils.js" \
             --include "assets/**" \
+            --include "textures/**" \
             --include "vendor/*"
 
       - name: Configure bucket access policy
@@ -180,6 +181,7 @@ jobs:
                       ("arn:aws:s3:::" + $bucket + "/script.js"),
                       ("arn:aws:s3:::" + $bucket + "/simple-experience.js"),
                       ("arn:aws:s3:::" + $bucket + "/assets/*"),
+                      ("arn:aws:s3:::" + $bucket + "/textures/*"),
                       ("arn:aws:s3:::" + $bucket + "/vendor/*")
                     ]
                   }

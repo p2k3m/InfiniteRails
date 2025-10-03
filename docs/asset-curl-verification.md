@@ -14,12 +14,16 @@ python3 -m http.server 4173 &
 SERVER_PID=$!
 sleep 1
 
-# Probe each public model/audio asset path
+# Probe each public model/texture/audio asset path
 for path in \
   assets/arm.gltf \
   assets/steve.gltf \
   assets/zombie.gltf \
   assets/iron_golem.gltf \
+  textures/grass.png \
+  textures/dirt.png \
+  textures/stone.png \
+  textures/rails.png \
   assets/audio-samples.json \
   assets/offline-assets.js; do
   echo "Checking $path"
@@ -32,7 +36,7 @@ kill $SERVER_PID
 
 ## Results
 - Every request returned `HTTP/1.0 200 OK` from the local server.
-- No `403 Forbidden` responses were observed for the asset endpoints under the hosted bundle.
+- No `403 Forbidden` responses were observed for the model, texture, or audio endpoints under the hosted bundle.
 
 ## Follow-up
 - Once outbound HTTPS access is restored, rerun the same loop against the production distribution domain (for example `https://d3gj6x3ityfh5o.cloudfront.net/`) to confirm edge caching and bucket permissions still allow anonymous reads.
