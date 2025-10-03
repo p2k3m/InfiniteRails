@@ -332,6 +332,139 @@
     }
   }
 
+  const overlayIsolationState = {
+    stack: [],
+    originals: new Map(),
+    doc: null,
+  };
+
+  function normaliseOverlayIsolationDocument(doc) {
+    if (!doc?.body) {
+      overlayIsolationState.stack = [];
+      overlayIsolationState.originals.clear();
+      overlayIsolationState.doc = null;
+      return [];
+    }
+    overlayIsolationState.stack = overlayIsolationState.stack.filter((element) => {
+      if (!element) {
+        return false;
+      }
+      if (element.isConnected === false) {
+        return false;
+      }
+      if (doc.body && typeof doc.body.contains === 'function' && !doc.body.contains(element)) {
+        return false;
+      }
+      return true;
+    });
+    const children = doc.body?.children;
+    return Array.isArray(children) ? children : Array.from(children ?? []);
+  }
+
+  function applyOverlayIsolation(docOverride = null) {
+    const doc =
+      docOverride || overlayIsolationState.doc || (typeof document !== 'undefined' ? document : null);
+    if (!doc?.body) {
+      overlayIsolationState.stack = [];
+      overlayIsolationState.originals.clear();
+      overlayIsolationState.doc = null;
+      return;
+    }
+    overlayIsolationState.doc = doc;
+    const bodyChildren = normaliseOverlayIsolationDocument(doc);
+    const activeOverlay =
+      overlayIsolationState.stack.length > 0
+        ? overlayIsolationState.stack[overlayIsolationState.stack.length - 1]
+        : null;
+
+    if (!activeOverlay) {
+      for (const [element, originalState] of Array.from(overlayIsolationState.originals.entries())) {
+        if (!element) {
+          overlayIsolationState.originals.delete(element);
+          continue;
+        }
+        const bodyContainsElement =
+          doc.body && typeof doc.body.contains === 'function' ? doc.body.contains(element) : true;
+        if (!bodyContainsElement) {
+          overlayIsolationState.originals.delete(element);
+          continue;
+        }
+        setInertState(element, Boolean(originalState));
+        overlayIsolationState.originals.delete(element);
+      }
+      overlayIsolationState.originals.clear();
+      return;
+    }
+
+    if (doc.body && typeof doc.body.contains === 'function' && !doc.body.contains(activeOverlay)) {
+      overlayIsolationState.stack.pop();
+      applyOverlayIsolation(doc);
+      return;
+    }
+
+    const backgroundElements = [];
+    for (const child of bodyChildren) {
+      if (!child) {
+        continue;
+      }
+      const containsOverlay =
+        typeof child.contains === 'function' ? child.contains(activeOverlay) : child === activeOverlay;
+      if (!containsOverlay) {
+        backgroundElements.push(child);
+      }
+    }
+    const backgroundSet = new Set(backgroundElements);
+    for (const element of backgroundElements) {
+      if (!overlayIsolationState.originals.has(element)) {
+        const hadInert = typeof element.hasAttribute === 'function' ? element.hasAttribute('inert') : false;
+        overlayIsolationState.originals.set(element, hadInert);
+      }
+      setInertState(element, true);
+    }
+    for (const [element, originalState] of Array.from(overlayIsolationState.originals.entries())) {
+      if (!backgroundSet.has(element)) {
+        const bodyContainsElement =
+          doc.body && typeof doc.body.contains === 'function' ? doc.body.contains(element) : true;
+        if (!bodyContainsElement) {
+          overlayIsolationState.originals.delete(element);
+          continue;
+        }
+        setInertState(element, Boolean(originalState));
+        overlayIsolationState.originals.delete(element);
+      }
+    }
+  }
+
+  function activateOverlayIsolation(element) {
+    if (!element) {
+      return;
+    }
+    const doc = element.ownerDocument || overlayIsolationState.doc || (typeof document !== 'undefined' ? document : null);
+    if (!doc?.body) {
+      return;
+    }
+    normaliseOverlayIsolationDocument(doc);
+    const existingIndex = overlayIsolationState.stack.indexOf(element);
+    if (existingIndex !== -1) {
+      overlayIsolationState.stack.splice(existingIndex, 1);
+    }
+    overlayIsolationState.stack.push(element);
+    applyOverlayIsolation(doc);
+  }
+
+  function releaseOverlayIsolation(element) {
+    if (!element) {
+      return;
+    }
+    const doc = overlayIsolationState.doc || element.ownerDocument || (typeof document !== 'undefined' ? document : null);
+    if (!doc?.body) {
+      return;
+    }
+    normaliseOverlayIsolationDocument(doc);
+    overlayIsolationState.stack = overlayIsolationState.stack.filter((entry) => entry && entry !== element);
+    applyOverlayIsolation(doc);
+  }
+
   function deepFreeze(value, seen = new WeakSet()) {
     if (!value || typeof value !== 'object') {
       return value;
@@ -1759,6 +1892,9 @@
       this.lastGuideTrigger = null;
       this.guideModalVisible = false;
       this.introModalEl = this.ui.introModal || null;
+      if (this.introModalEl && this.introModalEl.hidden !== true) {
+        activateOverlayIsolation(this.introModalEl);
+      }
       this.hudRootEl = this.ui.hudRootEl || null;
       this.pointerHintActive = false;
       this.pointerHintHideTimer = null;
@@ -2809,6 +2945,7 @@
         introModal.hidden = true;
         introModal.style.display = 'none';
         setInertState(introModal, true);
+        releaseOverlayIsolation(introModal);
       }
       if (startButton) {
         startButton.disabled = true;
@@ -2828,6 +2965,9 @@
         this.guideModalEl.setAttribute('aria-hidden', visible ? 'false' : 'true');
         if (!visible) {
           setInertState(this.guideModalEl, true);
+          releaseOverlayIsolation(this.guideModalEl);
+        } else {
+          activateOverlayIsolation(this.guideModalEl);
         }
         if (!this.guideModalEl.dataset.simpleGuideBound) {
           this.addSafeEventListener(this.guideModalEl, 'click', this.onGuideModalClick, {
@@ -3169,6 +3309,7 @@
         this.renderGuideCard(this.activeGuideIndex ?? 0, { rebuildDots: true, scrollToTop: true });
         this.guideModalEl.hidden = false;
         setInertState(this.guideModalEl, false);
+        activateOverlayIsolation(this.guideModalEl);
         this.guideModalEl.setAttribute('aria-hidden', 'false');
         if (typeof document !== 'undefined' && typeof document.exitPointerLock === 'function') {
           document.exitPointerLock();
@@ -3203,6 +3344,7 @@
         }
         this.guideModalEl.hidden = true;
         setInertState(this.guideModalEl, true);
+        releaseOverlayIsolation(this.guideModalEl);
         this.guideModalEl.setAttribute('aria-hidden', 'true');
         if (!focusHandled) {
           if (restore) {
@@ -3547,6 +3689,7 @@
       this.bindFirstRunTutorialControls();
       overlay.hidden = false;
       setInertState(overlay, false);
+      activateOverlayIsolation(overlay);
       overlay.setAttribute('data-visible', 'true');
       this.firstRunTutorialMarkOnDismiss = !!markSeenOnDismiss;
       this.firstRunTutorialShowBriefingOnDismiss = !!showBriefingAfter;
@@ -3614,6 +3757,7 @@
       const finalise = () => {
         overlay.hidden = true;
         setInertState(overlay, true);
+        releaseOverlayIsolation(overlay);
         if (body?.classList) {
           body.classList.remove('first-run-tutorial-active');
         }
@@ -3670,6 +3814,7 @@
       timerHost.clearTimeout(this.briefingFadeTimer);
       briefing.hidden = false;
       setInertState(briefing, false);
+      activateOverlayIsolation(briefing);
       requestAnimationFrame(() => {
         briefing.classList.add('is-visible');
       });
@@ -3698,6 +3843,7 @@
       if (!briefing.classList.contains('is-visible')) {
         briefing.hidden = true;
         setInertState(briefing, true);
+        releaseOverlayIsolation(briefing);
         this.focusGameViewport();
         return;
       }
@@ -3706,6 +3852,7 @@
       const duration = force ? 120 : 280;
       this.briefingFadeTimer = timerHost.setTimeout(() => {
         briefing.hidden = true;
+        releaseOverlayIsolation(briefing);
         this.focusGameViewport();
       }, duration);
     }
@@ -13985,6 +14132,7 @@
         this.introModalEl.hidden = false;
         this.introModalEl.style.display = 'grid';
         setInertState(this.introModalEl, false);
+        activateOverlayIsolation(this.introModalEl);
       }
       if (this.hudRootEl) {
         this.hudRootEl.classList.add('renderer-unavailable');
@@ -15047,6 +15195,7 @@
       overlay.hidden = false;
       try {
         setInertState(overlay, false);
+        activateOverlayIsolation(overlay);
       } catch (error) {
         if (typeof console !== 'undefined' && typeof console.debug === 'function') {
           console.debug('Failed to update inert state for AI overlay fallback.', error);
@@ -17248,6 +17397,7 @@
       this.assetRecoveryOverlayEl.hidden = false;
       this.assetRecoveryOverlayEl.removeAttribute('hidden');
       setInertState(this.assetRecoveryOverlayEl, false);
+      activateOverlayIsolation(this.assetRecoveryOverlayEl);
       this.assetRecoveryOverlayEl.setAttribute('data-mode', 'error');
       if (this.assetRecoveryDialogEl) {
         this.assetRecoveryDialogEl.setAttribute('aria-busy', 'false');
@@ -17302,6 +17452,7 @@
         return;
       }
       setInertState(this.assetRecoveryOverlayEl, true);
+      releaseOverlayIsolation(this.assetRecoveryOverlayEl);
       this.assetRecoveryOverlayEl.setAttribute('hidden', '');
       this.assetRecoveryOverlayEl.hidden = true;
       this.assetRecoveryPromptActive = false;
@@ -17765,11 +17916,13 @@
       if (visible) {
         this.craftingModal.hidden = false;
         setInertState(this.craftingModal, false);
+        activateOverlayIsolation(this.craftingModal);
         document.exitPointerLock?.();
         this.refreshCraftingUi();
       } else {
         this.craftingModal.hidden = true;
         setInertState(this.craftingModal, true);
+        releaseOverlayIsolation(this.craftingModal);
         this.toggleCraftingSearch(false);
         this.focusGameViewport();
         this.clearCraftingHelperHint();
@@ -17784,12 +17937,14 @@
       if (visible) {
         this.inventoryModal.hidden = false;
         setInertState(this.inventoryModal, false);
+        activateOverlayIsolation(this.inventoryModal);
         document.exitPointerLock?.();
         this.updateInventoryModal();
         this.inventorySortButton?.setAttribute('aria-pressed', 'false');
       } else {
         this.inventoryModal.hidden = true;
         setInertState(this.inventoryModal, true);
+        releaseOverlayIsolation(this.inventoryModal);
         this.focusGameViewport();
         this.inventorySortButton?.setAttribute('aria-pressed', 'false');
       }
@@ -18954,6 +19109,7 @@
       dimensionIntroRulesEl.textContent = `${ruleLabel}: ${rules}`;
       dimensionIntroEl.hidden = false;
       setInertState(dimensionIntroEl, false);
+      activateOverlayIsolation(dimensionIntroEl);
       dimensionIntroEl.classList.remove('active');
       void dimensionIntroEl.offsetWidth;
       dimensionIntroEl.classList.add('active');
@@ -18981,6 +19137,7 @@
         dimensionIntroEl.hidden = true;
         setInertState(dimensionIntroEl, true);
         dimensionIntroEl.dataset.intent = 'hidden';
+        releaseOverlayIsolation(dimensionIntroEl);
       };
       if (immediate || this.prefersReducedMotion) {
         dimensionIntroEl.classList.remove('active');
@@ -19141,6 +19298,7 @@
       if (this.victoryCelebrationEl) {
         this.victoryCelebrationEl.hidden = false;
         setInertState(this.victoryCelebrationEl, false);
+        activateOverlayIsolation(this.victoryCelebrationEl);
         this.victoryCelebrationEl.classList.remove('active');
         void this.victoryCelebrationEl.offsetWidth;
         this.victoryCelebrationEl.classList.add('active');
@@ -19185,6 +19343,7 @@
       setInertState(this.victoryCelebrationEl, true);
       const finalize = () => {
         this.victoryCelebrationEl.hidden = true;
+        releaseOverlayIsolation(this.victoryCelebrationEl);
         if (this.victoryConfettiEl) {
           this.victoryConfettiEl.innerHTML = '';
         }
@@ -19488,12 +19647,14 @@
       `;
       this.victoryBannerEl.classList.add('visible');
       setInertState(this.victoryBannerEl, false);
+      activateOverlayIsolation(this.victoryBannerEl);
     }
 
     hideVictoryBanner() {
       if (!this.victoryBannerEl) return;
       this.victoryBannerEl.classList.remove('visible');
       setInertState(this.victoryBannerEl, true);
+      releaseOverlayIsolation(this.victoryBannerEl);
       this.victoryBannerEl.innerHTML = '';
     }
 
