@@ -2142,7 +2142,6 @@
       this.aiAttachmentFailureAnnounced = false;
       this.boundEventDisposers = [];
       this.boundEventRecords = [];
-      this.bindAssetRecoveryControls();
       this.onOpenCraftingSearchClick = () => this.toggleCraftingSearch(true);
       this.onCloseCraftingSearchClick = () => this.toggleCraftingSearch(false);
       this.lastHintMessage = '';
@@ -2324,6 +2323,7 @@
         }
         this.handleAssetRecoveryReload();
       };
+      this.bindAssetRecoveryControls();
       this.materials = this.createMaterials();
       this.defaultKeyBindings = cloneKeyBindingMap(DEFAULT_KEY_BINDINGS);
       this.configKeyBindingOverrides = normaliseKeyBindingMap(window.APP_CONFIG?.keyBindings) || null;
