@@ -14780,7 +14780,26 @@
       const clearR = Math.round(clearColor.r * 255);
       const clearG = Math.round(clearColor.g * 255);
       const clearB = Math.round(clearColor.b * 255);
-      const samplePoints = [[Math.floor(width * 0.5), Math.floor(height * 0.5)]];
+      const tolerance = typeof detection.colorTolerance === 'number' ? detection.colorTolerance : 2;
+      const ratioSamples = [
+        [0.5, 0.5],
+        [0.25, 0.25],
+        [0.75, 0.25],
+        [0.25, 0.75],
+        [0.75, 0.75],
+      ];
+      const samplePoints = [];
+      for (const [rx, ry] of ratioSamples) {
+        const x = Math.max(0, Math.min(width - 1, Math.round(width * rx)));
+        const y = Math.max(0, Math.min(height - 1, Math.round(height * ry)));
+        if (!samplePoints.some((point) => point[0] === x && point[1] === y)) {
+          samplePoints.push([x, y]);
+        }
+      }
+      if (samplePoints.length === 0) {
+        detection.enabled = false;
+        return;
+      }
       const buffer = new Uint8Array(4);
       let clearMatches = 0;
       let samplesTaken = 0;
@@ -14788,7 +14807,11 @@
         try {
           gl.readPixels(x, y, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, buffer);
           samplesTaken += 1;
-          if (buffer[0] === clearR && buffer[1] === clearG && buffer[2] === clearB) {
+          const matches =
+            Math.abs(buffer[0] - clearR) <= tolerance &&
+            Math.abs(buffer[1] - clearG) <= tolerance &&
+            Math.abs(buffer[2] - clearB) <= tolerance;
+          if (matches) {
             clearMatches += 1;
           }
         } catch (error) {
@@ -14801,7 +14824,7 @@
         return;
       }
       detection.samples += 1;
-      if (clearMatches >= samplePoints.length - 1) {
+      if (clearMatches >= samplePoints.length) {
         detection.clearFrameMatches = (detection.clearFrameMatches || 0) + 1;
       } else {
         detection.clearFrameMatches = 0;
