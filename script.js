@@ -1316,23 +1316,50 @@
       return;
     }
     hudStateBinding.lastSignature = signature;
-    const player = state.player || {};
-    if (ui.heartsEl && Number.isFinite(player.health)) {
-      ui.heartsEl.innerHTML = createHeartMarkupFromHealth(player.health);
+    const ensureNumber = (value, fallback = 0) =>
+      Number.isFinite(value) ? Number(value) : fallback;
+    const clamp01 = (value, fallback = 0) => {
+      if (!Number.isFinite(value)) {
+        return fallback;
+      }
+      if (value <= 0) {
+        return 0;
+      }
+      if (value >= 1) {
+        return 1;
+      }
+      return value;
+    };
+    const player = state.player && typeof state.player === 'object' ? state.player : {};
+    if (ui.heartsEl) {
+      const healthValue = ensureNumber(player.health, ensureNumber(player.maxHealth, 0));
+      ui.heartsEl.innerHTML = createHeartMarkupFromHealth(healthValue);
+      ui.heartsEl.setAttribute('data-hearts', String(Math.max(0, Math.round(healthValue / 2))));
+    }
+    if (ui.bubblesEl) {
+      const maxBreath = Math.max(1, Math.round(ensureNumber(player.maxBreath, 10)));
+      const breath = Math.min(maxBreath, Math.max(0, Math.round(ensureNumber(player.breath, maxBreath))));
+      const percent = Math.max(0, Math.min(100, Math.round(ensureNumber(player.breathPercent, (breath / maxBreath) * 100))));
+      const stateLabel = percent <= 0 ? 'empty' : percent < 35 ? 'low' : 'ok';
+      ui.bubblesEl.textContent = `Air ${percent}%`;
+      ui.bubblesEl.dataset.state = stateLabel;
+      ui.bubblesEl.setAttribute('aria-label', `Air remaining: ${percent}%`);
     }
     const score = state.score || {};
     const breakdown = score.breakdown || {};
-    if (ui.scoreTotalEl && Number.isFinite(score.total)) {
-      ui.scoreTotalEl.textContent = Math.round(score.total).toLocaleString();
+    if (ui.scoreTotalEl) {
+      const totalScore = Math.max(0, Math.round(ensureNumber(score.total, 0)));
+      ui.scoreTotalEl.textContent = totalScore.toLocaleString();
     }
     if (ui.scoreRecipesEl) {
-      const recipePoints = breakdown.recipes ?? breakdown.crafting ?? 0;
-      ui.scoreRecipesEl.textContent = formatHudMetric(score.craftingEvents, 'craft', 'crafts', recipePoints);
+      const recipePoints = ensureNumber(breakdown.recipes ?? breakdown.crafting, 0);
+      const craftEvents = ensureNumber(score.craftingEvents, ensureNumber(score.recipes, 0));
+      ui.scoreRecipesEl.textContent = formatHudMetric(craftEvents, 'craft', 'crafts', recipePoints);
     }
     if (ui.scoreDimensionsEl) {
-      const dimensionCount = Number.isFinite(score.dimensions) ? Math.max(1, score.dimensions) : 1;
-      const dimensionPoints = breakdown.dimensions ?? 0;
-      const penaltyPoints = breakdown.penalties ?? 0;
+      const dimensionCount = Math.max(1, Math.round(ensureNumber(score.dimensions, 1)));
+      const dimensionPoints = ensureNumber(breakdown.dimensions, 0);
+      const penaltyPoints = ensureNumber(breakdown.penalties, 0);
       let display = `${dimensionCount} (+${formatHudPointValue(dimensionPoints)} pts`;
       if (penaltyPoints > 0) {
         display += `, -${formatHudPointValue(penaltyPoints)} penalty`;
@@ -1341,20 +1368,27 @@
       ui.scoreDimensionsEl.textContent = display;
     }
     if (ui.scorePortalsEl) {
-      const portalPoints = breakdown.portal ?? breakdown.portals ?? 0;
-      ui.scorePortalsEl.textContent = formatHudMetric(score.portalEvents, 'event', 'events', portalPoints);
+      const portalPoints = ensureNumber(breakdown.portal ?? breakdown.portals, 0);
+      const portalEvents = ensureNumber(score.portalEvents, 0);
+      ui.scorePortalsEl.textContent = formatHudMetric(portalEvents, 'event', 'events', portalPoints);
     }
     if (ui.scoreCombatEl) {
-      const combatPoints = breakdown.combat ?? 0;
-      ui.scoreCombatEl.textContent = formatHudMetric(score.combatEvents, 'victory', 'victories', combatPoints);
+      const combatPoints = ensureNumber(breakdown.combat, 0);
+      const combatEvents = ensureNumber(score.combatEvents, 0);
+      ui.scoreCombatEl.textContent = formatHudMetric(combatEvents, 'victory', 'victories', combatPoints);
     }
     if (ui.scoreLootEl) {
-      const lootPoints = breakdown.loot ?? 0;
-      ui.scoreLootEl.textContent = formatHudMetric(score.lootEvents, 'find', 'finds', lootPoints);
+      const lootPoints = ensureNumber(breakdown.loot, 0);
+      const lootEvents = ensureNumber(score.lootEvents, 0);
+      ui.scoreLootEl.textContent = formatHudMetric(lootEvents, 'find', 'finds', lootPoints);
     }
     const portal = state.portal || {};
-    if (ui.portalProgressLabel && typeof portal.progressLabel === 'string') {
-      ui.portalProgressLabel.textContent = portal.progressLabel;
+    if (ui.portalProgressLabel) {
+      const label =
+        typeof portal.progressLabel === 'string' && portal.progressLabel.trim().length
+          ? portal.progressLabel.trim()
+          : `Portal frame ${Math.max(0, Math.round(ensureNumber(portal.progressPercent, ensureNumber(portal.progress, 0) * 100)))}%`;
+      ui.portalProgressLabel.textContent = label;
     }
     if (ui.portalProgressBar) {
       if (Number.isFinite(portal.displayProgress)) {
@@ -1364,9 +1398,22 @@
       }
     }
     if (ui.portalStatusEl) {
-      const statusState = typeof portal.state === 'string' ? portal.state : 'inactive';
-      const statusLabel = typeof portal.statusLabel === 'string' ? portal.statusLabel : 'Portal Status';
-      const statusMessage = typeof portal.statusMessage === 'string' ? portal.statusMessage : '';
+      const statusState =
+        typeof portal.state === 'string' && portal.state.trim().length ? portal.state.trim() : 'inactive';
+      const statusLabel =
+        typeof portal.statusLabel === 'string' && portal.statusLabel.trim().length
+          ? portal.statusLabel.trim()
+          : 'Portal Dormant';
+      const statusMessageBase =
+        typeof portal.statusMessage === 'string' && portal.statusMessage.trim().length
+          ? portal.statusMessage.trim()
+          : null;
+      const remainingBlocks = ensureNumber(portal.remainingBlocks, null);
+      const statusMessage = statusMessageBase
+        ? statusMessageBase
+        : Number.isFinite(remainingBlocks) && remainingBlocks > 0
+          ? `${remainingBlocks} frame block${remainingBlocks === 1 ? '' : 's'} required to stabilise.`
+          : 'Awaiting ignition sequence.';
       ui.portalStatusEl.dataset.state = statusState;
       ui.portalStatusEl.setAttribute('aria-label', `Portal status: ${statusLabel}. ${statusMessage}`);
       if (ui.portalStatusStateText) {
@@ -1385,23 +1432,66 @@
     }
     const dimension = state.dimension || {};
     if (ui.dimensionInfoEl && dimension) {
+      const baseName =
+        typeof dimension.name === 'string' && dimension.name.trim().length
+          ? dimension.name.trim()
+          : 'Unknown Realm';
+      const baseDescription =
+        typeof dimension.description === 'string' && dimension.description.trim().length
+          ? dimension.description.trim()
+          : 'Stabilise the rails, gather resources, and prepare the next portal.';
+      const baseMeta =
+        typeof dimension.meta === 'string' && dimension.meta.trim().length
+          ? dimension.meta.trim()
+          : 'Portal readiness pending.';
       if (dimension.victory && dimension.victoryDetails) {
         const victory = dimension.victoryDetails;
+        const victoryTitle =
+          typeof victory.title === 'string' && victory.title.trim().length
+            ? victory.title.trim()
+            : baseName;
+        const victoryMessage =
+          typeof victory.message === 'string' && victory.message.trim().length
+            ? victory.message.trim()
+            : 'Eternal Ingot secured — portal network stabilised.';
+        const victoryMeta =
+          typeof victory.meta === 'string' && victory.meta.trim().length
+            ? victory.meta.trim()
+            : baseMeta;
         const replayMarkup = victory.replayAvailable
           ? '<p><button type="button" class="victory-replay-button" data-action="replay-run">Replay Run</button></p>'
           : '';
         ui.dimensionInfoEl.innerHTML = `
-          <h3>${escapeHtml(victory.title ?? dimension.name ?? 'Netherite Terminus')}</h3>
-          <p>${escapeHtml(victory.message ?? '')}</p>
-          <p class="dimension-meta">${escapeHtml(victory.meta ?? '')}</p>
+          <h3>${escapeHtml(victoryTitle)}</h3>
+          <p>${escapeHtml(victoryMessage)}</p>
+          <p class="dimension-meta">${escapeHtml(victoryMeta)}</p>
           ${replayMarkup}
         `;
       } else {
         ui.dimensionInfoEl.innerHTML = `
-          <h3>${escapeHtml(dimension.name ?? 'Unknown Realm')}</h3>
-          <p>${escapeHtml(dimension.description ?? '')}</p>
-          <p class="dimension-meta">${escapeHtml(dimension.meta ?? '')}</p>
+          <h3>${escapeHtml(baseName)}</h3>
+          <p>${escapeHtml(baseDescription)}</p>
+          <p class="dimension-meta">${escapeHtml(baseMeta)}</p>
         `;
+      }
+    }
+    if (ui.timeEl) {
+      const daylight = clamp01(state.daylight, null);
+      if (daylight !== null) {
+        const percent = Math.round(daylight * 100);
+        let label = 'Daylight';
+        if (daylight < 0.16) {
+          label = 'Nightfall (Midnight)';
+        } else if (daylight < 0.32) {
+          label = 'Nightfall';
+        } else if (daylight < 0.52) {
+          label = 'Dawn';
+        } else if (daylight > 0.82) {
+          label = 'High Sun';
+        }
+        ui.timeEl.textContent = `${label} ${percent}%`;
+      } else if (!ui.timeEl.textContent) {
+        ui.timeEl.textContent = 'Daylight 0%';
       }
     }
   }

@@ -42,6 +42,7 @@
   const POINTER_LOCK_CHANGE_EVENTS = ['pointerlockchange', 'mozpointerlockchange', 'webkitpointerlockchange'];
   const POINTER_LOCK_ERROR_EVENTS = ['pointerlockerror', 'mozpointerlockerror', 'webkitpointerlockerror'];
   const FALLBACK_HEALTH = 10;
+  const FALLBACK_BREATH = 10;
   const PORTAL_BLOCK_REQUIREMENT = 10;
   const PORTAL_INTERACTION_RANGE = 4.5;
   const ZOMBIE_CONTACT_RANGE = 1.35;
@@ -1524,6 +1525,8 @@
       this.playerAvatarUrl = null;
       this.playerLocation = null;
       this.playerLocationLabel = 'Location hidden';
+      this.playerBreathCapacity = FALLBACK_BREATH;
+      this.playerBreath = this.playerBreathCapacity;
       this.identityStorageKey = options.identityStorageKey || IDENTITY_STORAGE_KEY;
       this.identityHydrating = false;
       this.locationRequestCooldownSeconds = Math.max(
@@ -16481,11 +16484,29 @@
     }
 
     getPlayerStatusSnapshot() {
-      const health = Math.max(0, Math.round(this.health ?? FALLBACK_HEALTH));
+      const maxHealth = Number.isFinite(this.maxHealth)
+        ? Math.max(0, Math.round(this.maxHealth))
+        : FALLBACK_HEALTH;
+      const health = Math.max(
+        0,
+        Math.round(Number.isFinite(this.health) ? this.health : maxHealth || FALLBACK_HEALTH),
+      );
+      const maxBreath = Number.isFinite(this.playerBreathCapacity)
+        ? Math.max(1, Math.round(this.playerBreathCapacity))
+        : FALLBACK_BREATH;
+      const breath = Math.max(
+        0,
+        Math.round(Number.isFinite(this.playerBreath) ? this.playerBreath : maxBreath),
+      );
+      const breathPercent = maxBreath > 0 ? Math.round((breath / maxBreath) * 100) : 0;
       return {
         health,
-        maxHealth: FALLBACK_HEALTH,
+        maxHealth: maxHealth || FALLBACK_HEALTH,
         hearts: Math.max(0, health / 2),
+        breath,
+        maxBreath,
+        bubbles: Math.max(0, Math.min(5, Math.ceil(breath / 2))),
+        breathPercent,
       };
     }
 
@@ -16543,10 +16564,7 @@
         timers.set(element, timer);
       }
       if (typeof this.updateHud === 'function') {
-        this.updateHud();
-      }
-      if (typeof this.publishStateSnapshot === 'function') {
-        this.publishStateSnapshot('score-event');
+        this.updateHud({ reason: 'score-event' });
       }
     }
 
@@ -16562,7 +16580,18 @@
       });
     }
 
-    updateHud() {
+    updateHud(reasonOrOptions) {
+      const options =
+        typeof reasonOrOptions === 'string'
+          ? { reason: reasonOrOptions }
+          : reasonOrOptions && typeof reasonOrOptions === 'object'
+            ? reasonOrOptions
+            : {};
+      const reason =
+        typeof options.reason === 'string' && options.reason.trim().length
+          ? options.reason.trim()
+          : 'hud-update';
+      const shouldPublish = options.publish !== false;
       const {
         heartsEl,
         scoreTotalEl,
@@ -16618,6 +16647,9 @@
       this.updateDimensionInfoPanel();
       this.updatePortalProgress();
       this.updateFooterSummary();
+      if (shouldPublish && typeof this.publishStateSnapshot === 'function') {
+        this.publishStateSnapshot(reason);
+      }
     }
 
     setPortalStatusIndicator(state, message, label) {
@@ -17521,6 +17553,9 @@
       }
       this.lastPublishedStateSignature = signature;
       const world = this.createWorldSnapshot();
+      const daylight = Number.isFinite(this.daylightIntensity)
+        ? Math.max(0, Math.min(1, this.daylightIntensity))
+        : 0;
       const state = {
         isRunning: Boolean(this.started && !this.rendererUnavailable),
         rendererMode: scope.__INFINITE_RAILS_RENDERER_MODE__ || null,
@@ -17529,6 +17564,7 @@
         portal,
         score,
         player,
+        daylight,
         reason,
         updatedAt: Date.now(),
         signature,
