@@ -2229,6 +2229,141 @@
       }
     }
 
+    summariseRequiredSceneNodes() {
+      const scene = this.scene || null;
+      const summary = {
+        steve: { present: false, placeholder: false, nodeName: null, attached: false },
+        ground: { present: false, attached: false, terrainGroupChildren: 0 },
+        blocks: { present: false, attached: false, meshCount: 0, sampleChunk: null },
+        mobs: {
+          present: false,
+          zombieCount: 0,
+          golemCount: 0,
+          total: 0,
+          groups: { zombieAttached: false, golemAttached: false },
+        },
+        allPresent: false,
+        missing: [],
+      };
+      if (!scene) {
+        summary.missing.push('steve', 'ground', 'mob', 'block');
+        return summary;
+      }
+      const isAttachedToScene = (object) => {
+        let current = object;
+        while (current) {
+          if (current === scene) {
+            return true;
+          }
+          current = current.parent || null;
+        }
+        return false;
+      };
+
+      const candidateAvatars = [];
+      if (this.playerAvatar) {
+        candidateAvatars.push(this.playerAvatar);
+      }
+      if (this.playerRig && Array.isArray(this.playerRig.children)) {
+        for (const child of this.playerRig.children) {
+          if (
+            child &&
+            (child.name === 'PlayerAvatar' ||
+              child.name === 'PlayerAvatarPlaceholder' ||
+              child.userData?.placeholderKey === 'steve')
+          ) {
+            candidateAvatars.push(child);
+          }
+        }
+      }
+      const avatar = candidateAvatars.find((node) => isAttachedToScene(node)) || candidateAvatars[0] || null;
+      if (avatar) {
+        summary.steve.nodeName = avatar.name || null;
+        summary.steve.placeholder = Boolean(avatar.userData?.placeholder);
+        summary.steve.attached = isAttachedToScene(avatar);
+        summary.steve.present = summary.steve.attached;
+      }
+
+      const terrainGroup = this.terrainGroup || null;
+      if (terrainGroup) {
+        summary.ground.terrainGroupChildren = Array.isArray(terrainGroup.children)
+          ? terrainGroup.children.length
+          : 0;
+        summary.ground.attached = isAttachedToScene(terrainGroup);
+        summary.ground.present = summary.ground.attached && summary.ground.terrainGroupChildren > 0;
+      }
+
+      const chunkGroups = Array.isArray(this.terrainChunkGroups) ? this.terrainChunkGroups : [];
+      let referenceChunk = null;
+      let totalBlockMeshes = 0;
+      for (const chunk of chunkGroups) {
+        if (!chunk) {
+          continue;
+        }
+        const children = Array.isArray(chunk.children) ? chunk.children : [];
+        let chunkMeshCount = 0;
+        for (const child of children) {
+          if (child?.isMesh) {
+            chunkMeshCount += 1;
+          }
+        }
+        if (chunkMeshCount > 0) {
+          totalBlockMeshes += chunkMeshCount;
+          if (!referenceChunk) {
+            referenceChunk = chunk;
+          }
+        }
+      }
+      summary.blocks.meshCount = totalBlockMeshes;
+      if (referenceChunk) {
+        summary.blocks.sampleChunk = referenceChunk.name || referenceChunk.userData?.chunkKey || null;
+        summary.blocks.attached = isAttachedToScene(referenceChunk);
+        summary.blocks.present = summary.blocks.attached;
+      } else if (terrainGroup) {
+        const terrainChildren = Array.isArray(terrainGroup.children) ? terrainGroup.children : [];
+        let detectedMesh = terrainChildren.find((child) => child?.isMesh) || null;
+        if (!detectedMesh && typeof terrainGroup.traverse === 'function') {
+          terrainGroup.traverse((child) => {
+            if (detectedMesh || child === terrainGroup) {
+              return;
+            }
+            if (child?.isMesh) {
+              detectedMesh = child;
+            }
+          });
+        }
+        if (detectedMesh) {
+          summary.blocks.attached = isAttachedToScene(detectedMesh);
+          summary.blocks.present = summary.blocks.attached;
+          summary.blocks.sampleChunk = detectedMesh.name || terrainGroup.name || 'TerrainGroup';
+          if (!summary.blocks.meshCount) {
+            summary.blocks.meshCount = 1;
+          }
+        }
+      }
+
+      const zombieGroup = this.zombieGroup || null;
+      const golemGroup = this.golemGroup || null;
+      const zombieCount = Array.isArray(zombieGroup?.children) ? zombieGroup.children.length : 0;
+      const golemCount = Array.isArray(golemGroup?.children) ? golemGroup.children.length : 0;
+      summary.mobs.zombieCount = zombieCount;
+      summary.mobs.golemCount = golemCount;
+      summary.mobs.total = zombieCount + golemCount;
+      summary.mobs.groups.zombieAttached = zombieGroup ? isAttachedToScene(zombieGroup) : false;
+      summary.mobs.groups.golemAttached = golemGroup ? isAttachedToScene(golemGroup) : false;
+      summary.mobs.present =
+        (zombieCount > 0 && summary.mobs.groups.zombieAttached) ||
+        (golemCount > 0 && summary.mobs.groups.golemAttached);
+
+      if (!summary.steve.present) summary.missing.push('steve');
+      if (!summary.ground.present) summary.missing.push('ground');
+      if (!summary.mobs.present) summary.missing.push('mob');
+      if (!summary.blocks.present) summary.missing.push('block');
+
+      summary.allPresent = summary.missing.length === 0;
+      return summary;
+    }
+
     logEngineBootDiagnostics(context = {}) {
       const consoleRef = typeof console !== 'undefined' ? console : null;
       if (!consoleRef || typeof consoleRef.log !== 'function') {
@@ -2339,6 +2474,30 @@
         samplePending: pendingModelKeys,
       };
 
+      const requiredSceneNodes =
+        typeof this.summariseRequiredSceneNodes === 'function' ? this.summariseRequiredSceneNodes() : null;
+
+      if (requiredSceneNodes) {
+        const missingLabel = requiredSceneNodes.missing?.length
+          ? requiredSceneNodes.missing.join(', ')
+          : 'none';
+        const logLabel = requiredSceneNodes.allPresent
+          ? 'Scene graph validation — required nodes located.'
+          : `Scene graph validation failed — missing required nodes: ${missingLabel}.`;
+        const payload = { requiredNodes: requiredSceneNodes };
+        if (requiredSceneNodes.allPresent) {
+          if (typeof consoleRef?.info === 'function') {
+            consoleRef.info(logLabel, payload);
+          } else {
+            consoleRef.log?.(logLabel, payload);
+          }
+        } else if (typeof consoleRef?.error === 'function') {
+          consoleRef.error(logLabel, payload);
+        } else {
+          consoleRef.warn?.(logLabel, payload);
+        }
+      }
+
       const sceneStatus = {
         rendererReady: Boolean(this.renderer && !this.rendererUnavailable),
         sceneChildren: this.scene?.children?.length ?? 0,
@@ -2350,6 +2509,9 @@
         zombieActors: Array.isArray(this.zombies) ? this.zombies.length : 0,
         golemActors: Array.isArray(this.golems) ? this.golems.length : 0,
       };
+      if (requiredSceneNodes) {
+        sceneStatus.requiredNodes = requiredSceneNodes;
+      }
 
       const controlStatus = {
         pointerLocked: Boolean(this.pointerLocked),
