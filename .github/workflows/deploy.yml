@@ -403,13 +403,12 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Invalidate CloudFront cache
-        if: steps.ensure_distribution.outputs['distribution-id'] != ''
         env:
-          DISTRIBUTION_ID: ${{ steps.ensure_distribution.outputs.distribution-id }}
+          DISTRIBUTION_ID: ${{ steps.ensure_distribution.outputs.distribution-id || secrets.AWS_CLOUDFRONT_DISTRIBUTION_ID || '' }}
         run: |
           set -euo pipefail
           if [ -z "${DISTRIBUTION_ID}" ]; then
-            echo '::error::CloudFront distribution ID is empty. Check the discovery step output.'
+            echo '::error::CloudFront distribution ID is empty. Set AWS_CLOUDFRONT_DISTRIBUTION_ID or ensure the discovery step locates the distribution before retrying.'
             exit 1
           fi
           MAX_ATTEMPTS=5
