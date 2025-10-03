@@ -8,6 +8,11 @@ const { spawnSync } = require('node:child_process');
 
 const checks = [
   {
+    label: 'Asset manifest validation',
+    command: 'npm',
+    args: ['run', 'check:assets'],
+  },
+  {
     label: 'Vitest unit suite',
     command: 'npm',
     args: ['run', 'test'],
