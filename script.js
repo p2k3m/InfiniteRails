@@ -1186,6 +1186,174 @@
     }
   }
 
+  const ERROR_BOUNDARY_DEFAULTS = {
+    bootstrap: {
+      title: 'Bootstrap failure',
+      userMessage: 'The game failed to initialise. Reload to try again.',
+      diagnosticScope: 'renderer',
+      diagnosticMessage: 'Bootstrap sequence failed. Reload to try again.',
+      logScope: 'startup',
+      logMessage: 'Bootstrap sequence failed. Reload to try again.',
+    },
+    'simple-experience': {
+      title: 'Renderer unavailable',
+      userMessage: 'Failed to initialise the renderer. Check your connection and reload.',
+      diagnosticScope: 'renderer',
+      diagnosticMessage: 'Failed to initialise the renderer. Check your connection and reload.',
+      logScope: 'startup',
+      logMessage: 'Failed to initialise the renderer. Check your connection and reload.',
+    },
+    'experience-start': {
+      title: 'Unable to start expedition',
+      userMessage: 'We hit a snag while starting the expedition. Try again or reload the page.',
+      diagnosticScope: 'renderer',
+      diagnosticMessage: 'Gameplay start failed.',
+      logScope: 'runtime',
+      logMessage: 'Gameplay start failed.',
+    },
+    'experience-tutorial': {
+      title: 'Tutorial unavailable',
+      userMessage: 'The tutorial overlay failed to open. Try again or reload the page.',
+      diagnosticScope: 'renderer',
+      diagnosticMessage: 'Tutorial overlay failed to open.',
+      logScope: 'runtime',
+      logMessage: 'Tutorial overlay failed to open.',
+    },
+    runtime: {
+      title: 'Unexpected error',
+      userMessage: 'An unexpected error occurred. Reload to try again.',
+      diagnosticScope: 'renderer',
+      diagnosticMessage: 'Unexpected runtime error detected.',
+      logScope: 'runtime',
+      logMessage: 'Unexpected runtime error detected.',
+    },
+  };
+
+  function normaliseErrorForBoundary(error) {
+    if (error instanceof Error) {
+      return {
+        name: typeof error.name === 'string' && error.name.trim().length ? error.name.trim() : 'Error',
+        message:
+          typeof error.message === 'string' && error.message.trim().length
+            ? error.message.trim()
+            : 'An unexpected error occurred.',
+        stack: typeof error.stack === 'string' && error.stack.trim().length ? error.stack.trim() : null,
+      };
+    }
+    if (typeof error === 'string' && error.trim().length) {
+      return { name: 'Error', message: error.trim(), stack: null };
+    }
+    return {
+      name: 'Error',
+      message: 'An unexpected error occurred.',
+      stack: null,
+    };
+  }
+
+  function markErrorAsHandled(error) {
+    if (!error || typeof error !== 'object') {
+      return;
+    }
+    try {
+      Object.defineProperty(error, '__infiniteRailsBoundaryHandled', {
+        value: true,
+        configurable: true,
+        enumerable: false,
+        writable: true,
+      });
+    } catch (definitionError) {
+      try {
+        // eslint-disable-next-line no-param-reassign
+        error.__infiniteRailsBoundaryHandled = true;
+      } catch (assignmentError) {
+        // Ignore if we cannot tag the error instance.
+      }
+    }
+  }
+
+  function wasErrorHandledByBoundary(error) {
+    return Boolean(error && typeof error === 'object' && error.__infiniteRailsBoundaryHandled);
+  }
+
+  function handleErrorBoundary(error, options = {}) {
+    if (!error) {
+      error = new Error('Unknown runtime failure.');
+    }
+    if (wasErrorHandledByBoundary(error)) {
+      return;
+    }
+    const boundaryKey =
+      typeof options.boundary === 'string' && options.boundary.trim().length
+        ? options.boundary.trim()
+        : 'runtime';
+    const defaults = ERROR_BOUNDARY_DEFAULTS[boundaryKey] || ERROR_BOUNDARY_DEFAULTS.runtime;
+    const normalised = normaliseErrorForBoundary(error);
+    const overlayTitle = options.title ?? defaults.title;
+    const userMessage = options.userMessage ?? defaults.userMessage;
+    const diagnosticScope = options.diagnosticScope ?? defaults.diagnosticScope ?? 'renderer';
+    const diagnosticStatus = options.diagnosticStatus ?? defaults.diagnosticStatus ?? 'error';
+    const stage = options.stage ?? boundaryKey;
+    const detail = {
+      ...(defaults.detail || {}),
+      ...(options.detail || {}),
+      stage,
+      boundary: boundaryKey,
+      errorName: normalised.name,
+      errorMessage: normalised.message,
+      stack: normalised.stack,
+    };
+    const diagnosticMessage =
+      options.diagnosticMessage ??
+      defaults.diagnosticMessage ??
+      (stage ? `${stage} failure: ${normalised.message}` : normalised.message);
+    const logScope = options.logScope ?? defaults.logScope ?? 'runtime';
+    const logMessage = options.logMessage ?? defaults.logMessage ?? diagnosticMessage;
+    const logLevel = options.logLevel ?? defaults.logLevel ?? 'error';
+    presentCriticalErrorOverlay({
+      title: overlayTitle,
+      message: userMessage,
+      diagnosticScope,
+      diagnosticStatus,
+      diagnosticMessage,
+      logScope,
+      logMessage,
+      logLevel,
+      detail,
+      timestamp: options.timestamp,
+    });
+    markErrorAsHandled(error);
+  }
+
+  function invokeWithErrorBoundary(action, options = {}) {
+    if (typeof action !== 'function') {
+      return null;
+    }
+    const { rethrow = true } = options;
+    try {
+      const result = action();
+      if (result && typeof result.then === 'function') {
+        return result.catch((error) => {
+          if (!wasErrorHandledByBoundary(error)) {
+            handleErrorBoundary(error, options);
+          }
+          if (rethrow) {
+            return Promise.reject(error);
+          }
+          return undefined;
+        });
+      }
+      return result;
+    } catch (error) {
+      if (!wasErrorHandledByBoundary(error)) {
+        handleErrorBoundary(error, options);
+      }
+      if (rethrow) {
+        throw error;
+      }
+      return null;
+    }
+  }
+
   function formatAssetLogLabel(detail) {
     const kind = typeof detail?.kind === 'string' && detail.kind.trim().length ? detail.kind.trim() : 'asset';
     const key = typeof detail?.key === 'string' && detail.key.trim().length ? detail.key.trim() : null;
@@ -5078,25 +5246,11 @@
       if (globalScope.console?.error) {
         globalScope.console.error('Failed to initialise simplified renderer.', error);
       }
-      const errorMessage =
-        typeof error?.message === 'string' && error.message.trim().length
-          ? error.message.trim()
-          : 'Failed to initialise the renderer. Check your connection and reload.';
-      const errorName = typeof error?.name === 'string' && error.name.trim().length ? error.name.trim() : undefined;
-      const errorStack = typeof error?.stack === 'string' && error.stack.trim().length ? error.stack.trim() : undefined;
-      presentCriticalErrorOverlay({
-        title: 'Renderer unavailable',
-        message: 'Failed to initialise the renderer. Check your connection and reload.',
-        diagnosticScope: 'renderer',
-        diagnosticStatus: 'error',
-        diagnosticMessage: 'Failed to initialise the renderer. Check your connection and reload.',
-        logScope: 'startup',
-        logMessage: 'Failed to initialise the renderer. Check your connection and reload.',
+      handleErrorBoundary(error, {
+        boundary: 'simple-experience',
+        stage: 'simple-experience.create',
         detail: {
           reason: 'simple-experience-create',
-          errorMessage,
-          errorName,
-          stack: errorStack,
         },
       });
       throw error;
@@ -5232,11 +5386,31 @@
         if (event?.preventDefault) {
           event.preventDefault();
         }
-        try {
-          experience.start();
-        } catch (error) {
-          console.error('Failed to start gameplay session', error);
-        }
+        const startAction = () => {
+          try {
+            const result = experience.start();
+            if (result && typeof result.then === 'function') {
+              return result.catch((error) => {
+                if (globalScope.console?.error) {
+                  globalScope.console.error('Failed to start gameplay session', error);
+                }
+                throw error;
+              });
+            }
+            return result;
+          } catch (error) {
+            if (globalScope.console?.error) {
+              globalScope.console.error('Failed to start gameplay session', error);
+            }
+            throw error;
+          }
+        };
+        invokeWithErrorBoundary(startAction, {
+          boundary: 'experience-start',
+          stage: 'experience.start',
+          rethrow: false,
+          detail: { reason: 'experience-start' },
+        });
       });
       ui.startButton.dataset.simpleExperienceBound = 'true';
     }
@@ -5248,11 +5422,31 @@
         if (!experience || typeof experience.showFirstRunTutorial !== 'function') {
           return;
         }
-        try {
-          experience.showFirstRunTutorial({ markSeenOnDismiss: true, autoFocus: true });
-        } catch (error) {
-          console.error('Failed to display tutorial overlay', error);
-        }
+        const tutorialAction = () => {
+          try {
+            const result = experience.showFirstRunTutorial({ markSeenOnDismiss: true, autoFocus: true });
+            if (result && typeof result.then === 'function') {
+              return result.catch((error) => {
+                if (globalScope.console?.error) {
+                  globalScope.console.error('Failed to display tutorial overlay', error);
+                }
+                throw error;
+              });
+            }
+            return result;
+          } catch (error) {
+            if (globalScope.console?.error) {
+              globalScope.console.error('Failed to display tutorial overlay', error);
+            }
+            throw error;
+          }
+        };
+        invokeWithErrorBoundary(tutorialAction, {
+          boundary: 'experience-tutorial',
+          stage: 'experience.showFirstRunTutorial',
+          rethrow: false,
+          detail: { reason: 'experience-tutorial' },
+        });
       });
       ui.landingGuideButton.dataset.simpleExperienceGuideBound = 'true';
     }
@@ -5349,21 +5543,33 @@
       if (scope.console?.error) {
         scope.console.error('Simple fallback bootstrap failed.', bootstrapError);
       }
+      const fallbackFailureDetail = {
+        errorMessage:
+          typeof bootstrapError?.message === 'string' && bootstrapError.message.trim().length
+            ? bootstrapError.message.trim()
+            : undefined,
+        errorName:
+          typeof bootstrapError?.name === 'string' && bootstrapError.name.trim().length
+            ? bootstrapError.name.trim()
+            : undefined,
+        reason: 'simple-fallback-bootstrap',
+      };
       if (typeof logDiagnosticsEvent === 'function') {
         logDiagnosticsEvent('startup', 'Simple fallback bootstrap failed.', {
           level: 'error',
-          detail: {
-            errorMessage:
-              typeof bootstrapError?.message === 'string' && bootstrapError.message.trim().length
-                ? bootstrapError.message.trim()
-                : undefined,
-            errorName:
-              typeof bootstrapError?.name === 'string' && bootstrapError.name.trim().length
-                ? bootstrapError.name.trim()
-                : undefined,
-          },
+          detail: fallbackFailureDetail,
         });
       }
+      handleErrorBoundary(bootstrapError, {
+        boundary: 'bootstrap',
+        stage: 'simple-fallback.bootstrap',
+        title: 'Fallback bootstrap failed',
+        userMessage: 'Fallback renderer failed to start. Reload to try again.',
+        diagnosticMessage: 'Simple fallback bootstrap failed.',
+        logMessage: 'Simple fallback bootstrap failed.',
+        detail: fallbackFailureDetail,
+        rethrow: false,
+      });
     }
     return true;
   }
@@ -5373,18 +5579,41 @@
   }
 
   function bootstrap() {
-    const scope =
-      typeof globalScope !== 'undefined'
-        ? globalScope
-        : typeof window !== 'undefined'
-          ? window
-          : globalThis;
-    const startSimple = shouldStartSimpleMode();
-    const mode = startSimple ? 'simple' : 'advanced';
-    setRendererModeIndicator(mode);
-    if (scope.SimpleExperience?.create) {
-      ensureSimpleExperience(mode);
-    }
+    return invokeWithErrorBoundary(
+      () => {
+        const scope =
+          typeof globalScope !== 'undefined'
+            ? globalScope
+            : typeof window !== 'undefined'
+              ? window
+              : globalThis;
+        const startSimple = shouldStartSimpleMode();
+        const mode = startSimple ? 'simple' : 'advanced';
+        setRendererModeIndicator(mode);
+        if (scope.SimpleExperience?.create) {
+          return ensureSimpleExperience(mode);
+        }
+        const missingEntryError = new Error('SimpleExperience bootstrap entrypoint unavailable.');
+        if (scope.console?.error) {
+          scope.console.error('Simple experience entrypoint missing during bootstrap.', missingEntryError);
+        }
+        handleErrorBoundary(missingEntryError, {
+          boundary: 'bootstrap',
+          stage: 'bootstrap.simpleExperienceUnavailable',
+          title: 'Renderer unavailable',
+          userMessage: 'Renderer entrypoint is missing from the build output. Reload to try again.',
+          diagnosticMessage: 'Renderer entrypoint unavailable during bootstrap.',
+          logMessage: 'Renderer entrypoint unavailable during bootstrap.',
+          detail: { reason: 'simple-experience-unavailable' },
+          rethrow: false,
+        });
+        return null;
+      },
+      {
+        boundary: 'bootstrap',
+        stage: 'bootstrap',
+      },
+    );
   }
 
   function setupSimpleExperienceIntegrations() {
@@ -5522,6 +5751,88 @@
   };
   developerStatsApi.onChange = addDeveloperStatsChangeListener;
   globalScope.InfiniteRails.developerStats = developerStatsApi;
+
+  if (typeof globalScope.addEventListener === 'function') {
+    globalScope.addEventListener(
+      'error',
+      (event) => {
+        if (!event) {
+          return;
+        }
+        const runtimeError =
+          event.error instanceof Error
+            ? event.error
+            : new Error(
+                typeof event.message === 'string' && event.message.trim().length
+                  ? event.message.trim()
+                  : 'Unhandled runtime error.',
+              );
+        const detail = {
+          reason: 'global-error',
+          message:
+            typeof event.message === 'string' && event.message.trim().length
+              ? event.message.trim()
+              : undefined,
+          filename:
+            typeof event.filename === 'string' && event.filename.trim().length
+              ? event.filename.trim()
+              : undefined,
+          lineno: Number.isFinite(event.lineno) ? event.lineno : undefined,
+          colno: Number.isFinite(event.colno) ? event.colno : undefined,
+        };
+        handleErrorBoundary(runtimeError, {
+          boundary: 'runtime',
+          stage: 'window.error',
+          detail,
+          rethrow: false,
+        });
+      },
+      { capture: true },
+    );
+    globalScope.addEventListener(
+      'unhandledrejection',
+      (event) => {
+        if (!event) {
+          return;
+        }
+        const reason = event.reason;
+        let rejectionError = reason instanceof Error ? reason : null;
+        if (!rejectionError) {
+          const description =
+            typeof reason === 'string' && reason.trim().length
+              ? reason.trim()
+              : 'Unhandled promise rejection occurred.';
+          rejectionError = new Error(description);
+        }
+        const detail = { reason: 'unhandledrejection' };
+        if (reason && typeof reason === 'object') {
+          if (typeof reason.message === 'string' && reason.message.trim().length) {
+            detail.message = reason.message.trim();
+          }
+          if (typeof reason.name === 'string' && reason.name.trim().length) {
+            detail.name = reason.name.trim();
+          }
+          try {
+            detail.serialised = JSON.parse(JSON.stringify(reason));
+          } catch (serializationError) {
+            detail.serialised = undefined;
+          }
+        } else if (typeof reason !== 'undefined') {
+          detail.value = reason;
+        }
+        handleErrorBoundary(rejectionError, {
+          boundary: 'runtime',
+          stage: 'window.unhandledrejection',
+          detail,
+          rethrow: false,
+        });
+        if (typeof event.preventDefault === 'function') {
+          event.preventDefault();
+        }
+      },
+      { capture: true },
+    );
+  }
 
   globalScope.bootstrap = bootstrap;
 
