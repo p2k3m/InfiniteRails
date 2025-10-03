@@ -45,6 +45,8 @@
   const FALLBACK_BREATH = 10;
   const PORTAL_BLOCK_REQUIREMENT = 10;
   const PORTAL_INTERACTION_RANGE = 4.5;
+  const PORTAL_SHADER_FALLBACK_ANNOUNCEMENT =
+    'Portal shader offline — emissive fallback active.';
   const ZOMBIE_CONTACT_RANGE = 1.35;
   const ZOMBIE_SPAWN_INTERVAL = 8;
   const ZOMBIE_MAX_PER_DIMENSION = 4;
@@ -2001,14 +2003,21 @@
       this.portalActivations = 0;
       this.portalHintShown = false;
       this.portalState = null;
-      this.portalIgnitionLog = [];
+      this.portalIgnitionLog = this.portalShaderFallbackActive
+        ? [PORTAL_SHADER_FALLBACK_ANNOUNCEMENT]
+        : [];
       this.dimensionLifecycleHooks = {
         exit: new Set(),
         enter: new Set(),
       };
       this.portalStatusState = 'inactive';
-      this.portalStatusMessage = '';
-      this.portalStatusLabel = '';
+      if (this.portalShaderFallbackActive) {
+        this.portalStatusMessage = PORTAL_SHADER_FALLBACK_ANNOUNCEMENT;
+        this.portalStatusLabel = 'Portal Fallback';
+      } else {
+        this.portalStatusMessage = '';
+        this.portalStatusLabel = '';
+      }
       this.portalStatusFlashTimer = null;
       this.dimensionIntroAutoHideTimer = null;
       this.dimensionIntroFadeTimer = null;
@@ -5518,9 +5527,7 @@
     }
 
     handlePortalShaderInitialisationFailure(error) {
-      if (this.portalShaderFallbackActive) {
-        return;
-      }
+      const wasFallbackActive = this.portalShaderFallbackActive === true;
       this.portalShaderFallbackActive = true;
       this.lightingFallbackPending = true;
       const consoleRef = typeof console !== 'undefined' ? console : null;
@@ -5531,12 +5538,32 @@
       } else if (consoleRef?.error) {
         consoleRef.error(warningMessage, error);
       }
+      const fallbackAnnouncement = PORTAL_SHADER_FALLBACK_ANNOUNCEMENT;
+      if (typeof this.showHint === 'function') {
+        this.showHint(fallbackAnnouncement);
+      }
+      this.lastHintMessage = fallbackAnnouncement;
+      if (!Array.isArray(this.portalIgnitionLog)) {
+        this.portalIgnitionLog = [];
+      }
+      if (this.portalIgnitionLog[0] !== fallbackAnnouncement) {
+        this.portalIgnitionLog.unshift(fallbackAnnouncement);
+      }
+      this.portalIgnitionLog = this.portalIgnitionLog.filter(Boolean).slice(0, 6);
+      if (typeof this.updatePortalProgress === 'function') {
+        this.updatePortalProgress();
+      }
+      if (!wasFallbackActive && typeof this.updateFooterSummary === 'function') {
+        this.updateFooterSummary();
+      }
       const errorMessage =
         typeof error?.message === 'string' && error.message.trim().length ? error.message.trim() : undefined;
       this.emitGameEvent('shader-fallback', {
         shader: 'portal',
         reason: 'initialisation-error',
         errorMessage,
+        fallbackActive: true,
+        announcement: fallbackAnnouncement,
       });
     }
 
@@ -11903,43 +11930,59 @@
       this.portalActivated = true;
       const usePlaceholder =
         this.portalShaderFallbackActive || !(this.materials.portal instanceof THREE.ShaderMaterial);
+      const attachPlaceholderMesh = () => {
+        const placeholder = this.createPortalPlaceholderMesh(this.dimensionSettings || null);
+        if (placeholder) {
+          placeholder.position.set(worldX, worldY, worldZ);
+          placeholder.rotation.y = Math.PI;
+          placeholder.renderOrder = 2;
+          placeholder.castShadow = false;
+          placeholder.receiveShadow = false;
+          placeholder.userData = {
+            ...(placeholder.userData || {}),
+            placeholder: true,
+            placeholderKey: placeholder.userData?.placeholderKey || 'portal-core',
+            placeholderReason: this.portalShaderFallbackActive ? 'shader-fallback' : 'model-missing',
+            placeholderSource: 'portal-placeholder',
+          };
+          this.portalGroup.add(placeholder);
+        }
+        return placeholder;
+      };
       let portalMesh = null;
       if (usePlaceholder) {
-        portalMesh = this.createPortalPlaceholderMesh(this.dimensionSettings || null);
-        if (portalMesh) {
-          portalMesh.position.set(worldX, worldY, worldZ);
+        portalMesh = attachPlaceholderMesh();
+      } else {
+        try {
+          if (!this.portalPlaneGeometry) {
+            this.portalPlaneGeometry = new THREE.PlaneGeometry(2.4, 3.2);
+          }
+          const portalMaterial = this.materials.portal.clone();
+          const sourceUniforms = this.materials.portal.uniforms || {};
+          const cloneColor = (uniformValue, fallbackColor) => {
+            if (uniformValue && typeof uniformValue.clone === 'function') {
+              return uniformValue.clone();
+            }
+            return new THREE.Color(fallbackColor);
+          };
+          portalMaterial.uniforms = {
+            uTime: { value: 0 },
+            uColorA: { value: cloneColor(sourceUniforms.uColorA?.value, '#7f5af0') },
+            uColorB: { value: cloneColor(sourceUniforms.uColorB?.value, '#2cb67d') },
+          };
+          portalMesh = new THREE.Mesh(this.portalPlaneGeometry, portalMaterial);
+          portalMesh.position.set(worldX, worldY, worldZ + 0.02);
           portalMesh.rotation.y = Math.PI;
           portalMesh.renderOrder = 2;
           portalMesh.castShadow = false;
           portalMesh.receiveShadow = false;
-          portalMesh.userData = {
-            ...(portalMesh.userData || {}),
-            placeholder: true,
-            placeholderKey: portalMesh.userData?.placeholderKey || 'portal-core',
-            placeholderReason: this.portalShaderFallbackActive ? 'shader-fallback' : 'model-missing',
-            placeholderSource: 'portal-placeholder',
-          };
           this.portalGroup.add(portalMesh);
+        } catch (error) {
+          this.handlePortalShaderInitialisationFailure(error);
         }
-      }
-
-      if (!portalMesh) {
-        if (!this.portalPlaneGeometry) {
-          this.portalPlaneGeometry = new THREE.PlaneGeometry(2.4, 3.2);
+        if (!portalMesh) {
+          portalMesh = attachPlaceholderMesh();
         }
-        const portalMaterial = this.materials.portal.clone();
-        portalMaterial.uniforms = {
-          uTime: { value: 0 },
-          uColorA: { value: this.materials.portal.uniforms.uColorA.value.clone() },
-          uColorB: { value: this.materials.portal.uniforms.uColorB.value.clone() },
-        };
-        portalMesh = new THREE.Mesh(this.portalPlaneGeometry, portalMaterial);
-        portalMesh.position.set(worldX, worldY, worldZ + 0.02);
-        portalMesh.rotation.y = Math.PI;
-        portalMesh.renderOrder = 2;
-        portalMesh.castShadow = false;
-        portalMesh.receiveShadow = false;
-        this.portalGroup.add(portalMesh);
       }
 
       this.portalMesh = portalMesh;
@@ -17939,19 +17982,26 @@
         portalStatusIcon.dataset.state = nextState;
       }
       if (previousState !== nextState) {
-        if (nextState === 'active') {
-          this.audio.play('portalActivate', { volume: 0.7 });
+        if (nextState === 'active' && typeof this.previewUpcomingDimension === 'function') {
           this.previewUpcomingDimension();
+        }
+        const audioController = this.audio;
+        const canPlayAudio = audioController && typeof audioController.play === 'function';
+        if (!canPlayAudio) {
+          return;
+        }
+        if (nextState === 'active') {
+          audioController.play('portalActivate', { volume: 0.7 });
         } else if (nextState === 'ready') {
-          this.audio.play('portalPrimed', { volume: 0.55 });
+          audioController.play('portalPrimed', { volume: 0.55 });
         } else if (nextState === 'building') {
-          this.audio.play('portalPrimed', { volume: 0.35 });
+          audioController.play('portalPrimed', { volume: 0.35 });
         } else if (nextState === 'blocked') {
-          this.audio.play('portalDormant', { volume: 0.45 });
+          audioController.play('portalDormant', { volume: 0.45 });
         } else if (nextState === 'inactive' && previousState !== 'inactive') {
-          this.audio.play('portalDormant', { volume: 0.38 });
+          audioController.play('portalDormant', { volume: 0.38 });
         } else if (previousState === 'active' && nextState !== 'victory') {
-          this.audio.play('portalDormant', { volume: 0.5 });
+          audioController.play('portalDormant', { volume: 0.5 });
         }
       }
     }
@@ -18042,6 +18092,12 @@
             ? 1 - Math.min(1, remaining / this.netheriteCountdownSeconds)
             : 1;
         displayProgress = Math.max(displayProgress, fraction);
+      }
+
+      if (this.portalShaderFallbackActive && !this.victoryAchieved) {
+        statusLabel = 'Portal Fallback';
+        statusMessage = PORTAL_SHADER_FALLBACK_ANNOUNCEMENT;
+        progressLabel = 'Portal fallback active';
       }
 
       return {
