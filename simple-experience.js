@@ -12153,6 +12153,7 @@
       let pointsAwarded = 5;
       let portalLog = '';
       let transitionResult = null;
+      let dimensionTravelSucceeded = true;
       const previousSettings = this.dimensionSettings;
       const rulesSummary = this.buildDimensionRuleSummary(nextSettings);
       if (this.portalMechanics?.enterPortal) {
@@ -12173,6 +12174,12 @@
           if (transitionResult?.log) {
             portalLog = transitionResult.log;
           }
+          const teleportOutsideTrigger =
+            transitionResult?.teleportOutsideTriggers === true ||
+            transitionResult?.teleportOutsideTrigger === true ||
+            transitionResult?.teleportedOutsideTrigger === true;
+          dimensionTravelSucceeded =
+            !teleportOutsideTrigger && transitionResult?.dimensionChanged !== false;
         } catch (error) {
           console.warn('Portal transition mechanics failed', error);
         }
@@ -12209,7 +12216,7 @@
         nextDimension: this.dimensionSettings,
         transition: transitionResult,
       });
-      if (Number.isFinite(pointsAwarded)) {
+      if (dimensionTravelSucceeded && Number.isFinite(pointsAwarded)) {
         this.score += pointsAwarded;
         this.addScoreBreakdown('dimensions', pointsAwarded);
       }
