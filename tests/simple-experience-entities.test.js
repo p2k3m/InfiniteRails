@@ -412,6 +412,183 @@ describe('simple experience entity lifecycle', () => {
     }
   });
 
+  it('requests navigation coverage for zombies even when models are unavailable', async () => {
+    const { experience } = createExperienceForTest();
+
+    experience.start();
+    await Promise.resolve();
+
+    experience.forceNightCycle();
+
+    const ensureChunkSpy = vi.spyOn(experience, 'ensureNavigationMeshForChunk');
+    const ensureWorldSpy = vi.spyOn(experience, 'ensureNavigationMeshForWorldPosition');
+    const originalClone = experience.cloneModelScene;
+    const cloneSpy = vi
+      .spyOn(experience, 'cloneModelScene')
+      .mockImplementation(function (key, ...args) {
+        if (key === 'zombie') {
+          return Promise.reject(new Error('missing zombie model'));
+        }
+        return originalClone.apply(this, [key, ...args]);
+      });
+
+    experience.lastZombieSpawn = experience.elapsed - 100;
+
+    expect(() => experience.spawnZombie()).not.toThrow();
+    expect(experience.zombies.length).toBeGreaterThan(0);
+    expect(
+      ensureChunkSpy.mock.calls.some(([, options]) => options?.reason === 'zombie-spawn'),
+    ).toBe(true);
+
+    await Promise.resolve();
+
+    ensureChunkSpy.mockClear();
+    ensureWorldSpy.mockClear();
+
+    const playerPosition = new experience.THREE.Vector3(3, 0, 3);
+    vi.spyOn(experience, 'getCameraWorldPosition').mockImplementation(function (target) {
+      if (target?.copy) {
+        target.copy(playerPosition);
+        return target;
+      }
+      return playerPosition.clone();
+    });
+
+    experience.updateZombies(0.16);
+
+    expect(ensureWorldSpy).toHaveBeenCalledWith(playerPosition.x, playerPosition.z);
+    expect(
+      ensureChunkSpy.mock.calls.some(([, options]) => options?.reason === 'zombie-chase'),
+    ).toBe(true);
+
+    cloneSpy.mockRestore();
+  });
+
+  it('steers golems using navigation meshes when model upgrades fail', async () => {
+    const { experience } = createExperienceForTest();
+
+    experience.start();
+    await Promise.resolve();
+
+    experience.forceNightCycle();
+
+    const ensureWorldSpy = vi.spyOn(experience, 'ensureNavigationMeshForWorldPosition');
+    const originalClone = experience.cloneModelScene;
+    const cloneSpy = vi
+      .spyOn(experience, 'cloneModelScene')
+      .mockImplementation(function (key, ...args) {
+        if (key === 'golem') {
+          return Promise.reject(new Error('missing golem model'));
+        }
+        return originalClone.apply(this, [key, ...args]);
+      });
+
+    experience.lastZombieSpawn = experience.elapsed - 100;
+    experience.spawnZombie();
+
+    ensureWorldSpy.mockClear();
+
+    experience.lastGolemSpawn = experience.elapsed - 100;
+    expect(() => experience.spawnGolem()).not.toThrow();
+    expect(experience.golems.length).toBeGreaterThan(0);
+
+    await Promise.resolve();
+
+    ensureWorldSpy.mockClear();
+
+    const golem = experience.golems[0];
+    const targetZombie = experience.zombies[0];
+    golem.mesh.position.set(
+      targetZombie.mesh.position.x + 5,
+      targetZombie.mesh.position.y,
+      targetZombie.mesh.position.z + 5,
+    );
+    const golemPosition = golem.mesh.position.clone();
+    const targetPosition = targetZombie.mesh.position.clone();
+
+    experience.updateGolems(0.16);
+
+    const calledForGolem = ensureWorldSpy.mock.calls.some(([x, z]) => {
+      return Math.abs(x - golemPosition.x) < 1e-5 && Math.abs(z - golemPosition.z) < 1e-5;
+    });
+    expect(calledForGolem).toBe(true);
+
+    const calledForTarget = ensureWorldSpy.mock.calls.some(([x, z]) => {
+      return Math.abs(x - targetPosition.x) < 1e-5 && Math.abs(z - targetPosition.z) < 1e-5;
+    });
+    expect(calledForTarget).toBe(true);
+
+    cloneSpy.mockRestore();
+  });
+
+  it('shows the global debug overlay when AI attachment fails', async () => {
+    const overlay = {
+      hidden: true,
+      attributes: {},
+      dataset: {},
+      removeAttribute: vi.fn((name) => {
+        delete overlay.attributes[name];
+        if (name === 'hidden') {
+          overlay.hidden = false;
+        }
+      }),
+      setAttribute: vi.fn((name, value) => {
+        overlay.attributes[name] = value;
+      }),
+      toggleAttribute: vi.fn((name, force) => {
+        if (force) {
+          overlay.attributes[name] = '';
+        } else {
+          delete overlay.attributes[name];
+        }
+      }),
+    };
+    const titleEl = { textContent: '' };
+    const messageEl = { textContent: '' };
+    const rendererStatusEl = { textContent: '' };
+    const rendererDiagnostic = { setAttribute: vi.fn() };
+
+    const originalGetElementById = window.document.getElementById;
+    const originalQuerySelector = window.document.querySelector;
+
+    window.document.getElementById = vi.fn((id) => {
+      switch (id) {
+        case 'globalOverlay':
+          return overlay;
+        case 'globalOverlayTitle':
+          return titleEl;
+        case 'globalOverlayMessage':
+          return messageEl;
+        case 'globalOverlayRendererStatus':
+          return rendererStatusEl;
+        default:
+          return typeof originalGetElementById === 'function' ? originalGetElementById(id) : null;
+      }
+    });
+    window.document.querySelector = vi.fn((selector) => {
+      if (selector === '[data-diagnostic="renderer"]') {
+        return rendererDiagnostic;
+      }
+      return typeof originalQuerySelector === 'function' ? originalQuerySelector(selector) : null;
+    });
+
+    try {
+      const { experience } = createExperienceForTest();
+
+      experience.handleEntityAttachmentFailure('zombie', { reason: 'world-root-unavailable' });
+
+      expect(overlay.hidden).toBe(false);
+      expect(overlay.setAttribute).toHaveBeenCalledWith('data-mode', 'error');
+      expect(titleEl.textContent).toBe('AI systems offline');
+      expect(messageEl.textContent).toContain('AI scripts');
+      expect(rendererDiagnostic.setAttribute).toHaveBeenCalledWith('data-status', 'error');
+      expect(rendererStatusEl.textContent).toContain('reload');
+    } finally {
+      window.document.getElementById = originalGetElementById;
+      window.document.querySelector = originalQuerySelector;
+    }
+  });
+
   it('re-registers entity groups when they are missing', async () => {
     const { experience } = createExperienceForTest();
 

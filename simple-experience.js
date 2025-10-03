@@ -12735,6 +12735,104 @@
         failureDetails.error = context.error;
       }
       this.presentRendererFailure(message, failureDetails);
+      const overlayDetail = {
+        kind: label,
+        reason: context.reason ?? 'unknown',
+      };
+      if (context.error instanceof Error) {
+        overlayDetail.errorName = context.error.name ?? undefined;
+        overlayDetail.errorMessage = context.error.message ?? undefined;
+      }
+      this.showAiDebugOverlay(message, overlayDetail);
+    }
+
+    showAiDebugOverlay(message, details = {}) {
+      const scope =
+        (typeof window !== 'undefined' && window) ||
+        (typeof globalThis !== 'undefined' && globalThis) ||
+        null;
+      if (!scope) {
+        return false;
+      }
+      const summaryMessage =
+        typeof message === 'string' && message.trim().length
+          ? message.trim()
+          : 'AI scripts offline — reload the page to recover.';
+      const overlayApi =
+        scope.bootstrapOverlay ||
+        scope.InfiniteRails?.bootstrapOverlay ||
+        scope.__INFINITE_RAILS_BOOTSTRAP_OVERLAY__ ||
+        null;
+      const detailPayload = details && typeof details === 'object' ? { ...details } : {};
+      if (overlayApi && typeof overlayApi.showError === 'function') {
+        try {
+          overlayApi.showError({
+            title: 'AI systems offline',
+            message: summaryMessage,
+          });
+          if (typeof overlayApi.setDiagnostic === 'function') {
+            overlayApi.setDiagnostic('renderer', {
+              status: 'error',
+              message: summaryMessage,
+            });
+          }
+          if (typeof overlayApi.logEvent === 'function') {
+            overlayApi.logEvent('ai', summaryMessage, {
+              level: 'error',
+              detail: detailPayload,
+            });
+          }
+          return true;
+        } catch (error) {
+          if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+            console.debug('AI debug overlay API unavailable; using DOM fallback.', error);
+          }
+        }
+      }
+      const doc =
+        this.canvas?.ownerDocument ||
+        scope.document ||
+        (typeof document !== 'undefined' ? document : null);
+      if (!doc || typeof doc.getElementById !== 'function') {
+        return false;
+      }
+      const overlay = doc.getElementById('globalOverlay');
+      if (!overlay) {
+        return false;
+      }
+      if (typeof overlay.removeAttribute === 'function') {
+        overlay.removeAttribute('hidden');
+      }
+      if (typeof overlay.setAttribute === 'function') {
+        overlay.setAttribute('data-mode', 'error');
+        overlay.setAttribute('data-fallback-active', 'true');
+      }
+      overlay.hidden = false;
+      try {
+        setInertState(overlay, false);
+      } catch (error) {
+        if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+          console.debug('Failed to update inert state for AI overlay fallback.', error);
+        }
+      }
+      const titleEl = doc.getElementById('globalOverlayTitle');
+      if (titleEl) {
+        titleEl.textContent = 'AI systems offline';
+      }
+      const messageEl = doc.getElementById('globalOverlayMessage');
+      if (messageEl) {
+        messageEl.textContent = summaryMessage;
+      }
+      const rendererDiagnostic =
+        typeof doc.querySelector === 'function' ? doc.querySelector('[data-diagnostic="renderer"]') : null;
+      if (rendererDiagnostic && typeof rendererDiagnostic.setAttribute === 'function') {
+        rendererDiagnostic.setAttribute('data-status', 'error');
+      }
+      const rendererStatusEl = doc.getElementById('globalOverlayRendererStatus');
+      if (rendererStatusEl) {
+        rendererStatusEl.textContent = 'AI scripts offline — reload to recover.';
+      }
+      return true;
     }
 
     createGolemActor() {
