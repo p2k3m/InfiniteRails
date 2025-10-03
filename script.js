@@ -1594,6 +1594,95 @@
     return baseMessage;
   }
 
+  function ensureSimpleModeQueryParam(scope) {
+    const loc = scope?.location;
+    if (!loc || typeof loc.href !== 'string' || !loc.href) {
+      return false;
+    }
+    const origin =
+      typeof loc.origin === 'string' && loc.origin
+        ? loc.origin
+        : typeof loc.protocol === 'string' && typeof loc.host === 'string' && loc.host
+          ? `${loc.protocol}//${loc.host}`
+          : undefined;
+    let url;
+    try {
+      url = origin ? new URL(loc.href, origin) : new URL(loc.href);
+    } catch (error) {
+      if (scope?.console?.debug) {
+        scope.console.debug('Failed to parse current location when applying simple mode query.', error);
+      }
+      return false;
+    }
+    const previousMode = url.searchParams.get('mode');
+    if (previousMode === 'simple') {
+      return false;
+    }
+    url.searchParams.set('mode', 'simple');
+    const newUrl = url.toString();
+    const applyUrlToLocation = () => {
+      try {
+        loc.href = newUrl;
+        loc.search = url.search;
+        if (typeof url.pathname === 'string') {
+          loc.pathname = url.pathname;
+        }
+        if (typeof url.hash === 'string') {
+          loc.hash = url.hash;
+        }
+        if (typeof url.origin === 'string') {
+          loc.origin = url.origin;
+        }
+        if (typeof url.protocol === 'string') {
+          loc.protocol = url.protocol;
+        }
+        if (typeof url.host === 'string') {
+          loc.host = url.host;
+        }
+        if (typeof url.hostname === 'string') {
+          loc.hostname = url.hostname;
+        }
+      } catch (locationError) {
+        if (scope?.console?.debug) {
+          scope.console.debug('Failed to synchronise fallback URL on location object.', locationError);
+        }
+      }
+    };
+    if (scope?.history && typeof scope.history.replaceState === 'function') {
+      try {
+        scope.history.replaceState(scope.history.state ?? null, '', newUrl);
+        applyUrlToLocation();
+        return false;
+      } catch (error) {
+        if (scope?.console?.debug) {
+          scope.console.debug('Failed to replaceState with simple mode fallback URL.', error);
+        }
+      }
+    }
+    if (typeof loc.replace === 'function') {
+      try {
+        loc.replace(newUrl);
+        return true;
+      } catch (error) {
+        if (scope?.console?.debug) {
+          scope.console.debug('Failed to replace() location with simple mode fallback URL.', error);
+        }
+      }
+    }
+    if (typeof loc.assign === 'function') {
+      try {
+        loc.assign(newUrl);
+        return true;
+      } catch (error) {
+        if (scope?.console?.debug) {
+          scope.console.debug('Failed to assign() location with simple mode fallback URL.', error);
+        }
+      }
+    }
+    applyUrlToLocation();
+    return false;
+  }
+
   function applyRendererReadyState(detail = null, options = {}) {
     bootstrapOverlay.setDiagnostic('renderer', {
       status: 'ok',
@@ -2096,20 +2185,40 @@
         detail.message = 'Renderer unavailable. Reload to try again.';
       }
       lastRendererFailureDetail = detail;
+      const failureMessage = formatRendererFailureMessage(detail);
       bootstrapOverlay.showError({
         title: 'Renderer unavailable',
-        message: formatRendererFailureMessage(detail),
+        message: failureMessage,
       });
       bootstrapOverlay.setDiagnostic('renderer', {
         status: 'error',
-        message: formatRendererFailureMessage(detail),
+        message: failureMessage,
       });
       if (typeof logDiagnosticsEvent === 'function') {
-        logDiagnosticsEvent('startup', formatRendererFailureMessage(detail), {
+        logDiagnosticsEvent('startup', failureMessage, {
           level: 'error',
           detail,
           timestamp: Number.isFinite(detail?.timestamp) ? detail.timestamp : undefined,
         });
+      }
+      const activeMode =
+        typeof detail.mode === 'string' && detail.mode.trim().length
+          ? detail.mode.trim()
+          : typeof globalScope.__INFINITE_RAILS_RENDERER_MODE__ === 'string'
+            ? globalScope.__INFINITE_RAILS_RENDERER_MODE__
+            : null;
+      if (activeMode !== 'simple') {
+        const fallbackContext = {
+          reason: 'renderer-failure',
+          mode: activeMode || 'unknown',
+        };
+        if (typeof detail.stage === 'string' && detail.stage.trim().length) {
+          fallbackContext.stage = detail.stage.trim();
+        }
+        tryStartSimpleFallback(
+          detail.error instanceof Error ? detail.error : null,
+          fallbackContext,
+        );
       }
     });
     globalScope.addEventListener('infinite-rails:asset-fallback', (event) => {
@@ -6340,7 +6449,7 @@
     if (simpleFallbackAttempted) {
       return false;
     }
-    if (typeof bootstrapOverlay !== 'undefined' && bootstrapOverlay.state.mode !== 'error') {
+    if (typeof bootstrapOverlay !== 'undefined') {
       bootstrapOverlay.showLoading({
         message: 'Attempting simplified renderer fallback…',
       });
@@ -6412,6 +6521,10 @@
       logDiagnosticsEvent('startup', 'Falling back to the simple renderer after a bootstrap failure.', {
         level: 'warning',
       });
+    }
+    const navigationTriggered = ensureSimpleModeQueryParam(scope);
+    if (navigationTriggered) {
+      return true;
     }
     try {
       if (typeof scope.bootstrap === 'function') {

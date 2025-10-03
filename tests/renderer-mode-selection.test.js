@@ -35,6 +35,11 @@ function instantiateShouldStartSimpleMode(windowStub) {
   return factory(windowStub, URLSearchParams);
 }
 
+const ensureSimpleModeStart = scriptSource.indexOf('function ensureSimpleModeQueryParam(');
+const ensureSimpleModeEnd = scriptSource.indexOf('function applyRendererReadyState', ensureSimpleModeStart);
+if (ensureSimpleModeStart === -1 || ensureSimpleModeEnd === -1 || ensureSimpleModeEnd <= ensureSimpleModeStart) {
+  throw new Error('Failed to locate ensureSimpleModeQueryParam definition in script.js');
+}
 const fallbackStart = scriptSource.indexOf('let simpleFallbackAttempted = false;');
 const fallbackEnd = scriptSource.indexOf('function createScoreboardUtilsFallback', fallbackStart);
 if (fallbackStart === -1 || fallbackEnd === -1 || fallbackEnd <= fallbackStart) {
@@ -42,12 +47,18 @@ if (fallbackStart === -1 || fallbackEnd === -1 || fallbackEnd <= fallbackStart) 
 }
 
 function instantiateSimpleFallback(scope) {
+  const ensureSimpleModeSource = scriptSource.slice(ensureSimpleModeStart, ensureSimpleModeEnd);
+  const fallbackSource = scriptSource.slice(fallbackStart, fallbackEnd);
   const factory = new Function(
     'scope',
     "'use strict';" +
       'const bootstrap = scope.bootstrap;' +
       'const globalScope = scope;' +
-      scriptSource.slice(fallbackStart, fallbackEnd) +
+      'const documentRef = scope.documentRef ?? scope.document ?? null;' +
+      'const bootstrapOverlay = scope.bootstrapOverlay ?? { showLoading: () => {}, showError: () => {}, setDiagnostic: () => {}, setRecoveryAction: () => {} };' +
+      'const isDebugModeEnabled = scope.isDebugModeEnabled ?? (() => false);' +
+      ensureSimpleModeSource +
+      fallbackSource +
       '\nreturn { tryStartSimpleFallback, getAttempted: () => simpleFallbackAttempted };'
   );
   return factory(scope);
@@ -290,6 +301,7 @@ afterEach(() => {
   } else {
     global.document = originalDocument;
   }
+  delete global.bootstrapOverlay;
 });
 
 describe('renderer mode selection', () => {
@@ -383,7 +395,7 @@ describe('renderer mode selection', () => {
     expect(showError).toHaveBeenCalledWith(
       expect.objectContaining({
         title: 'WebGL output blocked',
-        message: expect.stringContaining('Enable hardware acceleration in your browser settings.'),
+        message: expect.stringContaining('WebGL output is blocked, so Infinite Rails is launching the simplified renderer.'),
       }),
     );
     expect(setDiagnostic).toHaveBeenCalledWith('renderer', {
@@ -425,7 +437,7 @@ describe('renderer mode selection', () => {
     expect(overlay).toBeTruthy();
     expect(mockDocument.body.getAttribute('data-webgl-fallback-mode')).toBe('simple');
     expect(overlay.__webglFallback?.troubleshootingSteps).toEqual([
-      'Enable hardware acceleration in your browser settings.',
+      "Open your browser settings (for example, chrome://settings/system) and enable 'Use hardware acceleration when available.' If the toggle stays disabled, follow the browser help steps at https://support.google.com/chrome/answer/95759.",
       'Disable extensions that block WebGL or force software rendering.',
       'Update your graphics drivers, then restart your browser.',
     ]);
@@ -583,6 +595,13 @@ describe('renderer mode selection', () => {
         bootstrap: () => {
           calls.push('boot');
         },
+        bootstrapOverlay: {
+          showLoading: vi.fn(),
+          showError: vi.fn(),
+          setDiagnostic: vi.fn(),
+          setRecoveryAction: vi.fn(),
+          state: { mode: 'loading' },
+        },
       };
       const { tryStartSimpleFallback, getAttempted } = instantiateSimpleFallback(scope);
       const result = tryStartSimpleFallback(new Error('loader failed'), { reason: 'unit-test' });
@@ -601,12 +620,111 @@ describe('renderer mode selection', () => {
       expect(calls).toHaveLength(1);
     });
 
+    it('updates the URL query and restarts bootstrap when falling back', () => {
+      const showLoading = vi.fn();
+      const replaceState = vi.fn((state, title, url) => {
+        const parsed = new URL(url);
+        scope.location.href = parsed.toString();
+        scope.location.search = parsed.search;
+        scope.location.pathname = parsed.pathname;
+        scope.location.hash = parsed.hash;
+        scope.location.origin = parsed.origin;
+        scope.location.protocol = parsed.protocol;
+        scope.location.host = parsed.host;
+        scope.location.hostname = parsed.hostname;
+      });
+      const bootstrap = vi.fn();
+      const scope = {
+        APP_CONFIG: { enableAdvancedExperience: true, preferAdvanced: true },
+        SimpleExperience: { create: () => ({}) },
+        console: { warn: () => {}, error: () => {}, debug: () => {} },
+        bootstrap,
+        history: { state: { foo: 'bar' }, replaceState },
+        location: {
+          href: 'https://example.com/play?foo=bar',
+          origin: 'https://example.com',
+          protocol: 'https:',
+          host: 'example.com',
+          hostname: 'example.com',
+          search: '?foo=bar',
+          pathname: '/play',
+          hash: '',
+        },
+        bootstrapOverlay: {
+          showLoading,
+          showError: vi.fn(),
+          setDiagnostic: vi.fn(),
+          setRecoveryAction: vi.fn(),
+          state: { mode: 'error' },
+        },
+      };
+      const { tryStartSimpleFallback } = instantiateSimpleFallback(scope);
+      const result = tryStartSimpleFallback(null, { reason: 'renderer-failure', mode: 'advanced' });
+      expect(result).toBe(true);
+      expect(showLoading).toHaveBeenCalledWith(
+        expect.objectContaining({ message: expect.stringContaining('simplified renderer fallback') }),
+      );
+      expect(replaceState).toHaveBeenCalledTimes(1);
+      const parsed = new URL(scope.location.href);
+      expect(parsed.searchParams.get('mode')).toBe('simple');
+      expect(scope.APP_CONFIG.forceSimpleMode).toBe(true);
+      expect(scope.APP_CONFIG.enableAdvancedExperience).toBe(false);
+      expect(scope.APP_CONFIG.preferAdvanced).toBe(false);
+      expect(scope.APP_CONFIG.defaultMode).toBe('simple');
+      expect(bootstrap).toHaveBeenCalledTimes(1);
+    });
+
+    it('navigates with mode=simple when history state replacement is unavailable', () => {
+      const locationReplace = vi.fn();
+      const scope = {
+        APP_CONFIG: { enableAdvancedExperience: true, preferAdvanced: true },
+        SimpleExperience: { create: () => ({}) },
+        console: { warn: () => {}, error: () => {}, debug: () => {} },
+        bootstrap: vi.fn(),
+        location: {
+          href: 'https://example.com/play',
+          origin: 'https://example.com',
+          protocol: 'https:',
+          host: 'example.com',
+          hostname: 'example.com',
+          search: '',
+          pathname: '/play',
+          hash: '',
+          replace: locationReplace,
+        },
+        bootstrapOverlay: {
+          showLoading: vi.fn(),
+          showError: vi.fn(),
+          setDiagnostic: vi.fn(),
+          setRecoveryAction: vi.fn(),
+          state: { mode: 'loading' },
+        },
+      };
+      const { tryStartSimpleFallback } = instantiateSimpleFallback(scope);
+      const result = tryStartSimpleFallback(null, { reason: 'renderer-failure', mode: 'advanced' });
+      expect(result).toBe(true);
+      expect(locationReplace).toHaveBeenCalledTimes(1);
+      expect(locationReplace.mock.calls[0][0]).toContain('mode=simple');
+      expect(scope.APP_CONFIG.forceSimpleMode).toBe(true);
+      expect(scope.APP_CONFIG.enableAdvancedExperience).toBe(false);
+      expect(scope.APP_CONFIG.preferAdvanced).toBe(false);
+      expect(scope.APP_CONFIG.defaultMode).toBe('simple');
+      expect(scope.bootstrap).not.toHaveBeenCalled();
+    });
+
     it('returns false when the simple sandbox is unavailable', () => {
       const scope = {
         APP_CONFIG: {},
         console: { warn: () => {}, error: () => {} },
         bootstrap: () => {
           throw new Error('should not be called');
+        },
+        bootstrapOverlay: {
+          showLoading: vi.fn(),
+          showError: vi.fn(),
+          setDiagnostic: vi.fn(),
+          setRecoveryAction: vi.fn(),
+          state: { mode: 'error' },
         },
       };
       const { tryStartSimpleFallback, getAttempted } = instantiateSimpleFallback(scope);
