@@ -2222,12 +2222,14 @@
 
   if (typeof globalScope?.addEventListener === 'function') {
     globalScope.addEventListener('infinite-rails:started', (event) => {
+      cancelRendererStartWatchdog();
       applyRendererReadyState(event?.detail && typeof event.detail === 'object' ? event.detail : null, {
         logLevel: 'success',
         logMessage: 'Renderer initialised successfully.',
       });
     });
     globalScope.addEventListener('infinite-rails:renderer-failure', (event) => {
+      cancelRendererStartWatchdog();
       const detail =
         event?.detail && typeof event.detail === 'object' ? { ...event.detail } : {};
       if (typeof detail.message !== 'string' || !detail.message.trim().length) {
@@ -2556,6 +2558,7 @@
       });
     });
     globalScope.addEventListener('infinite-rails:start-error', (event) => {
+      cancelRendererStartWatchdog();
       const detail = event?.detail && typeof event.detail === 'object' ? event.detail : {};
       const stage = typeof detail?.stage === 'string' && detail.stage.trim().length ? detail.stage.trim() : null;
       const baseMessage =
@@ -2609,6 +2612,7 @@
       }
     });
     globalScope.addEventListener('infinite-rails:initialisation-error', (event) => {
+      cancelRendererStartWatchdog();
       const detail = event?.detail && typeof event.detail === 'object' ? event.detail : {};
       const stage = typeof detail?.stage === 'string' && detail.stage.trim().length ? detail.stage.trim() : null;
       const baseMessage =
@@ -6528,9 +6532,107 @@
     return experience;
   }
 
+  const DEFAULT_RENDERER_START_TIMEOUT_MS = 12000;
   let simpleFallbackAttempted = false;
+  let rendererStartWatchdogHandle = null;
+  let rendererStartWatchdogMode = null;
+
+  function resolveRendererStartTimeout(config) {
+    if (config && typeof config === 'object') {
+      const candidates = [
+        config.rendererStartTimeoutMs,
+        config.rendererStartTimeout,
+        config.rendererWatchdogTimeoutMs,
+      ];
+      for (const candidate of candidates) {
+        const parsed = Number.parseInt(candidate, 10);
+        if (Number.isFinite(parsed) && parsed > 0) {
+          return parsed;
+        }
+      }
+    }
+    return DEFAULT_RENDERER_START_TIMEOUT_MS;
+  }
+
+  function cancelRendererStartWatchdog() {
+    const clear =
+      (typeof globalScope !== 'undefined' && typeof globalScope.clearTimeout === 'function'
+        ? globalScope.clearTimeout
+        : typeof clearTimeout === 'function'
+          ? clearTimeout
+          : null);
+    if (rendererStartWatchdogHandle !== null && clear) {
+      try {
+        clear(rendererStartWatchdogHandle);
+      } catch (error) {
+        if (globalScope?.console?.debug) {
+          globalScope.console.debug('Failed to clear renderer start watchdog timer.', error);
+        }
+      }
+    }
+    rendererStartWatchdogHandle = null;
+    rendererStartWatchdogMode = null;
+  }
+
+  function scheduleRendererStartWatchdog(mode) {
+    if (mode !== 'advanced') {
+      cancelRendererStartWatchdog();
+      return;
+    }
+    const set =
+      (typeof globalScope !== 'undefined' && typeof globalScope.setTimeout === 'function'
+        ? globalScope.setTimeout
+        : typeof setTimeout === 'function'
+          ? setTimeout
+          : null);
+    if (!set) {
+      return;
+    }
+    cancelRendererStartWatchdog();
+    const config = globalScope.APP_CONFIG || (globalScope.APP_CONFIG = {});
+    const timeout = resolveRendererStartTimeout(config);
+    if (!Number.isFinite(timeout) || timeout <= 0) {
+      return;
+    }
+    rendererStartWatchdogMode = mode;
+    rendererStartWatchdogHandle = set(() => {
+      rendererStartWatchdogHandle = null;
+      rendererStartWatchdogMode = null;
+      if (simpleFallbackAttempted) {
+        return;
+      }
+      const warningMessage =
+        'Advanced renderer start timed out — switching to the simplified sandbox.';
+      if (globalScope?.console?.warn) {
+        globalScope.console.warn(warningMessage);
+      }
+      if (typeof tryStartSimpleFallback === 'function') {
+        const timeoutError = new Error('Advanced renderer start timed out.');
+        try {
+          tryStartSimpleFallback(timeoutError, {
+            reason: 'renderer-timeout',
+            mode: 'advanced',
+            source: 'watchdog',
+            stage: 'startup.watchdog',
+          });
+        } catch (fallbackError) {
+          if (globalScope?.console?.debug) {
+            globalScope.console.debug('Renderer watchdog fallback failed to start.', fallbackError);
+          }
+        }
+      }
+    }, timeout);
+  }
+
+  function getRendererStartWatchdogState() {
+    return {
+      handle: rendererStartWatchdogHandle,
+      mode: rendererStartWatchdogMode,
+    };
+  }
 
   function tryStartSimpleFallback(error, context = {}) {
+    cancelRendererStartWatchdog();
     if (simpleFallbackAttempted) {
       return false;
     }
@@ -6666,6 +6768,7 @@
         const startSimple = shouldStartSimpleMode();
         const mode = startSimple ? 'simple' : 'advanced';
         setRendererModeIndicator(mode);
+        scheduleRendererStartWatchdog(mode);
         if (scope.SimpleExperience?.create) {
           return ensureSimpleExperience(mode);
         }
