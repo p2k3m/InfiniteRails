@@ -7754,6 +7754,16 @@
           chest.name = 'ChestFallback';
           return applyPlaceholderMetadata(chest, 'chest');
         }
+        case 'portal':
+        case 'portal-core':
+        case 'portal-frame': {
+          const portal = this.createPortalPlaceholderMesh(this.dimensionSettings || null);
+          if (!portal) {
+            return null;
+          }
+          portal.name = 'PortalFallback';
+          return applyPlaceholderMetadata(portal, 'portal-core');
+        }
         default: {
           const size = Number.isFinite(options.size) && options.size > 0 ? options.size : 1;
           const geometry = new THREE.BoxGeometry(size, size, size);
@@ -10068,49 +10078,179 @@
       const palette = theme?.palette ?? {};
       const baseColor = palette.dirt || '#a66a33';
       const accentColor = palette.rails || '#f5b041';
+      const overlayColor = '#3f2f1d';
       const group = new THREE.Group();
-      const baseMaterial = new THREE.MeshStandardMaterial({
+
+      const bodyMaterial = new THREE.MeshStandardMaterial({
         color: baseColor,
         roughness: 0.72,
         metalness: 0.18,
       });
-      const trimMaterial = new THREE.MeshStandardMaterial({
+      const lidMaterial = bodyMaterial.clone();
+      lidMaterial.color.set(baseColor);
+      lidMaterial.color.offsetHSL(0, -0.08, 0.05);
+
+      const strapMaterial = new THREE.MeshStandardMaterial({
         color: accentColor,
-        roughness: 0.4,
-        metalness: 0.68,
+        roughness: 0.28,
+        metalness: 0.82,
         emissive: new THREE.Color(accentColor),
-        emissiveIntensity: 0.18,
+        emissiveIntensity: 0.28,
+        side: THREE.DoubleSide,
       });
-      const lockMaterial = trimMaterial.clone();
-      const body = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.5, 0.6), baseMaterial);
+
+      const overlayMaterial = new THREE.MeshStandardMaterial({
+        color: overlayColor,
+        roughness: 0.58,
+        metalness: 0.22,
+        emissive: new THREE.Color('#2a1a0c'),
+        emissiveIntensity: 0.18,
+        side: THREE.DoubleSide,
+      });
+
+      const lockMaterial = new THREE.MeshStandardMaterial({
+        color: '#fde68a',
+        roughness: 0.24,
+        metalness: 0.9,
+        emissive: new THREE.Color('#fbbf24'),
+        emissiveIntensity: 0.45,
+      });
+
+      const body = new THREE.Mesh(new THREE.BoxGeometry(0.94, 0.5, 0.94), bodyMaterial);
       body.castShadow = true;
       body.receiveShadow = true;
       body.position.y = 0.25;
       group.add(body);
+
       const lidPivot = new THREE.Group();
-      lidPivot.position.set(0, 0.5, -0.3);
-      const lid = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.4, 0.6), baseMaterial.clone());
-      lid.position.set(0, 0, 0.3);
+      lidPivot.position.set(0, 0.5, -0.47);
+      group.add(lidPivot);
+
+      const lid = new THREE.Mesh(new THREE.BoxGeometry(0.94, 0.38, 0.94), lidMaterial);
+      lid.position.set(0, 0, 0.47);
       lid.castShadow = true;
       lid.receiveShadow = true;
       lidPivot.add(lid);
-      group.add(lidPivot);
-      const band = new THREE.Mesh(new THREE.BoxGeometry(0.94, 0.12, 0.12), trimMaterial);
-      band.position.set(0, 0.32, 0);
-      band.castShadow = true;
-      band.receiveShadow = true;
-      group.add(band);
-      const lock = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.22, 0.05), lockMaterial);
-      lock.position.set(0, 0.32, 0.33);
+
+      const bodyOverlay = new THREE.Mesh(new THREE.BoxGeometry(0.96, 0.08, 0.96), overlayMaterial);
+      bodyOverlay.position.y = 0.24;
+      body.add(bodyOverlay);
+
+      const lidOverlay = new THREE.Mesh(new THREE.BoxGeometry(0.96, 0.08, 0.96), overlayMaterial.clone());
+      lidOverlay.position.set(0, 0.22, 0);
+      lid.add(lidOverlay);
+
+      const strapFrontLower = new THREE.Mesh(new THREE.PlaneGeometry(0.22, 0.46), strapMaterial);
+      strapFrontLower.position.set(0, 0.2, 0.49);
+      body.add(strapFrontLower);
+
+      const strapFrontUpper = strapFrontLower.clone();
+      strapFrontUpper.position.set(0, 0.16, 0.49);
+      lid.add(strapFrontUpper);
+
+      const strapBackLower = strapFrontLower.clone();
+      strapBackLower.position.z = -0.49;
+      strapBackLower.rotation.y = Math.PI;
+      body.add(strapBackLower);
+
+      const strapBackUpper = strapFrontUpper.clone();
+      strapBackUpper.position.z = -0.49;
+      strapBackUpper.rotation.y = Math.PI;
+      lid.add(strapBackUpper);
+
+      const strapTop = new THREE.Mesh(new THREE.PlaneGeometry(0.22, 0.94), strapMaterial.clone());
+      strapTop.rotation.x = -Math.PI / 2;
+      strapTop.position.set(0, 0.19, 0);
+      lid.add(strapTop);
+
+      const lock = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.2, 0.08), lockMaterial);
+      lock.position.set(0, 0.22, 0.49);
       lock.castShadow = true;
       lock.receiveShadow = true;
       group.add(lock);
+
+      const lockInset = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.12, 0.04), overlayMaterial.clone());
+      lockInset.position.set(0, -0.02, 0.05);
+      lock.add(lockInset);
+
       group.userData = {
         lid,
         lidPivot,
-        highlightMaterials: [trimMaterial, lockMaterial],
+        highlightMaterials: [strapMaterial, strapTop.material, lockMaterial],
+        placeholder: true,
+        placeholderKey: 'chest',
       };
+
       return group;
+    }
+
+    createPortalPlaceholderMesh(theme) {
+      const THREE = this.THREE;
+      if (!THREE) {
+        return null;
+      }
+      const palette = theme?.palette ?? {};
+      const frameColor = palette.stone || '#312e81';
+      const swirlColor = palette.rails || '#7f5af0';
+      const accentColor = palette.grass || '#2cb67d';
+
+      const frameMaterial = new THREE.MeshStandardMaterial({
+        color: frameColor,
+        roughness: 0.74,
+        metalness: 0.26,
+      });
+
+      const swirlMaterial = new THREE.MeshStandardMaterial({
+        color: swirlColor,
+        transparent: true,
+        opacity: 0.85,
+        emissive: new THREE.Color(swirlColor),
+        emissiveIntensity: 0.45,
+        roughness: 0.32,
+        metalness: 0.55,
+        side: THREE.DoubleSide,
+      });
+
+      const accentMaterial = new THREE.MeshStandardMaterial({
+        color: accentColor,
+        transparent: true,
+        opacity: 0.9,
+        emissive: new THREE.Color(accentColor),
+        emissiveIntensity: 0.32,
+        roughness: 0.35,
+        metalness: 0.48,
+        side: THREE.DoubleSide,
+      });
+
+      const core = new THREE.Mesh(new THREE.BoxGeometry(2.3, 3.1, 0.3), frameMaterial);
+      core.castShadow = false;
+      core.receiveShadow = false;
+
+      const swirl = new THREE.Mesh(new THREE.PlaneGeometry(2.05, 2.6), swirlMaterial);
+      swirl.position.z = 0.16;
+      core.add(swirl);
+
+      const swirlBack = swirl.clone();
+      swirlBack.position.z = -0.16;
+      swirlBack.rotation.y = Math.PI;
+      core.add(swirlBack);
+
+      const accentTop = new THREE.Mesh(new THREE.PlaneGeometry(1.7, 0.32), accentMaterial);
+      accentTop.position.set(0, 0.75, 0.165);
+      core.add(accentTop);
+
+      const accentBottom = accentTop.clone();
+      accentBottom.position.y = -0.75;
+      core.add(accentBottom);
+
+      core.userData = {
+        ...(core.userData || {}),
+        highlightMaterials: [swirlMaterial, accentMaterial],
+        placeholder: true,
+        placeholderKey: 'portal-core',
+      };
+
+      return core;
     }
 
     spawnDimensionChests() {
@@ -10885,23 +11025,48 @@
       const worldZ = anchorWorld.z;
       this.portalGroup.clear();
       this.portalActivated = true;
-      if (!this.portalPlaneGeometry) {
-        this.portalPlaneGeometry = new THREE.PlaneGeometry(2.4, 3.2);
+      const usePlaceholder =
+        this.portalShaderFallbackActive || !(this.materials.portal instanceof THREE.ShaderMaterial);
+      let portalMesh = null;
+      if (usePlaceholder) {
+        portalMesh = this.createPortalPlaceholderMesh(this.dimensionSettings || null);
+        if (portalMesh) {
+          portalMesh.position.set(worldX, worldY, worldZ);
+          portalMesh.rotation.y = Math.PI;
+          portalMesh.renderOrder = 2;
+          portalMesh.castShadow = false;
+          portalMesh.receiveShadow = false;
+          portalMesh.userData = {
+            ...(portalMesh.userData || {}),
+            placeholder: true,
+            placeholderKey: portalMesh.userData?.placeholderKey || 'portal-core',
+            placeholderReason: this.portalShaderFallbackActive ? 'shader-fallback' : 'model-missing',
+            placeholderSource: 'portal-placeholder',
+          };
+          this.portalGroup.add(portalMesh);
+        }
       }
-      const portalMaterial = this.materials.portal.clone();
-      portalMaterial.uniforms = {
-        uTime: { value: 0 },
-        uColorA: { value: this.materials.portal.uniforms.uColorA.value.clone() },
-        uColorB: { value: this.materials.portal.uniforms.uColorB.value.clone() },
-      };
-      const plane = new THREE.Mesh(this.portalPlaneGeometry, portalMaterial);
-      plane.position.set(worldX, worldY, worldZ + 0.02);
-      plane.rotation.y = Math.PI;
-      plane.renderOrder = 2;
-      plane.castShadow = false;
-      plane.receiveShadow = false;
-      this.portalGroup.add(plane);
-      this.portalMesh = plane;
+
+      if (!portalMesh) {
+        if (!this.portalPlaneGeometry) {
+          this.portalPlaneGeometry = new THREE.PlaneGeometry(2.4, 3.2);
+        }
+        const portalMaterial = this.materials.portal.clone();
+        portalMaterial.uniforms = {
+          uTime: { value: 0 },
+          uColorA: { value: this.materials.portal.uniforms.uColorA.value.clone() },
+          uColorB: { value: this.materials.portal.uniforms.uColorB.value.clone() },
+        };
+        portalMesh = new THREE.Mesh(this.portalPlaneGeometry, portalMaterial);
+        portalMesh.position.set(worldX, worldY, worldZ + 0.02);
+        portalMesh.rotation.y = Math.PI;
+        portalMesh.renderOrder = 2;
+        portalMesh.castShadow = false;
+        portalMesh.receiveShadow = false;
+        this.portalGroup.add(portalMesh);
+      }
+
+      this.portalMesh = portalMesh;
       this.hidePortalInteriorBlocks();
       this.updatePortalInteriorValidity();
       this.portalHintShown = true;
