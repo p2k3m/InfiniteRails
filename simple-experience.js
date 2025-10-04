@@ -10441,9 +10441,58 @@
 
     applyDimensionSettings(index) {
       const themeCount = DIMENSION_THEME.length;
+      if (themeCount === 0) {
+        if (typeof console !== 'undefined' && typeof console.error === 'function') {
+          console.error(
+            `Dimension theme load attempt failed for index ${index}. No dimension themes are registered.`,
+          );
+        }
+        this.dimensionSettings = null;
+        this.dimensionTerrainProfile = DEFAULT_TERRAIN_PROFILE;
+        this.applyTerrainProfileToCaps(this.dimensionTerrainProfile);
+        this.currentSpeed = PLAYER_BASE_SPEED;
+        this.gravityScale = 1;
+        this.netheriteChallengePlanned = false;
+        if (typeof this.resetNetheriteChallenge === 'function') {
+          this.resetNetheriteChallenge();
+        }
+        return;
+      }
       const safeIndex = ((index % themeCount) + themeCount) % themeCount;
-      this.currentDimensionIndex = safeIndex;
-      const theme = DIMENSION_THEME[safeIndex] ?? DIMENSION_THEME[0];
+      let resolvedIndex = safeIndex;
+      let theme = DIMENSION_THEME[safeIndex] ?? null;
+      if (!theme) {
+        const fallbackIndex = DIMENSION_THEME.findIndex((candidate) => Boolean(candidate));
+        const fallbackTheme = fallbackIndex >= 0 ? DIMENSION_THEME[fallbackIndex] : null;
+        if (typeof console !== 'undefined') {
+          const logger = typeof console.warn === 'function' ? console.warn : console.log;
+          if (typeof logger === 'function') {
+            const fallbackMessage = fallbackTheme
+              ? `Falling back to theme "${fallbackTheme.id ?? `index-${fallbackIndex}`}".`
+              : 'No fallback theme is available.';
+            logger(
+              `Dimension theme load attempt missing for index ${safeIndex} (requested ${index}). ${fallbackMessage}`,
+            );
+          }
+        }
+        if (fallbackTheme) {
+          theme = fallbackTheme;
+          resolvedIndex = fallbackIndex;
+        }
+      }
+      if (!theme) {
+        this.dimensionSettings = null;
+        this.dimensionTerrainProfile = DEFAULT_TERRAIN_PROFILE;
+        this.applyTerrainProfileToCaps(this.dimensionTerrainProfile);
+        this.currentSpeed = PLAYER_BASE_SPEED;
+        this.gravityScale = 1;
+        this.netheriteChallengePlanned = false;
+        if (typeof this.resetNetheriteChallenge === 'function') {
+          this.resetNetheriteChallenge();
+        }
+        return;
+      }
+      this.currentDimensionIndex = resolvedIndex;
       this.dimensionSettings = theme;
       this.dimensionTerrainProfile = theme?.terrainProfile || DEFAULT_TERRAIN_PROFILE;
       this.applyTerrainProfileToCaps(this.dimensionTerrainProfile);
