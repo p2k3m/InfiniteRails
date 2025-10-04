@@ -130,6 +130,7 @@ async function waitForLeaderboard(page) {
   if (!summaries.some((text) => dimensionLabels.test(text))) {
     throw new Error('Leaderboard rows did not include a dimension summary.');
   }
+  return { rows, summaries };
 }
 
 async function validateScoreHud(page, { requireDimensionCount = false } = {}) {
@@ -167,7 +168,9 @@ async function runAdvancedScenario(browser) {
     await page.waitForFunction(() => document.body.classList.contains('game-active'), {
       timeout: 15000,
     });
+    logCheckpoint('Advanced', 'Gameplay activation confirmed', { elapsedFrom: scenarioStart });
     await page.waitForFunction(() => Boolean(window.__INFINITE_RAILS_STATE__), { timeout: 15000 });
+    logCheckpoint('Advanced', 'Renderer state object detected', { elapsedFrom: scenarioStart });
 
     logCheckpoint('Advanced', 'Collecting renderer state snapshot', { elapsedFrom: scenarioStart });
     const stateSnapshot = await page.evaluate(() => {
@@ -200,11 +203,31 @@ async function runAdvancedScenario(browser) {
     if (stateSnapshot.eventCount === 0) {
       throw new Error('Advanced renderer did not record any event log entries.');
     }
+    logCheckpoint(
+      'Advanced',
+      `Renderer snapshot summary — rows: ${stateSnapshot.worldRows}, cols: ${stateSnapshot.worldCols}, events: ${stateSnapshot.eventCount}, dimension: ${stateSnapshot.dimensionName}`,
+      { elapsedFrom: scenarioStart },
+    );
 
     logCheckpoint('Advanced', 'Validating HUD and leaderboard', { elapsedFrom: scenarioStart });
-    await ensureGameHudReady(page);
-    await waitForLeaderboard(page);
-    await validateScoreHud(page);
+    const hudState = await ensureGameHudReady(page);
+    logCheckpoint(
+      'Advanced',
+      `HUD ready — time: ${hudState.timeText}, dimension: ${hudState.dimensionHeading}, portal: ${hudState.portalLabel}`,
+      { elapsedFrom: scenarioStart },
+    );
+    const leaderboard = await waitForLeaderboard(page);
+    logCheckpoint(
+      'Advanced',
+      `Leaderboard populated — rows: ${leaderboard.rows}`,
+      { elapsedFrom: scenarioStart },
+    );
+    const scoreHud = await validateScoreHud(page);
+    logCheckpoint(
+      'Advanced',
+      `Score HUD totals — total: ${scoreHud.total}, recipes: ${scoreHud.recipes}, dimensions: ${scoreHud.dimensions}`,
+      { elapsedFrom: scenarioStart },
+    );
 
     const unexpected = findUnexpectedWarnings(warnings);
     if (unexpected.length) {
@@ -292,7 +315,12 @@ async function runSimpleScenario(browser) {
     }
 
     logCheckpoint('Sandbox', 'Validating HUD after debug actions', { elapsedFrom: scenarioStart });
-    await ensureGameHudReady(page, { requireNight: true });
+    const hudState = await ensureGameHudReady(page, { requireNight: true });
+    logCheckpoint(
+      'Sandbox',
+      `HUD ready — time: ${hudState.timeText}, dimension: ${hudState.dimensionHeading}, portal: ${hudState.portalLabel}`,
+      { elapsedFrom: scenarioStart },
+    );
 
     logCheckpoint('Sandbox', 'Driving portal progression', { elapsedFrom: scenarioStart });
     await page.evaluate(() => {
@@ -313,8 +341,16 @@ async function runSimpleScenario(browser) {
     );
 
     logCheckpoint('Sandbox', 'Validating leaderboard and score HUD', { elapsedFrom: scenarioStart });
-    await waitForLeaderboard(page);
-    await validateScoreHud(page, { requireDimensionCount: true });
+    const leaderboard = await waitForLeaderboard(page);
+    logCheckpoint('Sandbox', `Leaderboard populated — rows: ${leaderboard.rows}`, {
+      elapsedFrom: scenarioStart,
+    });
+    const scoreHud = await validateScoreHud(page, { requireDimensionCount: true });
+    logCheckpoint(
+      'Sandbox',
+      `Score HUD totals — total: ${scoreHud.total}, recipes: ${scoreHud.recipes}, dimensions: ${scoreHud.dimensions}`,
+      { elapsedFrom: scenarioStart },
+    );
 
     if (!debugSnapshot.hudActive) {
       throw new Error('Debug snapshot indicates HUD inactive despite gameplay start.');
