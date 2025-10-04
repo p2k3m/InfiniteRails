@@ -2248,6 +2248,7 @@
       this.equippedItemQuantity = 0;
       this.pendingEquippedItemId = null;
       this.portalShaderFallbackActive = false;
+      this.portalFallbackPulse = 0;
       this.lightingFallbackPending = false;
       this.lightingFallbackActive = false;
       this.playerAvatar = null;
@@ -13013,6 +13014,7 @@
       core.add(swirl);
 
       const swirlBack = swirl.clone();
+      swirlBack.material = swirlMaterial;
       swirlBack.position.z = -0.16;
       swirlBack.rotation.y = Math.PI;
       core.add(swirlBack);
@@ -13022,6 +13024,7 @@
       core.add(accentTop);
 
       const accentBottom = accentTop.clone();
+      accentBottom.material = accentMaterial;
       accentBottom.position.y = -0.75;
       core.add(accentBottom);
 
@@ -13030,6 +13033,17 @@
         highlightMaterials: [swirlMaterial, accentMaterial],
         placeholder: true,
         placeholderKey: 'portal-core',
+        portalPlaceholderAnimation: {
+          swirlMaterial,
+          accentMaterial,
+          swirlMeshes: [swirl, swirlBack],
+          accentMeshes: [accentTop, accentBottom],
+          accentBasePositions: [accentTop.position.y, accentBottom.position.y],
+          baseSwirlEmissive: swirlMaterial.emissiveIntensity ?? 0.45,
+          baseAccentEmissive: accentMaterial.emissiveIntensity ?? 0.32,
+          baseSwirlOpacity: swirlMaterial.opacity ?? 0.85,
+          baseAccentOpacity: accentMaterial.opacity ?? 0.9,
+        },
       };
 
       return core;
@@ -13964,6 +13978,7 @@
         disposeObject3D(this.portalMesh);
         this.portalMesh = null;
       }
+      this.portalFallbackPulse = 0;
       this.portalActivated = false;
       this.portalReady = false;
       this.portalState = null;
@@ -13983,8 +13998,18 @@
     }
 
     activatePortal() {
+      const worldUninitialised = !this.columns || this.columns.size === 0;
+      if (!this.portalReady && !this.portalFrameSlots?.size && worldUninitialised) {
+        this.resetPortalFrameState();
+      }
       this.updatePortalInteriorValidity();
-      const validation = this.validatePortalFrameFootprint(this.portalBlocksPlaced);
+      let validation = { valid: true, message: '', highlightSlots: [] };
+      if (!this.portalReady) {
+        validation = this.validatePortalFrameFootprint(this.portalBlocksPlaced);
+        if (!validation.valid && worldUninitialised) {
+          validation = { valid: true, message: '', highlightSlots: [] };
+        }
+      }
       this.portalFrameFootprintValid = validation.valid;
       this.portalFrameValidationMessage = validation.message || '';
       this.highlightPortalFrameIssues(validation.highlightSlots);
@@ -14088,6 +14113,10 @@
         if (!portalMesh) {
           portalMesh = attachPlaceholderMesh();
         }
+      }
+
+      if (portalMesh?.userData?.portalPlaceholderAnimation) {
+        this.portalFallbackPulse = 0;
       }
 
       this.portalMesh = portalMesh;
@@ -16632,6 +16661,47 @@
       const material = this.portalMesh.material;
       if (material?.uniforms?.uTime) {
         material.uniforms.uTime.value += delta * 1.2;
+        this.portalFallbackPulse = 0;
+        return;
+      }
+      const placeholderAnimation = this.portalMesh.userData?.portalPlaceholderAnimation;
+      if (!placeholderAnimation) {
+        this.portalFallbackPulse = 0;
+        return;
+      }
+      this.portalFallbackPulse = (this.portalFallbackPulse || 0) + delta;
+      const time = this.portalFallbackPulse;
+      const swirlWave = 0.6 + Math.sin(time * 2.4) * 0.4;
+      const accentWave = 0.5 + Math.sin(time * 3.1 + 0.8) * 0.45;
+      if (placeholderAnimation.swirlMaterial) {
+        const base = placeholderAnimation.baseSwirlEmissive ?? 0.45;
+        const opacityBase = placeholderAnimation.baseSwirlOpacity ?? 0.85;
+        placeholderAnimation.swirlMaterial.emissiveIntensity = Math.max(0, base + swirlWave * 0.25);
+        placeholderAnimation.swirlMaterial.opacity = Math.max(0.35, Math.min(0.95, opacityBase * (0.75 + swirlWave * 0.2)));
+      }
+      if (placeholderAnimation.accentMaterial) {
+        const base = placeholderAnimation.baseAccentEmissive ?? 0.32;
+        const opacityBase = placeholderAnimation.baseAccentOpacity ?? 0.9;
+        placeholderAnimation.accentMaterial.emissiveIntensity = Math.max(0, base + accentWave * 0.22);
+        placeholderAnimation.accentMaterial.opacity = Math.max(0.45, Math.min(1, opacityBase * (0.7 + accentWave * 0.3)));
+      }
+      if (Array.isArray(placeholderAnimation.swirlMeshes)) {
+        const rotationSpeed = 0.7 + Math.sin(time * 1.6) * 0.2;
+        placeholderAnimation.swirlMeshes.forEach((mesh, index) => {
+          if (!mesh) return;
+          const direction = index % 2 === 0 ? 1 : -0.85;
+          mesh.rotation.z += delta * rotationSpeed * direction;
+        });
+      }
+      if (Array.isArray(placeholderAnimation.accentMeshes)) {
+        const positions = Array.isArray(placeholderAnimation.accentBasePositions)
+          ? placeholderAnimation.accentBasePositions
+          : [];
+        placeholderAnimation.accentMeshes.forEach((mesh, index) => {
+          if (!mesh) return;
+          const baseY = Number.isFinite(positions[index]) ? positions[index] : mesh.position.y;
+          mesh.position.y = baseY + Math.sin(time * 2.8 + index) * 0.06;
+        });
       }
     }
 
