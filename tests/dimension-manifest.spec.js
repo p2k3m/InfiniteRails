@@ -82,6 +82,61 @@ describe('dimension asset manifest', () => {
     );
   });
 
+  it('ensures every dimension manifest lists its required terrain, mobs, and objects', () => {
+    const manifest = loadManifest();
+    const baseTerrain = ['grass-block', 'dirt', 'stone', 'rail-segment', 'portal-anchor'];
+    const baseMobs = ['player-avatar', 'zombie', 'iron-golem'];
+    const baseObjects = [
+      'portal-frame',
+      'portal-core',
+      'loot-chest',
+      'rail-network',
+      'crafting-interface',
+      'eternal-ingot',
+    ];
+
+    const coverageExpectations = {
+      origin: {
+        terrain: baseTerrain,
+        mobs: baseMobs,
+        objects: baseObjects,
+      },
+      rock: {
+        terrain: baseTerrain,
+        mobs: baseMobs,
+        objects: baseObjects,
+      },
+      stone: {
+        terrain: baseTerrain,
+        mobs: baseMobs,
+        objects: [...baseObjects, 'bastion-rampart'],
+      },
+      tar: {
+        terrain: [...baseTerrain, 'tar-pool'],
+        mobs: [...baseMobs, 'swamp-phantom'],
+        objects: baseObjects,
+      },
+      marble: {
+        terrain: baseTerrain,
+        mobs: baseMobs,
+        objects: [...baseObjects, 'marble-bridge'],
+      },
+      netherite: {
+        terrain: baseTerrain,
+        mobs: baseMobs,
+        objects: [...baseObjects, 'eternal-ingot-pedestal'],
+      },
+    };
+
+    Object.entries(coverageExpectations).forEach(([dimensionId, expectation]) => {
+      const entry = manifest[dimensionId];
+      expect(entry).toBeTruthy();
+      expect(entry.terrain).toEqual(expect.arrayContaining(expectation.terrain));
+      expect(entry.mobs).toEqual(expect.arrayContaining(expectation.mobs));
+      expect(entry.objects).toEqual(expect.arrayContaining(expectation.objects));
+    });
+  });
+
   it('links dimension themes to manifest entries', () => {
     const { windowStub } = ensureSimpleExperienceLoaded();
     const manifest = windowStub.InfiniteRailsDimensionManifest;
