@@ -2660,6 +2660,7 @@
       this.heightmapStreamLastError = null;
       this.seededHeightmapCache = new Map();
       this.lastTerrainBuildSummary = null;
+      this.lastScenePopulationSummary = null;
     }
 
     emitGameEvent(type, detail = {}) {
@@ -2718,8 +2719,8 @@
         this.applyDimensionSettings(this.currentDimensionIndex);
         this.primeAmbientAudio();
         this.buildTerrain();
+        this.populateSceneAfterTerrain({ reason: 'start' });
         this.buildRails();
-        this.spawnDimensionChests();
         this.refreshPortalState();
         this.attachPlayerToSimulation();
         this.evaluateBossChallenge();
@@ -2901,6 +2902,57 @@
 
       summary.allPresent = summary.missing.length === 0;
       return summary;
+    }
+
+    reportMissingSceneObjects(summary, context = {}) {
+      if (!summary || summary.allPresent) {
+        return;
+      }
+      const reasonRaw = typeof context.reason === 'string' ? context.reason.trim() : '';
+      const reason = reasonRaw.length ? reasonRaw : 'scene-population';
+      const errors = Array.isArray(context.errors) ? context.errors : [];
+      const errorMap = new Map();
+      for (const entry of errors) {
+        if (!entry || typeof entry.asset !== 'string') {
+          continue;
+        }
+        if (!errorMap.has(entry.asset)) {
+          errorMap.set(entry.asset, entry.error || null);
+        }
+      }
+      const missingKeys = Array.isArray(summary.missing) ? summary.missing : [];
+      if (!missingKeys.length) {
+        return;
+      }
+      const summaryKeyMap = { steve: 'steve', ground: 'ground', block: 'blocks', mob: 'mobs' };
+      const assetNameMap = {
+        steve: 'player-avatar',
+        ground: 'terrain-ground',
+        block: 'terrain-blocks',
+        mob: 'mob-actors',
+      };
+      for (const missingKey of missingKeys) {
+        const asset = assetNameMap[missingKey] || missingKey;
+        const summaryKey = summaryKeyMap[missingKey] || missingKey;
+        const snapshot = summary[summaryKey] ?? null;
+        const capturedError =
+          errorMap.get(asset) ?? errorMap.get(summaryKey) ?? errorMap.get(missingKey) ?? null;
+        const detail = {
+          asset,
+          reason,
+          missingKey,
+          snapshot,
+        };
+        if (capturedError) {
+          detail.error = normaliseLiveDiagnosticError(capturedError);
+        }
+        if (typeof console !== 'undefined' && typeof console.error === 'function') {
+          console.error(`Scene object missing — ${asset}`, detail);
+        }
+        if (typeof notifyLiveDiagnostics === 'function') {
+          notifyLiveDiagnostics('scene', `Scene object missing — ${asset}`, detail, { level: 'error' });
+        }
+      }
     }
 
     logEngineBootDiagnostics(context = {}) {
@@ -11200,6 +11252,131 @@
       }
     }
 
+    populateSceneAfterTerrain(options = {}) {
+      const reasonRaw = typeof options.reason === 'string' ? options.reason.trim() : '';
+      const reason = reasonRaw.length ? reasonRaw : 'terrain-ready';
+      const populationErrors = [];
+      const recordPopulationError = (asset, error) => {
+        const consoleDetail = { asset, reason };
+        if (error) {
+          consoleDetail.error = error;
+        }
+        if (typeof console !== 'undefined' && typeof console.error === 'function') {
+          console.error(`Scene population step failed for ${asset}.`, consoleDetail);
+        }
+        populationErrors.push({ asset, error });
+        const diagnosticDetail = {
+          asset,
+          reason,
+          error: normaliseLiveDiagnosticError(error),
+        };
+        if (typeof notifyLiveDiagnostics === 'function') {
+          notifyLiveDiagnostics('scene', `Scene population step failed for ${asset}.`, diagnosticDetail, {
+            level: 'error',
+          });
+        }
+      };
+      const invokeStep = (asset, handler) => {
+        if (typeof handler !== 'function') {
+          return;
+        }
+        try {
+          handler();
+        } catch (error) {
+          recordPopulationError(asset, error);
+        }
+      };
+
+      invokeStep('terrain-ground', () => {
+        const THREE = this.THREE;
+        const terrainGroup = this.terrainGroup || null;
+        if (!terrainGroup) {
+          throw new Error('Terrain group unavailable after build.');
+        }
+        let targetParent = null;
+        if (this.worldRoot instanceof THREE.Group && typeof this.worldRoot.add === 'function') {
+          targetParent = this.worldRoot;
+        } else if (this.scene && typeof this.scene.add === 'function') {
+          targetParent = this.scene;
+        }
+        if (!targetParent) {
+          throw new Error('No valid scene root available for terrain group attachment.');
+        }
+        if (
+          terrainGroup.parent &&
+          terrainGroup.parent !== targetParent &&
+          typeof terrainGroup.parent.remove === 'function'
+        ) {
+          try {
+            terrainGroup.parent.remove(terrainGroup);
+          } catch (error) {
+            if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+              console.debug('Failed to detach terrain group from previous parent.', error);
+            }
+          }
+        }
+        if (terrainGroup.parent !== targetParent) {
+          try {
+            targetParent.add(terrainGroup);
+          } catch (error) {
+            const attachError = new Error('Terrain group could not be attached to the scene root.');
+            attachError.cause = error;
+            throw attachError;
+          }
+        }
+      });
+
+      invokeStep('terrain-blocks', () => {
+        const terrainGroup = this.terrainGroup || null;
+        const chunkGroups = Array.isArray(this.terrainChunkGroups) ? this.terrainChunkGroups : [];
+        if (!terrainGroup) {
+          throw new Error('Terrain group missing while validating block meshes.');
+        }
+        if (!chunkGroups.length) {
+          throw new Error('Terrain chunk groups are empty after terrain generation.');
+        }
+        let attachedChunkCount = 0;
+        for (const chunk of chunkGroups) {
+          if (!chunk) {
+            continue;
+          }
+          if (chunk.parent !== terrainGroup && typeof terrainGroup.add === 'function') {
+            terrainGroup.add(chunk);
+          }
+          if (chunk.parent === terrainGroup) {
+            attachedChunkCount += 1;
+          }
+        }
+        if (attachedChunkCount <= 0) {
+          throw new Error('No terrain chunk groups are attached to the terrain group.');
+        }
+      });
+
+      invokeStep('player-avatar', () => {
+        this.positionPlayer();
+      });
+
+      invokeStep('loot-chests', () => {
+        this.spawnDimensionChests();
+      });
+
+      const mobOptions = typeof options.mobs === 'object' && options.mobs !== null ? options.mobs : {};
+      invokeStep('mob-actors', () => {
+        this.populateInitialMobs(mobOptions);
+      });
+
+      if (typeof this.summariseRequiredSceneNodes === 'function') {
+        const summary = this.summariseRequiredSceneNodes();
+        this.lastScenePopulationSummary = summary || null;
+        if (summary && !summary.allPresent) {
+          this.reportMissingSceneObjects(summary, { reason, errors: populationErrors });
+        }
+        return summary;
+      }
+      this.lastScenePopulationSummary = null;
+      return null;
+    }
+
     detectChunkDebugFlag() {
       if (typeof window === 'undefined') {
         return false;
@@ -13470,8 +13647,8 @@
         );
       }
       this.buildTerrain();
+      this.populateSceneAfterTerrain({ reason: 'dimension-transition' });
       this.buildRails();
-      this.spawnDimensionChests();
       this.refreshPortalState();
       const arrivalRules = this.buildDimensionRuleSummary(
         this.dimensionSettings,
@@ -15798,6 +15975,51 @@
       const material = this.portalMesh.material;
       if (material?.uniforms?.uTime) {
         material.uniforms.uTime.value += delta * 1.2;
+      }
+    }
+
+    populateInitialMobs(options = {}) {
+      const mobOptions = typeof options === 'object' && options !== null ? options : {};
+      const spawnInitialGolems = mobOptions.spawnInitialGolems !== false;
+      const spawnInitialZombies =
+        mobOptions.spawnInitialZombies !== undefined
+          ? Boolean(mobOptions.spawnInitialZombies)
+          : typeof this.isNight === 'function'
+            ? this.isNight()
+            : false;
+      const golemTargetRaw = Number.isFinite(mobOptions.initialGolemCount)
+        ? Math.floor(mobOptions.initialGolemCount)
+        : 1;
+      const zombieTargetRaw = Number.isFinite(mobOptions.initialZombieCount)
+        ? Math.floor(mobOptions.initialZombieCount)
+        : 1;
+      const golemTarget = Math.max(0, Math.min(GOLEM_MAX_PER_DIMENSION, golemTargetRaw));
+      const zombieTarget = Math.max(0, Math.min(ZOMBIE_MAX_PER_DIMENSION, zombieTargetRaw));
+
+      const golemGroup = this.ensureEntityGroup('golem');
+      if (!Array.isArray(this.golems)) {
+        this.golems = [];
+      }
+      if (spawnInitialGolems && golemGroup) {
+        const currentGolems = this.golems.length;
+        const desiredGolems = Math.max(currentGolems, golemTarget);
+        const limit = Math.min(desiredGolems, GOLEM_MAX_PER_DIMENSION);
+        for (let index = currentGolems; index < limit; index += 1) {
+          this.spawnGolem();
+        }
+      }
+
+      const zombieGroup = this.ensureEntityGroup('zombie');
+      if (!Array.isArray(this.zombies)) {
+        this.zombies = [];
+      }
+      if (spawnInitialZombies && zombieGroup) {
+        const currentZombies = this.zombies.length;
+        const desiredZombies = Math.max(currentZombies, zombieTarget);
+        const limit = Math.min(desiredZombies, ZOMBIE_MAX_PER_DIMENSION);
+        for (let index = currentZombies; index < limit; index += 1) {
+          this.spawnZombie();
+        }
       }
     }
 
