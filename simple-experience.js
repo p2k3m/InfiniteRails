@@ -7949,6 +7949,15 @@
         key: normalised,
         attempt: attemptNumber,
       });
+      const schedule = this.textureRetrySchedules?.get?.(normalised) || null;
+      this.emitGameEvent('asset-retry-attempt', {
+        key: `texture:${normalised}`,
+        kind: 'textures',
+        attempt: attemptNumber,
+        limit: this.assetRetryLimit,
+        reason: schedule?.reason || 'unknown',
+        url: schedule?.url ?? null,
+      });
       const material = this.textureUpgradeTargets.get(normalised) || null;
       if (material) {
         this.queueExternalTextureUpgrade(normalised, material);
@@ -8001,9 +8010,24 @@
           },
         );
       }
+      if (attemptsSoFar === 0) {
+        this.emitGameEvent('asset-retry-requested', {
+          keys: [`texture:${normalised}`],
+          source: 'automatic',
+        });
+      }
       this.emitGameEvent('texture-retry-scheduled', {
         key: normalised,
         attempt: nextAttempt,
+        delayMs: delay,
+        reason,
+        url: context?.url ?? null,
+      });
+      this.emitGameEvent('asset-retry-scheduled', {
+        key: `texture:${normalised}`,
+        kind: 'textures',
+        attempt: nextAttempt,
+        limit: this.assetRetryLimit,
         delayMs: delay,
         reason,
         url: context?.url ?? null,
@@ -8069,6 +8093,7 @@
         return;
       }
       const wasMissing = this.textureFallbackMissingKeys.delete(normalised);
+      const attemptsUsed = this.textureRetryAttempts.get(normalised) || 0;
       this.textureRetryAttempts.delete(normalised);
       this.clearScheduledTextureRetry(normalised);
       if (wasMissing) {
@@ -8082,6 +8107,14 @@
           key: normalised,
           url: context?.url ?? null,
         });
+        if (attemptsUsed > 0) {
+          this.emitGameEvent('asset-retry-success', {
+            key: `texture:${normalised}`,
+            kind: 'textures',
+            attempts: attemptsUsed,
+            url: context?.url ?? null,
+          });
+        }
       }
       if (this.textureFallbackMissingKeys.size === 0) {
         this.texturePackUnavailable = false;
@@ -8253,6 +8286,12 @@
             { key },
             { level: 'warning' },
           );
+        }
+        if (!fallbackTexture && key) {
+          this.scheduleTextureRetry(key, {
+            reason: 'missing-fallback-texture',
+            url: options.url || null,
+          });
         }
         return fallbackTexture;
       };
