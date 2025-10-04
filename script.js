@@ -3769,6 +3769,408 @@
     return `${apiBaseUrl.replace(/\/$/, '')}/scores`;
   }
 
+  const BACKEND_LIVE_CHECK_TIMEOUT_MS = 8000;
+  const BACKEND_LIVE_CHECK_ALLOWED_POST_STATUSES = new Set([400, 401, 403, 409, 422, 429]);
+  const backendLiveCheckState = {
+    promise: null,
+    performed: false,
+    success: null,
+    detail: null,
+  };
+
+  function normaliseLiveCheckErrorDetail(error) {
+    if (!error) {
+      return null;
+    }
+    if (typeof error === 'string') {
+      const trimmed = error.trim();
+      return trimmed ? { name: 'Error', message: trimmed } : null;
+    }
+    if (typeof error !== 'object') {
+      return { name: 'Error', message: String(error) };
+    }
+    const message =
+      typeof error.message === 'string' && error.message.trim().length
+        ? error.message.trim()
+        : null;
+    const detail = {
+      name: typeof error.name === 'string' && error.name.trim().length ? error.name.trim() : 'Error',
+    };
+    if (message) {
+      detail.message = message;
+    }
+    if (error.code !== undefined) {
+      detail.code = error.code;
+    }
+    if (error.reason !== undefined) {
+      detail.reason = error.reason;
+    }
+    return detail;
+  }
+
+  function simplifyBackendProbeResult(result) {
+    if (!result || typeof result !== 'object') {
+      return null;
+    }
+    const simplified = {};
+    if (typeof result.label === 'string' && result.label.trim().length) {
+      simplified.label = result.label.trim();
+    }
+    if (typeof result.url === 'string' && result.url.trim().length) {
+      simplified.url = result.url.trim();
+    }
+    if (typeof result.method === 'string' && result.method.trim().length) {
+      simplified.method = result.method.trim();
+    }
+    if (Number.isFinite(result.status)) {
+      simplified.status = result.status;
+    }
+    if (result.reason) {
+      simplified.reason = result.reason;
+    }
+    if (result.error) {
+      simplified.error = normaliseLiveCheckErrorDetail(result.error);
+    }
+    return simplified;
+  }
+
+  function formatBackendProbeLabel(method, url, label) {
+    if (label && typeof label === 'string' && label.trim().length) {
+      return label.trim();
+    }
+    const methodLabel = typeof method === 'string' && method.trim().length ? method.trim().toUpperCase() : 'REQUEST';
+    const urlLabel = typeof url === 'string' && url.trim().length ? url.trim() : 'unknown endpoint';
+    return `${methodLabel} ${urlLabel}`;
+  }
+
+  function formatBackendProbeSummary(result) {
+    if (!result || typeof result !== 'object') {
+      return 'unknown backend probe failure';
+    }
+    const label = formatBackendProbeLabel(result.method, result.url, result.label);
+    if (Number.isFinite(result.status)) {
+      return `${label} returned ${result.status}`;
+    }
+    if (result.reason === 'fetch-unavailable') {
+      return `${label} failed — fetch API unavailable`;
+    }
+    if (result.reason === 'missing-url') {
+      return `${label} failed — endpoint missing`;
+    }
+    if (result.error) {
+      const detail = normaliseLiveCheckErrorDetail(result.error);
+      if (detail?.reason === 'timeout' || detail?.name === 'AbortError') {
+        return `${label} timed out`;
+      }
+      const message =
+        detail?.message && detail.message.trim().length ? detail.message.trim() : 'request failed';
+      return `${label} failed — ${message}`;
+    }
+    return `${label} failed`;
+  }
+
+  function createBackendLiveCheckTimeout(timeoutMs) {
+    const hasAbortController = typeof AbortController === 'function';
+    const set =
+      typeof globalScope?.setTimeout === 'function'
+        ? globalScope.setTimeout
+        : typeof setTimeout === 'function'
+          ? setTimeout
+          : null;
+    const clear =
+      typeof globalScope?.clearTimeout === 'function'
+        ? globalScope.clearTimeout
+        : typeof clearTimeout === 'function'
+          ? clearTimeout
+          : null;
+    if (!hasAbortController || !set || !clear) {
+      return { signal: undefined, dispose() {} };
+    }
+    const controller = new AbortController();
+    const handle = set(() => {
+      try {
+        controller.abort();
+      } catch (error) {}
+    }, timeoutMs);
+    const dispose = () => {
+      try {
+        clear(handle);
+      } catch (error) {}
+    };
+    return { signal: controller.signal, dispose, controller };
+  }
+
+  async function probeBackendEndpoint({
+    url,
+    method = 'GET',
+    label = null,
+    allowStatuses = BACKEND_LIVE_CHECK_ALLOWED_POST_STATUSES,
+    headers = null,
+    body = undefined,
+    timeout = BACKEND_LIVE_CHECK_TIMEOUT_MS,
+  }) {
+    if (!url || typeof url !== 'string') {
+      return { ok: false, url, method, label, reason: 'missing-url' };
+    }
+    if (typeof fetch !== 'function') {
+      return { ok: false, url, method, label, reason: 'fetch-unavailable' };
+    }
+    const requestInit = {
+      method,
+      credentials: 'omit',
+      cache: 'no-store',
+      redirect: 'follow',
+    };
+    if (headers && typeof headers === 'object') {
+      requestInit.headers = headers;
+    }
+    if (body !== undefined) {
+      requestInit.body = body;
+    }
+    const { signal, dispose } = createBackendLiveCheckTimeout(timeout);
+    if (signal) {
+      requestInit.signal = signal;
+    }
+    try {
+      const response = await fetch(url, requestInit);
+      dispose();
+      const status = response.status;
+      const ok = response.ok || (allowStatuses instanceof Set ? allowStatuses.has(status) : false);
+      return { ok, status, url, method, label };
+    } catch (error) {
+      dispose();
+      const detail = normaliseLiveCheckErrorDetail(error) || { name: 'Error', message: String(error) };
+      if (detail && detail.name === 'AbortError' && !detail.reason) {
+        detail.reason = 'timeout';
+      }
+      return { ok: false, error: detail, url, method, label };
+    }
+  }
+
+  function markBackendLiveCheckSuccess(context = null) {
+    backendLiveCheckState.performed = true;
+    backendLiveCheckState.success = true;
+    backendLiveCheckState.detail = context;
+    const timestamp = new Date().toISOString();
+    if (!identityState.backendValidation || typeof identityState.backendValidation !== 'object') {
+      identityState.backendValidation = {};
+    }
+    identityState.backendValidation.performed = true;
+    identityState.backendValidation.ok = true;
+    identityState.backendValidation.checkedAt = timestamp;
+    identityState.backendValidation.detail = context
+      ? {
+          results: Array.isArray(context.results)
+            ? context.results.map((result) => simplifyBackendProbeResult(result)).filter(Boolean)
+            : [],
+        }
+      : { results: [] };
+    const configuredBase = identityState.configuredApiBaseUrl ?? null;
+    if (configuredBase) {
+      identityState.apiBaseUrl = configuredBase;
+      identityState.endpoints = {
+        scores: identityState.configuredEndpoints?.scores ?? null,
+        users: identityState.configuredEndpoints?.users ?? null,
+      };
+      if (activeExperienceInstance) {
+        activeExperienceInstance.apiBaseUrl = identityState.apiBaseUrl;
+      }
+    }
+    if (typeof bootstrapOverlay?.setDiagnostic === 'function') {
+      bootstrapOverlay.setDiagnostic('backend', {
+        status: 'ok',
+        message: 'Leaderboard service ready.',
+      });
+    }
+    const currentMessage = typeof identityState.scoreboardMessage === 'string' ? identityState.scoreboardMessage.trim() : '';
+    const lowerCurrent = currentMessage.toLowerCase();
+    const indicatesValidation =
+      lowerCurrent.includes('validating leaderboard service') ||
+      lowerCurrent === 'connecting to the leaderboard service…'.toLowerCase() ||
+      lowerCurrent === 'connecting to the leaderboard service...'.toLowerCase();
+    const shouldReplaceMessage = !currentMessage || indicatesValidation;
+    if (shouldReplaceMessage) {
+      const nextMessage = deriveOnlineScoreboardMessage();
+      updateScoreboardStatus(nextMessage, { offline: false });
+    } else if (identityState.scoreboardOffline) {
+      updateScoreboardStatus(identityState.scoreboardMessage, { offline: false });
+    }
+    if (typeof logDiagnosticsEvent === 'function') {
+      logDiagnosticsEvent('startup', 'Backend live-check succeeded.', {
+        level: 'success',
+        detail: context,
+      });
+    }
+  }
+
+  function markBackendLiveCheckFailure(context = null) {
+    backendLiveCheckState.performed = true;
+    backendLiveCheckState.success = false;
+    backendLiveCheckState.detail = context;
+    const timestamp = new Date().toISOString();
+    const summary =
+      typeof context?.message === 'string' && context.message.trim().length ? context.message.trim() : '';
+    const formattedSummary = summary.replace(/[。\uFF0E\.]+$/u, '');
+    const message = formattedSummary
+      ? `Leaderboard offline — ${formattedSummary}.`
+      : 'Leaderboard offline — runs will remain on this device.';
+    if (!identityState.backendValidation || typeof identityState.backendValidation !== 'object') {
+      identityState.backendValidation = {};
+    }
+    identityState.backendValidation.performed = true;
+    identityState.backendValidation.ok = false;
+    identityState.backendValidation.checkedAt = timestamp;
+    identityState.backendValidation.detail = {
+      reason: context?.reason ?? 'unknown',
+      message,
+      summary,
+      results: Array.isArray(context?.results)
+        ? context.results.map((result) => simplifyBackendProbeResult(result)).filter(Boolean)
+        : [],
+      failures: Array.isArray(context?.failures)
+        ? context.failures.map((result) => simplifyBackendProbeResult(result)).filter(Boolean)
+        : [],
+    };
+    identityState.apiBaseUrl = null;
+    identityState.endpoints = { scores: null, users: null };
+    if (activeExperienceInstance) {
+      activeExperienceInstance.apiBaseUrl = null;
+    }
+    updateScoreboardStatus(message, { offline: true });
+    if (typeof bootstrapOverlay?.setDiagnostic === 'function') {
+      bootstrapOverlay.setDiagnostic('backend', {
+        status: 'error',
+        message,
+      });
+    }
+    if (typeof logDiagnosticsEvent === 'function') {
+      logDiagnosticsEvent('startup', 'Backend live-check failed. Falling back to local mode.', {
+        level: 'warning',
+        detail: context,
+      });
+    }
+    if (globalScope?.console?.warn) {
+      globalScope.console.warn('Backend live-check failed; continuing in offline mode.', context);
+    }
+  }
+
+  async function performBackendLiveCheck() {
+    const configuredBase = identityState.configuredApiBaseUrl ?? null;
+    const configuredEndpoints = identityState.configuredEndpoints ?? {};
+    if (!configuredBase) {
+      backendLiveCheckState.performed = true;
+      backendLiveCheckState.success = false;
+      backendLiveCheckState.detail = { reason: 'missing-backend' };
+      return false;
+    }
+    if (typeof fetch !== 'function') {
+      markBackendLiveCheckFailure({
+        reason: 'fetch-unavailable',
+        message: 'fetch API unavailable — cannot validate leaderboard endpoints',
+      });
+      return false;
+    }
+    if (typeof bootstrapOverlay?.setDiagnostic === 'function') {
+      bootstrapOverlay.setDiagnostic('backend', {
+        status: 'pending',
+        message: 'Validating leaderboard service…',
+      });
+    }
+    const probes = [];
+    if (configuredEndpoints.scores) {
+      probes.push(
+        probeBackendEndpoint({
+          url: configuredEndpoints.scores,
+          method: 'GET',
+          label: 'GET /scores',
+          allowStatuses: new Set(),
+        }),
+      );
+      probes.push(
+        probeBackendEndpoint({
+          url: configuredEndpoints.scores,
+          method: 'POST',
+          label: 'POST /scores',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Infinite-Rails-Live-Check': '1',
+          },
+          body: JSON.stringify({ mode: 'live-check', timestamp: new Date().toISOString() }),
+          allowStatuses: BACKEND_LIVE_CHECK_ALLOWED_POST_STATUSES,
+        }),
+      );
+    }
+    if (configuredEndpoints.users) {
+      probes.push(
+        probeBackendEndpoint({
+          url: configuredEndpoints.users,
+          method: 'POST',
+          label: 'POST /users',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Infinite-Rails-Live-Check': '1',
+          },
+          body: JSON.stringify({ mode: 'live-check', timestamp: new Date().toISOString() }),
+          allowStatuses: BACKEND_LIVE_CHECK_ALLOWED_POST_STATUSES,
+        }),
+      );
+    }
+    if (!probes.length) {
+      markBackendLiveCheckFailure({
+        reason: 'missing-endpoints',
+        message: 'no API endpoints configured for validation',
+      });
+      return false;
+    }
+    const results = await Promise.all(probes);
+    const failures = results.filter((result) => !result.ok);
+    if (failures.length) {
+      const summary = failures.map((result) => formatBackendProbeSummary(result)).join('; ');
+      markBackendLiveCheckFailure({
+        reason: 'endpoint-failure',
+        message: summary,
+        results,
+        failures,
+      });
+      return false;
+    }
+    markBackendLiveCheckSuccess({ results });
+    return true;
+  }
+
+  function ensureBackendLiveCheck() {
+    if (backendLiveCheckState.promise) {
+      return backendLiveCheckState.promise;
+    }
+    if (!identityState.configuredApiBaseUrl) {
+      backendLiveCheckState.performed = true;
+      backendLiveCheckState.success = false;
+      backendLiveCheckState.detail = { reason: 'missing-backend' };
+      return Promise.resolve(false);
+    }
+    const runPromise = performBackendLiveCheck()
+      .then((result) => {
+        backendLiveCheckState.performed = true;
+        backendLiveCheckState.success = Boolean(result);
+        return backendLiveCheckState.success;
+      })
+      .catch((error) => {
+        backendLiveCheckState.performed = true;
+        backendLiveCheckState.success = false;
+        if (globalScope?.console?.error) {
+          globalScope.console.error('Unexpected error during backend live-check.', error);
+        }
+        throw error;
+      });
+    backendLiveCheckState.promise = runPromise;
+    runPromise.finally(() => {
+      if (backendLiveCheckState.promise === runPromise) {
+        backendLiveCheckState.promise = Promise.resolve(backendLiveCheckState.success ?? false);
+      }
+    });
+    return backendLiveCheckState.promise;
+  }
+
   function inferLocationLabel(location) {
     if (!location || typeof location !== 'object') {
       return 'Location hidden';
@@ -3802,6 +4204,11 @@
   }
   const apiBaseInvalid = Boolean(originalApiBaseUrl && !apiBaseUrl);
 
+  const configuredEndpoints = {
+    scores: buildScoreboardUrl(apiBaseUrl),
+    users: apiBaseUrl ? `${apiBaseUrl.replace(/\/$/, '')}/users` : null,
+  };
+
   const originalDiagnosticsEndpoint =
     globalAppConfig?.diagnosticsEndpoint ?? globalAppConfig?.logEndpoint ?? null;
   const diagnosticsEndpoint = normaliseDiagnosticsEndpoint(originalDiagnosticsEndpoint);
@@ -3815,7 +4222,9 @@
       : null;
 
   const identityState = {
-    apiBaseUrl,
+    originalApiBaseUrl,
+    configuredApiBaseUrl: apiBaseUrl,
+    apiBaseUrl: null,
     googleClientId,
     googleInitialized: false,
     googleReady: false,
@@ -3824,13 +4233,20 @@
     identity: null,
     scoreboardMessage: '',
     scoreboardOffline: false,
+    configuredEndpoints,
     endpoints: {
-      scores: buildScoreboardUrl(apiBaseUrl),
-      users: apiBaseUrl ? `${apiBaseUrl.replace(/\/$/, '')}/users` : null,
+      scores: null,
+      users: null,
+    },
+    backendValidation: {
+      performed: false,
+      ok: null,
+      checkedAt: null,
+      detail: null,
     },
   };
 
-  if (!identityState.apiBaseUrl) {
+  if (!identityState.configuredApiBaseUrl) {
     if (apiBaseInvalid) {
       bootstrapOverlay.setDiagnostic('backend', {
         status: 'error',
@@ -3845,7 +4261,7 @@
   } else {
     bootstrapOverlay.setDiagnostic('backend', {
       status: 'pending',
-      message: 'Connecting to the leaderboard service…',
+      message: 'Validating leaderboard service…',
     });
   }
 
@@ -4251,15 +4667,65 @@
     const lastFailure = lastRendererFailureDetail ? { ...lastRendererFailureDetail } : null;
     const bootDiagnosticsSnapshot = cloneBootDiagnosticsSnapshot(bootDiagnosticsState.lastSnapshot);
     const bootDiagnosticsErrors = summariseBootDiagnosticErrors(bootDiagnosticsState.lastSnapshot);
+    const activeApiBase = identityState.apiBaseUrl ?? null;
+    const configuredApiBase = identityState.configuredApiBaseUrl ?? null;
+    const endpointsSnapshot =
+      identityState.endpoints && typeof identityState.endpoints === 'object'
+        ? {
+            scores:
+              typeof identityState.endpoints.scores === 'string'
+                ? identityState.endpoints.scores
+                : identityState.endpoints.scores ?? null,
+            users:
+              typeof identityState.endpoints.users === 'string'
+                ? identityState.endpoints.users
+                : identityState.endpoints.users ?? null,
+          }
+        : null;
+    const configuredEndpointsSnapshot =
+      identityState.configuredEndpoints && typeof identityState.configuredEndpoints === 'object'
+        ? {
+            scores:
+              typeof identityState.configuredEndpoints.scores === 'string'
+                ? identityState.configuredEndpoints.scores
+                : identityState.configuredEndpoints.scores ?? null,
+            users:
+              typeof identityState.configuredEndpoints.users === 'string'
+                ? identityState.configuredEndpoints.users
+                : identityState.configuredEndpoints.users ?? null,
+          }
+        : null;
+    const backendValidationSnapshot = identityState.backendValidation
+      ? {
+          performed: Boolean(identityState.backendValidation.performed),
+          ok:
+            typeof identityState.backendValidation.ok === 'boolean'
+              ? identityState.backendValidation.ok
+              : null,
+          checkedAt:
+            typeof identityState.backendValidation.checkedAt === 'string'
+              ? identityState.backendValidation.checkedAt
+              : identityState.backendValidation.checkedAt ?? null,
+          detail:
+            identityState.backendValidation.detail && typeof identityState.backendValidation.detail === 'object'
+              ? { ...identityState.backendValidation.detail }
+              : null,
+        }
+      : null;
     return {
       generatedAt: new Date().toISOString(),
       rendererMode: scope?.InfiniteRails?.rendererMode ?? null,
       diagnostics,
       lastRendererFailure: lastFailure,
       backend: {
-        configured: Boolean(identityState.apiBaseUrl),
-        apiBaseUrl: identityState.apiBaseUrl ?? null,
-        endpoints: identityState.endpoints ?? null,
+        configured: Boolean(configuredApiBase),
+        active: Boolean(activeApiBase),
+        apiBaseUrl: activeApiBase,
+        configuredApiBaseUrl: configuredApiBase,
+        originalApiBaseUrl: identityState.originalApiBaseUrl ?? null,
+        endpoints: endpointsSnapshot,
+        configuredEndpoints: configuredEndpointsSnapshot,
+        validation: backendValidationSnapshot,
       },
       debugMode: isDebugModeEnabled(),
       userAgent: scope?.navigator?.userAgent ?? null,
@@ -5611,6 +6077,18 @@
     }
   }
 
+  function deriveOnlineScoreboardMessage() {
+    const identity = identityState.identity ?? null;
+    if (identity?.googleId && identityState.configuredApiBaseUrl) {
+      const name =
+        typeof identity.name === 'string' && identity.name.trim().length
+          ? identity.name.trim()
+          : 'Explorer';
+      return `Signed in as ${name}. Leaderboard sync active.`;
+    }
+    return 'Leaderboard connected — sign in to publish your run.';
+  }
+
   function showGlobalScoreSyncWarning(message) {
     const instance = activeExperienceInstance;
     if (instance && typeof instance.showScoreSyncWarning === 'function') {
@@ -5846,13 +6324,9 @@
 
     globalScope.addEventListener('infinite-rails:score-sync-restored', (event) => {
       const detail = event?.detail ?? {};
-      let fallback = 'Leaderboard connection restored.';
-      if (identityState.apiBaseUrl) {
-        const activeIdentity = identityState.identity ?? null;
-        fallback = activeIdentity?.googleId
-          ? `Signed in as ${activeIdentity.name}. Leaderboard sync active.`
-          : 'Leaderboard connected — sign in to publish your run.';
-      }
+      const fallback = identityState.apiBaseUrl
+        ? deriveOnlineScoreboardMessage()
+        : 'Leaderboard connection restored.';
       const message = deriveBackendMessageFromDetail(detail, fallback);
       updateScoreboardStatus(message, { offline: false });
       hideGlobalScoreSyncWarning(message);
@@ -6032,6 +6506,8 @@
     if (reason === 'google-sign-in') {
       if (identityState.apiBaseUrl && identityState.endpoints.users) {
         message = `Signing in as ${merged.name}\u2026`;
+      } else if (identityState.configuredApiBaseUrl) {
+        message = `Signed in as ${merged.name}. Validating leaderboard service…`;
       } else {
         message = `Signed in as ${merged.name}. Offline mode — configure APP_CONFIG.apiBaseUrl to sync.`;
       }
@@ -6341,6 +6817,8 @@
         if (!identityState.identity?.googleId) {
           if (identityState.apiBaseUrl && !apiBaseInvalid) {
             updateScoreboardStatus('Google Sign-In ready — authenticate to sync your run.');
+          } else if (identityState.configuredApiBaseUrl && !apiBaseInvalid) {
+            updateScoreboardStatus('Google Sign-In ready — validating leaderboard service…');
           } else {
             updateScoreboardStatus('Google Sign-In ready — runs stay local until an API endpoint is configured.');
           }
@@ -7473,23 +7951,35 @@
           event.preventDefault();
         }
         const startAction = () => {
-          try {
+          const executeStart = async () => {
+            let backendReady = false;
+            try {
+              backendReady = await ensureBackendLiveCheck();
+            } catch (validationError) {
+              backendReady = false;
+              if (globalScope?.console?.debug) {
+                globalScope.console.debug(
+                  'Backend live-check rejected; continuing with current leaderboard mode.',
+                  validationError,
+                );
+              }
+            }
+            if (!backendReady && identityState.apiBaseUrl) {
+              backendReady = true;
+            }
+            experience.apiBaseUrl = backendReady ? identityState.apiBaseUrl : null;
             const result = experience.start();
             if (result && typeof result.then === 'function') {
-              return result.catch((error) => {
-                if (globalScope.console?.error) {
-                  globalScope.console.error('Failed to start gameplay session', error);
-                }
-                throw error;
-              });
+              return result;
             }
             return result;
-          } catch (error) {
+          };
+          return executeStart().catch((error) => {
             if (globalScope.console?.error) {
               globalScope.console.error('Failed to start gameplay session', error);
             }
             throw error;
-          }
+          });
         };
         invokeWithErrorBoundary(startAction, {
           boundary: 'experience-start',
@@ -7832,19 +8322,29 @@
     if (apiBaseInvalid) {
       return 'Configured API endpoint is invalid. Using local leaderboard entries until it is updated.';
     }
-    if (apiBaseUrl && initialIdentity?.googleId) {
-      return `Signed in as ${initialIdentity.name}. Leaderboard sync active.`;
-    }
-    if (!apiBaseUrl && initialIdentity?.googleId) {
-      return `Signed in as ${initialIdentity.name}. Offline mode — storing runs locally.`;
-    }
     if (apiBaseUrl) {
-      return 'Leaderboard connected — sign in to publish your run.';
+      if (initialIdentity?.googleId) {
+        const name =
+          typeof initialIdentity.name === 'string' && initialIdentity.name.trim().length
+            ? initialIdentity.name.trim()
+            : 'Explorer';
+        return `Signed in as ${name}. Validating leaderboard service…`;
+      }
+      return 'Validating leaderboard service…';
+    }
+    if (initialIdentity?.googleId) {
+      return `Signed in as ${initialIdentity.name}. Offline mode — storing runs locally.`;
     }
     return 'Offline mode active — storing scores locally.';
   })();
   updateScoreboardStatus(initialScoreboardMessage);
   applyIdentity(initialIdentity, { persist: false, silent: true });
+
+  if (identityState.configuredApiBaseUrl) {
+    ensureBackendLiveCheck().catch((error) => {
+      globalScope?.console?.debug?.('Backend live-check promise rejected.', error);
+    });
+  }
 
   fallbackSigninButtons.forEach((btn) => {
     btn.addEventListener('click', (event) => {
