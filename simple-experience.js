@@ -4706,7 +4706,7 @@
             'Tap the <strong>hammer</strong> icon to craft. Place blocks with the <strong>✦</strong> action button while aiming and ignite portals with the <strong>⧉</strong> control.';
         }
         if (noteEl) {
-          noteEl.innerHTML = 'Need a refresher later? Tap the <strong>Tutorial</strong> button in the HUD anytime.';
+          noteEl.innerHTML = 'Need a refresher later? Tap the <strong>How to Play</strong> button in the HUD anytime.';
         }
         this.refreshFirstRunTutorialErrors();
         this.refreshLostGuidanceContent();
@@ -4735,7 +4735,7 @@
         craftDetail.innerHTML = `Tap the <strong>hammer</strong> icon or press <strong>${craftingKeys}</strong> to craft. Place blocks with <strong>${placeKeys}</strong> and ignite portals with <strong>${portalKeys}</strong>.`;
       }
       if (noteEl) {
-        noteEl.innerHTML = `Need a refresher later? Press <strong>${tutorialKeys}</strong> or use the <strong>Tutorial</strong> button in the HUD.`;
+        noteEl.innerHTML = `Need a refresher later? Press <strong>${tutorialKeys}</strong> or use the <strong>How to Play</strong> button in the HUD.`;
       }
       this.refreshFirstRunTutorialErrors();
       this.refreshLostGuidanceContent();
