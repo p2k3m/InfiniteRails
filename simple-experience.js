@@ -305,6 +305,7 @@
       toggleInventory: ['KeyI'],
       openGuide: ['F1'],
       toggleTutorial: ['Slash', 'F4'],
+      toggleDeveloperOverlay: ['Backquote', 'F8'],
       openSettings: ['F2'],
       openLeaderboard: ['F3'],
       closeMenus: ['Escape'],
@@ -2277,6 +2278,7 @@
       }
       this.canvas = options.canvas;
       this.ui = options.ui || {};
+      this.developerOverlayWarningIssued = false;
       this.victoryBannerEl = this.ui.victoryBanner || null;
       this.victoryCelebrationEl = this.ui.victoryCelebration || null;
       this.victoryConfettiEl = this.ui.victoryConfetti || null;
@@ -6729,6 +6731,33 @@
       this.applyCameraPerspective(next);
       const message = next === 'first' ? 'First-person view enabled.' : 'Third-person view enabled.';
       this.showHint(message);
+    }
+
+    toggleDeveloperLogOverlay(source = 'experience-hotkey') {
+      const scope =
+        (typeof window !== 'undefined' && window) ||
+        (typeof globalThis !== 'undefined' && globalThis) ||
+        null;
+      const api = scope?.InfiniteRails?.developerStats || null;
+      if (api && typeof api.toggle === 'function') {
+        try {
+          api.toggle({ source: source ?? 'experience-hotkey' });
+          return true;
+        } catch (error) {
+          if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+            console.debug('Developer log overlay toggle failed.', error);
+          }
+        }
+      }
+      if (!this.developerOverlayWarningIssued && typeof console !== 'undefined') {
+        if (typeof console.warn === 'function') {
+          console.warn(
+            'Developer stats overlay unavailable — ensure the HUD bootstrap completes before using the hotkey.',
+          );
+        }
+        this.developerOverlayWarningIssued = true;
+      }
+      return false;
     }
 
     ensurePlayerArmsVisible() {
@@ -16499,6 +16528,10 @@
         }
         event.preventDefault();
       }
+      if (this.isKeyForAction(code, 'toggleDeveloperOverlay') && !event.repeat) {
+        this.toggleDeveloperLogOverlay('keyboard');
+        event.preventDefault();
+      }
       if (this.isKeyForAction(code, 'closeMenus')) {
         this.toggleCraftingModal(false);
         this.toggleInventoryModal(false);
@@ -23673,11 +23706,25 @@
           audio = 0;
         }
       }
+      const assets = {
+        pending: this.assetRecoveryPendingKeys instanceof Set ? this.assetRecoveryPendingKeys.size : 0,
+        failures: this.assetFailureCounts instanceof Map ? this.assetFailureCounts.size : 0,
+      };
+      const scene = {
+        sceneChildren: Array.isArray(this.scene?.children) ? this.scene.children.length : 0,
+        worldChildren: Array.isArray(this.worldRoot?.children) ? this.worldRoot.children.length : 0,
+        terrainMeshes: Array.isArray(this.terrainGroup?.children) ? this.terrainGroup.children.length : 0,
+        actorCount:
+          (Array.isArray(this.zombies) ? this.zombies.length : 0) +
+          (Array.isArray(this.golems) ? this.golems.length : 0),
+      };
       return {
         fps,
         models,
         textures,
         audio,
+        assets,
+        scene,
       };
     }
 
