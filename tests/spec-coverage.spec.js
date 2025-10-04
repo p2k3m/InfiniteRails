@@ -51,7 +51,8 @@ describe('Portals of Dimension spec regression checks', () => {
   it('retains the player control and progression instrumentation', () => {
     expect(
       simpleExperienceSource.includes(
-        'Movement input detected (forward). If the avatar fails to advance, confirm control bindings and resolve any locked physics/body constraints or failed transform updates blocking motion.',
+        "`Movement input detected${actionSegment}${sourceSegment}. ` +\n" +
+          "              'If the avatar fails to advance, confirm control bindings and resolve any locked physics/body constraints or failed transform updates blocking motion.'",
       ),
     ).toBe(true);
     expect(simpleExperienceSource.includes('this.canvas.requestPointerLock')).toBe(true);

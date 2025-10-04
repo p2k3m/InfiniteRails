@@ -2343,6 +2343,7 @@
         this.optionKeyBindingOverrides,
       );
       this.keyBindings = this.buildKeyBindings({ includeStored: true });
+      this.ensureMovementBindingsConfigured();
       this.keys = new Set();
       this.velocity = new THREE.Vector3();
       this.tmpForward = new THREE.Vector3();
@@ -2358,11 +2359,14 @@
         pending: false,
         triggeredAt: 0,
         timeoutMs: 650,
+        noticeThrottleMs: 1500,
+        lastNoticeAt: 0,
         initialPosition: new THREE.Vector3(),
         initialAvatarPosition: new THREE.Vector3(),
         anchorProbe: new THREE.Vector3(),
         avatarProbe: new THREE.Vector3(),
         key: null,
+        source: null,
       };
       this.cameraBaseOffset = new THREE.Vector3();
       this.cameraShakeOffset = new THREE.Vector3();
@@ -2549,6 +2553,7 @@
       this.touchButtonStates = { up: false, down: false, left: false, right: false };
       this.joystickVector = new THREE.Vector2();
       this.joystickPointerId = null;
+      this.joystickMovementEngaged = false;
       this.touchLookPointerId = null;
       this.touchLookLast = null;
       this.touchActionStart = 0;
@@ -8318,6 +8323,7 @@
     resetJoystick() {
       this.joystickPointerId = null;
       this.joystickVector.set(0, 0);
+      this.joystickMovementEngaged = false;
       if (this.virtualJoystickThumb) {
         this.virtualJoystickThumb.style.transform = 'translate(0px, 0px)';
       }
@@ -8375,6 +8381,18 @@
         const thumbY = normalisedY * thumbRadius;
         this.virtualJoystickThumb.style.transform = `translate(${thumbX.toFixed(1)}px, ${thumbY.toFixed(1)}px)`;
       }
+      const magnitudeSq =
+        typeof this.joystickVector.lengthSq === 'function'
+          ? this.joystickVector.lengthSq()
+          : this.joystickVector.x * this.joystickVector.x + this.joystickVector.y * this.joystickVector.y;
+      if (Number.isFinite(magnitudeSq)) {
+        if (magnitudeSq > 0.01 && !this.joystickMovementEngaged) {
+          this.handleMovementInputDetected('virtual-joystick', { source: 'virtual-joystick' });
+          this.joystickMovementEngaged = true;
+        } else if (magnitudeSq <= 0.0025) {
+          this.joystickMovementEngaged = false;
+        }
+      }
     }
 
     handleTouchButtonPress(event) {
@@ -8390,6 +8408,16 @@
       if (!action) return;
       if (action === 'up' || action === 'down' || action === 'left' || action === 'right') {
         this.touchButtonStates[action] = true;
+        const actionMap = {
+          up: 'moveForward',
+          down: 'moveBackward',
+          left: 'moveLeft',
+          right: 'moveRight',
+        };
+        const mappedAction = actionMap[action];
+        if (mappedAction) {
+          this.handleMovementInputDetected(mappedAction, { source: 'touch-button' });
+        }
       }
     }
 
@@ -13607,6 +13635,59 @@
       }
     }
 
+    ensureMovementBindingsConfigured() {
+      if (!this.keyBindings || typeof this.keyBindings !== 'object') {
+        this.keyBindings = {};
+      }
+      const missing = [];
+      MOVEMENT_ACTIONS.forEach((action) => {
+        const keys = this.keyBindings?.[action];
+        if (Array.isArray(keys) && keys.length) {
+          return;
+        }
+        const baseFallback = Array.isArray(this.baseKeyBindings?.[action])
+          ? this.baseKeyBindings[action]
+          : null;
+        const defaultFallback = Array.isArray(this.defaultKeyBindings?.[action])
+          ? this.defaultKeyBindings[action]
+          : null;
+        const fallback = baseFallback && baseFallback.length ? baseFallback : defaultFallback;
+        if (Array.isArray(fallback) && fallback.length) {
+          this.keyBindings[action] = [...fallback];
+          missing.push({ action, restored: true, keys: [...fallback] });
+        } else {
+          this.keyBindings[action] = [];
+          missing.push({ action, restored: false, keys: [] });
+        }
+      });
+      if (!missing.length) {
+        return false;
+      }
+      const restoredCount = missing.filter((entry) => entry.restored).length;
+      const unresolvedCount = missing.length - restoredCount;
+      let message = 'Movement key bindings were missing; restored defaults where available.';
+      if (restoredCount && unresolvedCount) {
+        message =
+          'Movement key bindings were missing; restored defaults where available and flagged unresolved actions for review.';
+      } else if (!restoredCount) {
+        message = 'Movement key bindings were missing but no defaults were available to restore.';
+      }
+      const detail = {
+        restoredCount,
+        unresolvedCount,
+        actions: missing.map((entry) => ({
+          action: entry.action,
+          restored: entry.restored,
+          keys: entry.keys,
+        })),
+      };
+      notifyLiveDiagnostics('movement', message, detail, { level: 'warning' });
+      if (typeof console !== 'undefined' && typeof console.warn === 'function') {
+        console.warn(message, detail);
+      }
+      return restoredCount > 0;
+    }
+
     buildKeyBindings({ includeStored = true } = {}) {
       const base = this.baseKeyBindings
         ? cloneKeyBindingMap(this.baseKeyBindings)
@@ -13686,6 +13767,7 @@
       }
       const changed = this.applyKeyBinding(action.trim(), nextKeys);
       if (changed) {
+        this.ensureMovementBindingsConfigured();
         if (persist) {
           this.persistKeyBindings();
         }
@@ -13708,6 +13790,7 @@
         }
       });
       if (changed) {
+        this.ensureMovementBindingsConfigured();
         if (persist) {
           this.persistKeyBindings();
         }
@@ -13719,6 +13802,7 @@
     resetKeyBindings(options = {}) {
       const { persist = true } = options;
       this.keyBindings = this.buildKeyBindings({ includeStored: false });
+      this.ensureMovementBindingsConfigured();
       if (persist) {
         this.persistKeyBindings();
       }
@@ -14320,10 +14404,16 @@
         event.preventDefault();
       }
       if (this.isKeyForAction(code, 'moveForward') && !event.repeat) {
-        console.error(
-          'Movement input detected (forward). If the avatar fails to advance, confirm control bindings and resolve any locked physics/body constraints or failed transform updates blocking motion.',
-        );
-        this.queueMovementBindingValidation('moveForward');
+        this.handleMovementInputDetected('moveForward', { source: 'keyboard' });
+      }
+      if (this.isKeyForAction(code, 'moveBackward') && !event.repeat) {
+        this.handleMovementInputDetected('moveBackward', { source: 'keyboard' });
+      }
+      if (this.isKeyForAction(code, 'moveLeft') && !event.repeat) {
+        this.handleMovementInputDetected('moveLeft', { source: 'keyboard' });
+      }
+      if (this.isKeyForAction(code, 'moveRight') && !event.repeat) {
+        this.handleMovementInputDetected('moveRight', { source: 'keyboard' });
       }
       if (this.isKeyForAction(code, 'resetPosition')) {
         this.resetPosition();
@@ -14404,7 +14494,41 @@
       this.refreshHudInteractionState();
     }
 
-    queueMovementBindingValidation(actionLabel) {
+    handleMovementInputDetected(actionLabel, options = {}) {
+      const diagnostics = this.movementBindingDiagnostics;
+      const sourceValue =
+        typeof options?.source === 'string' && options.source.trim().length
+          ? options.source.trim()
+          : '';
+      if (diagnostics) {
+        const now = this.getHighResTimestamp();
+        const throttle = Number.isFinite(diagnostics.noticeThrottleMs)
+          ? diagnostics.noticeThrottleMs
+          : 1500;
+        const lastNotice = Number.isFinite(diagnostics.lastNoticeAt) ? diagnostics.lastNoticeAt : 0;
+        if (!lastNotice || now - lastNotice >= throttle) {
+          diagnostics.lastNoticeAt = now;
+          const consoleRef = typeof console !== 'undefined' ? console : null;
+          if (consoleRef) {
+            const actionSegment = actionLabel ? ` (${actionLabel})` : '';
+            const sourceSegment = sourceValue ? ` via ${sourceValue}` : '';
+            const message =
+              `Movement input detected${actionSegment}${sourceSegment}. ` +
+              'If the avatar fails to advance, confirm control bindings and resolve any locked physics/body constraints or failed transform updates blocking motion.';
+            if (typeof consoleRef.error === 'function') {
+              consoleRef.error(message);
+            } else if (typeof consoleRef.warn === 'function') {
+              consoleRef.warn(message);
+            } else if (typeof consoleRef.log === 'function') {
+              consoleRef.log(message);
+            }
+          }
+        }
+      }
+      this.queueMovementBindingValidation(actionLabel, { source: sourceValue });
+    }
+
+    queueMovementBindingValidation(actionLabel, options = {}) {
       const diagnostics = this.movementBindingDiagnostics;
       if (!diagnostics) {
         return;
@@ -14412,9 +14536,15 @@
       const THREE = this.THREE;
       const anchor = this.getMovementAnchorPosition();
       const avatarAnchor = this.getPlayerAvatarWorldPosition(diagnostics.avatarProbe || null);
+      const sourceValue =
+        typeof options?.source === 'string' && options.source.trim().length
+          ? options.source.trim()
+          : null;
       if (!anchor && !avatarAnchor) {
         diagnostics.pending = false;
-        this.validateMovementBindings(null, null, null, null);
+        this.validateMovementBindings(null, null, null, null, actionLabel || null, sourceValue);
+        diagnostics.key = null;
+        diagnostics.source = null;
         return;
       }
       if (anchor) {
@@ -14424,7 +14554,9 @@
         }
         if (!diagnostics.initialPosition) {
           diagnostics.pending = false;
-          this.validateMovementBindings(anchor, null, avatarAnchor, null);
+          this.validateMovementBindings(anchor, null, avatarAnchor, null, actionLabel || null, sourceValue);
+          diagnostics.key = null;
+          diagnostics.source = null;
           return;
         }
         diagnostics.initialPosition.copy(anchor);
@@ -14445,6 +14577,7 @@
       diagnostics.pending = true;
       diagnostics.triggeredAt = this.getHighResTimestamp();
       diagnostics.key = typeof actionLabel === 'string' ? actionLabel : null;
+      diagnostics.source = sourceValue;
     }
 
     getMovementAnchorPosition() {
@@ -14517,12 +14650,15 @@
       if (!diagnostics || !diagnostics.pending) {
         return;
       }
+      const actionLabel = diagnostics.key || null;
+      const sourceLabel = diagnostics.source || null;
       const anchor = this.getMovementAnchorPosition();
       const avatarAnchor = this.getPlayerAvatarWorldPosition(diagnostics.avatarProbe || null);
       if (!anchor && !avatarAnchor) {
         diagnostics.pending = false;
-        this.validateMovementBindings(null, null, null, null);
+        this.validateMovementBindings(null, null, null, null, actionLabel, sourceLabel);
         diagnostics.key = null;
+        diagnostics.source = null;
         return;
       }
       if (anchor && (!diagnostics.initialPosition || typeof diagnostics.initialPosition.copy !== 'function')) {
@@ -14534,6 +14670,7 @@
               : null;
         diagnostics.pending = false;
         diagnostics.key = null;
+        diagnostics.source = null;
         return;
       }
       if (avatarAnchor && (!diagnostics.initialAvatarPosition || typeof diagnostics.initialAvatarPosition.copy !== 'function')) {
@@ -14545,6 +14682,7 @@
               : null;
         diagnostics.pending = false;
         diagnostics.key = null;
+        diagnostics.source = null;
         return;
       }
       const canMeasureDisplacement =
@@ -14562,6 +14700,7 @@
       if (movedByRig || movedByAvatar) {
         diagnostics.pending = false;
         diagnostics.key = null;
+        diagnostics.source = null;
         return;
       }
       const now = this.getHighResTimestamp();
@@ -14569,11 +14708,12 @@
         return;
       }
       diagnostics.pending = false;
-      this.validateMovementBindings(anchor, displacementSq, avatarAnchor, avatarDisplacementSq);
+      this.validateMovementBindings(anchor, displacementSq, avatarAnchor, avatarDisplacementSq, actionLabel, sourceLabel);
       diagnostics.key = null;
+      diagnostics.source = null;
     }
 
-    validateMovementBindings(anchor, displacementSq, avatarAnchor, avatarDisplacementSq) {
+    validateMovementBindings(anchor, displacementSq, avatarAnchor, avatarDisplacementSq, actionLabel, sourceLabel) {
       const consoleRef = typeof console !== 'undefined' ? console : null;
       if (!consoleRef) {
         return;
@@ -14658,6 +14798,10 @@
       const message =
         'Movement diagnostics: input registered but no player displacement detected. Verify keyboard listeners, avatar rig transforms, and mesh parenting.';
       const report = {
+        input: {
+          action: actionLabel || null,
+          source: sourceLabel || null,
+        },
         keyboardListeners: {
           document: { keydown: hasDocumentKeydown, keyup: hasDocumentKeyup },
           window: { keydown: hasWindowKeydown, keyup: hasWindowKeyup },
@@ -14699,6 +14843,7 @@
       }
       if (groupCollapsed && groupEnd) {
         groupCollapsed(message);
+        warn('Input summary', report.input);
         warn('Keyboard listener coverage', report.keyboardListeners);
         warn('Rig status', report.rig);
         warn('Rig initial position', report.rig.initialPosition);
