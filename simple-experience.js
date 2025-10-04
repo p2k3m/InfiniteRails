@@ -2026,6 +2026,7 @@
       this.playerMixer = null;
       this.playerIdleAction = null;
       this.playerAnimationRig = null;
+      this.playerAvatarLoaded = false;
       this.handSwingStrength = 0;
       this.handSwingTimer = 0;
       this.modelPromises = new Map();
@@ -2998,7 +2999,7 @@
         pendingCount: this.modelPromises instanceof Map ? this.modelPromises.size : 0,
         warmupQueue: Array.isArray(this.lazyModelWarmupQueue) ? this.lazyModelWarmupQueue.length : 0,
         handModelLoaded: Boolean(this.handModelLoaded),
-        playerAvatarLoaded: Boolean(this.playerAvatar),
+        playerAvatarLoaded: this.playerAvatarLoaded === true,
         sampleLoaded: loadedModelKeys,
         samplePending: pendingModelKeys,
       };
@@ -5680,6 +5681,7 @@
       }
       this.playerMixer = null;
       this.playerIdleAction = null;
+      this.playerAvatarLoaded = false;
 
       this.cameraPerspective = 'first';
       this.playerHeadAttachment = null;
@@ -5807,9 +5809,20 @@
       this.worldRoot.add(this.chestGroup);
       this.worldRoot.add(this.challengeGroup);
       this.createFirstPersonHands();
-      this.loadPlayerCharacter().catch((error) => {
-        console.error('Player model failed to load; continuing with primitive hands.', error);
-      });
+      this.playerAvatarLoaded = false;
+      this.loadPlayerCharacter()
+        .then((loaded) => {
+          this.playerAvatarLoaded = loaded === true;
+          if (!loaded && typeof console !== 'undefined' && typeof console.warn === 'function') {
+            console.warn('Steve GLTF model unavailable at spawn — placeholder rig active.');
+          }
+        })
+        .catch((error) => {
+          console.error('Player model failed to load; continuing with primitive hands.', error);
+          this.playerAvatarLoaded = false;
+          this.ensurePlayerAvatarPlaceholder('failed');
+          this.primePlayerLocomotionAnimations();
+        });
       this.refreshCameraBaseOffset();
       if (typeof console !== 'undefined') {
         console.info(
@@ -9676,6 +9689,46 @@
       return rig;
     }
 
+    primePlayerLocomotionAnimations(rig = null) {
+      const targetRig = rig || this.playerAnimationRig;
+      if (!targetRig || !targetRig.actions) {
+        return false;
+      }
+      const previousState = targetRig.state || targetRig.baseState || null;
+      const locomotionStates = ['idle', 'walk'];
+      let primed = false;
+      locomotionStates.forEach((state) => {
+        const action = targetRig.actions[state];
+        if (!action) {
+          return;
+        }
+        this.setAnimationRigState(targetRig, state, {
+          fade: 0,
+          forceDuringPulse: true,
+          force: true,
+        });
+        if (targetRig.mixer && typeof targetRig.mixer.update === 'function') {
+          try {
+            targetRig.mixer.update(0);
+          } catch (error) {
+            if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+              console.debug('Unable to prime animation mixer state.', { state, error });
+            }
+          }
+        }
+        primed = true;
+      });
+      const fallbackState = previousState && targetRig.actions[previousState] ? previousState : 'idle';
+      if (primed && fallbackState) {
+        this.setAnimationRigState(targetRig, fallbackState, {
+          fade: 0,
+          forceDuringPulse: true,
+          force: true,
+        });
+      }
+      return primed;
+    }
+
     setAnimationRigState(rig, state, options = {}) {
       if (!rig || !rig.actions) {
         return;
@@ -10044,9 +10097,13 @@
     }
 
     async loadPlayerCharacter(options = {}) {
-      if (!this.playerRig) return;
+      if (!this.playerRig) {
+        this.playerAvatarLoaded = false;
+        return false;
+      }
       const THREE = this.THREE;
       const sessionId = this.activeSessionId;
+      this.playerAvatarLoaded = false;
       const maxAttempts = Number.isFinite(options?.maxAttempts)
         ? Math.max(1, Math.floor(options.maxAttempts))
         : 3;
@@ -10067,7 +10124,8 @@
           if (candidate?.scene) {
             disposeObject3D(candidate.scene);
           }
-          return;
+          this.playerAvatarLoaded = false;
+          return false;
         }
         const isPlaceholder = candidate?.scene?.userData?.placeholder === true;
         const candidateRigMetadata = candidate?.metadata?.avatarRig || null;
@@ -10106,13 +10164,16 @@
             : 700;
         await this.delay(delayMs);
         if (sessionId !== this.activeSessionId) {
-          return;
+          this.playerAvatarLoaded = false;
+          return false;
         }
       }
       if (!asset?.scene) {
         console.warn('Player avatar model unavailable after retries — using placeholder rig.');
         this.ensurePlayerAvatarPlaceholder('failed');
-        return;
+        this.playerAvatarLoaded = false;
+        this.primePlayerLocomotionAnimations();
+        return false;
       }
       const model = asset.scene;
       model.name = 'PlayerAvatar';
@@ -10196,7 +10257,9 @@
           this.configurePlayerAnimationRig(placeholder, [], { defaultState: 'idle' });
           this.playerHeadAttachment = placeholder;
         }
-        return;
+        this.playerAvatarLoaded = false;
+        this.primePlayerLocomotionAnimations();
+        return false;
       }
 
       if (this.playerAvatar) {
@@ -10225,6 +10288,9 @@
         'Avatar visibility confirmed — verify animation rig initialises correctly if the player appears static.',
       );
       this.ensurePlayerArmsVisible();
+      this.primePlayerLocomotionAnimations();
+      this.playerAvatarLoaded = true;
+      return true;
     }
 
     upgradeZombie(zombie) {
