@@ -17411,9 +17411,23 @@
           this.updateAnimationRig(zombie.animation, delta);
         }
       }
-      const playerBounds = this.getPlayerPhysicsBounds();
-      this.resolveMobCollectionCollisions(this.zombies, {
-        type: 'zombie',
+      let playerBounds = null;
+      try {
+        playerBounds = this.getPlayerPhysicsBounds();
+      } catch (error) {
+        if (typeof console !== 'undefined' && typeof console.warn === 'function') {
+          console.warn('Failed to resolve player bounds for zombie collision handling.', error);
+        }
+        if (typeof notifyLiveDiagnostics === 'function') {
+          notifyLiveDiagnostics(
+            'ai',
+            'Failed to resolve player bounds for zombie collision handling.',
+            { error: normaliseLiveDiagnosticError(error) },
+            { level: 'warning' },
+          );
+        }
+      }
+      this.safelyResolveMobCollisions('zombie', this.zombies, {
         fallbackRadius: ZOMBIE_COLLISION_RADIUS,
         playerBounds,
         extraTargets: Array.isArray(this.golems) ? this.golems : [],
@@ -17780,6 +17794,47 @@
             }
           }
         }
+      }
+    }
+
+    safelyResolveMobCollisions(type, mobs, options = {}) {
+      if (!Array.isArray(mobs) || mobs.length === 0) {
+        return;
+      }
+      const collisionType = options.type || type || 'mob';
+      const mergedOptions = { ...options, type: collisionType };
+      try {
+        this.resolveMobCollectionCollisions(mobs, mergedOptions);
+      } catch (error) {
+        if (typeof console !== 'undefined' && typeof console.error === 'function') {
+          console.error(`Mob collision resolution failed for ${collisionType}.`, error);
+        }
+        if (typeof notifyLiveDiagnostics === 'function') {
+          notifyLiveDiagnostics(
+            'ai',
+            `Mob collision resolution failed for ${collisionType}.`,
+            { type: collisionType, error: normaliseLiveDiagnosticError(error) },
+            { level: 'error' },
+          );
+        }
+        mobs
+          .filter(
+            (mob) =>
+              !mob ||
+              !mob.mesh ||
+              !mob.mesh.position ||
+              typeof mob.mesh.position.x !== 'number' ||
+              typeof mob.mesh.position.z !== 'number',
+          )
+          .forEach((mob) => {
+            try {
+              this.handleMobCollisionFailure(collisionType, mob, error);
+            } catch (handlerError) {
+              if (typeof console !== 'undefined' && typeof console.warn === 'function') {
+                console.warn('Failed to recycle mob after collision resolution error.', handlerError);
+              }
+            }
+          });
       }
     }
 
@@ -18214,9 +18269,23 @@
           this.updateAnimationRig(golem.animation, delta);
         }
       }
-      const playerBounds = this.getPlayerPhysicsBounds();
-      this.resolveMobCollectionCollisions(this.golems, {
-        type: 'golem',
+      let playerBounds = null;
+      try {
+        playerBounds = this.getPlayerPhysicsBounds();
+      } catch (error) {
+        if (typeof console !== 'undefined' && typeof console.warn === 'function') {
+          console.warn('Failed to resolve player bounds for golem collision handling.', error);
+        }
+        if (typeof notifyLiveDiagnostics === 'function') {
+          notifyLiveDiagnostics(
+            'ai',
+            'Failed to resolve player bounds for golem collision handling.',
+            { error: normaliseLiveDiagnosticError(error) },
+            { level: 'warning' },
+          );
+        }
+      }
+      this.safelyResolveMobCollisions('golem', this.golems, {
         fallbackRadius: GOLEM_COLLISION_RADIUS,
         playerBounds,
       });
