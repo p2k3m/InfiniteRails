@@ -385,3 +385,16 @@ if (typeof Object.defineProperty === 'function') {
   module.exports.default = module.exports;
   module.exports.__esModule = true;
 }
+
+try {
+  const globalScope =
+    (typeof globalThis !== 'undefined' && globalThis) ||
+    (typeof window !== 'undefined' && window) ||
+    (typeof global !== 'undefined' && global);
+  if (globalScope && typeof globalScope === 'object') {
+    const namespace = globalScope.Crafting || (globalScope.Crafting = {});
+    Object.keys(module.exports).forEach((key) => {
+      namespace[key] = module.exports[key];
+    });
+  }
+} catch (error) {}

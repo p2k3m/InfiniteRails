@@ -2766,6 +2766,8 @@
       };
       this.craftingRecipes = this.createCraftingRecipes();
       this.craftedRecipes = new Set();
+      this.craftingValidationModule = null;
+      this.craftingValidationModuleResolved = false;
       this.restorePersistentUnlocks();
       this.restoreIdentitySnapshot();
       this.animationFrame = null;
@@ -20592,6 +20594,210 @@
         .join(', ');
     }
 
+    resolveCraftingValidationModule() {
+      const scope =
+        (typeof window !== 'undefined' && window) ||
+        (typeof globalThis !== 'undefined' && globalThis) ||
+        null;
+      const candidate = scope?.Crafting ?? null;
+      if (
+        candidate &&
+        typeof candidate.validateCraftAttempt === 'function' &&
+        typeof candidate.createCraftingState === 'function'
+      ) {
+        this.craftingValidationModule = candidate;
+        this.craftingValidationModuleResolved = true;
+        return this.craftingValidationModule;
+      }
+      if (!this.craftingValidationModuleResolved) {
+        this.craftingValidationModuleResolved = true;
+      }
+      return this.craftingValidationModule;
+    }
+
+    buildCraftingInventorySnapshot() {
+      const inventory = {};
+      const hotbar = {};
+      if (Array.isArray(this.hotbar)) {
+        this.hotbar.forEach((slot) => {
+          if (!slot || !slot.item) {
+            return;
+          }
+          const quantity = Number.isFinite(slot.quantity) ? Math.max(0, slot.quantity) : 0;
+          if (quantity <= 0) {
+            return;
+          }
+          hotbar[slot.item] = (hotbar[slot.item] || 0) + quantity;
+          inventory[slot.item] = (inventory[slot.item] || 0) + quantity;
+        });
+      }
+      if (this.satchel && typeof this.satchel.forEach === 'function') {
+        this.satchel.forEach((quantity, itemId) => {
+          if (!itemId) {
+            return;
+          }
+          const count = Number.isFinite(quantity) ? Math.max(0, quantity) : 0;
+          if (count <= 0) {
+            return;
+          }
+          inventory[itemId] = (inventory[itemId] || 0) + count;
+        });
+      }
+      return { inventory, hotbar };
+    }
+
+    findRecipeMetadataById(recipeId) {
+      if (!recipeId) {
+        return null;
+      }
+      let match = null;
+      this.craftingRecipes.forEach((recipe, key) => {
+        if (match || !recipe || recipe.id !== recipeId) {
+          return;
+        }
+        match = { recipe, key, parts: this.getRecipeSequence(recipe, key) };
+      });
+      return match;
+    }
+
+    buildCraftingValidationState() {
+      const module = this.resolveCraftingValidationModule();
+      if (!module) {
+        return null;
+      }
+      const recipes = [];
+      const dimensionIds = new Set();
+      this.craftingRecipes.forEach((recipe, key) => {
+        if (!recipe) {
+          return;
+        }
+        const parts = this.getRecipeSequence(recipe, key);
+        const unlock = recipe.unlock || recipe.dimension || 'origin';
+        dimensionIds.add(unlock);
+        recipes.push({
+          id: recipe.id,
+          name: recipe.label,
+          sequence: parts.slice(),
+          output: { item: recipe.id, quantity: 1 },
+          unlock,
+          points: Number.isFinite(recipe.score) ? recipe.score : 0,
+        });
+      });
+      if (!recipes.length) {
+        return null;
+      }
+      const { inventory, hotbar } = this.buildCraftingInventorySnapshot();
+      const unlockedRecipes = [];
+      this.craftingState.unlocked.forEach((entry) => {
+        if (entry?.id) {
+          unlockedRecipes.push(entry.id);
+        }
+      });
+      const knownRecipes = Array.from(this.craftedRecipes || []);
+      const unlockedDimensions = dimensionIds.size ? Array.from(dimensionIds) : ['origin'];
+      const state = module.createCraftingState({
+        recipes,
+        inventory,
+        hotbar,
+        unlockedRecipes,
+        knownRecipes,
+        unlockedDimensions,
+        points: Number.isFinite(this.score) ? this.score : 0,
+      });
+      return { module, state };
+    }
+
+    translateCraftingModuleValidation(sequence, attempt) {
+      if (!attempt) {
+        return null;
+      }
+      if (attempt.reason === 'empty-sequence') {
+        return {
+          valid: false,
+          reason: 'empty-sequence',
+          message: 'Add items to the sequence to craft.',
+        };
+      }
+      const filtered = Array.isArray(sequence) ? sequence.filter(Boolean) : [];
+      const key = filtered.join(',');
+      const baseMatch = key && this.craftingRecipes.has(key)
+        ? { recipe: this.craftingRecipes.get(key), key, parts: filtered.slice() }
+        : null;
+      const matchById = (id) => {
+        if (!id) {
+          return baseMatch;
+        }
+        return this.findRecipeMetadataById(id) || baseMatch;
+      };
+      if (!attempt.valid) {
+        const reason = attempt.reason || 'no-recipe';
+        if (reason === 'order-mismatch') {
+          const target =
+            (attempt.recipe && matchById(attempt.recipe.id)) ||
+            this.findRecipeByIngredients(filtered) ||
+            baseMatch;
+          const recipe = target?.recipe || null;
+          const parts = target?.parts || attempt.recipe?.sequence || [];
+          const order = this.formatRecipeSequence(parts);
+          const label =
+            (recipe && recipe.label) ||
+            (attempt.recipe && (attempt.recipe.label || attempt.recipe.name)) ||
+            'Recipe';
+          return {
+            valid: false,
+            reason,
+            recipe,
+            message: order
+              ? `${label} requires the order ${order}.`
+              : attempt.alert || 'Recipe ingredients detected, but the order is incorrect.',
+          };
+        }
+        if (reason === 'missing-ingredients') {
+          const target =
+            (attempt.recipe && matchById(attempt.recipe.id)) ||
+            baseMatch;
+          const summary = this.describeMissingIngredients(attempt.missing);
+          return {
+            valid: false,
+            reason,
+            recipe: target?.recipe || null,
+            missing: Array.isArray(attempt.missing) ? attempt.missing : [],
+            message: summary
+              ? `Missing materials: ${summary}.`
+              : attempt.alert || 'Missing materials for this recipe.',
+          };
+        }
+        if (reason === 'no-recipe') {
+          return {
+            valid: false,
+            reason,
+            message: attempt.alert || 'Sequence fizzles. No recipe matched.',
+          };
+        }
+        return {
+          valid: false,
+          reason,
+          message: attempt.alert || 'Sequence unstable.',
+        };
+      }
+      const target =
+        (attempt.recipe && matchById(attempt.recipe.id)) ||
+        baseMatch;
+      const recipe = target?.recipe || null;
+      const sequenceKey = target?.key || (target?.parts?.join(',') ?? key);
+      const label =
+        (recipe && recipe.label) ||
+        (attempt.recipe && (attempt.recipe.label || attempt.recipe.name)) ||
+        'Recipe';
+      return {
+        valid: true,
+        reason: 'ready',
+        recipe,
+        key: sequenceKey,
+        message: `${label} crafted!`,
+      };
+    }
+
     validateCraftingSequence() {
       const sequence = Array.isArray(this.craftingState?.sequence)
         ? this.craftingState.sequence.filter(Boolean)
@@ -20602,6 +20808,17 @@
           reason: 'empty-sequence',
           message: 'Add items to the sequence to craft.',
         };
+      }
+      const validationState = this.buildCraftingValidationState();
+      if (validationState) {
+        const attempt = validationState.module.validateCraftAttempt(
+          validationState.state,
+          sequence,
+        );
+        const translated = this.translateCraftingModuleValidation(sequence, attempt);
+        if (translated) {
+          return translated;
+        }
       }
       const key = sequence.join(',');
       const recipe = this.craftingRecipes.get(key);
