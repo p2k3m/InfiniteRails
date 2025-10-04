@@ -142,7 +142,9 @@ async function runAdvancedScenario(browser) {
   });
 
   try {
-    await page.goto('file://' + process.cwd() + '/index.html');
+    await page.goto('file://' + process.cwd() + '/index.html', {
+      waitUntil: 'domcontentloaded',
+    });
     await maybeClickStart(page);
     await page.waitForFunction(() => document.body.classList.contains('game-active'), {
       timeout: 15000,
@@ -201,7 +203,9 @@ async function runSimpleScenario(browser) {
   });
 
   try {
-    await page.goto('file://' + process.cwd() + '/index.html?mode=simple');
+    await page.goto('file://' + process.cwd() + '/index.html?mode=simple', {
+      waitUntil: 'domcontentloaded',
+    });
     await maybeClickStart(page);
     await page.waitForTimeout(1500);
     const introVisible = await page.isVisible('#introModal').catch(() => false);
