@@ -20227,7 +20227,7 @@
 
     handleCraftButton() {
       const craftedSequence = this.craftingState.sequence.slice();
-      const validation = this.validateCraftingSequence();
+      const validation = this.updateCraftButtonState(this.validateCraftingSequence());
       if (!validation.valid) {
         this.showHint(validation.message || 'Sequence unstable.');
         this.announceCraftingValidation(validation);
@@ -20510,16 +20510,29 @@
       this.craftSuggestionsEl.appendChild(fragment);
     }
 
-    updateCraftButtonState() {
-      if (!this.craftButton) return;
-      const validation = this.validateCraftingSequence();
+    updateCraftButtonState(presetValidation = null) {
+      if (!this.craftButton) return presetValidation;
+      const validation = presetValidation || this.validateCraftingSequence();
+      this.craftingState.lastValidation = validation;
       const enabled = validation.valid === true;
       this.craftButton.disabled = !enabled;
+      this.craftButton.dataset.eligible = enabled ? 'true' : 'false';
       if (validation.reason) {
         this.craftButton.dataset.validationState = enabled ? 'ready' : validation.reason;
       } else {
         delete this.craftButton.dataset.validationState;
       }
+      const hintMessage = enabled
+        ? validation.recipe
+          ? `Ready to craft ${validation.recipe.label}.`
+          : 'Ready to craft.'
+        : validation.message || 'Sequence unstable.';
+      if (hintMessage) {
+        this.craftButton.setAttribute('data-hint', hintMessage);
+      } else {
+        this.craftButton.removeAttribute('data-hint');
+      }
+      return validation;
     }
 
     buildIngredientCount(parts = []) {
