@@ -4703,6 +4703,25 @@ body.sidebar-open .player-hint {
   opacity: 0.55;
 }
 
+.crafting-actions .primary[disabled],
+.crafting-actions .primary[aria-disabled='true'] {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.crafting-suggestions__item[aria-disabled='true'],
+.crafting-search__result[aria-disabled='true'],
+.crafting-suggestions li[data-status='missing'] > .crafting-suggestions__item,
+.crafting-suggestions li[data-status='locked'] > .crafting-suggestions__item,
+.crafting-suggestions li[data-status='unavailable'] > .crafting-suggestions__item,
+.crafting-search-panel__results li[data-status='missing'] > .crafting-search__result,
+.crafting-search-panel__results li[data-status='locked'] > .crafting-search__result,
+.crafting-search-panel__results li[data-status='unavailable'] > .crafting-search__result {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+
 .visual-warning {
   display: block;
   font-size: 0.65rem;
