@@ -2350,6 +2350,7 @@
       this.tmpVector = new THREE.Vector3();
       this.tmpVector2 = new THREE.Vector3();
       this.tmpVector3 = new THREE.Vector3();
+      this.tmpVector4 = new THREE.Vector3();
       this.mobCollisionVector = new THREE.Vector3();
       this.mobCollisionVector2 = new THREE.Vector3();
       this.tmpQuaternion = new THREE.Quaternion();
@@ -2358,6 +2359,9 @@
         triggeredAt: 0,
         timeoutMs: 650,
         initialPosition: new THREE.Vector3(),
+        initialAvatarPosition: new THREE.Vector3(),
+        anchorProbe: new THREE.Vector3(),
+        avatarProbe: new THREE.Vector3(),
         key: null,
       };
       this.cameraBaseOffset = new THREE.Vector3();
@@ -14405,29 +14409,102 @@
       if (!diagnostics) {
         return;
       }
+      const THREE = this.THREE;
       const anchor = this.getMovementAnchorPosition();
-      if (!anchor) {
+      const avatarAnchor = this.getPlayerAvatarWorldPosition(diagnostics.avatarProbe || null);
+      if (!anchor && !avatarAnchor) {
         diagnostics.pending = false;
-        this.validateMovementBindings(null, null);
+        this.validateMovementBindings(null, null, null, null);
         return;
       }
-      if (!diagnostics.initialPosition) {
-        diagnostics.initialPosition = this.THREE?.Vector3 ? new this.THREE.Vector3() : null;
+      if (anchor) {
+        if (!diagnostics.initialPosition || typeof diagnostics.initialPosition.copy !== 'function') {
+          diagnostics.initialPosition =
+            THREE && typeof THREE.Vector3 === 'function' ? new THREE.Vector3() : null;
+        }
+        if (!diagnostics.initialPosition) {
+          diagnostics.pending = false;
+          this.validateMovementBindings(anchor, null, avatarAnchor, null);
+          return;
+        }
+        diagnostics.initialPosition.copy(anchor);
+      } else {
+        diagnostics.initialPosition = null;
       }
-      if (!diagnostics.initialPosition) {
-        diagnostics.pending = false;
-        this.validateMovementBindings(anchor, null);
-        return;
+      if (avatarAnchor) {
+        if (!diagnostics.initialAvatarPosition || typeof diagnostics.initialAvatarPosition.copy !== 'function') {
+          diagnostics.initialAvatarPosition =
+            THREE && typeof THREE.Vector3 === 'function' ? new THREE.Vector3() : null;
+        }
+        if (diagnostics.initialAvatarPosition) {
+          diagnostics.initialAvatarPosition.copy(avatarAnchor);
+        }
+      } else {
+        diagnostics.initialAvatarPosition = null;
       }
-      diagnostics.initialPosition.copy(anchor);
       diagnostics.pending = true;
       diagnostics.triggeredAt = this.getHighResTimestamp();
       diagnostics.key = typeof actionLabel === 'string' ? actionLabel : null;
     }
 
     getMovementAnchorPosition() {
+      const THREE = this.THREE;
+      const diagnostics = this.movementBindingDiagnostics || null;
+      const ensureProbe = () => {
+        if (diagnostics?.anchorProbe && typeof diagnostics.anchorProbe.set === 'function') {
+          return diagnostics.anchorProbe;
+        }
+        if (THREE && typeof THREE.Vector3 === 'function') {
+          const probe = new THREE.Vector3();
+          if (diagnostics) {
+            diagnostics.anchorProbe = probe;
+          }
+          return probe;
+        }
+        return null;
+      };
+      const physicsBody = this.playerPhysicsBody || this.ensurePlayerPhysicsBody();
+      if (physicsBody && typeof physicsBody.getWorldPosition === 'function') {
+        const probe = ensureProbe();
+        if (probe) {
+          try {
+            physicsBody.getWorldPosition(probe);
+            return probe;
+          } catch (error) {
+            if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+              console.debug('Unable to resolve player physics body world position for diagnostics.', error);
+            }
+          }
+        }
+      }
+      if (this.playerRig && typeof this.playerRig.getWorldPosition === 'function') {
+        const probe = ensureProbe();
+        if (probe) {
+          try {
+            this.playerRig.getWorldPosition(probe);
+            return probe;
+          } catch (error) {
+            if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+              console.debug('Unable to resolve player rig world position for diagnostics.', error);
+            }
+          }
+        }
+      }
       if (this.playerRig?.position) {
         return this.playerRig.position;
+      }
+      if (this.camera && typeof this.camera.getWorldPosition === 'function') {
+        const probe = ensureProbe();
+        if (probe) {
+          try {
+            this.camera.getWorldPosition(probe);
+            return probe;
+          } catch (error) {
+            if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+              console.debug('Unable to resolve camera world position for diagnostics.', error);
+            }
+          }
+        }
       }
       if (this.camera?.position) {
         return this.camera.position;
@@ -14441,24 +14518,48 @@
         return;
       }
       const anchor = this.getMovementAnchorPosition();
-      if (!anchor) {
+      const avatarAnchor = this.getPlayerAvatarWorldPosition(diagnostics.avatarProbe || null);
+      if (!anchor && !avatarAnchor) {
         diagnostics.pending = false;
-        this.validateMovementBindings(null, null);
+        this.validateMovementBindings(null, null, null, null);
         diagnostics.key = null;
         return;
       }
-      if (!diagnostics.initialPosition) {
-        diagnostics.initialPosition = anchor.clone ? anchor.clone() : null;
+      if (anchor && (!diagnostics.initialPosition || typeof diagnostics.initialPosition.copy !== 'function')) {
+        diagnostics.initialPosition =
+          anchor && typeof anchor.clone === 'function'
+            ? anchor.clone()
+            : this.THREE && typeof this.THREE.Vector3 === 'function'
+              ? new this.THREE.Vector3().copy(anchor)
+              : null;
+        diagnostics.pending = false;
+        diagnostics.key = null;
+        return;
+      }
+      if (avatarAnchor && (!diagnostics.initialAvatarPosition || typeof diagnostics.initialAvatarPosition.copy !== 'function')) {
+        diagnostics.initialAvatarPosition =
+          avatarAnchor && typeof avatarAnchor.clone === 'function'
+            ? avatarAnchor.clone()
+            : this.THREE && typeof this.THREE.Vector3 === 'function'
+              ? new this.THREE.Vector3().copy(avatarAnchor)
+              : null;
         diagnostics.pending = false;
         diagnostics.key = null;
         return;
       }
       const canMeasureDisplacement =
-        diagnostics.initialPosition && typeof anchor.distanceToSquared === 'function';
+        anchor && diagnostics.initialPosition && typeof anchor.distanceToSquared === 'function';
       const displacementSq = canMeasureDisplacement
         ? anchor.distanceToSquared(diagnostics.initialPosition)
         : null;
-      if (Number.isFinite(displacementSq) && displacementSq > 0.0025) {
+      const canMeasureAvatarDisplacement =
+        avatarAnchor && diagnostics.initialAvatarPosition && typeof avatarAnchor.distanceToSquared === 'function';
+      const avatarDisplacementSq = canMeasureAvatarDisplacement
+        ? avatarAnchor.distanceToSquared(diagnostics.initialAvatarPosition)
+        : null;
+      const movedByRig = Number.isFinite(displacementSq) && displacementSq > 0.0025;
+      const movedByAvatar = Number.isFinite(avatarDisplacementSq) && avatarDisplacementSq > 0.0025;
+      if (movedByRig || movedByAvatar) {
         diagnostics.pending = false;
         diagnostics.key = null;
         return;
@@ -14468,11 +14569,11 @@
         return;
       }
       diagnostics.pending = false;
-      this.validateMovementBindings(anchor, displacementSq);
+      this.validateMovementBindings(anchor, displacementSq, avatarAnchor, avatarDisplacementSq);
       diagnostics.key = null;
     }
 
-    validateMovementBindings(anchor, displacementSq) {
+    validateMovementBindings(anchor, displacementSq, avatarAnchor, avatarDisplacementSq) {
       const consoleRef = typeof console !== 'undefined' ? console : null;
       if (!consoleRef) {
         return;
@@ -14517,12 +14618,14 @@
           z: Number.parseFloat(vector.z.toFixed(3)),
         };
       };
+      const diagnostics = this.movementBindingDiagnostics || {};
       const rigPosition = this.playerRig?.position || null;
       const rigSummary = summariseVector(rigPosition);
+      const initialRigSummary = summariseVector(diagnostics.initialPosition);
       const cameraPosition = this.camera?.position || null;
       const cameraSummary = summariseVector(cameraPosition);
-      let avatarWorldSummary = null;
-      if (this.playerAvatar && typeof this.playerAvatar.getWorldPosition === 'function' && this.THREE?.Vector3) {
+      let avatarWorldSummary = summariseVector(avatarAnchor);
+      if (!avatarWorldSummary && this.playerAvatar && typeof this.playerAvatar.getWorldPosition === 'function' && this.THREE?.Vector3) {
         const probe = new this.THREE.Vector3();
         try {
           this.playerAvatar.getWorldPosition(probe);
@@ -14537,6 +14640,8 @@
           }
         }
       }
+      const initialAvatarSummary = summariseVector(diagnostics.initialAvatarPosition);
+      const avatarAttached = Boolean(this.playerAvatar && this.playerAvatar.parent === this.playerRig);
       const physicsBody = this.ensurePlayerPhysicsBody();
       const physicsBounds = this.getPlayerPhysicsBounds();
       const physicsPositionSummary = physicsBounds?.position ? summariseVector(physicsBounds.position) : null;
@@ -14551,7 +14656,7 @@
         : null;
       const anchorSummary = summariseVector(anchor);
       const message =
-        'Movement diagnostics: input registered but no displacement detected. Verify keyboard listeners and avatar rig transforms.';
+        'Movement diagnostics: input registered but no player displacement detected. Verify keyboard listeners, avatar rig transforms, and mesh parenting.';
       const report = {
         keyboardListeners: {
           document: { keydown: hasDocumentKeydown, keyup: hasDocumentKeyup },
@@ -14562,7 +14667,8 @@
         rig: {
           present: Boolean(this.playerRig),
           position: rigSummary,
-          avatarAttached: Boolean(this.playerAvatar && this.playerAvatar.parent === this.playerRig),
+          initialPosition: initialRigSummary,
+          avatarAttached,
         },
         camera: {
           present: Boolean(this.camera),
@@ -14576,6 +14682,15 @@
           bottom: physicsBottomSummary,
         },
         avatarWorldPosition: avatarWorldSummary,
+        avatarInitialPosition: initialAvatarSummary,
+        avatarDisplacementSq,
+        avatar: {
+          present: Boolean(this.playerAvatar),
+          attachedToRig: avatarAttached,
+          currentPosition: avatarWorldSummary,
+          initialPosition: initialAvatarSummary,
+          displacementSq: avatarDisplacementSq,
+        },
         anchorPosition: anchorSummary,
       };
       notifyLiveDiagnostics('movement', message, report, { level: 'warning' });
@@ -14586,9 +14701,12 @@
         groupCollapsed(message);
         warn('Keyboard listener coverage', report.keyboardListeners);
         warn('Rig status', report.rig);
+        warn('Rig initial position', report.rig.initialPosition);
         warn('Camera status', report.camera);
         warn('Physics body status', report.physics);
         warn('Avatar mesh position', report.avatarWorldPosition);
+        warn('Avatar initial position', report.avatarInitialPosition);
+        warn('Avatar displacement squared', report.avatarDisplacementSq);
         warn('Anchor position', report.anchorPosition);
         warn('Displacement squared', report.displacementSq);
         groupEnd();
@@ -16727,6 +16845,49 @@
         rig.add(this.playerPhysicsBody);
       }
       return this.playerPhysicsBody;
+    }
+
+    getPlayerAvatarWorldPosition(target) {
+      const THREE = this.THREE;
+      let destination = target || null;
+      if (!destination) {
+        if (THREE && typeof THREE.Vector3 === 'function') {
+          if (!this.tmpVector4 || typeof this.tmpVector4.set !== 'function') {
+            this.tmpVector4 = new THREE.Vector3();
+          }
+          destination = this.tmpVector4;
+          destination.set(0, 0, 0);
+        } else {
+          destination = { x: 0, y: 0, z: 0 };
+        }
+      }
+      const avatar = this.playerAvatar;
+      if (avatar && typeof avatar.getWorldPosition === 'function') {
+        try {
+          avatar.getWorldPosition(destination);
+          return destination;
+        } catch (error) {
+          if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+            console.debug('Unable to resolve player avatar world position.', error);
+          }
+        }
+      }
+      const rig = this.playerRig;
+      if (rig && typeof rig.getWorldPosition === 'function') {
+        try {
+          rig.getWorldPosition(destination);
+          return destination;
+        } catch (error) {
+          if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+            console.debug('Unable to resolve player rig world position fallback.', error);
+          }
+        }
+      }
+      if (rig?.position && typeof destination.copy === 'function') {
+        destination.copy(rig.position);
+        return destination;
+      }
+      return this.getPlayerWorldPosition(destination);
     }
 
     getPlayerWorldPosition(target) {

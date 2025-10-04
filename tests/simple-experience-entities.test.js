@@ -327,6 +327,69 @@ describe('dimension loot tables', () => {
   });
 });
 
+describe('movement binding diagnostics', () => {
+  it('captures avatar world position when queuing validation and clears after rig movement', () => {
+    const { experience } = createExperienceForTest();
+    experience.setupScene();
+    experience.ensurePlayerPhysicsBody();
+    const placeholder = experience.ensurePlayerAvatarPlaceholder('boot');
+    expect(placeholder).toBeTruthy();
+
+    const diagnostics = experience.movementBindingDiagnostics;
+    const getHighResSpy = vi.spyOn(experience, 'getHighResTimestamp');
+    getHighResSpy.mockReturnValueOnce(0);
+    getHighResSpy.mockReturnValue(1000);
+
+    experience.queueMovementBindingValidation('moveForward');
+
+    expect(diagnostics.pending).toBe(true);
+    expect(diagnostics.initialAvatarPosition).toBeTruthy();
+    expect(typeof diagnostics.initialAvatarPosition.copy).toBe('function');
+
+    const snapshot = diagnostics.initialAvatarPosition.clone();
+    const avatarPosition = experience.getPlayerAvatarWorldPosition(new window.THREE.Vector3());
+    expect(snapshot.distanceToSquared(avatarPosition)).toBeLessThan(1e-6);
+
+    const validateSpy = vi.spyOn(experience, 'validateMovementBindings');
+
+    experience.playerRig.position.x += 0.75;
+    experience.ensurePlayerPhysicsBody();
+    experience.evaluateMovementBindingDiagnostics();
+
+    expect(diagnostics.pending).toBe(false);
+    expect(validateSpy).not.toHaveBeenCalled();
+  });
+
+  it('invokes diagnostics when only the camera moves without player displacement', () => {
+    const { experience } = createExperienceForTest();
+    experience.setupScene();
+    experience.ensurePlayerPhysicsBody();
+    experience.ensurePlayerAvatarPlaceholder('boot');
+
+    const getHighResSpy = vi.spyOn(experience, 'getHighResTimestamp');
+    getHighResSpy.mockReturnValueOnce(0);
+    getHighResSpy.mockReturnValue(1000);
+
+    const validateSpy = vi.spyOn(experience, 'validateMovementBindings');
+
+    experience.queueMovementBindingValidation('moveForward');
+
+    experience.camera.position.z -= 1.2;
+    experience.evaluateMovementBindingDiagnostics();
+
+    expect(validateSpy).toHaveBeenCalledTimes(1);
+    const [anchor, rigDisplacementSq, avatarAnchor, avatarDisplacementSq] = validateSpy.mock.calls[0];
+    expect(anchor).toBeTruthy();
+    expect(avatarAnchor).toBeTruthy();
+    if (rigDisplacementSq !== null) {
+      expect(rigDisplacementSq).toBeLessThan(0.0025);
+    }
+    if (avatarDisplacementSq !== null) {
+      expect(avatarDisplacementSq).toBeLessThan(0.0025);
+    }
+  });
+});
+
 describe('simple experience entity lifecycle', () => {
   it('positions Steve and spawns treasure chests when the scene loads', async () => {
     const { experience, spawnTop } = createExperienceForTest();
