@@ -624,4 +624,35 @@ describe('simple experience terrain generation', () => {
       vi.useRealTimers();
     }
   });
+
+  it('rebuilds navigation meshes whenever the world reloads', () => {
+    const canvas = {
+      width: 512,
+      height: 512,
+      clientWidth: 512,
+      clientHeight: 512,
+      getContext: () => null,
+    };
+
+    const experience = window.SimpleExperience.create({ canvas, ui: {} });
+    experience.scene = new THREE.Scene();
+    experience.terrainGroup = new THREE.Group();
+    experience.terrainChunkGroups = [];
+    experience.terrainChunkMap = new Map();
+    experience.dirtyTerrainChunks = new Set();
+
+    experience.buildTerrain();
+
+    const initialBuildCount = experience.navigationMeshBuildCounter;
+    const initialGeneration = experience.navigationMeshGeneration;
+
+    experience.buildTerrain({ reason: 'world-reload' });
+
+    expect(experience.navigationMeshSummary).toBeTruthy();
+    expect(experience.navigationMeshBuildCounter).toBeGreaterThan(initialBuildCount);
+    expect(experience.navigationMeshGeneration).toBeGreaterThan(initialGeneration);
+    expect(experience.navigationMeshSummary.reason).toBe('world-reload');
+    expect(experience.navigationMeshSummary.chunkCount).toBeGreaterThan(0);
+    expect(experience.navigationMeshSummary.walkableCells).toBeGreaterThan(0);
+  });
 });

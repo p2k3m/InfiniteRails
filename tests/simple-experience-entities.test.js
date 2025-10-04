@@ -561,6 +561,29 @@ describe('simple experience entity lifecycle', () => {
     }
   });
 
+  it('warns when AI movement cannot resolve a navigation chunk', () => {
+    const { experience } = createExperienceForTest();
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      experience.ensureNavigationMeshForActorPosition('zombie', Number.NaN, 0, {
+        stage: 'unit-test',
+        throttleMs: 0,
+      });
+
+      expect(warnSpy).toHaveBeenCalledWith(
+        'AI movement failure detected. Verify navigation mesh rebuild scheduling and terrain coverage.',
+        expect.objectContaining({
+          actorType: 'zombie',
+          stage: 'unit-test',
+          reason: 'position-invalid',
+        }),
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
   it('spawns golems with fallback materials when MeshStandardMaterial is unavailable', async () => {
     const { experience } = createExperienceForTest();
 

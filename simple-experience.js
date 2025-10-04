@@ -149,6 +149,7 @@
   }
 
   const WORLD_SIZE = 64;
+  const NAVMESH_RELOAD_REASONS = new Set(['world-load', 'world-reload']);
   const DEFAULT_PROCEDURAL_VOXEL_PALETTE = {
     base: '#6fbf73',
     highlight: '#e5f7ff',
@@ -11863,8 +11864,8 @@
       const navmeshReason =
         navmeshReasonRaw.length > 0
           ? navmeshReasonRaw
-          : buildReason === 'world-load'
-            ? 'world-load'
+          : NAVMESH_RELOAD_REASONS.has(buildReason)
+            ? buildReason
             : `${buildReason}-navmesh`;
       this.ensureWorldRootGroups();
       const resetTerrainState = () => {
