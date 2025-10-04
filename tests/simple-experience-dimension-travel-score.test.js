@@ -21,6 +21,8 @@ function prepareExperienceForAdvance(experience) {
   vi.spyOn(experience, 'showHint').mockImplementation(() => {});
   vi.spyOn(experience, 'runDimensionExitHooks').mockResolvedValue();
   vi.spyOn(experience, 'runDimensionEnterHooks').mockResolvedValue();
+  vi.spyOn(experience, 'runDimensionReadyHooks').mockResolvedValue();
+  vi.spyOn(experience, 'verifyDimensionAssetsAfterTransition').mockReturnValue({ allPresent: true });
   vi.spyOn(experience, 'applyDimensionSettings').mockImplementation(function mockApply(index) {
     this.currentDimensionIndex = index;
     this.dimensionSettings = themes[index] ?? { id: `dimension-${index}`, name: `Dimension ${index + 1}` };
@@ -69,5 +71,38 @@ describe('simple experience dimension travel scoring', () => {
     expect(experience.portalMechanics.enterPortal).toHaveBeenCalled();
     expect(experience.score).toBe(startScore);
     expect(addScoreSpy).not.toHaveBeenCalledWith('dimensions', expect.any(Number));
+  });
+
+  it('cleans, loads, runs post-init hooks, and verifies assets during travel', async () => {
+    const { experience } = createExperience();
+    prepareExperienceForAdvance(experience);
+    const populateSpy = vi
+      .spyOn(experience, 'populateSceneAfterTerrain')
+      .mockImplementation(() => {});
+    const handleSpy = vi.spyOn(experience, 'handleDimensionPostInit');
+    const exitSpy = experience.runDimensionExitHooks;
+    const applySpy = experience.applyDimensionSettings;
+    const buildSpy = experience.buildTerrain;
+    const verifySpy = experience.verifyDimensionAssetsAfterTransition;
+
+    experience.portalMechanics = { ...experience.portalMechanics };
+    experience.portalMechanics.enterPortal = vi.fn(() => ({ dimensionChanged: true }));
+
+    await experience.advanceDimension();
+
+    expect(exitSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ previousDimension: expect.anything(), nextDimension: expect.anything() }),
+    );
+    expect(applySpy).toHaveBeenCalledWith(expect.any(Number));
+    expect(buildSpy).toHaveBeenCalled();
+    expect(populateSpy).toHaveBeenCalledWith({ reason: 'dimension-transition' });
+    expect(handleSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        previousDimension: expect.anything(),
+        nextDimension: expect.anything(),
+        arrivalRules: expect.any(String),
+      }),
+    );
+    expect(verifySpy).toHaveBeenCalledWith(expect.objectContaining({ reason: 'dimension-transition' }));
   });
 });
