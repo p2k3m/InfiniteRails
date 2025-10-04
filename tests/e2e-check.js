@@ -36,10 +36,27 @@ function findUnexpectedWarnings(warnings) {
 }
 
 async function maybeClickStart(page) {
-  const startButtonVisible = await page.isVisible('#startButton').catch(() => false);
-  if (startButtonVisible) {
-    await page.click('#startButton');
+  const startButton = page.locator('#startButton');
+  if ((await startButton.count()) === 0) {
+    return;
   }
+
+  const visible = await startButton.isVisible().catch(() => false);
+  if (!visible) {
+    return;
+  }
+
+  await page.waitForFunction(
+    () => {
+      const button = document.querySelector('#startButton');
+      if (!button) return false;
+      const stillPreloading = button.getAttribute('data-preloading') === 'true';
+      return !button.disabled && !stillPreloading;
+    },
+    { timeout: 30000 },
+  );
+
+  await startButton.click();
 }
 
 async function ensureGameHudReady(page, { requireNight = false } = {}) {
