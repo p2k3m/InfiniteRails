@@ -9999,9 +9999,11 @@
       const maxAttempts = Number.isFinite(options?.maxAttempts)
         ? Math.max(1, Math.floor(options.maxAttempts))
         : 3;
+      this.playerAvatarMetadata = null;
       this.ensurePlayerAvatarPlaceholder('boot');
       let asset = null;
       let attempt = 0;
+      let rigMetadata = null;
       while (attempt < maxAttempts) {
         attempt += 1;
         let candidate = null;
@@ -10017,15 +10019,30 @@
           return;
         }
         const isPlaceholder = candidate?.scene?.userData?.placeholder === true;
-        if (candidate?.scene && !isPlaceholder) {
+        const candidateRigMetadata = candidate?.metadata?.avatarRig || null;
+        const rigMetadataValid = candidateRigMetadata?.valid === true;
+        if (candidate?.scene && !isPlaceholder && rigMetadataValid) {
+          rigMetadata = candidateRigMetadata;
           asset = candidate;
           break;
         }
-        const message =
-          attempt < maxAttempts
+        const rigError =
+          candidate?.scene && !isPlaceholder && !rigMetadataValid
+            ? (() => {
+                const error = new Error('Explorer avatar rig metadata unavailable.');
+                error.code = 'PLAYER_AVATAR_METADATA_MISSING';
+                return error;
+              })()
+            : null;
+        const message = (() => {
+          if (rigError) {
+            return 'Explorer avatar rig metadata unavailable — placeholder visuals active while the model reinitialises.';
+          }
+          return attempt < maxAttempts
             ? `Explorer avatar still loading (attempt ${attempt} of ${maxAttempts}) — placeholder visuals active until detailed models return.`
             : `Explorer avatar unavailable after ${maxAttempts} attempt(s) — placeholder visuals remain active.`;
-        this.handleAssetLoadFailure('steve', null, { fallbackMessage: message });
+        })();
+        this.handleAssetLoadFailure('steve', rigError, { fallbackMessage: message });
         if (candidate?.scene) {
           disposeObject3D(candidate.scene);
         }
@@ -10043,6 +10060,7 @@
       }
       if (!asset?.scene) {
         console.warn('Player avatar model unavailable after retries — using placeholder rig.');
+        this.ensurePlayerAvatarPlaceholder('failed');
         return;
       }
       const model = asset.scene;
@@ -10133,6 +10151,7 @@
 
       this.playerRig.add(model);
       this.playerAvatar = model;
+      this.playerAvatarMetadata = rigMetadata;
 
       const head = model.getObjectByName('HeadPivot') || model.getObjectByName('Head');
       this.playerHeadAttachment = head && head.isObject3D ? head : model;
@@ -10148,6 +10167,7 @@
       });
       this.playerMixer = this.playerAnimationRig?.mixer || null;
       this.playerIdleAction = this.playerAnimationRig?.actions?.idle || null;
+      console.info('Steve visible in scene — GLTF rig active.');
       console.info(
         'Avatar visibility confirmed — verify animation rig initialises correctly if the player appears static.',
       );
