@@ -7964,9 +7964,6 @@
                 );
               }
             }
-            if (!backendReady && identityState.apiBaseUrl) {
-              backendReady = true;
-            }
             experience.apiBaseUrl = backendReady ? identityState.apiBaseUrl : null;
             const result = experience.start();
             if (result && typeof result.then === 'function') {
