@@ -8154,6 +8154,15 @@
         this.textureFallbackMissingKeys.add(key);
       }
       this.texturePackUnavailable = true;
+      const failureKey = key && typeof key === 'string' && key.trim().length ? `texture:${key.trim()}` : 'texture-pack';
+      const previousFailures = this.assetFailureCounts?.get(failureKey) || 0;
+      const fallbackMessage = this.buildTextureFallbackMessage();
+      if (fallbackMessage && previousFailures === 0) {
+        this.recordAssetFailure(failureKey, {
+          fallbackMessage,
+          error: context?.error || null,
+        });
+      }
       this.emitGameEvent('texture-pack-fallback', {
         reason,
         failures: this.texturePackErrorCount,
@@ -8441,6 +8450,37 @@
       const fallbackAlertSample =
         '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';
       knownPlayableNames.add(fallbackAlertName);
+      const ensureAudioFallbackMessage = (text) => {
+        const trimmed = typeof text === 'string' ? text.trim() : '';
+        const suffix = 'Fallback alert tone active until audio assets are restored.';
+        if (!trimmed) {
+          return suffix;
+        }
+        if (/fallback alert tone/i.test(trimmed)) {
+          return trimmed;
+        }
+        if (/fallback/i.test(trimmed) && /(audio|tone)/i.test(trimmed)) {
+          return trimmed;
+        }
+        if (/[.!?]$/.test(trimmed)) {
+          return `${trimmed} ${suffix}`;
+        }
+        return `${trimmed}. ${suffix}`;
+      };
+      const submitAudioFailure = (sampleKey, message, error) => {
+        const fallbackMessage = ensureAudioFallbackMessage(message);
+        if (typeof this.recordAssetFailure === 'function') {
+          const failureKey =
+            typeof sampleKey === 'string' && sampleKey.trim().length
+              ? `audio:${sampleKey.trim()}`
+              : 'audio';
+          this.recordAssetFailure(failureKey, {
+            fallbackMessage,
+            error: error || null,
+          });
+        }
+        return fallbackMessage;
+      };
       const getSamplePayload = (name) => {
         if (!name) return null;
         if (name === fallbackAlertName) {
@@ -8597,10 +8637,11 @@
 
       const logAudioPlaybackIssue = (requestedName, resolvedName, info = {}) => {
         const fallbackName = resolvedName || requestedName || 'unknown sample';
-        const message =
+        let message =
           typeof info?.message === 'string' && info.message.trim().length
             ? info.message.trim()
             : `Audio sample "${fallbackName}" failed to play.`;
+        message = submitAudioFailure(resolvedName || requestedName || null, message, info?.error || null);
         const timestamp = Date.now();
         if (typeof console !== 'undefined' && typeof console.error === 'function') {
           if (info?.error) {
@@ -8678,12 +8719,12 @@
         }
         messageParts.push('A fallback alert tone will be used until the audio files are restored.');
         const bootMessage = messageParts.join(' ');
-        bootStatusMessage = bootMessage;
+        bootStatusMessage = ensureAudioFallbackMessage(bootMessage);
         logAudioPlaybackIssue(
           bootMissingSampleList[0] || affectedAliasList[0] || null,
           bootMissingSampleList[0] || null,
           {
-            message: bootMessage,
+            message: bootStatusMessage,
             code: 'boot-missing-sample',
             detail: {
               missingSamples: bootMissingSampleList,
@@ -10231,6 +10272,11 @@
             : undefined;
           this.handleAssetLoadFailure(key, error, fallbackOptions);
           if (loaderUnavailable) {
+            this.recordAssetFailure('script:gltfloader', {
+              fallbackMessage:
+                'Model loader script unavailable — placeholder visuals active until assets recover.',
+              error,
+            });
             const fallbackScene = this.createModelFallbackMesh(key, { reason: 'loader-unavailable' });
             if (fallbackScene) {
               const fallbackPayload = { scene: fallbackScene, animations: [] };
