@@ -344,6 +344,55 @@
     }
   }
 
+  function prepareBootDiagnosticsEntries(entries) {
+    if (!Array.isArray(entries)) {
+      return [];
+    }
+    return entries
+      .map((entry) => {
+        const severity = normaliseBootDiagnosticsSeverity(entry?.severity, { allowPending: true });
+        let message = '';
+        if (typeof entry?.message === 'string' && entry.message.trim().length) {
+          message = entry.message.trim();
+        } else if (entry?.message !== undefined && entry?.message !== null) {
+          message = String(entry.message);
+        }
+        let detail = null;
+        if (entry?.detail !== undefined && entry?.detail !== null) {
+          if (typeof entry.detail === 'string' || typeof entry.detail === 'number' || typeof entry.detail === 'boolean') {
+            detail = entry.detail;
+          } else {
+            try {
+              detail = JSON.parse(JSON.stringify(entry.detail));
+            } catch (error) {
+              detail = String(entry.detail);
+            }
+          }
+        }
+        return { severity, message, detail };
+      })
+      .filter((entry) => Boolean(entry.severity));
+  }
+
+  function sortBootDiagnosticsEntries(entries) {
+    const rank = (value) => BOOT_DIAGNOSTICS_SEVERITY_RANK[value] ?? 0;
+    return [...entries].sort((a, b) => {
+      const rankDelta = rank(b.severity) - rank(a.severity);
+      if (rankDelta !== 0) {
+        return rankDelta;
+      }
+      if (a.message !== b.message) {
+        return a.message.localeCompare(b.message);
+      }
+      const detailA = formatBootDiagnosticsDetail(a.detail);
+      const detailB = formatBootDiagnosticsDetail(b.detail);
+      if (detailA !== detailB) {
+        return detailA.localeCompare(detailB);
+      }
+      return 0;
+    });
+  }
+
   function setBootDiagnosticsSectionStatus(sectionState, severity) {
     if (!sectionState) {
       return;
@@ -388,20 +437,17 @@
           list.removeChild(list.firstChild);
         }
       }
-      const entries = Array.isArray(snapshot?.sections?.[scope]) ? snapshot.sections[scope] : [];
-      const hasEntries = entries.length > 0;
-      const items = hasEntries
-        ? entries
-        : [
-            {
-              severity: 'pending',
-              message: BOOT_DIAGNOSTICS_DEFAULT_MESSAGE,
-              detail: null,
-            },
-          ];
-      let highestSeverity = hasEntries ? 'ok' : 'pending';
-      items.forEach((entry) => {
-        const severity = normaliseBootDiagnosticsSeverity(entry?.severity, { allowPending: true });
+      const normalisedEntries = sortBootDiagnosticsEntries(
+        prepareBootDiagnosticsEntries(snapshot?.sections?.[scope]),
+      );
+      const hasEntries = normalisedEntries.length > 0;
+      let highestSeverity = 'pending';
+      let errorCount = 0;
+      normalisedEntries.forEach((entry) => {
+        const severity = entry.severity;
+        if (severity === 'error') {
+          errorCount += 1;
+        }
         if (BOOT_DIAGNOSTICS_SEVERITY_RANK[severity] > BOOT_DIAGNOSTICS_SEVERITY_RANK[highestSeverity]) {
           highestSeverity = severity;
         }
@@ -413,13 +459,10 @@
         item.dataset.status = severity;
         const messageEl = listDoc.createElement('span');
         messageEl.className = 'boot-diagnostics__message';
-        const messageText =
-          typeof entry?.message === 'string' && entry.message.trim().length
-            ? entry.message.trim()
-            : 'No additional details.';
+        const messageText = entry.message && entry.message.length ? entry.message : 'No additional details.';
         messageEl.textContent = messageText;
         item.appendChild(messageEl);
-        const detailText = formatBootDiagnosticsDetail(entry?.detail);
+        const detailText = formatBootDiagnosticsDetail(entry.detail);
         if (detailText) {
           const detailEl = listDoc.createElement('span');
           detailEl.className = 'boot-diagnostics__detail';
@@ -428,8 +471,20 @@
         }
         list.appendChild(item);
       });
-      if (!hasEntries) {
+      if (!hasEntries && list && listDoc) {
+        const item = listDoc.createElement('li');
+        item.className = 'diagnostic-list__item boot-diagnostics__item';
+        item.dataset.status = 'pending';
+        const messageEl = listDoc.createElement('span');
+        messageEl.className = 'boot-diagnostics__message';
+        messageEl.textContent = BOOT_DIAGNOSTICS_DEFAULT_MESSAGE;
+        item.appendChild(messageEl);
+        list.appendChild(item);
         highestSeverity = 'pending';
+      }
+      if (sectionState.container?.dataset) {
+        sectionState.container.dataset.hasErrors = errorCount > 0 ? 'true' : 'false';
+        sectionState.container.dataset.errorCount = String(errorCount);
       }
       setBootDiagnosticsSectionStatus(sectionState, highestSeverity);
     });
@@ -489,6 +544,31 @@
       }
     });
     return clone;
+  }
+
+  function summariseBootDiagnosticErrors(snapshot) {
+    const clone = cloneBootDiagnosticsSnapshot(snapshot);
+    if (!clone) {
+      return null;
+    }
+    const summary = {
+      timestamp: clone.timestamp ?? null,
+      status: clone.status ?? null,
+      phase: clone.phase ?? null,
+      totalErrorCount: 0,
+      sections: {},
+    };
+    BOOT_DIAGNOSTIC_SCOPES.forEach((scope) => {
+      const entries = prepareBootDiagnosticsEntries(clone.sections?.[scope]);
+      const errors = entries.filter((entry) => entry.severity === 'error').map((entry) => ({
+        severity: 'error',
+        message: entry.message && entry.message.length ? entry.message : 'No additional details.',
+        detail: entry.detail ?? null,
+      }));
+      summary.sections[scope] = errors;
+      summary.totalErrorCount += errors.length;
+    });
+    return summary;
   }
 
   function notifyBootDiagnosticsListeners(snapshot) {
@@ -3791,6 +3871,8 @@
     const diagnostics = typeof bootstrapOverlay?.diagnostics === 'object' ? bootstrapOverlay.diagnostics : {};
     const history = getEventLogHistorySnapshot();
     const lastFailure = lastRendererFailureDetail ? { ...lastRendererFailureDetail } : null;
+    const bootDiagnosticsSnapshot = cloneBootDiagnosticsSnapshot(bootDiagnosticsState.lastSnapshot);
+    const bootDiagnosticsErrors = summariseBootDiagnosticErrors(bootDiagnosticsState.lastSnapshot);
     return {
       generatedAt: new Date().toISOString(),
       rendererMode: scope?.InfiniteRails?.rendererMode ?? null,
@@ -3809,6 +3891,8 @@
           ? bootstrapOverlay.getLogEntries()
           : [],
       liveDiagnostics: getLiveDiagnosticsEntriesSnapshot(),
+      bootDiagnostics: bootDiagnosticsSnapshot,
+      bootDiagnosticsErrors,
     };
   }
 
@@ -7506,6 +7590,7 @@
   bootDiagnosticsApi.getSnapshot = () => cloneBootDiagnosticsSnapshot(bootDiagnosticsState.lastSnapshot);
   bootDiagnosticsApi.onUpdate = (listener) => addBootDiagnosticsChangeListener(listener);
   bootDiagnosticsApi.downloadReport = () => downloadDiagnosticsReport();
+  bootDiagnosticsApi.getErrorSummary = () => summariseBootDiagnosticErrors(bootDiagnosticsState.lastSnapshot);
   globalScope.InfiniteRails.bootDiagnostics = bootDiagnosticsApi;
 
   if (typeof globalScope.addEventListener === 'function') {
