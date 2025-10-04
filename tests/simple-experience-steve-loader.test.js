@@ -106,6 +106,19 @@ describe('simple experience steve model loading', () => {
     experience.cloneModelScene = vi.fn().mockResolvedValue({
       scene: invalidModel,
       animations: [new THREE.AnimationClip('Jump', -1, [])],
+      metadata: {
+        avatarRig: {
+          valid: true,
+          errors: [],
+          hierarchy: {},
+          meshAssignments: {},
+          meshExpectations: {},
+          meshNameByIndex: {},
+          missingNodes: [],
+          hierarchyIssues: [],
+          meshMismatches: [],
+        },
+      },
     });
 
     try {
@@ -154,10 +167,24 @@ describe('simple experience steve model loading', () => {
 
     const idleClip = new THREE.AnimationClip('Idle', -1, []);
     const walkClip = new THREE.AnimationClip('WalkForward', -1, []);
+    const rigMetadata = {
+      avatarRig: {
+        valid: true,
+        errors: [],
+        hierarchy: {},
+        meshAssignments: {},
+        meshExpectations: {},
+        meshNameByIndex: {},
+        missingNodes: [],
+        hierarchyIssues: [],
+        meshMismatches: [],
+      },
+    };
 
     experience.cloneModelScene = vi.fn().mockResolvedValue({
       scene: model,
       animations: [idleClip, walkClip],
+      metadata: rigMetadata,
     });
 
     try {
