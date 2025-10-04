@@ -184,6 +184,8 @@
       models: null,
       textures: null,
       audio: null,
+      assets: null,
+      scene: null,
     },
     updateHandle: null,
     updateMode: null,
@@ -5008,7 +5010,7 @@
     if (!fields) {
       return;
     }
-    ['fps', 'models', 'textures', 'audio'].forEach((key) => {
+    ['fps', 'models', 'textures', 'audio', 'assets', 'scene'].forEach((key) => {
       const element = fields[key];
       if (element) {
         element.textContent = '—';
@@ -5034,6 +5036,50 @@
     return safe.toFixed(1);
   }
 
+  function formatDeveloperStatAssetStatus(status) {
+    if (!status || typeof status !== 'object') {
+      return '—';
+    }
+    const pending = Number.isFinite(status.pending) ? Math.max(0, status.pending) : 0;
+    const failures = Number.isFinite(status.failures) ? Math.max(0, status.failures) : 0;
+    if (pending > 0 && failures > 0 && failures !== pending) {
+      return `${pending.toLocaleString(undefined)} pending / ${failures.toLocaleString(undefined)} tracked`;
+    }
+    if (pending > 0) {
+      return `${pending.toLocaleString(undefined)} pending`;
+    }
+    if (failures > 0) {
+      return `${failures.toLocaleString(undefined)} tracked`;
+    }
+    return '0';
+  }
+
+  function formatDeveloperStatSceneStatus(status) {
+    if (!status || typeof status !== 'object') {
+      return '—';
+    }
+    const sceneChildren = Number.isFinite(status.sceneChildren) ? Math.max(0, status.sceneChildren) : null;
+    const worldChildren = Number.isFinite(status.worldChildren) ? Math.max(0, status.worldChildren) : null;
+    const terrainMeshes = Number.isFinite(status.terrainMeshes) ? Math.max(0, status.terrainMeshes) : null;
+    const actorCount = Number.isFinite(status.actorCount) ? Math.max(0, status.actorCount) : null;
+    const parts = [];
+    if (sceneChildren !== null || worldChildren !== null) {
+      const sceneLabel = sceneChildren !== null ? sceneChildren.toLocaleString(undefined) : '—';
+      const worldLabel = worldChildren !== null ? worldChildren.toLocaleString(undefined) : '—';
+      parts.push(`${sceneLabel} scene / ${worldLabel} world`);
+    }
+    if (terrainMeshes !== null) {
+      parts.push(`${terrainMeshes.toLocaleString(undefined)} terrain`);
+    }
+    if (actorCount !== null) {
+      parts.push(`${actorCount.toLocaleString(undefined)} actors`);
+    }
+    if (!parts.length) {
+      return '—';
+    }
+    return parts.join(' · ');
+  }
+
   function updateDeveloperStatsDisplay(metrics) {
     const { fields } = developerStatsState;
     if (!fields) {
@@ -5051,6 +5097,12 @@
     if (fields.audio) {
       fields.audio.textContent = formatDeveloperStatCount(metrics?.audio);
     }
+    if (fields.assets) {
+      fields.assets.textContent = formatDeveloperStatAssetStatus(metrics?.assets);
+    }
+    if (fields.scene) {
+      fields.scene.textContent = formatDeveloperStatSceneStatus(metrics?.scene);
+    }
   }
 
   function collectDeveloperMetrics() {
@@ -5064,11 +5116,38 @@
         return null;
       }
       developerStatsState.metricsErrorLogged = false;
+      const normaliseAssets = (value) => {
+        if (!value || typeof value !== 'object') {
+          return { pending: 0, failures: 0 };
+        }
+        return {
+          pending: Number.isFinite(value.pending) ? Math.max(0, value.pending) : 0,
+          failures: Number.isFinite(value.failures) ? Math.max(0, value.failures) : 0,
+        };
+      };
+      const normaliseScene = (value) => {
+        if (!value || typeof value !== 'object') {
+          return {
+            sceneChildren: 0,
+            worldChildren: 0,
+            terrainMeshes: 0,
+            actorCount: 0,
+          };
+        }
+        return {
+          sceneChildren: Number.isFinite(value.sceneChildren) ? Math.max(0, value.sceneChildren) : 0,
+          worldChildren: Number.isFinite(value.worldChildren) ? Math.max(0, value.worldChildren) : 0,
+          terrainMeshes: Number.isFinite(value.terrainMeshes) ? Math.max(0, value.terrainMeshes) : 0,
+          actorCount: Number.isFinite(value.actorCount) ? Math.max(0, value.actorCount) : 0,
+        };
+      };
       return {
         fps: Number.isFinite(metrics.fps) ? metrics.fps : 0,
         models: Number.isFinite(metrics.models) ? metrics.models : 0,
         textures: Number.isFinite(metrics.textures) ? metrics.textures : 0,
         audio: Number.isFinite(metrics.audio) ? metrics.audio : 0,
+        assets: normaliseAssets(metrics.assets),
+        scene: normaliseScene(metrics.scene),
       };
     } catch (error) {
       if (!developerStatsState.metricsErrorLogged && globalScope.console?.debug) {
@@ -5224,6 +5303,8 @@
         models: ui.developerStatsPanel.querySelector('[data-stat="models"]') || null,
         textures: ui.developerStatsPanel.querySelector('[data-stat="textures"]') || null,
         audio: ui.developerStatsPanel.querySelector('[data-stat="audio"]') || null,
+        assets: ui.developerStatsPanel.querySelector('[data-stat="assets"]') || null,
+        scene: ui.developerStatsPanel.querySelector('[data-stat="scene"]') || null,
       };
     }
     setDeveloperStatsEnabled(developerStatsState.enabled, { persist: false, forceRefresh: true });
@@ -8451,13 +8532,22 @@
   developerStatsApi.getMetrics = () => {
     const metrics = collectDeveloperMetrics();
     if (!metrics) {
-      return { fps: null, models: null, textures: null, audio: null };
+      return {
+        fps: null,
+        models: null,
+        textures: null,
+        audio: null,
+        assets: { pending: null, failures: null },
+        scene: { sceneChildren: null, worldChildren: null, terrainMeshes: null, actorCount: null },
+      };
     }
     return {
       fps: metrics.fps,
       models: metrics.models,
       textures: metrics.textures,
       audio: metrics.audio,
+      assets: metrics.assets,
+      scene: metrics.scene,
     };
   };
   developerStatsApi.onChange = addDeveloperStatsChangeListener;
