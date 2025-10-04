@@ -7915,8 +7915,13 @@
     }
     activeExperienceInstance = experience;
     globalScope.__INFINITE_RAILS_ACTIVE_EXPERIENCE__ = experience;
+    const scopeLocation = globalScope?.location || (typeof window !== 'undefined' ? window.location : null);
+    const locationProtocol = typeof scopeLocation?.protocol === 'string' ? scopeLocation.protocol.toLowerCase() : '';
+    const runningFromFileProtocol = locationProtocol === 'file:';
+    const shouldEnforceStrictAssets = !runningFromFileProtocol;
+    const shouldPreloadCriticalAssets = !runningFromFileProtocol;
     let assetPreloadPromise = null;
-    if (experience && typeof experience.enableStrictAssetValidation === 'function') {
+    if (shouldEnforceStrictAssets && experience && typeof experience.enableStrictAssetValidation === 'function') {
       try {
         experience.enableStrictAssetValidation();
       } catch (error) {
@@ -7924,8 +7929,12 @@
           globalScope.console.debug('Failed to enable strict asset validation.', error);
         }
       }
+    } else if (runningFromFileProtocol && globalScope.console?.info) {
+      globalScope.console.info(
+        'Skipping strict asset validation while running from the file:// protocol; placeholder assets will be allowed.',
+      );
     }
-    if (experience && typeof experience.preloadRequiredAssets === 'function') {
+    if (shouldPreloadCriticalAssets && experience && typeof experience.preloadRequiredAssets === 'function') {
       try {
         assetPreloadPromise = experience.preloadRequiredAssets();
       } catch (error) {
@@ -7934,6 +7943,10 @@
           globalScope.console.error('Critical asset preload failure detected.', error);
         }
       }
+    } else if (!shouldPreloadCriticalAssets && globalScope.console?.info) {
+      globalScope.console.info(
+        'Critical asset preload skipped in offline mode; the experience will stream assets on demand.',
+      );
     }
     if (developerStatsState.enabled) {
       developerStatsState.lastUpdateAt = 0;
