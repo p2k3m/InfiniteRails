@@ -2138,22 +2138,91 @@
     return `${def.icon} ${def.label}${count > 1 ? ` ×${count}` : ''}`;
   }
 
-  function createHeartMarkup(health) {
+  function createHeartMarkup(status, previousStatus = null) {
+    const health = Math.max(0, Math.round(status?.health ?? 0));
+    const maxHealth = Math.max(2, Math.round(status?.maxHealth ?? FALLBACK_HEALTH));
+    const totalHearts = Math.max(1, Math.ceil(maxHealth / 2));
     const fullHearts = Math.floor(health / 2);
-    const halfHeart = health % 2;
-    const pieces = [];
-    for (let i = 0; i < 5; i += 1) {
-      const index = i * 2;
-      let glyph = '♡';
-      if (index + 1 <= fullHearts) {
-        glyph = '❤';
-      } else if (index < fullHearts + halfHeart) {
-        glyph = '❥';
+    const hasHalfHeart = health % 2 === 1;
+    const heartRows = [];
+    const rows = Math.ceil(totalHearts / 5);
+    const containerClasses = ['hud-hearts'];
+    if (previousStatus) {
+      const previousHealth = Math.max(0, Math.round(previousStatus.health ?? 0));
+      if (health < previousHealth) {
+        containerClasses.push('is-damaged');
+      } else if (health > previousHealth) {
+        containerClasses.push('is-healing');
       }
-      const span = `<span class="heart-icon" aria-hidden="true">${glyph}</span>`;
-      pieces.push(span);
     }
-    return `<span class="hud-hearts" role="img" aria-label="${health / 2} hearts remaining">${pieces.join('')}</span>`;
+    if (health <= Math.max(2, Math.floor(maxHealth * 0.25))) {
+      containerClasses.push('is-critical');
+    }
+    for (let row = 0; row < rows; row += 1) {
+      const rowPieces = [];
+      for (let column = 0; column < 5; column += 1) {
+        const index = row * 5 + column;
+        if (index >= totalHearts) {
+          break;
+        }
+        let stateClass = '';
+        if (index >= fullHearts + (hasHalfHeart ? 1 : 0)) {
+          stateClass = ' is-empty';
+        } else if (index === fullHearts && hasHalfHeart) {
+          stateClass = ' is-partial';
+        }
+        rowPieces.push(
+          `<span class="heart-icon${stateClass}" style="--heart-index:${index}" aria-hidden="true"></span>`,
+        );
+      }
+      heartRows.push(`<span class="hud-hearts__row">${rowPieces.join('')}</span>`);
+    }
+    const remainingHearts = health / 2;
+    const precision = Number.isInteger(remainingHearts) ? 0 : 1;
+    const label = `${remainingHearts.toLocaleString(undefined, {
+      minimumFractionDigits: precision,
+      maximumFractionDigits: precision,
+    })} hearts remaining`;
+    return `<div class="${containerClasses.join(' ')}" role="img" aria-label="${label}">${heartRows.join('')}</div>`;
+  }
+
+  function createBubbleMarkup(status, previousStatus = null) {
+    const breath = Math.max(0, Math.round(status?.breath ?? 0));
+    const maxBreath = Math.max(1, Math.round(status?.maxBreath ?? FALLBACK_BREATH));
+    const totalBubbles = Math.max(1, Math.min(5, Math.ceil(maxBreath / 2)));
+    const activeBubbles = Math.max(0, Math.min(totalBubbles, Math.ceil(breath / 2)));
+    const hasPartialBubble = breath % 2 === 1 && activeBubbles > 0 && activeBubbles <= totalBubbles;
+    const classes = ['hud-bubbles'];
+    if (previousStatus) {
+      const previousBreath = Math.max(0, Math.round(previousStatus.breath ?? 0));
+      if (breath < previousBreath) {
+        classes.push('is-losing');
+      }
+    }
+    if ((status?.breathPercent ?? 100) <= 35) {
+      classes.push('is-low');
+    }
+    const stack = [];
+    for (let index = 0; index < totalBubbles; index += 1) {
+      let stateClass = '';
+      if (index >= activeBubbles) {
+        stateClass = ' is-empty';
+      } else if (index === activeBubbles - 1 && hasPartialBubble) {
+        stateClass = ' is-partial';
+      }
+      stack.push(
+        `<span class="bubble-indicator${stateClass}" style="--bubble-index:${index}" aria-hidden="true"></span>`,
+      );
+    }
+    const percent = Math.max(0, Math.min(100, Math.round(status?.breathPercent ?? 0)));
+    return `
+      <div class="${classes.join(' ')}" role="img" aria-label="${percent}% breath remaining">
+        <span class="hud-bubbles__frame">
+          <span class="hud-bubbles__stack">${stack.join('')}</span>
+        </span>
+        <span class="hud-bubbles__value">${percent}%</span>
+      </div>
+    `.trim();
   }
 
   function escapeHtml(value) {
@@ -2295,6 +2364,7 @@
       this.scoreSyncWarningEl = this.ui.scoreSyncWarningEl || null;
       this.scoreSyncWarningMessageEl = this.ui.scoreSyncWarningMessageEl || null;
       this.scoreMetricFlashTimers = new Map();
+      this.lastPlayerStatusSnapshot = null;
       this.craftingScoreEvents = 0;
       this.dimensionScoreEvents = 0;
       this.portalScoreEvents = 0;
@@ -22225,6 +22295,7 @@
       const shouldPublish = options.publish !== false;
       const {
         heartsEl,
+        bubblesEl,
         scoreTotalEl,
         scoreRecipesEl,
         scoreDimensionsEl,
@@ -22232,9 +22303,20 @@
         scoreCombatEl,
         scoreLootEl,
       } = this.ui;
+      const playerStatus = this.getPlayerStatusSnapshot();
+      const previousStatus = this.lastPlayerStatusSnapshot || null;
       if (heartsEl) {
-        heartsEl.innerHTML = createHeartMarkup(this.health);
+        heartsEl.innerHTML = createHeartMarkup(playerStatus, previousStatus);
+        heartsEl.dataset.health = String(playerStatus.health);
+        heartsEl.dataset.maxHealth = String(playerStatus.maxHealth);
       }
+      if (bubblesEl) {
+        bubblesEl.innerHTML = createBubbleMarkup(playerStatus, previousStatus);
+        bubblesEl.dataset.breath = String(playerStatus.breath);
+        bubblesEl.dataset.maxBreath = String(playerStatus.maxBreath);
+        bubblesEl.dataset.breathPercent = String(playerStatus.breathPercent);
+      }
+      this.lastPlayerStatusSnapshot = playerStatus;
       if (scoreTotalEl) {
         const roundedScore = Math.round(this.score ?? 0);
         scoreTotalEl.textContent = roundedScore.toLocaleString();
