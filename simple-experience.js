@@ -13983,6 +13983,34 @@
     }
 
     activatePortal() {
+      this.updatePortalInteriorValidity();
+      const validation = this.validatePortalFrameFootprint(this.portalBlocksPlaced);
+      this.portalFrameFootprintValid = validation.valid;
+      this.portalFrameValidationMessage = validation.message || '';
+      this.highlightPortalFrameIssues(validation.highlightSlots);
+      if (!validation.valid) {
+        const message =
+          validation.message ||
+          'Portal activation aborted — portal frame must form a level 4×3 stone ring.';
+        if (typeof this.showHint === 'function') {
+          this.showHint(message);
+        }
+        this.portalIgnitionLog = [message];
+        this.portalReady = false;
+        if (typeof console !== 'undefined' && typeof console.error === 'function') {
+          console.error(
+            'Portal activation aborted — invalid frame detected. Realign the highlighted blocks before attempting ignition again.',
+            {
+              message,
+              highlightCount: Array.isArray(validation.highlightSlots)
+                ? validation.highlightSlots.length
+                : 0,
+            },
+          );
+        }
+        this.updatePortalProgress();
+        return false;
+      }
       const { blocked, summary } = this.refreshPortalObstructionState();
       if (blocked) {
         const message = summary ||
