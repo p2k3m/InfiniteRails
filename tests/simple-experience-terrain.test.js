@@ -40,6 +40,7 @@ beforeAll(() => {
     removeEventListener: () => {},
     requestAnimationFrame: (cb) => setTimeout(() => cb(Date.now()), 16),
     cancelAnimationFrame: (id) => clearTimeout(id),
+    dispatchEvent: () => true,
   };
   const documentStub = {
     createElement: (tag) => {
@@ -53,6 +54,16 @@ beforeAll(() => {
   };
 
   Object.assign(windowStub, { THREE, THREE_GLOBAL: THREE, document: documentStub });
+
+  if (typeof globalThis.CustomEvent !== 'function') {
+    globalThis.CustomEvent = class CustomEventMock {
+      constructor(type, params = {}) {
+        this.type = type;
+        this.detail = params?.detail ?? null;
+      }
+    };
+  }
+  windowStub.CustomEvent = globalThis.CustomEvent;
 
   globalThis.window = windowStub;
   globalThis.document = documentStub;
@@ -148,6 +159,33 @@ describe('simple experience terrain generation', () => {
     } finally {
       loadSpy.mockRestore();
       window.APP_CONFIG = {};
+    }
+  });
+
+  it('reports asset failures when textures degrade to procedural fallbacks', () => {
+    const canvas = {
+      width: 512,
+      height: 512,
+      clientWidth: 512,
+      clientHeight: 512,
+      getContext: () => null,
+    };
+
+    const experience = window.SimpleExperience.create({ canvas, ui: {} });
+    const eventSpy = vi.spyOn(experience, 'emitGameEvent');
+    experience.assetFailureCounts.delete('texture:grass');
+    eventSpy.mockClear();
+
+    try {
+      experience.noteTexturePackFallback('fallback-texture', { key: 'grass' });
+      const failureCall = eventSpy.mock.calls.find(([type]) => type === 'asset-load-failure');
+
+      expect(failureCall).toBeTruthy();
+      expect(failureCall?.[1]?.key).toBe('texture:grass');
+      expect(failureCall?.[1]?.fallbackMessage).toContain('Texture pack');
+      expect(experience.assetFailureCounts.get('texture:grass')).toBe(1);
+    } finally {
+      eventSpy.mockRestore();
     }
   });
 
