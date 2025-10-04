@@ -326,6 +326,52 @@ describe('simple experience terrain generation', () => {
     }
   });
 
+  it('includes retry countdown details in the texture pack fallback notice', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2024-01-01T00:00:00Z'));
+
+    const canvas = {
+      width: 512,
+      height: 512,
+      clientWidth: 512,
+      clientHeight: 512,
+      getContext: () => null,
+    };
+
+    const playerHintEl = {
+      textContent: '',
+      classList: {
+        add: vi.fn(),
+      },
+      setAttribute: vi.fn(),
+    };
+
+    const footerEl = {
+      dataset: {},
+    };
+
+    const footerStatusEl = {
+      textContent: '',
+    };
+
+    try {
+      const experience = window.SimpleExperience.create({
+        canvas,
+        ui: { playerHintEl, footerEl, footerStatusEl },
+      });
+      experience.texturePackRetryIntervalMs = 4000;
+
+      experience.noteTexturePackFallback('fallback-texture', { key: 'grass' });
+
+      expect(playerHintEl.textContent).toContain('Texture pack unavailable');
+      expect(playerHintEl.textContent).toContain('Next retry');
+      expect(playerHintEl.textContent).toMatch(/Next retry(?:[^\d]*?)4 seconds?/);
+      expect(playerHintEl.textContent).toContain('(attempt 1 of');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('applies per-dimension terrain profiles without generating flat or empty worlds', () => {
     const canvas = {
       width: 512,
