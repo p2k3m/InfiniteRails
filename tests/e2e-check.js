@@ -1,5 +1,12 @@
 const { chromium } = require('playwright');
 
+const MAX_RUN_DURATION_MS = 2 * 60 * 1000;
+
+function logCheckpoint(scope, message, { elapsedFrom } = {}) {
+  const elapsed = elapsedFrom ? ` +${Math.round((Date.now() - elapsedFrom) / 10) / 100}s` : '';
+  console.info(`[E2E][${scope}] ${message}${elapsed}`);
+}
+
 const ALLOWED_WARNING_SUBSTRINGS = [
   'accounts.google.com',
   'ERR_CERT_AUTHORITY_INVALID',
@@ -19,7 +26,7 @@ const ALLOWED_WARNING_SUBSTRINGS = [
   'Retrying golem armour asset',
 ];
 
-function createConsoleCapture(page) {
+function createConsoleCapture(page, scope) {
   const warnings = [];
   const infoLogs = [];
   page.on('console', (msg) => {
@@ -30,6 +37,12 @@ function createConsoleCapture(page) {
     if (msg.type() === 'error' || msg.type() === 'warning') {
       warnings.push(text);
     }
+  });
+  page.on('requestfailed', (request) => {
+    const failure = request.failure();
+    console.error(
+      `[E2E][${scope}] Request failed: ${request.method()} ${request.url()} (${failure?.errorText ?? 'unknown error'})`,
+    );
   });
   return { warnings, infoLogs };
 }
@@ -135,22 +148,28 @@ async function validateScoreHud(page, { requireDimensionCount = false } = {}) {
 }
 
 async function runAdvancedScenario(browser) {
+  const scenarioStart = Date.now();
+  logCheckpoint('Advanced', 'Scenario start');
   const page = await browser.newPage();
-  const { warnings } = createConsoleCapture(page);
+  const { warnings } = createConsoleCapture(page, 'Advanced');
   page.on('pageerror', (err) => {
     throw err;
   });
 
   try {
+    logCheckpoint('Advanced', 'Navigating to advanced renderer', { elapsedFrom: scenarioStart });
     await page.goto('file://' + process.cwd() + '/index.html', {
       waitUntil: 'domcontentloaded',
     });
+    logCheckpoint('Advanced', 'Ensuring start button handled', { elapsedFrom: scenarioStart });
     await maybeClickStart(page);
+    logCheckpoint('Advanced', 'Waiting for gameplay activation', { elapsedFrom: scenarioStart });
     await page.waitForFunction(() => document.body.classList.contains('game-active'), {
       timeout: 15000,
     });
     await page.waitForFunction(() => Boolean(window.__INFINITE_RAILS_STATE__), { timeout: 15000 });
 
+    logCheckpoint('Advanced', 'Collecting renderer state snapshot', { elapsedFrom: scenarioStart });
     const stateSnapshot = await page.evaluate(() => {
       const state = window.__INFINITE_RAILS_STATE__;
       if (!state) return null;
@@ -182,6 +201,7 @@ async function runAdvancedScenario(browser) {
       throw new Error('Advanced renderer did not record any event log entries.');
     }
 
+    logCheckpoint('Advanced', 'Validating HUD and leaderboard', { elapsedFrom: scenarioStart });
     await ensureGameHudReady(page);
     await waitForLeaderboard(page);
     await validateScoreHud(page);
@@ -190,22 +210,27 @@ async function runAdvancedScenario(browser) {
     if (unexpected.length) {
       throw new Error(`Console reported unexpected issues during advanced run: ${unexpected.join(' | ')}`);
     }
+    logCheckpoint('Advanced', 'Scenario complete', { elapsedFrom: scenarioStart });
   } finally {
     await page.close();
   }
 }
 
 async function runSimpleScenario(browser) {
+  const scenarioStart = Date.now();
+  logCheckpoint('Sandbox', 'Scenario start');
   const page = await browser.newPage();
-  const { warnings, infoLogs } = createConsoleCapture(page);
+  const { warnings, infoLogs } = createConsoleCapture(page, 'Sandbox');
   page.on('pageerror', (err) => {
     throw err;
   });
 
   try {
+    logCheckpoint('Sandbox', 'Navigating to simple renderer', { elapsedFrom: scenarioStart });
     await page.goto('file://' + process.cwd() + '/index.html?mode=simple', {
       waitUntil: 'domcontentloaded',
     });
+    logCheckpoint('Sandbox', 'Handling start flow', { elapsedFrom: scenarioStart });
     await maybeClickStart(page);
     await page.waitForTimeout(1500);
     const introVisible = await page.isVisible('#introModal').catch(() => false);
@@ -231,6 +256,7 @@ async function runSimpleScenario(browser) {
       console.warn('Dimension activation log missing; relying on HUD validation.');
     }
 
+    logCheckpoint('Sandbox', 'Waiting for debug hooks', { elapsedFrom: scenarioStart });
     await page.waitForFunction(() => Boolean(window.__INFINITE_RAILS_DEBUG__?.getSnapshot), {
       timeout: 15000,
     });
@@ -238,6 +264,7 @@ async function runSimpleScenario(browser) {
       () => (window.__INFINITE_RAILS_DEBUG__?.getSnapshot?.()?.voxelColumns ?? 0) >= 4096,
       { timeout: 15000 },
     );
+    logCheckpoint('Sandbox', 'Applying debug mutations', { elapsedFrom: scenarioStart });
     await page.evaluate(() => {
       const debug = window.__INFINITE_RAILS_DEBUG__;
       debug?.forceNight?.();
@@ -247,6 +274,7 @@ async function runSimpleScenario(browser) {
       () => (window.__INFINITE_RAILS_DEBUG__?.getSnapshot?.()?.zombieCount ?? 0) > 0,
       { timeout: 10000 },
     );
+    logCheckpoint('Sandbox', 'Collecting debug snapshot', { elapsedFrom: scenarioStart });
     const debugSnapshot = await page.evaluate(() =>
       window.__INFINITE_RAILS_DEBUG__?.getSnapshot ? window.__INFINITE_RAILS_DEBUG__.getSnapshot() : null,
     );
@@ -263,8 +291,10 @@ async function runSimpleScenario(browser) {
       throw new Error('Scene graph missing expected child nodes.');
     }
 
+    logCheckpoint('Sandbox', 'Validating HUD after debug actions', { elapsedFrom: scenarioStart });
     await ensureGameHudReady(page, { requireNight: true });
 
+    logCheckpoint('Sandbox', 'Driving portal progression', { elapsedFrom: scenarioStart });
     await page.evaluate(() => {
       const debug = window.__INFINITE_RAILS_DEBUG__;
       debug?.completePortalFrame?.();
@@ -282,6 +312,7 @@ async function runSimpleScenario(browser) {
       { timeout: 10000 },
     );
 
+    logCheckpoint('Sandbox', 'Validating leaderboard and score HUD', { elapsedFrom: scenarioStart });
     await waitForLeaderboard(page);
     await validateScoreHud(page, { requireDimensionCount: true });
 
@@ -293,14 +324,24 @@ async function runSimpleScenario(browser) {
     if (unexpected.length) {
       throw new Error(`Console reported unexpected issues during sandbox run: ${unexpected.join(' | ')}`);
     }
+    logCheckpoint('Sandbox', 'Scenario complete', { elapsedFrom: scenarioStart });
   } finally {
     await page.close();
   }
 }
 
 async function run() {
+  const runStart = Date.now();
+  logCheckpoint('Runner', 'Initialising');
+  const failFastTimer = setTimeout(() => {
+    console.error(
+      `[E2E][Runner] Aborting after exceeding ${Math.round(MAX_RUN_DURATION_MS / 1000)}s timeout. Review environment readiness.`,
+    );
+    process.exit(1);
+  }, MAX_RUN_DURATION_MS);
   let browser;
   try {
+    logCheckpoint('Runner', 'Launching browser');
     browser = await chromium.launch();
   } catch (error) {
     const message = error?.message || '';
@@ -311,19 +352,25 @@ async function run() {
         `Skipping E2E smoke test (${missingExecutable ? 'browser download required' : 'system dependencies unavailable'}).`,
       );
       console.warn('Details:', message.trim());
+      clearTimeout(failFastTimer);
       return;
     }
     throw error;
   }
 
   try {
+    logCheckpoint('Runner', 'Starting advanced scenario', { elapsedFrom: runStart });
     await runAdvancedScenario(browser);
+    logCheckpoint('Runner', 'Advanced scenario passed', { elapsedFrom: runStart });
+    logCheckpoint('Runner', 'Starting sandbox scenario', { elapsedFrom: runStart });
     await runSimpleScenario(browser);
+    logCheckpoint('Runner', 'Sandbox scenario passed', { elapsedFrom: runStart });
     console.error(
       'E2E smoke test completion checkpoint — review scenario assertions if this emits during a failing run; success must be validated by test expectations rather than console output.',
     );
   } finally {
     await browser?.close?.();
+    clearTimeout(failFastTimer);
   }
 }
 
