@@ -57,5 +57,33 @@ describe('simple experience model loader fallback', () => {
     );
     expect(experience.footerEl.dataset.state).toBe('warning');
   });
+
+  it('adds an error overlay when zombie fallbacks are created after a failure', () => {
+    const { experience } = createExperience();
+    const fallback = experience.createModelFallbackMesh('zombie', { reason: 'failed' });
+    expect(fallback).toBeTruthy();
+    const overlay = fallback.children.find((child) => child?.name === 'ZombieErrorOverlay');
+    expect(overlay).toBeTruthy();
+    expect(overlay.userData).toMatchObject({
+      placeholder: true,
+      placeholderOverlay: true,
+      placeholderKey: 'zombie',
+      placeholderReason: 'failed',
+    });
+  });
+
+  it('adds an error overlay when golem fallbacks are created after a failure', () => {
+    const { experience } = createExperience();
+    const fallback = experience.createModelFallbackMesh('golem', { reason: 'loader-unavailable' });
+    expect(fallback).toBeTruthy();
+    const overlay = fallback.children.find((child) => child?.name === 'GolemErrorOverlay');
+    expect(overlay).toBeTruthy();
+    expect(overlay.userData).toMatchObject({
+      placeholder: true,
+      placeholderOverlay: true,
+      placeholderKey: 'golem',
+      placeholderReason: 'loader-unavailable',
+    });
+  });
 });
 
