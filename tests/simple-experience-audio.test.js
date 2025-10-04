@@ -146,6 +146,25 @@ describe('SimpleExperience audio bootstrapping', () => {
   });
 });
 
+describe('SimpleExperience audio diagnostics', () => {
+  it('emits a boot error when required samples are missing', () => {
+    const windowStub = getWindowStub();
+    windowStub.INFINITE_RAILS_EMBEDDED_ASSETS.audioSamples = {};
+    const dispatchSpy = vi.spyOn(windowStub, 'dispatchEvent').mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const { experience } = createExperience();
+    experience.createAudioController();
+
+    const errorMessages = errorSpy.mock.calls.map(([message]) => String(message));
+    expect(errorMessages.some((message) => message.includes('Missing audio sample'))).toBe(true);
+    expect(errorMessages.some((message) => message.includes('fallback alert tone'))).toBe(true);
+
+    dispatchSpy.mockRestore();
+    errorSpy.mockRestore();
+  });
+});
+
 describe('SimpleExperience audio fallbacks', () => {
   it('plays an alert tone and logs an error when the requested sample is missing', async () => {
     const windowStub = getWindowStub();

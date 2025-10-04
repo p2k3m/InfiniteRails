@@ -7857,17 +7857,6 @@
       const AudioCtor = !useHowler
         ? scope?.Audio || (typeof Audio !== 'undefined' ? Audio : null)
         : null;
-      if (!useHowler && typeof AudioCtor !== 'function') {
-        return {
-          has: (name) => available.has(name),
-          play: () => {},
-          playRandom: () => {},
-          stopAll: () => {},
-          setMasterVolume: () => {},
-          getLoadedSampleCount: () => totalSamples,
-          _resolve: (name) => (available.has(name) ? name : null),
-        };
-      }
       const aliasSource = scope?.INFINITE_RAILS_AUDIO_ALIASES || null;
       const aliasMap = new Map();
       if (aliasSource && typeof aliasSource === 'object') {
@@ -7885,6 +7874,7 @@
       const aliasCache = new Map();
       const aliasNotified = new Set();
       const missingSampleNotified = new Set();
+      const bootMissingSamples = new Set();
       const fallbackAlertName = '__fallback_alert__';
       const fallbackAlertSample =
         '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';
@@ -7899,10 +7889,23 @@
         const payload = samples[name];
         return typeof payload === 'string' && payload.trim().length ? payload : null;
       };
+      const hasSamplePayload = (name, options = {}) => {
+        if (!name || name === fallbackAlertName) {
+          return true;
+        }
+        const payload = getSamplePayload(name);
+        if (!payload) {
+          if (options?.stage === 'boot') {
+            bootMissingSamples.add(name);
+          }
+          return false;
+        }
+        return true;
+      };
       const resolveAudioName = (name) => {
         if (!name) return null;
         if (available.has(name)) {
-          return name;
+          return hasSamplePayload(name) ? name : null;
         }
         if (aliasCache.has(name)) {
           return aliasCache.get(name);
@@ -7912,7 +7915,14 @@
           aliasCache.set(name, null);
           return null;
         }
-        const resolved = candidates.find((candidate) => available.has(candidate)) || null;
+        let resolved = null;
+        for (let index = 0; index < candidates.length; index += 1) {
+          const candidate = candidates[index];
+          if (available.has(candidate) && hasSamplePayload(candidate)) {
+            resolved = candidate;
+            break;
+          }
+        }
         aliasCache.set(name, resolved);
         return resolved;
       };
@@ -7921,10 +7931,21 @@
         if (!candidates || !candidates.length) {
           return;
         }
-        const resolved = candidates.find((candidate) => available.has(candidate));
+        let resolved = null;
+        candidates.forEach((candidate) => {
+          if (hasSamplePayload(candidate, { stage: 'boot' }) && available.has(candidate) && resolved === null) {
+            resolved = candidate;
+          }
+        });
         if (!resolved) {
           aliasIntegrityIssues.push({ aliasName, candidates: [...candidates] });
         }
+      });
+      available.forEach((sampleName) => {
+        hasSamplePayload(sampleName, { stage: 'boot' });
+      });
+      ['bubble', 'victoryCheer', 'miningA', 'miningB', 'crunch'].forEach((coreName) => {
+        hasSamplePayload(coreName, { stage: 'boot' });
       });
       if (!totalSamples && typeof console !== 'undefined' && typeof console.warn === 'function') {
         console.warn(
@@ -8022,6 +8043,9 @@
           code: typeof info?.code === 'string' ? info.code : 'playback-error',
           timestamp,
         };
+        if (info && typeof info.detail !== 'undefined') {
+          detail.detail = info.detail;
+        }
         const error = info?.error;
         if (error) {
           const errorMessage =
@@ -8053,6 +8077,55 @@
           }
         }
       };
+      const bootMissingSampleList = Array.from(bootMissingSamples).sort();
+      const affectedAliasList = aliasIntegrityIssues.map((issue) => issue.aliasName).sort();
+      if (bootMissingSampleList.length || affectedAliasList.length) {
+        const messageParts = [];
+        if (bootMissingSampleList.length) {
+          if (bootMissingSampleList.length === 1) {
+            messageParts.push(`Missing audio sample "${bootMissingSampleList[0]}" detected during startup.`);
+          } else {
+            messageParts.push(
+              `Missing audio samples detected during startup (${bootMissingSampleList.join(', ')}).`,
+            );
+          }
+        } else {
+          messageParts.push('Audio samples failed to initialise during startup.');
+        }
+        if (affectedAliasList.length) {
+          if (affectedAliasList.length === 1) {
+            messageParts.push(`Affected cue: ${affectedAliasList[0]}.`);
+          } else {
+            messageParts.push(`Affected cues: ${affectedAliasList.join(', ')}.`);
+          }
+        }
+        messageParts.push('A fallback alert tone will be used until the audio files are restored.');
+        const bootMessage = messageParts.join(' ');
+        logAudioPlaybackIssue(
+          bootMissingSampleList[0] || affectedAliasList[0] || null,
+          bootMissingSampleList[0] || null,
+          {
+            message: bootMessage,
+            code: 'boot-missing-sample',
+            detail: {
+              missingSamples: bootMissingSampleList,
+              affectedAliases: affectedAliasList,
+            },
+          },
+        );
+      }
+
+      if (!useHowler && typeof AudioCtor !== 'function') {
+        return {
+          has: (name) => available.has(name),
+          play: () => {},
+          playRandom: () => {},
+          stopAll: () => {},
+          setMasterVolume: () => {},
+          getLoadedSampleCount: () => totalSamples,
+          _resolve: (name) => (available.has(name) ? name : null),
+        };
+      }
 
       const createAudioPlaybackWatchdog = (requestedName, resolvedName, options = {}) => {
         const getTimerScope = () => {
