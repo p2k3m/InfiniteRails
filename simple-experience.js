@@ -2320,6 +2320,7 @@
       this.textureFallbackMissingKeys = new Set();
       this.textureRetryAttempts = new Map();
       this.textureRetryHandles = new Map();
+      this.textureRetrySchedules = new Map();
       this.textureUpgradeTargets = new Map();
       this.texturePackUnavailable = false;
       this.texturePackRetryIntervalMs = Number.isFinite(options.texturePackRetryIntervalMs)
@@ -7030,13 +7031,67 @@
         (entry) => typeof entry === 'string' && entry.trim().length,
       );
       const prefix = this.texturePackUnavailable ? 'Texture pack unavailable' : 'Texture pack offline';
+      const retrySummary = this.describeScheduledTextureRetry();
       if (!missingKeys.length) {
-        return `${prefix} — using procedural colours until streaming recovers.`;
+        const suffix = retrySummary ? ` ${retrySummary}` : '';
+        return `${prefix} — using procedural colours until streaming recovers.${suffix}`;
       }
       const sorted = missingKeys.sort();
       const labels = sorted.map((entry) => this.describeVoxelTextureKey(entry));
       const list = this.formatTextureNameList(labels);
-      return `${prefix} — missing textures for ${list}. Procedural colours active until streaming recovers.`;
+      const suffix = retrySummary ? ` ${retrySummary}` : '';
+      return `${prefix} — missing textures for ${list}. Procedural colours active until streaming recovers.${suffix}`;
+    }
+
+    describeScheduledTextureRetry() {
+      if (!this.textureRetrySchedules || this.textureRetrySchedules.size === 0) {
+        return '';
+      }
+      const now = typeof Date !== 'undefined' && typeof Date.now === 'function' ? Date.now() : null;
+      let nextEntry = null;
+      for (const [key, entry] of this.textureRetrySchedules.entries()) {
+        if (!entry || typeof entry !== 'object') {
+          continue;
+        }
+        const delayMs = Number.isFinite(entry.delayMs) ? entry.delayMs : null;
+        const scheduledAt = Number.isFinite(entry.scheduledAt) ? entry.scheduledAt : null;
+        const storedRunAt = Number.isFinite(entry.runAt) ? entry.runAt : null;
+        const computedRunAt = Number.isFinite(scheduledAt) && Number.isFinite(delayMs)
+          ? scheduledAt + delayMs
+          : null;
+        const runAt = storedRunAt ?? computedRunAt;
+        if (!Number.isFinite(runAt)) {
+          continue;
+        }
+        if (!nextEntry || runAt < nextEntry.runAt) {
+          nextEntry = {
+            key,
+            attempt: Number.isFinite(entry.attempt) ? Math.max(1, Math.floor(entry.attempt)) : null,
+            runAt,
+          };
+        }
+      }
+      if (!nextEntry) {
+        return '';
+      }
+      const attemptNumber = nextEntry.attempt || null;
+      let secondsRemaining = null;
+      if (Number.isFinite(now)) {
+        secondsRemaining = Math.max(0, Math.ceil((nextEntry.runAt - now) / 1000));
+      } else if (Number.isFinite(nextEntry.runAt)) {
+        secondsRemaining = Math.max(0, Math.ceil(nextEntry.runAt / 1000));
+      }
+      const attemptSuffix = attemptNumber ? ` (attempt ${attemptNumber} of ${this.assetRetryLimit})` : '';
+      if (!Number.isFinite(secondsRemaining)) {
+        return `Retrying texture streams soon${attemptSuffix}.`;
+      }
+      if (secondsRemaining <= 0) {
+        return `Retrying texture streams now${attemptSuffix}.`;
+      }
+      const label = this.describeVoxelTextureKey(nextEntry.key);
+      const keyFragment = label ? ` for ${label}` : '';
+      const plural = secondsRemaining === 1 ? '' : 's';
+      return `Next retry${keyFragment} in ${secondsRemaining} second${plural}${attemptSuffix}.`;
     }
 
     refreshTextureFallbackNotice() {
@@ -7103,6 +7158,7 @@
       const clearTimer = typeof scope?.clearTimeout === 'function' ? scope.clearTimeout.bind(scope) : clearTimeout;
       clearTimer(handle);
       this.textureRetryHandles.delete(normalised);
+      this.textureRetrySchedules?.delete?.(normalised);
     }
 
     handleTextureRetryExhausted(key, context = {}) {
@@ -7135,6 +7191,10 @@
       const normalised = typeof key === 'string' ? key.trim() : '';
       if (!normalised) {
         return;
+      }
+      this.textureRetrySchedules?.delete?.(normalised);
+      if (this.texturePackNoticeShown) {
+        this.refreshTextureFallbackNotice();
       }
       const attemptNumber = this.textureRetryAttempts.get(normalised) || 1;
       this.emitGameEvent('texture-retry-attempt', {
@@ -7174,6 +7234,13 @@
           : 60000;
       const delay = intervalMs;
       const delaySeconds = Math.max(1, Math.round(delay / 1000));
+      const scheduledAt = typeof Date !== 'undefined' && typeof Date.now === 'function' ? Date.now() : null;
+      const runAt =
+        Number.isFinite(scheduledAt) && Number.isFinite(delay)
+          ? scheduledAt + delay
+          : Number.isFinite(delay)
+            ? delay
+            : null;
       if (typeof console !== 'undefined' && typeof console.warn === 'function') {
         console.warn(
           `Retrying ${normalised} texture stream (attempt ${nextAttempt} of ${this.assetRetryLimit}) after a loading error in ${delaySeconds} second(s).`,
@@ -7197,9 +7264,24 @@
       const setTimer = typeof scope?.setTimeout === 'function' ? scope.setTimeout.bind(scope) : setTimeout;
       const handle = setTimer(() => {
         this.textureRetryHandles.delete(normalised);
+        this.textureRetrySchedules?.delete?.(normalised);
+        if (this.texturePackNoticeShown) {
+          this.refreshTextureFallbackNotice();
+        }
         this.triggerTextureRetry(normalised);
       }, delay);
       this.textureRetryHandles.set(normalised, handle);
+      this.textureRetrySchedules.set(normalised, {
+        attempt: nextAttempt,
+        delayMs: delay,
+        scheduledAt,
+        runAt,
+        reason,
+        url: context?.url ?? null,
+      });
+      if (this.texturePackNoticeShown) {
+        this.refreshTextureFallbackNotice();
+      }
     }
 
     retryMissingTextureStreams(context = {}) {
