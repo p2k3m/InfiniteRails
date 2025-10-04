@@ -4233,6 +4233,7 @@
     identity: null,
     scoreboardMessage: '',
     scoreboardOffline: false,
+    discoverabilityOffline: false,
     configuredEndpoints,
     endpoints: {
       scores: null,
@@ -6063,6 +6064,7 @@
   function updateScoreboardStatus(message, options = {}) {
     if (typeof options.offline === 'boolean') {
       identityState.scoreboardOffline = options.offline;
+      identityState.discoverabilityOffline = options.offline;
     }
     if (typeof message === 'string' && message.trim().length > 0) {
       identityState.scoreboardMessage = message.trim();
@@ -6633,11 +6635,22 @@
 
   function handleGoogleSignInFailure(message) {
     const fallback = createAnonymousIdentity(identityState.identity);
+    const offlineNotice = 'Leaderboards offline; discoverability disabled.';
+    const trimmedMessage = typeof message === 'string' && message.trim().length ? message.trim() : '';
+    const messageHasNotice = trimmedMessage
+      ? trimmedMessage.toLowerCase().includes(offlineNotice.toLowerCase())
+      : false;
+    const finalMessage = trimmedMessage
+      ? messageHasNotice
+        ? trimmedMessage
+        : `${trimmedMessage} ${offlineNotice}`
+      : `Google Sign-In failed — continuing as Guest Explorer. ${offlineNotice}`;
     applyIdentity(fallback, {
       reason: 'google-sign-in-failed',
-      message,
+      message: finalMessage,
       offline: true,
     });
+    showFallbackSignin({ keepGoogleVisible: false });
   }
 
   function handleGoogleCredential(response) {
