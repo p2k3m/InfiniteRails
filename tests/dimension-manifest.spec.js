@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { ensureSimpleExperienceLoaded } from './helpers/simple-experience-test-utils.js';
+import { describe, expect, it, vi } from 'vitest';
+import { ensureSimpleExperienceLoaded, createExperience } from './helpers/simple-experience-test-utils.js';
 
 function loadManifest() {
   const { windowStub } = ensureSimpleExperienceLoaded();
@@ -146,5 +146,29 @@ describe('dimension asset manifest', () => {
     themes.forEach((theme) => {
       expect(theme.assetManifest).toBe(manifest[theme.id]);
     });
+  });
+
+  it('logs an error when attempting to load a missing theme', () => {
+    const { experience } = createExperience();
+    const dimensionThemes = window.SimpleExperience.dimensionThemes;
+    const originalThemes = dimensionThemes.slice();
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      for (let i = 0; i < dimensionThemes.length; i += 1) {
+        dimensionThemes[i] = null;
+      }
+
+      experience.applyDimensionSettings(0);
+
+      expect(errorSpy).toHaveBeenCalled();
+      const [firstCall] = errorSpy.mock.calls;
+      expect(firstCall?.[0]).toContain('Dimension theme load attempt failed');
+    } finally {
+      errorSpy.mockRestore();
+      originalThemes.forEach((theme, index) => {
+        dimensionThemes[index] = theme;
+      });
+    }
   });
 });

@@ -1141,6 +1141,127 @@
     golem: MODEL_URLS.golem,
   };
 
+  const REQUIRED_MANIFEST_ASSET_KEYS = deepFreeze({
+    textures: Object.keys(BASE_TEXTURE_REFERENCES),
+    models: Object.keys(BASE_MODEL_REFERENCES),
+  });
+
+  const REQUIRED_DIMENSION_MANIFEST_COVERAGE = deepFreeze({
+    origin: {
+      terrain: [...BASE_TERRAIN_REFERENCES],
+      mobs: [...BASE_MOB_REFERENCES],
+      objects: [...BASE_OBJECT_REFERENCES],
+    },
+    rock: {
+      terrain: [...BASE_TERRAIN_REFERENCES],
+      mobs: [...BASE_MOB_REFERENCES],
+      objects: [...BASE_OBJECT_REFERENCES],
+    },
+    stone: {
+      terrain: [...BASE_TERRAIN_REFERENCES],
+      mobs: [...BASE_MOB_REFERENCES],
+      objects: [...BASE_OBJECT_REFERENCES, 'bastion-rampart'],
+    },
+    tar: {
+      terrain: [...BASE_TERRAIN_REFERENCES, 'tar-pool'],
+      mobs: [...BASE_MOB_REFERENCES, 'swamp-phantom'],
+      objects: [...BASE_OBJECT_REFERENCES],
+    },
+    marble: {
+      terrain: [...BASE_TERRAIN_REFERENCES],
+      mobs: [...BASE_MOB_REFERENCES],
+      objects: [...BASE_OBJECT_REFERENCES, 'marble-bridge'],
+    },
+    netherite: {
+      terrain: [...BASE_TERRAIN_REFERENCES],
+      mobs: [...BASE_MOB_REFERENCES],
+      objects: [...BASE_OBJECT_REFERENCES, 'eternal-ingot-pedestal'],
+    },
+  });
+
+  const reportedDimensionManifestIssues = new Set();
+  const reportedMissingThemeLoads = new Set();
+
+  function logDimensionManifestIssue(themeId, message) {
+    if (!message) {
+      return;
+    }
+    const id = typeof themeId === 'string' && themeId ? themeId : 'unknown';
+    const key = `${id}::${message}`;
+    if (reportedDimensionManifestIssues.has(key)) {
+      return;
+    }
+    reportedDimensionManifestIssues.add(key);
+    if (typeof console === 'undefined') {
+      return;
+    }
+    const logger = typeof console.error === 'function' ? console.error : console.log;
+    if (typeof logger === 'function') {
+      logger(`Dimension theme "${id}" manifest issue: ${message}`);
+    }
+  }
+
+  function ensureDimensionThemeManifestCoverage(theme) {
+    if (!theme || typeof theme !== 'object') {
+      return;
+    }
+    const themeId = typeof theme.id === 'string' && theme.id ? theme.id : 'unknown';
+    const manifest = theme.assetManifest;
+    if (!manifest || typeof manifest !== 'object') {
+      logDimensionManifestIssue(themeId, 'asset manifest is missing.');
+      return;
+    }
+
+    const coverage = REQUIRED_DIMENSION_MANIFEST_COVERAGE[themeId] || {
+      terrain: BASE_TERRAIN_REFERENCES,
+      mobs: BASE_MOB_REFERENCES,
+      objects: BASE_OBJECT_REFERENCES,
+    };
+
+    ['terrain', 'mobs', 'objects'].forEach((field) => {
+      const expected = Array.isArray(coverage[field]) ? coverage[field] : [];
+      const actual = Array.isArray(manifest[field]) ? manifest[field] : [];
+      if (actual.length === 0) {
+        logDimensionManifestIssue(themeId, `manifest has no ${field} entries.`);
+        return;
+      }
+      const missing = expected.filter((entry) => !actual.includes(entry));
+      if (missing.length > 0) {
+        logDimensionManifestIssue(
+          themeId,
+          `manifest ${field} is missing required entries: ${missing.join(', ')}.`,
+        );
+      }
+    });
+
+    const assets = manifest.assets;
+    if (!assets || typeof assets !== 'object') {
+      logDimensionManifestIssue(themeId, 'asset manifest is missing its assets map.');
+      return;
+    }
+
+    const { textures, models } = assets;
+    if (!textures || typeof textures !== 'object') {
+      logDimensionManifestIssue(themeId, 'texture manifest is unavailable.');
+    } else {
+      REQUIRED_MANIFEST_ASSET_KEYS.textures.forEach((key) => {
+        if (!(key in textures)) {
+          logDimensionManifestIssue(themeId, `texture manifest is missing "${key}".`);
+        }
+      });
+    }
+
+    if (!models || typeof models !== 'object') {
+      logDimensionManifestIssue(themeId, 'model manifest is unavailable.');
+    } else {
+      REQUIRED_MANIFEST_ASSET_KEYS.models.forEach((key) => {
+        if (!(key in models)) {
+          logDimensionManifestIssue(themeId, `model manifest is missing "${key}".`);
+        }
+      });
+    }
+  }
+
   const DEFAULT_TERRAIN_PROFILE = Object.freeze({
     minHeight: MIN_COLUMN_HEIGHT,
     maxHeight: MAX_COLUMN_HEIGHT,
@@ -1788,10 +1909,9 @@
   ].map((theme) => {
     const manifest = DIMENSION_ASSET_MANIFEST[theme.id] || null;
     const terrainProfile = DIMENSION_TERRAIN_PROFILES[theme.id] || DEFAULT_TERRAIN_PROFILE;
-    if (!manifest) {
-      return { ...theme, terrainProfile };
-    }
-    return { ...theme, assetManifest: manifest, terrainProfile };
+    const themed = { ...theme, assetManifest: manifest, terrainProfile };
+    ensureDimensionThemeManifestCoverage(themed);
+    return themed;
   });
 
   function pseudoRandom(x, z) {
@@ -10481,6 +10601,16 @@
         }
       }
       if (!theme) {
+        const logKey = `${index}:${safeIndex}`;
+        if (!reportedMissingThemeLoads.has(logKey) && typeof console !== 'undefined') {
+          reportedMissingThemeLoads.add(logKey);
+          const logger = typeof console.error === 'function' ? console.error : console.log;
+          if (typeof logger === 'function') {
+            logger(
+              `Dimension theme load attempt failed for index ${index} (resolved ${safeIndex}). Theme entry is unavailable.`,
+            );
+          }
+        }
         this.dimensionSettings = null;
         this.dimensionTerrainProfile = DEFAULT_TERRAIN_PROFILE;
         this.applyTerrainProfileToCaps(this.dimensionTerrainProfile);
@@ -10495,6 +10625,7 @@
       this.currentDimensionIndex = resolvedIndex;
       this.dimensionSettings = theme;
       this.dimensionTerrainProfile = theme?.terrainProfile || DEFAULT_TERRAIN_PROFILE;
+      ensureDimensionThemeManifestCoverage(theme);
       this.applyTerrainProfileToCaps(this.dimensionTerrainProfile);
       this.currentSpeed = PLAYER_BASE_SPEED * (theme.speedMultiplier ?? 1);
       this.gravityScale = theme.gravity ?? 1;
