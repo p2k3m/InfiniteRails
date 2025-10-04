@@ -2648,6 +2648,7 @@
       this.dimensionLifecycleHooks = {
         exit: new Set(),
         enter: new Set(),
+        ready: new Set(),
       };
       this.portalStatusState = 'inactive';
       if (this.portalShaderFallbackActive) {
@@ -2895,6 +2896,7 @@
       this.seededHeightmapCache = new Map();
       this.lastTerrainBuildSummary = null;
       this.lastScenePopulationSummary = null;
+      this.lastScenePopulationSummaryContext = null;
     }
 
     emitGameEvent(type, detail = {}) {
@@ -11886,6 +11888,8 @@
       const reasonRaw = typeof options.reason === 'string' ? options.reason.trim() : '';
       const reason = reasonRaw.length ? reasonRaw : 'terrain-ready';
       const populationErrors = [];
+      const populationContext = { reason, errors: populationErrors, reportedMissing: false };
+      this.lastScenePopulationSummaryContext = populationContext;
       const recordPopulationError = (asset, error) => {
         const consoleDetail = { asset, reason };
         if (error) {
@@ -11999,11 +12003,15 @@
         const summary = this.summariseRequiredSceneNodes();
         this.lastScenePopulationSummary = summary || null;
         if (summary && !summary.allPresent) {
+          populationContext.reportedMissing = true;
           this.reportMissingSceneObjects(summary, { reason, errors: populationErrors });
+        } else {
+          populationContext.reportedMissing = false;
         }
         return summary;
       }
       this.lastScenePopulationSummary = null;
+      populationContext.reportedMissing = false;
       return null;
     }
 
@@ -14195,7 +14203,7 @@
       if (typeof handler !== 'function') {
         return () => {};
       }
-      const key = phase === 'enter' ? 'enter' : 'exit';
+      const key = phase === 'enter' ? 'enter' : phase === 'ready' ? 'ready' : 'exit';
       const registry = this.dimensionLifecycleHooks?.[key];
       if (!registry || typeof registry.add !== 'function') {
         return () => {};
@@ -14214,6 +14222,10 @@
       return this.registerDimensionLifecycleHook('enter', handler);
     }
 
+    onDimensionReady(handler) {
+      return this.registerDimensionLifecycleHook('ready', handler);
+    }
+
     async runDimensionExitHooks(context = {}) {
       const payload = this.createDimensionTransitionPayload(context);
       this.clearZombies();
@@ -14228,6 +14240,11 @@
       this.evaluateBossChallenge();
       this.lastGolemSpawn = this.elapsed;
       await this.invokeDimensionLifecycleHooks('enter', payload);
+    }
+
+    async runDimensionReadyHooks(context = {}) {
+      const payload = this.createDimensionTransitionPayload(context);
+      await this.invokeDimensionLifecycleHooks('ready', payload);
     }
 
     createDimensionTransitionPayload(context = {}) {
@@ -14273,6 +14290,129 @@
           }
         }
       }
+    }
+
+    async handleDimensionPostInit(context = {}) {
+      const payload = this.createDimensionTransitionPayload(context);
+      const enrichedContext = {
+        ...context,
+        previousDimension: payload.previousDimension,
+        nextDimension: payload.nextDimension,
+        transition: payload.transition,
+      };
+      this.triggerDimensionPostInitAnimations(enrichedContext);
+      this.rebindDimensionContext();
+      await this.runDimensionEnterHooks(enrichedContext);
+      await this.runDimensionReadyHooks(enrichedContext);
+    }
+
+    triggerDimensionPostInitAnimations(context = {}) {
+      const theme = context?.nextDimension ?? this.dimensionSettings ?? null;
+      const rulesOverride =
+        typeof context?.arrivalRules === 'string' && context.arrivalRules.trim()
+          ? context.arrivalRules.trim()
+          : typeof context?.rulesOverride === 'string' && context.rulesOverride.trim()
+            ? context.rulesOverride.trim()
+            : this.buildDimensionRuleSummary(theme);
+      try {
+        this.revealDimensionIntro(theme, { intent: 'arrival', rulesOverride });
+      } catch (error) {
+        console.warn('Failed to trigger dimension intro animation after transition.', error);
+        if (typeof notifyLiveDiagnostics === 'function') {
+          notifyLiveDiagnostics(
+            'ui',
+            'Failed to trigger dimension intro animation after transition.',
+            { error: normaliseLiveDiagnosticError(error), reason: 'dimension-transition' },
+            { level: 'warning' },
+          );
+        }
+      }
+      const optionalAnimations = [
+        { method: 'playDimensionArrivalCinematics', diagnostic: 'dimension arrival cinematics' },
+        { method: 'triggerAmbientArrivalEffects', diagnostic: 'dimension ambient arrival effects' },
+      ];
+      optionalAnimations.forEach(({ method, diagnostic }) => {
+        const handler = method && typeof this[method] === 'function' ? this[method] : null;
+        if (!handler) {
+          return;
+        }
+        try {
+          handler.call(this, context);
+        } catch (error) {
+          console.warn(`Failed to trigger ${diagnostic} after transition.`, error);
+          if (typeof notifyLiveDiagnostics === 'function') {
+            notifyLiveDiagnostics(
+              'ui',
+              `Failed to trigger ${diagnostic} after transition.`,
+              { error: normaliseLiveDiagnosticError(error), reason: 'dimension-transition' },
+              { level: 'warning' },
+            );
+          }
+        }
+      });
+    }
+
+    verifyDimensionAssetsAfterTransition(context = {}) {
+      const reasonRaw = typeof context.reason === 'string' ? context.reason.trim() : '';
+      const reason = reasonRaw.length ? reasonRaw : 'dimension-transition';
+      let summary = this.lastScenePopulationSummary || null;
+      if (!summary && typeof this.summariseRequiredSceneNodes === 'function') {
+        try {
+          summary = this.summariseRequiredSceneNodes();
+          this.lastScenePopulationSummary = summary || null;
+        } catch (error) {
+          console.warn('Failed to summarise scene nodes during asset verification.', error);
+          if (typeof notifyLiveDiagnostics === 'function') {
+            notifyLiveDiagnostics(
+              'scene',
+              'Failed to summarise scene nodes during asset verification.',
+              { error: normaliseLiveDiagnosticError(error), reason },
+              { level: 'warning' },
+            );
+          }
+        }
+      }
+      const contextRecord =
+        this.lastScenePopulationSummaryContext || {
+          reason,
+          errors: [],
+          reportedMissing: false,
+        };
+      const errors = Array.isArray(context.errors) ? context.errors : contextRecord.errors || [];
+      const alreadyReported =
+        contextRecord.reason === reason && contextRecord.reportedMissing === true;
+      if (summary && !summary.allPresent && !alreadyReported && typeof this.reportMissingSceneObjects === 'function') {
+        try {
+          this.reportMissingSceneObjects(summary, { reason, errors });
+          contextRecord.reportedMissing = true;
+        } catch (error) {
+          console.warn('Failed to report missing scene objects during asset verification.', error);
+          if (typeof notifyLiveDiagnostics === 'function') {
+            notifyLiveDiagnostics(
+              'scene',
+              'Failed to report missing scene objects during asset verification.',
+              { error: normaliseLiveDiagnosticError(error), reason },
+              { level: 'warning' },
+            );
+          }
+        }
+      }
+      contextRecord.reason = reason;
+      if (Array.isArray(errors)) {
+        contextRecord.errors = errors;
+      } else if (!Array.isArray(contextRecord.errors)) {
+        contextRecord.errors = [];
+      }
+      if (!this.lastScenePopulationSummaryContext) {
+        this.lastScenePopulationSummaryContext = contextRecord;
+      } else {
+        this.lastScenePopulationSummaryContext.reason = reason;
+        this.lastScenePopulationSummaryContext.reportedMissing = contextRecord.reportedMissing;
+        if (Array.isArray(contextRecord.errors)) {
+          this.lastScenePopulationSummaryContext.errors = contextRecord.errors;
+        }
+      }
+      return summary;
     }
 
     async advanceDimension() {
@@ -14340,15 +14480,18 @@
         this.dimensionSettings,
         transitionResult?.dimensionRules ?? rulesSummary,
       );
-      this.revealDimensionIntro(this.dimensionSettings, {
-        intent: 'arrival',
-        rulesOverride: arrivalRules,
-      });
-      this.rebindDimensionContext();
-      await this.runDimensionEnterHooks({
+      await this.handleDimensionPostInit({
         previousDimension: previousSettings,
         nextDimension: this.dimensionSettings,
         transition: transitionResult,
+        arrivalRules,
+      });
+      const assetSummary = this.verifyDimensionAssetsAfterTransition({
+        previousDimension: previousSettings,
+        nextDimension: this.dimensionSettings,
+        transition: transitionResult,
+        reason: 'dimension-transition',
+        errors: this.lastScenePopulationSummaryContext?.errors ?? [],
       });
       if (dimensionTravelSucceeded && Number.isFinite(pointsAwarded)) {
         this.score += pointsAwarded;
@@ -14361,10 +14504,12 @@
         this.showHint(portalLog);
       }
       this.portalState = null;
+      const assetsVerified = assetSummary ? assetSummary.allPresent === true : null;
       this.emitGameEvent('dimension-advanced', {
         dimension: this.dimensionSettings?.id ?? null,
         index: this.currentDimensionIndex,
         summary: this.createRunSummary('dimension-advanced'),
+        assetsVerified,
       });
       this.publishStateSnapshot('dimension-advanced');
       this.markGuidanceProgress('dimension');
