@@ -7981,16 +7981,71 @@
       }
     }
     if (assetPreloadPromise && typeof assetPreloadPromise.then === 'function') {
+      let assetPreloadFallbackTimer = null;
+      const clearAssetPreloadFallbackTimer = () => {
+        if (assetPreloadFallbackTimer !== null) {
+          const clearTimer = typeof globalScope?.clearTimeout === 'function'
+            ? globalScope.clearTimeout.bind(globalScope)
+            : typeof clearTimeout === 'function'
+              ? clearTimeout
+              : null;
+          if (clearTimer) {
+            clearTimer(assetPreloadFallbackTimer);
+          }
+          assetPreloadFallbackTimer = null;
+        }
+      };
+      const releaseStartButton = ({ delayed } = {}) => {
+        if (!ui.startButton) {
+          return;
+        }
+        ui.startButton.disabled = false;
+        if (delayed) {
+          ui.startButton.removeAttribute('data-preloading');
+          ui.startButton.dataset.preloadWarning = 'delayed';
+        } else {
+          ui.startButton.removeAttribute('data-preloading');
+          if (ui.startButton.dataset.preloadWarning) {
+            delete ui.startButton.dataset.preloadWarning;
+          }
+        }
+      };
       if (ui.startButton) {
         ui.startButton.disabled = true;
         ui.startButton.setAttribute('data-preloading', 'true');
       }
+      const scheduleAssetPreloadFallback = () => {
+        const setTimer = typeof globalScope?.setTimeout === 'function'
+          ? globalScope.setTimeout.bind(globalScope)
+          : typeof setTimeout === 'function'
+            ? setTimeout
+            : null;
+        if (!setTimer) {
+          return;
+        }
+        assetPreloadFallbackTimer = setTimer(() => {
+          assetPreloadFallbackTimer = null;
+          if (ui.startButton && ui.startButton.disabled) {
+            releaseStartButton({ delayed: true });
+            if (globalScope.console?.warn) {
+              globalScope.console.warn(
+                'Asset preload is taking longer than expected. Enabling Start Expedition early; some visuals may appear with placeholders until loading completes.',
+              );
+            }
+            if (overlayController?.setDiagnostic) {
+              overlayController.setDiagnostic('assets', {
+                status: 'warning',
+                message: 'Assets still loading. Starting now may show placeholder visuals.',
+              });
+            }
+          }
+        }, 7000);
+      };
+      scheduleAssetPreloadFallback();
       assetPreloadPromise
         .then(() => {
-          if (ui.startButton) {
-            ui.startButton.disabled = false;
-            ui.startButton.removeAttribute('data-preloading');
-          }
+          clearAssetPreloadFallbackTimer();
+          releaseStartButton({ delayed: false });
           if (overlayController?.setDiagnostic) {
             overlayController.setDiagnostic('assets', {
               status: 'ok',
@@ -8000,6 +8055,7 @@
           hideBootstrapOverlay();
         })
         .catch((error) => {
+          clearAssetPreloadFallbackTimer();
           if (globalScope.console?.error) {
             globalScope.console.error('Critical asset preload failed.', error);
           }
@@ -8029,6 +8085,13 @@
               status: 'error',
               message: 'Failed to preload world assets.',
             });
+          }
+          if (ui.startButton) {
+            ui.startButton.disabled = true;
+            ui.startButton.setAttribute('data-preloading', 'error');
+            if (ui.startButton.dataset.preloadWarning) {
+              delete ui.startButton.dataset.preloadWarning;
+            }
           }
         });
     } else {
