@@ -2575,6 +2575,21 @@
     hideTimer: null,
   };
 
+  const hudAlertFallbackBinding = {
+    container: null,
+    titleEl: null,
+    messageEl: null,
+    hideTimer: null,
+    warningLogged: false,
+  };
+
+  const HUD_ALERT_FALLBACK_SEVERITY_STYLES = {
+    error: { background: '#7f1d1d', border: '#fca5a5', color: '#fef2f2' },
+    warning: { background: '#78350f', border: '#fcd34d', color: '#fffbeb' },
+    success: { background: '#065f46', border: '#6ee7b7', color: '#ecfdf5' },
+    info: { background: '#1e3a8a', border: '#bfdbfe', color: '#eff6ff' },
+  };
+
   function resolveHudAlertElements() {
     const doc = typeof document !== 'undefined' ? document : documentRef;
     if (!doc) {
@@ -2590,28 +2605,100 @@
     return hudAlertBinding;
   }
 
-  function hideHudAlert() {
-    const binding = resolveHudAlertElements();
-    if (!binding.element) {
-      return;
+  function ensureFallbackHudAlertBinding() {
+    const doc = typeof document !== 'undefined' ? document : documentRef;
+    if (!doc || typeof doc.createElement !== 'function') {
+      return null;
     }
+    const existing = hudAlertFallbackBinding.container;
+    if (existing && existing.isConnected) {
+      return hudAlertFallbackBinding;
+    }
+    const root = doc.body || doc.documentElement;
+    if (!root || typeof root.appendChild !== 'function') {
+      return null;
+    }
+    const container = doc.createElement('div');
+    container.id = 'hudAlertFallback';
+    container.setAttribute('role', 'alert');
+    container.setAttribute('aria-live', 'assertive');
+    container.style.position = 'fixed';
+    container.style.top = '16px';
+    container.style.left = '50%';
+    container.style.transform = 'translateX(-50%)';
+    container.style.zIndex = '2147483647';
+    container.style.maxWidth = 'min(90vw, 480px)';
+    container.style.padding = '16px 20px';
+    container.style.borderRadius = '12px';
+    container.style.boxShadow = '0 12px 32px rgba(0, 0, 0, 0.35)';
+    container.style.fontFamily =
+      'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+    container.style.fontSize = '16px';
+    container.style.lineHeight = '1.5';
+    container.style.textAlign = 'left';
+    container.style.pointerEvents = 'none';
+    container.style.display = 'none';
+    container.setAttribute('aria-hidden', 'true');
+
+    const titleEl = doc.createElement('div');
+    titleEl.style.fontWeight = '600';
+    titleEl.style.marginBottom = '4px';
+
+    const messageEl = doc.createElement('div');
+
+    container.appendChild(titleEl);
+    container.appendChild(messageEl);
+    root.appendChild(container);
+
+    hudAlertFallbackBinding.container = container;
+    hudAlertFallbackBinding.titleEl = titleEl;
+    hudAlertFallbackBinding.messageEl = messageEl;
+    hudAlertFallbackBinding.hideTimer = null;
+    hudAlertFallbackBinding.warningLogged = false;
+    return hudAlertFallbackBinding;
+  }
+
+  function hideFallbackHudAlert() {
+    const binding = hudAlertFallbackBinding;
     if (binding.hideTimer) {
       clearTimeout(binding.hideTimer);
       binding.hideTimer = null;
     }
-    binding.element.hidden = true;
-    safelySetAriaHidden(binding.element, true);
-    if (typeof binding.element.removeAttribute === 'function') {
-      binding.element.removeAttribute('data-severity');
+    if (binding.container) {
+      binding.container.style.display = 'none';
+      binding.container.removeAttribute('data-severity');
+      binding.container.setAttribute('aria-hidden', 'true');
     }
     if (binding.titleEl) {
       binding.titleEl.textContent = '';
-      binding.titleEl.hidden = true;
     }
     if (binding.messageEl) {
       binding.messageEl.textContent = '';
-      binding.messageEl.hidden = true;
     }
+  }
+
+  function hideHudAlert() {
+    const binding = resolveHudAlertElements();
+    if (binding.hideTimer) {
+      clearTimeout(binding.hideTimer);
+      binding.hideTimer = null;
+    }
+    if (binding.element) {
+      binding.element.hidden = true;
+      safelySetAriaHidden(binding.element, true);
+      if (typeof binding.element.removeAttribute === 'function') {
+        binding.element.removeAttribute('data-severity');
+      }
+      if (binding.titleEl) {
+        binding.titleEl.textContent = '';
+        binding.titleEl.hidden = true;
+      }
+      if (binding.messageEl) {
+        binding.messageEl.textContent = '';
+        binding.messageEl.hidden = true;
+      }
+    }
+    hideFallbackHudAlert();
   }
 
   function showHudAlert({
@@ -2621,9 +2708,6 @@
     autoHideMs = null,
   } = {}) {
     const binding = resolveHudAlertElements();
-    if (!binding.element) {
-      return;
-    }
     if (binding.hideTimer) {
       clearTimeout(binding.hideTimer);
       binding.hideTimer = null;
@@ -2633,21 +2717,70 @@
     const severityKey = typeof severity === 'string' ? severity.trim().toLowerCase() : '';
     const allowedSeverities = new Set(['error', 'warning', 'success', 'info']);
     const appliedSeverity = allowedSeverities.has(severityKey) ? severityKey : 'info';
-    binding.element.hidden = false;
-    safelySetAriaHidden(binding.element, false);
-    binding.element.setAttribute('data-severity', appliedSeverity);
-    if (binding.titleEl) {
-      binding.titleEl.textContent = safeTitle;
-      binding.titleEl.hidden = !safeTitle;
+    if (binding.element) {
+      binding.element.hidden = false;
+      safelySetAriaHidden(binding.element, false);
+      binding.element.setAttribute('data-severity', appliedSeverity);
+      if (binding.titleEl) {
+        binding.titleEl.textContent = safeTitle;
+        binding.titleEl.hidden = !safeTitle;
+      }
+      if (binding.messageEl) {
+        binding.messageEl.textContent = safeMessage;
+        binding.messageEl.hidden = !safeMessage;
+      }
+      if (Number.isFinite(autoHideMs) && autoHideMs > 0) {
+        binding.hideTimer = setTimeout(() => {
+          binding.hideTimer = null;
+          hideHudAlert();
+        }, autoHideMs);
+      }
+      hideFallbackHudAlert();
+      return;
     }
-    if (binding.messageEl) {
-      binding.messageEl.textContent = safeMessage;
-      binding.messageEl.hidden = !safeMessage;
+
+    const fallback = ensureFallbackHudAlertBinding();
+    if (!fallback) {
+      if (!hudAlertFallbackBinding.warningLogged && globalScope?.console?.error) {
+        hudAlertFallbackBinding.warningLogged = true;
+        globalScope.console.error('HUD alert container missing and fallback unavailable.', {
+          title: safeTitle,
+          message: safeMessage,
+          severity: appliedSeverity,
+        });
+      }
+      return;
+    }
+
+    if (!fallback.warningLogged && globalScope?.console?.warn) {
+      fallback.warningLogged = true;
+      globalScope.console.warn('HUD alert container missing; displaying emergency fallback alert.');
+    }
+
+    const palette = HUD_ALERT_FALLBACK_SEVERITY_STYLES[appliedSeverity] ||
+      HUD_ALERT_FALLBACK_SEVERITY_STYLES.info;
+    fallback.container.style.background = palette.background;
+    fallback.container.style.border = `1px solid ${palette.border}`;
+    fallback.container.style.color = palette.color;
+    fallback.container.setAttribute('data-severity', appliedSeverity);
+    fallback.container.style.display = 'block';
+    fallback.container.setAttribute('aria-hidden', 'false');
+    if (fallback.titleEl) {
+      fallback.titleEl.textContent = safeTitle || 'Infinite Rails';
+      fallback.titleEl.style.display = safeTitle ? 'block' : 'none';
+    }
+    if (fallback.messageEl) {
+      const fallbackText = safeMessage || safeTitle || 'An unexpected error occurred.';
+      fallback.messageEl.textContent = fallbackText;
+    }
+    if (fallback.hideTimer) {
+      clearTimeout(fallback.hideTimer);
+      fallback.hideTimer = null;
     }
     if (Number.isFinite(autoHideMs) && autoHideMs > 0) {
-      binding.hideTimer = setTimeout(() => {
-        binding.hideTimer = null;
-        hideHudAlert();
+      fallback.hideTimer = setTimeout(() => {
+        fallback.hideTimer = null;
+        hideFallbackHudAlert();
       }, autoHideMs);
     }
   }
