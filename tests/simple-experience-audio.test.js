@@ -147,6 +147,25 @@ describe('SimpleExperience audio bootstrapping', () => {
 });
 
 describe('SimpleExperience audio diagnostics', () => {
+  it('emits a boot status event when samples load successfully', () => {
+    const windowStub = getWindowStub();
+    const dispatchSpy = vi.spyOn(windowStub, 'dispatchEvent').mockImplementation(() => {});
+
+    const { experience } = createExperience();
+    experience.createAudioController();
+
+    const bootStatusEvent = dispatchSpy.mock.calls
+      .map(([event]) => event)
+      .find((event) => event?.type === 'infinite-rails:audio-boot-status');
+
+    expect(bootStatusEvent).toBeDefined();
+    expect(bootStatusEvent.detail).toEqual(
+      expect.objectContaining({ fallbackActive: false, message: 'Audio initialised successfully.' }),
+    );
+
+    dispatchSpy.mockRestore();
+  });
+
   it('emits a boot error when required samples are missing', () => {
     const windowStub = getWindowStub();
     windowStub.INFINITE_RAILS_EMBEDDED_ASSETS.audioSamples = {};
@@ -159,6 +178,15 @@ describe('SimpleExperience audio diagnostics', () => {
     const errorMessages = errorSpy.mock.calls.map(([message]) => String(message));
     expect(errorMessages.some((message) => message.includes('Missing audio sample'))).toBe(true);
     expect(errorMessages.some((message) => message.includes('fallback alert tone'))).toBe(true);
+
+    const bootStatusEvent = dispatchSpy.mock.calls
+      .map(([event]) => event)
+      .find((event) => event?.type === 'infinite-rails:audio-boot-status');
+    expect(bootStatusEvent).toBeDefined();
+    expect(bootStatusEvent.detail).toEqual(
+      expect.objectContaining({ fallbackActive: true }),
+    );
+    expect(String(bootStatusEvent.detail?.message || '')).toContain('Missing audio');
 
     dispatchSpy.mockRestore();
     errorSpy.mockRestore();
@@ -244,6 +272,10 @@ describe('SimpleExperience audio fallbacks', () => {
     const { experience } = createExperience();
     const controller = experience.createAudioController();
 
+    expect(controller.has('bubble')).toBe(true);
+    expect(controller.has('ambientOverworld')).toBe(true);
+    expect(controller.has('nonexistent')).toBe(false);
+
     controller.play('bubble');
 
     await Promise.resolve();
@@ -265,6 +297,7 @@ describe('SimpleExperience audio fallbacks', () => {
     );
 
     delete windowStub.Audio;
+    dispatchSpy.mockRestore();
     errorSpy.mockRestore();
   });
 });

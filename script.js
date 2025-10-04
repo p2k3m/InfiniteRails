@@ -704,6 +704,7 @@
     const diagnosticsState = {
       renderer: { status: 'pending', message: 'Initialising renderer…' },
       assets: { status: 'pending', message: 'Streaming core assets…' },
+      audio: { status: 'pending', message: 'Initialising audio engine…' },
       backend: { status: 'pending', message: 'Checking leaderboard service…' },
     };
     const DIAGNOSTIC_TYPES = Object.keys(diagnosticsState);
@@ -2661,6 +2662,30 @@
       }
       clearAssetLoadingIndicator(detail?.kind, detail?.key);
     });
+    globalScope.addEventListener('infinite-rails:audio-boot-status', (event) => {
+      const detail = event?.detail && typeof event.detail === 'object' ? event.detail : {};
+      const fallbackActive = Boolean(detail?.fallbackActive);
+      const baseMessage =
+        typeof detail?.message === 'string' && detail.message.trim().length
+          ? detail.message.trim()
+          : fallbackActive
+            ? 'Audio fallback alert tone active until assets are restored.'
+            : 'Audio initialised successfully.';
+      if (typeof logDiagnosticsEvent === 'function') {
+        logDiagnosticsEvent('audio', baseMessage, {
+          level: fallbackActive ? 'error' : 'success',
+          detail,
+          timestamp: Number.isFinite(detail?.timestamp) ? detail.timestamp : undefined,
+        });
+      }
+      if (typeof bootstrapOverlay?.setDiagnostic === 'function') {
+        bootstrapOverlay.setDiagnostic('audio', {
+          status: fallbackActive ? 'error' : 'ok',
+          message: baseMessage,
+        });
+      }
+    });
+
     globalScope.addEventListener('infinite-rails:audio-error', (event) => {
       const detail = event?.detail && typeof event.detail === 'object' ? event.detail : {};
       const fallbackName =
@@ -2708,6 +2733,13 @@
         detail,
         timestamp: Number.isFinite(detail?.timestamp) ? detail.timestamp : undefined,
       });
+      if (typeof bootstrapOverlay?.setDiagnostic === 'function') {
+        const status = detail?.code === 'boot-missing-sample' ? 'error' : 'warning';
+        bootstrapOverlay.setDiagnostic('audio', {
+          status,
+          message: baseMessage,
+        });
+      }
     });
     globalScope.addEventListener('infinite-rails:start-error', (event) => {
       cancelRendererStartWatchdog();
