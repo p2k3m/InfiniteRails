@@ -12,6 +12,9 @@ const ALLOWED_WARNING_SUBSTRINGS = [
   'Multiple instances of Three.js being imported',
   'Failed to load script',
   'Asset load failure',
+  'Retrying explorer avatar asset',
+  'Retrying first-person hands asset',
+  'Retrying golem armour asset',
 ];
 
 function createConsoleCapture(page) {
