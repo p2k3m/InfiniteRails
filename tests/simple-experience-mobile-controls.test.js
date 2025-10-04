@@ -44,6 +44,7 @@ function createMobileControlsHarness() {
 
   const mobileControls = {
     dataset: {},
+    hidden: true,
     setAttribute: vi.fn(),
     toggleAttribute: vi.fn(),
     addEventListener: vi.fn(),
@@ -103,8 +104,9 @@ describe('simple experience mobile controls', () => {
 
     expect(mobileControls.dataset.active).toBe('true');
     expect(mobileControls.dataset.ready).toBe('true');
-    expect(mobileControls.toggleAttribute).toHaveBeenCalledWith('inert', false);
-    expect(joystickEl.toggleAttribute).toHaveBeenCalledWith('inert', false);
+    expect(mobileControls.toggleAttribute).toHaveBeenCalledWith('hidden', false);
+    expect(mobileControls.hidden).toBe(false);
+    expect(joystickEl.toggleAttribute).not.toHaveBeenCalled();
 
     directionButtons.forEach((button) => {
       expect(button.addEventListener).toHaveBeenCalledWith('pointerdown', expect.any(Function), {

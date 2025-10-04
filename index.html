@@ -530,7 +530,7 @@
         >
           Click the viewport to capture your mouse, then use WASD or the arrow keys to move and left-click to mine.
         </div>
-        <div class="hand-overlay" id="handOverlay" aria-hidden="true" data-item="fist" data-hint="Currently equipped item.">
+        <div class="hand-overlay" id="handOverlay" data-item="fist" data-hint="Currently equipped item.">
           <div
             class="hand-overlay__icon"
             id="handOverlayIcon"
@@ -674,7 +674,7 @@
           >
             Expand Inventory
           </button>
-          <div class="extended" id="extendedInventory" inert></div>
+          <div class="extended" id="extendedInventory" hidden></div>
         </section>
         <section class="codex-panel" aria-label="Dimension codex">
           <header>
@@ -1479,9 +1479,9 @@
       </div>
     </div>
 
-    <div class="mobile-controls" id="mobileControls" data-active="false" inert>
+    <div class="mobile-controls" id="mobileControls" data-active="false">
       <div class="mobile-controls__cluster mobile-controls__cluster--movement" role="group" aria-label="Movement controls">
-        <div class="virtual-joystick" id="virtualJoystick" inert aria-label="Analog movement joystick">
+        <div class="virtual-joystick" id="virtualJoystick" aria-label="Analog movement joystick">
           <div class="virtual-joystick__thumb"></div>
         </div>
         <div class="mobile-controls__dpad" role="group" aria-label="Digital movement pad">

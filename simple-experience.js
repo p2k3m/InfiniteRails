@@ -580,6 +580,27 @@
     }
   }
 
+  function setElementHidden(element, hidden) {
+    if (!element) {
+      return;
+    }
+    const shouldHide = Boolean(hidden);
+    if ('hidden' in element) {
+      try {
+        element.hidden = shouldHide;
+      } catch (error) {
+        // Ignore failures from DOM stubs that expose a non-writable hidden property.
+      }
+    }
+    if (typeof element.toggleAttribute === 'function') {
+      element.toggleAttribute('hidden', shouldHide);
+    } else if (shouldHide) {
+      element.setAttribute?.('hidden', '');
+    } else {
+      element.removeAttribute?.('hidden');
+    }
+  }
+
   function focusElementSilently(target) {
     if (!target || typeof target.focus !== 'function') {
       return false;
@@ -9120,8 +9141,7 @@
       if (!controlsVerified) {
         this.teardownMobileControls();
         controls.dataset.active = 'false';
-        setInertState(controls, true);
-        this.virtualJoystickEl && setInertState(this.virtualJoystickEl, true);
+        setElementHidden(controls, true);
         this.mobileControlsActive = false;
         this.updatePointerHintForInputMode();
         this.refreshFirstRunTutorialContent();
@@ -9129,19 +9149,16 @@
       }
       const shouldActivate = Boolean(this.isTouchPreferred);
       if (shouldActivate === this.mobileControlsActive) {
-        setInertState(controls, !shouldActivate);
+        setElementHidden(controls, !shouldActivate);
         controls.dataset.active = shouldActivate ? 'true' : 'false';
-        if (shouldActivate) {
-          this.virtualJoystickEl && setInertState(this.virtualJoystickEl, false);
-        } else {
-          this.virtualJoystickEl && setInertState(this.virtualJoystickEl, true);
+        if (!shouldActivate) {
           this.updatePointerHintForInputMode();
         }
         this.refreshFirstRunTutorialContent();
         return;
       }
       this.teardownMobileControls();
-      setInertState(controls, !shouldActivate);
+      setElementHidden(controls, !shouldActivate);
       controls.dataset.active = shouldActivate ? 'true' : 'false';
       if (!shouldActivate) {
         this.updatePointerHintForInputMode();
@@ -9223,7 +9240,6 @@
       }
 
       if (this.virtualJoystickEl) {
-        setInertState(this.virtualJoystickEl, false);
         this.virtualJoystickEl.addEventListener('pointerdown', this.onJoystickPointerDown, { passive: false });
         window.addEventListener('pointermove', this.onJoystickPointerMove, { passive: false });
         window.addEventListener('pointerup', this.onJoystickPointerUp);
@@ -9445,10 +9461,7 @@
       this.resetJoystick();
       if (this.mobileControlsRoot) {
         this.mobileControlsRoot.dataset.active = 'false';
-        setInertState(this.mobileControlsRoot, true);
-      }
-      if (this.virtualJoystickEl) {
-        setInertState(this.virtualJoystickEl, true);
+        setElementHidden(this.mobileControlsRoot, true);
       }
       this.mobileControlsActive = false;
       this.updatePointerHintForInputMode();
@@ -19624,8 +19637,8 @@
         }
         overlay.dataset.item = datasetValue;
         overlay.dataset.quantity = String(count);
-        if (typeof overlay.setAttribute === 'function') {
-          overlay.setAttribute('aria-hidden', 'false');
+        if (typeof overlay.removeAttribute === 'function') {
+          overlay.removeAttribute('aria-hidden');
           const ariaLabel = hasItem ? formatInventoryLabel(itemId, count) : 'Fist equipped';
           overlay.setAttribute('aria-label', ariaLabel);
         }
@@ -20264,7 +20277,7 @@
       const expanded = this.hotbarExpanded === true;
       if (this.extendedInventoryEl) {
         this.extendedInventoryEl.dataset.visible = expanded ? 'true' : 'false';
-        setInertState(this.extendedInventoryEl, !expanded);
+        setElementHidden(this.extendedInventoryEl, !expanded);
       }
       if (this.hotbarExpandButton) {
         this.hotbarExpandButton.setAttribute('aria-expanded', expanded ? 'true' : 'false');
@@ -23372,15 +23385,11 @@
         <p>${escapeHtml(text)}</p>
       `;
       this.victoryBannerEl.classList.add('visible');
-      setInertState(this.victoryBannerEl, false);
-      activateOverlayIsolation(this.victoryBannerEl);
     }
 
     hideVictoryBanner() {
       if (!this.victoryBannerEl) return;
       this.victoryBannerEl.classList.remove('visible');
-      setInertState(this.victoryBannerEl, true);
-      releaseOverlayIsolation(this.victoryBannerEl);
       this.victoryBannerEl.innerHTML = '';
     }
 
