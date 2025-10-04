@@ -1824,6 +1824,12 @@
           child.material?.dispose?.();
         }
         child.geometry?.dispose?.();
+      } else if (child.isSprite) {
+        const material = child.material;
+        if (material) {
+          material.map?.dispose?.();
+          material.dispose?.();
+        }
       }
     });
   }
@@ -9930,6 +9936,176 @@
       }
     }
 
+    createModelFallbackErrorOverlay(options = {}) {
+      const THREE = this.THREE;
+      if (!THREE) {
+        return null;
+      }
+      const label = typeof options.label === 'string' && options.label.trim().length
+        ? options.label.trim()
+        : 'MODEL ERROR';
+      const detail = typeof options.detail === 'string' && options.detail.trim().length ? options.detail.trim() : '';
+      const width = Number.isFinite(options.width) && options.width > 0 ? options.width : 1.6;
+      const height = Number.isFinite(options.height) && options.height > 0 ? options.height : 0.55;
+      const offsetY = Number.isFinite(options.offsetY) ? options.offsetY : height * 1.2;
+      const renderOrder = Number.isFinite(options.renderOrder) ? options.renderOrder : 12;
+      const reason = typeof options.reason === 'string' && options.reason.trim().length
+        ? options.reason.trim()
+        : 'failed';
+      const key = typeof options.key === 'string' && options.key.trim().length ? options.key.trim() : 'asset';
+      const name = typeof options.name === 'string' && options.name.trim().length
+        ? options.name.trim()
+        : 'PlaceholderErrorOverlay';
+      const backgroundColor = options.backgroundColor || 'rgba(220, 38, 38, 0.9)';
+      const borderColor = options.borderColor || 'rgba(248, 250, 252, 0.45)';
+      const textColor = options.textColor || '#f8fafc';
+      const detailColor = options.detailColor || '#fecaca';
+      const textureWidth = Math.max(128, Math.floor(options.textureWidth || 512));
+      const textureHeight = Math.max(64, Math.floor(options.textureHeight || 256));
+      const doc = options.doc || (typeof document !== 'undefined' ? document : null);
+      let canvas = null;
+      let context = null;
+      if (doc && typeof doc.createElement === 'function') {
+        canvas = doc.createElement('canvas');
+        if (canvas) {
+          canvas.width = textureWidth;
+          canvas.height = textureHeight;
+          context = canvas.getContext('2d');
+        }
+      }
+      if (!context && typeof OffscreenCanvas === 'function') {
+        try {
+          canvas = new OffscreenCanvas(textureWidth, textureHeight);
+          context = canvas.getContext('2d');
+        } catch (error) {
+          context = null;
+          canvas = null;
+        }
+      }
+      if (context) {
+        context.clearRect(0, 0, textureWidth, textureHeight);
+        context.fillStyle = backgroundColor;
+        context.fillRect(0, 0, textureWidth, textureHeight);
+        const borderSize = Math.max(2, Math.floor(textureHeight * 0.05));
+        if (borderSize > 0) {
+          if (typeof context.strokeRect === 'function') {
+            context.strokeStyle = borderColor;
+            context.lineWidth = borderSize;
+            context.strokeRect(borderSize / 2, borderSize / 2, textureWidth - borderSize, textureHeight - borderSize);
+          } else {
+            context.fillStyle = borderColor;
+            context.fillRect(0, 0, textureWidth, borderSize);
+            context.fillRect(0, textureHeight - borderSize, textureWidth, borderSize);
+            context.fillRect(0, 0, borderSize, textureHeight);
+            context.fillRect(textureWidth - borderSize, 0, borderSize, textureHeight);
+          }
+        }
+        const canRenderText = typeof context.fillText === 'function';
+        if (canRenderText) {
+          context.fillStyle = textColor;
+          context.textAlign = 'center';
+          context.textBaseline = 'middle';
+          const headerSize = Math.max(18, Math.floor(textureHeight * (detail ? 0.34 : 0.42)));
+          if ('font' in context) {
+            context.font = `bold ${headerSize}px sans-serif`;
+          }
+          context.fillText(label.toUpperCase(), textureWidth / 2, textureHeight * (detail ? 0.38 : 0.5));
+          if (detail) {
+            context.fillStyle = detailColor;
+            const detailSize = Math.max(14, Math.floor(textureHeight * 0.2));
+            if ('font' in context) {
+              context.font = `600 ${detailSize}px sans-serif`;
+            }
+            context.fillText(detail, textureWidth / 2, textureHeight * 0.73);
+          }
+        } else {
+          context.fillStyle = textColor;
+          const bandHeight = Math.max(4, Math.floor(textureHeight * 0.12));
+          const bandY = Math.floor(textureHeight * (detail ? 0.36 : 0.44));
+          context.fillRect(borderSize, bandY, textureWidth - borderSize * 2, bandHeight);
+          if (detail) {
+            context.fillStyle = detailColor;
+            const detailHeight = Math.max(3, Math.floor(textureHeight * 0.08));
+            const detailY = Math.floor(textureHeight * 0.7);
+            context.fillRect(borderSize, detailY, textureWidth - borderSize * 2, detailHeight);
+          }
+        }
+        const texture = new THREE.CanvasTexture(canvas);
+        texture.colorSpace = THREE.SRGBColorSpace;
+        texture.anisotropy = 1;
+        texture.magFilter = THREE.LinearFilter;
+        texture.minFilter = THREE.LinearFilter;
+        texture.generateMipmaps = false;
+        texture.needsUpdate = true;
+        const material = new THREE.SpriteMaterial({ map: texture, transparent: true });
+        material.depthWrite = false;
+        material.depthTest = false;
+        const sprite = new THREE.Sprite(material);
+        sprite.scale.set(width, height, 1);
+        sprite.position.set(0, offsetY, 0);
+        sprite.center.set(0.5, 0);
+        sprite.renderOrder = renderOrder;
+        sprite.name = name;
+        sprite.userData = {
+          ...(sprite.userData || {}),
+          placeholder: true,
+          placeholderOverlay: true,
+          placeholderKey: key,
+          placeholderReason: reason,
+          placeholderSource: 'model-fallback-overlay',
+        };
+        return sprite;
+      }
+      const geometry = new THREE.PlaneGeometry(width, height);
+      const material = new THREE.MeshBasicMaterial({
+        color: '#b91c1c',
+        transparent: true,
+        opacity: 0.85,
+        depthWrite: false,
+        depthTest: false,
+        side: THREE.DoubleSide,
+      });
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.position.set(0, offsetY, 0);
+      mesh.renderOrder = renderOrder;
+      mesh.name = name;
+      mesh.userData = {
+        ...(mesh.userData || {}),
+        placeholder: true,
+        placeholderOverlay: true,
+        placeholderKey: key,
+        placeholderReason: reason,
+        placeholderSource: 'model-fallback-overlay',
+      };
+      return mesh;
+    }
+
+    attachModelFallbackErrorOverlay(target, options = {}) {
+      if (!target || typeof target.add !== 'function') {
+        return null;
+      }
+      const overlay = this.createModelFallbackErrorOverlay(options);
+      if (!overlay) {
+        return null;
+      }
+      try {
+        target.add(overlay);
+      } catch (error) {
+        if (typeof console !== 'undefined' && typeof console.warn === 'function') {
+          console.warn('Failed to attach model fallback error overlay.', error);
+        }
+        return null;
+      }
+      target.userData = {
+        ...(target.userData || {}),
+        placeholder: true,
+        placeholderOverlays: Array.isArray(target.userData?.placeholderOverlays)
+          ? Array.from(new Set([...target.userData.placeholderOverlays, overlay.name || 'overlay']))
+          : [overlay.name || 'overlay'],
+      };
+      return overlay;
+    }
+
     createModelFallbackMesh(key, options = {}) {
       const THREE = this.THREE;
       if (!THREE) {
@@ -9952,6 +10128,7 @@
         return object;
       };
       const defaultEmissive = '#111827';
+      const showErrorOverlay = reasonLabel === 'failed' || reasonLabel === 'loader-unavailable';
       const buildPrimitiveFallback = (shape, config = {}) => {
         const safeShape = typeof shape === 'string' && shape ? shape : 'box';
         const primitiveName = config.name || `${normalisedKey || 'asset'}-primitive-fallback`;
@@ -10027,7 +10204,7 @@
           mesh.name = 'ZombieFallback';
           mesh.castShadow = true;
           mesh.receiveShadow = true;
-          return withPrimitiveFallback(
+          const placeholder = withPrimitiveFallback(
             mesh,
             'zombie',
             {
@@ -10043,6 +10220,23 @@
               metalness: 0.18,
             },
           );
+          if (placeholder && showErrorOverlay) {
+            this.attachModelFallbackErrorOverlay(placeholder, {
+              key: 'zombie',
+              reason: reasonLabel,
+              label: 'MODEL ERROR',
+              detail: 'Zombie rig unavailable',
+              width: 1.65,
+              height: 0.6,
+              offsetY: 1.45,
+              backgroundColor: 'rgba(220, 38, 38, 0.92)',
+              borderColor: 'rgba(248, 250, 252, 0.45)',
+              textColor: '#f8fafc',
+              detailColor: '#fecaca',
+              name: 'ZombieErrorOverlay',
+            });
+          }
+          return placeholder;
         }
         case 'golem': {
           const actor = this.createGolemActor();
@@ -10054,7 +10248,7 @@
             });
             actor.name = 'GolemFallback';
           }
-          return withPrimitiveFallback(
+          const placeholder = withPrimitiveFallback(
             actor,
             'golem',
             {
@@ -10067,6 +10261,23 @@
               emissive: '#1f2937',
             },
           );
+          if (placeholder && showErrorOverlay) {
+            this.attachModelFallbackErrorOverlay(placeholder, {
+              key: 'golem',
+              reason: reasonLabel,
+              label: 'MODEL ERROR',
+              detail: 'Golem rig unavailable',
+              width: 1.9,
+              height: 0.65,
+              offsetY: 1.85,
+              backgroundColor: 'rgba(234, 88, 12, 0.9)',
+              borderColor: 'rgba(254, 243, 199, 0.4)',
+              textColor: '#fffbeb',
+              detailColor: '#fed7aa',
+              name: 'GolemErrorOverlay',
+            });
+          }
+          return placeholder;
         }
         case 'chest': {
           const chest = this.createChestMesh(this.dimensionSettings || null);
