@@ -17624,17 +17624,35 @@
       if (!mob || !playerBounds || !playerBounds.position) {
         return false;
       }
+      const type = options.type || 'mob';
+      const failureHandler =
+        typeof options.onFailure === 'function' ? options.onFailure : null;
+      const fail = (reason, details = {}) => {
+        const error = this.createMobCollisionError(reason, {
+          ...details,
+          type,
+          mobId: mob?.id ?? null,
+        });
+        this.dispatchMobCollisionFailure(type, mob, error, failureHandler);
+        return false;
+      };
       const position = mob.mesh?.position || null;
       if (!position || typeof position.x !== 'number' || typeof position.z !== 'number') {
-        throw new Error('Mob position unavailable for collision resolution.');
+        return fail('mob-position-unavailable', {
+          hasMesh: Boolean(mob?.mesh),
+        });
       }
       if (typeof position.addScaledVector !== 'function') {
-        throw new Error('Mob position vector missing addScaledVector helper.');
+        return fail('mob-position-vector-missing', {
+          hasAddScaledVector: typeof position.addScaledVector === 'function',
+        });
       }
       const radius = this.getMobCollisionRadius(mob, options.fallbackRadius);
-      const playerRadius = Number.isFinite(playerBounds.radius) ? playerBounds.radius : this.playerPhysicsRadius;
+      const playerRadius = Number.isFinite(playerBounds.radius)
+        ? playerBounds.radius
+        : this.playerPhysicsRadius;
       if (!Number.isFinite(playerRadius) || playerRadius <= 0) {
-        throw new Error('Player collision radius unavailable.');
+        return fail('player-radius-invalid', { playerRadius });
       }
       const target = this.mobCollisionVector;
       const playerPosition = playerBounds.position;
@@ -17645,7 +17663,7 @@
       );
       let distance = target.length();
       if (!Number.isFinite(distance)) {
-        throw new Error('Mob/player distance invalid.');
+        return fail('mob-player-distance-invalid', { distance });
       }
       if (distance === 0) {
         target.set(Math.random() - 0.5 || 0.5, 0, Math.random() - 0.5 || -0.5);
@@ -17653,7 +17671,10 @@
       }
       const minDistance = radius + playerRadius;
       if (minDistance <= 0) {
-        throw new Error('Minimum collision distance invalid.');
+        return fail('minimum-collision-distance-invalid', {
+          radius,
+          playerRadius,
+        });
       }
       if (distance >= minDistance || distance <= 0) {
         return false;
@@ -17668,13 +17689,49 @@
       if (!primary || !secondary || primary === secondary) {
         return false;
       }
+      const typeA = options.typeA || options.type || 'mob';
+      const typeB = options.typeB || options.type || typeA;
+      const failureA = typeof options.onFailureA === 'function' ? options.onFailureA : null;
+      const failureB = typeof options.onFailureB === 'function' ? options.onFailureB : null;
+      const failPrimary = (reason, details = {}) => {
+        const error = this.createMobCollisionError(reason, {
+          ...details,
+          role: 'primary',
+          type: typeA,
+          mobId: primary?.id ?? null,
+        });
+        this.dispatchMobCollisionFailure(typeA, primary, error, failureA);
+      };
+      const failSecondary = (reason, details = {}) => {
+        const error = this.createMobCollisionError(reason, {
+          ...details,
+          role: 'secondary',
+          type: typeB,
+          mobId: secondary?.id ?? null,
+        });
+        this.dispatchMobCollisionFailure(typeB, secondary, error, failureB);
+      };
       const positionA = primary.mesh?.position || null;
-      const positionB = secondary.mesh?.position || null;
-      if (!positionA || !positionB || typeof positionA.x !== 'number' || typeof positionB.x !== 'number') {
-        throw new Error('Mob positions unavailable for collision resolution.');
+      if (!positionA || typeof positionA.x !== 'number' || typeof positionA.z !== 'number') {
+        failPrimary('mob-position-unavailable', { hasMesh: Boolean(primary?.mesh) });
+        return false;
       }
-      if (typeof positionA.addScaledVector !== 'function' || typeof positionB.addScaledVector !== 'function') {
-        throw new Error('Mob position vectors missing addScaledVector helper.');
+      const positionB = secondary.mesh?.position || null;
+      if (!positionB || typeof positionB.x !== 'number' || typeof positionB.z !== 'number') {
+        failSecondary('mob-position-unavailable', { hasMesh: Boolean(secondary?.mesh) });
+        return false;
+      }
+      if (typeof positionA.addScaledVector !== 'function') {
+        failPrimary('mob-position-vector-missing', {
+          hasAddScaledVector: typeof positionA.addScaledVector === 'function',
+        });
+        return false;
+      }
+      if (typeof positionB.addScaledVector !== 'function') {
+        failSecondary('mob-position-vector-missing', {
+          hasAddScaledVector: typeof positionB.addScaledVector === 'function',
+        });
+        return false;
       }
       const radiusA = this.getMobCollisionRadius(primary, options.fallbackRadiusA);
       const radiusB = this.getMobCollisionRadius(secondary, options.fallbackRadiusB);
@@ -17682,7 +17739,10 @@
       direction.set(positionA.x - positionB.x, 0, positionA.z - positionB.z);
       let distance = direction.length();
       if (!Number.isFinite(distance)) {
-        throw new Error('Mob separation distance invalid.');
+        const details = { distance };
+        failPrimary('mob-separation-distance-invalid', details);
+        failSecondary('mob-separation-distance-invalid', details);
+        return false;
       }
       if (distance === 0) {
         direction.set(Math.random() - 0.5 || 0.5, 0, Math.random() - 0.5 || -0.5);
@@ -17690,7 +17750,10 @@
       }
       const minDistance = radiusA + radiusB;
       if (minDistance <= 0) {
-        throw new Error('Mob collision radii invalid.');
+        const details = { radiusA, radiusB };
+        failPrimary('mob-collision-radius-invalid', details);
+        failSecondary('mob-collision-radius-invalid', details);
+        return false;
       }
       if (distance >= minDistance || distance <= 0) {
         return false;
@@ -17728,10 +17791,12 @@
           continue;
         }
         if (playerBounds) {
-          try {
-            this.resolveMobPlayerCollision(mob, playerBounds, { fallbackRadius });
-          } catch (error) {
-            this.handleMobCollisionFailure(type, mob, error);
+          this.resolveMobPlayerCollision(mob, playerBounds, {
+            fallbackRadius,
+            type,
+            onFailure: (error) => this.handleMobCollisionFailure(type, mob, error),
+          });
+          if (!mobs.includes(mob)) {
             continue;
           }
         }
@@ -17740,17 +17805,16 @@
           if (!other || !mobs.includes(other)) {
             continue;
           }
-          try {
-            this.resolveMobPairCollision(mob, other, {
-              fallbackRadiusA: fallbackRadius,
-              fallbackRadiusB: fallbackRadius,
-            });
-          } catch (error) {
-            this.handleMobCollisionFailure(type, mob, error);
-            this.handleMobCollisionFailure(type, other, error);
-            if (!mobs.includes(mob)) {
-              break;
-            }
+          this.resolveMobPairCollision(mob, other, {
+            fallbackRadiusA: fallbackRadius,
+            fallbackRadiusB: fallbackRadius,
+            typeA: type,
+            typeB: type,
+            onFailureA: (error) => this.handleMobCollisionFailure(type, mob, error),
+            onFailureB: (error) => this.handleMobCollisionFailure(type, other, error),
+          });
+          if (!mobs.includes(mob)) {
+            break;
           }
         }
         if (!mobs.includes(mob)) {
@@ -17766,20 +17830,44 @@
           if (extra === mob) {
             continue;
           }
-          try {
-            this.resolveMobPairCollision(mob, extra, {
-              fallbackRadiusA: fallbackRadius,
-              fallbackRadiusB: extraRadius,
-              allowSecondaryAdjustment: allowExtraAdjustment,
-            });
-          } catch (error) {
-            this.handleMobCollisionFailure(type, mob, error);
-            this.handleMobCollisionFailure(extraType, extra, error);
-            if (!mobs.includes(mob)) {
-              break;
-            }
+          this.resolveMobPairCollision(mob, extra, {
+            fallbackRadiusA: fallbackRadius,
+            fallbackRadiusB: extraRadius,
+            allowSecondaryAdjustment: allowExtraAdjustment,
+            typeA: type,
+            typeB: extraType,
+            onFailureA: (error) => this.handleMobCollisionFailure(type, mob, error),
+            onFailureB: (error) => this.handleMobCollisionFailure(extraType, extra, error),
+          });
+          if (!mobs.includes(mob)) {
+            break;
           }
         }
+      }
+    }
+
+    createMobCollisionError(message, details = {}) {
+      const error = new Error(message || 'mob-collision-failure');
+      if (details && typeof details === 'object') {
+        error.details = { ...details };
+      }
+      return error;
+    }
+
+    dispatchMobCollisionFailure(type, mob, error, handler) {
+      let handled = false;
+      if (typeof handler === 'function') {
+        try {
+          handler(error);
+          handled = true;
+        } catch (handlerError) {
+          if (typeof console !== 'undefined' && typeof console.error === 'function') {
+            console.error('Mob collision failure handler threw.', handlerError);
+          }
+        }
+      }
+      if (!handled) {
+        this.handleMobCollisionFailure(type, mob, error);
       }
     }
 
