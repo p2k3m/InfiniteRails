@@ -1788,6 +1788,7 @@
     logLevel = 'error',
     detail = null,
     timestamp = null,
+    logToConsole = true,
   } = {}) {
     if (typeof bootstrapOverlay?.showError === 'function') {
       try {
@@ -1918,6 +1919,22 @@
           globalScope.console.warn('Unable to update diagnostic status for critical error.', diagnosticError);
         }
       }
+    }
+    if (logToConsole && typeof logCriticalErrorToConsole === 'function') {
+      const stageLabel =
+        typeof detail?.stage === 'string' && detail.stage.trim().length ? detail.stage.trim() : null;
+      logCriticalErrorToConsole({
+        message: logMessage,
+        diagnosticMessage,
+        playerMessage: message,
+        level: logLevel,
+        scope: logScope,
+        status: diagnosticStatus,
+        boundary: 'overlay',
+        stage: stageLabel,
+        detail,
+        timestamp,
+      });
     }
     if (logScope && typeof logDiagnosticsEvent === 'function') {
       logDiagnosticsEvent(logScope, logMessage, {
@@ -2173,6 +2190,7 @@
       logLevel,
       detail,
       timestamp: options.timestamp,
+      logToConsole: false,
     });
     logCriticalErrorToConsole({
       message: logMessage,
