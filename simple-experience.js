@@ -635,12 +635,15 @@
   }
 
   function safelySetAriaHidden(element, hidden, options = {}) {
-    if (!element || typeof element.setAttribute !== 'function') {
+    if (!element) {
       return false;
     }
     const doc = element.ownerDocument || (typeof document !== 'undefined' ? document : null);
     if (!hidden) {
-      element.setAttribute('aria-hidden', 'false');
+      if (options.toggleInert) {
+        setInertState(element, false);
+      }
+      element.removeAttribute?.('aria-hidden');
       return true;
     }
     const fallbackFocus = options.fallbackFocus || null;
@@ -648,7 +651,10 @@
     if (!cleared) {
       return false;
     }
-    element.setAttribute('aria-hidden', 'true');
+    if (options.toggleInert) {
+      setInertState(element, true);
+    }
+    element.removeAttribute?.('aria-hidden');
     return true;
   }
 

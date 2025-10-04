@@ -570,7 +570,7 @@
           class="victory-celebration"
           id="victoryCelebration"
           hidden
-          aria-hidden="true"
+          inert
           data-hint="Animated celebration with stats and share tools."
         >
           <div class="victory-celebration__backdrop" aria-hidden="true"></div>
@@ -617,8 +617,8 @@
         <div
           class="defeat-overlay"
           id="defeatOverlay"
-          aria-hidden="true"
           tabindex="-1"
+          inert
         >
           <div
             class="defeat-overlay__content"
@@ -639,7 +639,7 @@
           </div>
         </div>
       </section>
-      <aside class="side-panel" id="sidePanel" tabindex="-1" aria-hidden="true">
+      <aside class="side-panel" id="sidePanel" tabindex="-1" inert>
         <section class="player-panel" aria-label="Player profile">
           <header class="player-panel__header">
             <h2>Player Hub</h2>
@@ -1456,7 +1456,7 @@
           class="compose-overlay"
           id="leaderboardOverlay"
           hidden
-          aria-hidden="true"
+          inert
           data-mode="idle"
         >
           <div
@@ -1553,7 +1553,7 @@
       class="compose-overlay compose-overlay--global"
       id="assetRecoveryOverlay"
       hidden
-      aria-hidden="true"
+      inert
       data-mode="error"
     >
       <div
@@ -1582,7 +1582,7 @@
       class="compose-overlay compose-overlay--global"
       id="globalOverlay"
       hidden
-      aria-hidden="true"
+      inert
       data-mode="idle"
     >
       <div
@@ -1681,7 +1681,8 @@
 
           overlay.hidden = false;
           overlay.removeAttribute('hidden');
-          overlay.setAttribute('aria-hidden', 'false');
+          overlay.removeAttribute('aria-hidden');
+          overlay.removeAttribute('inert');
           overlay.setAttribute('data-mode', 'loading');
           overlay.setAttribute('data-fallback-active', 'true');
 
@@ -1768,9 +1769,10 @@
               }
             }
 
-            overlay.setAttribute('aria-hidden', 'true');
+            overlay.removeAttribute('aria-hidden');
             overlay.setAttribute('data-mode', 'idle');
             overlay.removeAttribute('data-fallback-active');
+            overlay.setAttribute('inert', '');
             overlay.setAttribute('hidden', '');
             overlay.hidden = true;
 
