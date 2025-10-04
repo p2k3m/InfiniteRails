@@ -4,10 +4,47 @@ on:
   push:
     branches:
       - main
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
 jobs:
+  pre-release-checks:
+    name: Pre-release checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Run unit tests
+        run: npm test
+        env:
+          CI: true
+
+      - name: Run end-to-end smoke tests
+        run: npm run test:e2e
+        env:
+          CI: true
+
+      - name: Validate asset manifest coverage
+        run: node scripts/validate-asset-manifest.js
+
   deploy:
+    if: github.event_name == 'push'
+    needs: pre-release-checks
     name: Build & Deploy
     runs-on: ubuntu-latest
     outputs:
@@ -58,9 +95,6 @@ jobs:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
-
-      - name: Validate asset manifest coverage
-        run: node scripts/validate-asset-manifest.js
 
       - name: Sync site to S3
         env:
