@@ -10168,6 +10168,15 @@
       const attemptLoad = (attempt) => {
         const attemptNumber = Math.max(1, attempt || 1);
         this.assetRetryState.set(key, attemptNumber);
+        if (attemptNumber > 1) {
+          this.emitGameEvent('asset-retry-attempt', {
+            key,
+            attempt: attemptNumber,
+            limit: this.assetRetryLimit,
+            kind: 'models',
+            url,
+          });
+        }
         return ensureGltfLoader(THREE)
           .then((LoaderClass) => {
             return new Promise((resolve, reject) => {
@@ -10220,8 +10229,8 @@
           })
           .catch((error) => {
             if (attemptNumber < this.assetRetryLimit) {
-              this.noteAssetRetry(key, attemptNumber, error, url);
               const delay = this.computeAssetRetryDelay(attemptNumber);
+              this.noteAssetRetry(key, attemptNumber, error, url, delay);
               return this.delay(delay).then(() => attemptLoad(attemptNumber + 1));
             }
             throw error;
@@ -20665,17 +20674,23 @@
       }
     }
 
-    noteAssetRetry(key, attemptNumber, error, url) {
+    noteAssetRetry(key, attemptNumber, error, url, delayMs) {
       const friendlyName = this.describeAssetKey(key);
       const nextAttempt = Math.min(this.assetRetryLimit, attemptNumber + 1);
+      const resolvedDelay = Number.isFinite(delayMs) ? Math.max(0, Math.floor(delayMs)) : this.computeAssetRetryDelay(attemptNumber);
+      const delaySeconds = Number.isFinite(resolvedDelay) ? Math.max(0, Math.round(resolvedDelay / 1000)) : null;
+      const delaySuffix = delaySeconds
+        ? ` in ${delaySeconds} second${delaySeconds === 1 ? '' : 's'}`
+        : '';
       if (typeof console !== 'undefined') {
         console.warn(
-          `Retrying ${friendlyName} asset (attempt ${nextAttempt} of ${this.assetRetryLimit}) after a loading error.`,
+          `Retrying ${friendlyName} asset (attempt ${nextAttempt} of ${this.assetRetryLimit}) after a loading error${delaySuffix}.`,
           {
             key,
             attempt: attemptNumber,
             nextAttempt,
             url,
+            delayMs: resolvedDelay,
             error,
           },
         );
@@ -20684,8 +20699,11 @@
         key,
         attempt: nextAttempt,
         previousAttempt: attemptNumber,
+        limit: this.assetRetryLimit,
         url,
+        delayMs: resolvedDelay,
         errorMessage: error?.message ?? null,
+        kind: 'models',
       });
     }
 

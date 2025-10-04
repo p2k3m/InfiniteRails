@@ -2125,6 +2125,51 @@
     return key ? `${kind}:${key}` : kind;
   }
 
+  function capitaliseFirstWord(value) {
+    if (typeof value !== 'string') {
+      return '';
+    }
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return '';
+    }
+    return `${trimmed.charAt(0).toUpperCase()}${trimmed.slice(1)}`;
+  }
+
+  function formatAssetRetrySubject(detail) {
+    const rawKey = typeof detail?.key === 'string' && detail.key.trim().length ? detail.key.trim() : '';
+    const key = rawKey.startsWith('texture:') ? rawKey.slice('texture:'.length) : rawKey;
+    const kind = typeof detail?.kind === 'string' && detail.kind.trim().length ? detail.kind.trim() : '';
+    if (key && key !== 'asset') {
+      if (kind === 'models') {
+        return `${key} models`;
+      }
+      if (kind === 'textures') {
+        return `${key} textures`;
+      }
+      return `${key} assets`;
+    }
+    if (kind === 'models') {
+      return 'model assets';
+    }
+    if (kind === 'textures') {
+      return 'texture assets';
+    }
+    return 'critical assets';
+  }
+
+  function formatAssetRetryAttemptSummary(attempt, limit) {
+    if (!Number.isFinite(attempt)) {
+      return '';
+    }
+    const attemptNumber = Math.max(1, Math.floor(attempt));
+    if (Number.isFinite(limit) && limit >= attemptNumber) {
+      const maxAttempts = Math.max(attemptNumber, Math.floor(limit));
+      return `attempt ${attemptNumber} of ${maxAttempts}`;
+    }
+    return `attempt ${attemptNumber}`;
+  }
+
   function summariseAssetUrl(url) {
     if (typeof url !== 'string' || !url.trim().length) {
       return null;
@@ -2968,6 +3013,54 @@
       if (typeof logDiagnosticsEvent === 'function') {
         logDiagnosticsEvent('assets', 'Retrying missing assets…', {
           level: 'info',
+        });
+      }
+    });
+    globalScope.addEventListener('infinite-rails:asset-retry-scheduled', (event) => {
+      const detail = event?.detail && typeof event.detail === 'object' ? event.detail : {};
+      const subject = formatAssetRetrySubject(detail) || 'assets';
+      const attemptSummary = formatAssetRetryAttemptSummary(detail?.attempt, detail?.limit);
+      const delayMs = Number.isFinite(detail?.delayMs) ? Math.max(0, Math.floor(detail.delayMs)) : null;
+      const delaySeconds = Number.isFinite(delayMs) ? Math.max(1, Math.round(delayMs / 1000)) : null;
+      let message = delaySeconds
+        ? `Retrying ${capitaliseFirstWord(subject)} in ${delaySeconds} second${delaySeconds === 1 ? '' : 's'}`
+        : `Retrying ${capitaliseFirstWord(subject)} shortly`;
+      if (attemptSummary) {
+        message += ` (${attemptSummary}).`;
+      } else {
+        message += '.';
+      }
+      bootstrapOverlay.setDiagnostic('assets', {
+        status: 'pending',
+        message,
+      });
+      if (typeof logDiagnosticsEvent === 'function') {
+        logDiagnosticsEvent('assets', message, {
+          level: 'info',
+          detail,
+          timestamp: Number.isFinite(detail?.timestamp) ? detail.timestamp : undefined,
+        });
+      }
+    });
+    globalScope.addEventListener('infinite-rails:asset-retry-attempt', (event) => {
+      const detail = event?.detail && typeof event.detail === 'object' ? event.detail : {};
+      const subject = formatAssetRetrySubject(detail) || 'assets';
+      const attemptSummary = formatAssetRetryAttemptSummary(detail?.attempt, detail?.limit);
+      let message = `Retrying ${capitaliseFirstWord(subject)} now`;
+      if (attemptSummary) {
+        message += ` (${attemptSummary}).`;
+      } else {
+        message += '.';
+      }
+      bootstrapOverlay.setDiagnostic('assets', {
+        status: 'pending',
+        message,
+      });
+      if (typeof logDiagnosticsEvent === 'function') {
+        logDiagnosticsEvent('assets', message, {
+          level: 'info',
+          detail,
+          timestamp: Number.isFinite(detail?.timestamp) ? detail.timestamp : undefined,
         });
       }
     });
