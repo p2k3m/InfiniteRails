@@ -130,8 +130,14 @@ describe('simple experience steve model loading', () => {
       expect(experience.playerAvatar).toBeTruthy();
       expect(experience.playerAvatar.userData?.placeholder).toBe(true);
       expect(experience.playerAvatar.userData?.placeholderSource).toBe('missing-animations');
-      expect(experience.playerAnimationRig).toBeNull();
-      expect(experience.playerMixer).toBeNull();
+      expect(experience.playerAnimationRig).toBeTruthy();
+      expect(experience.playerAnimationRig.state).toBe('idle');
+      expect(experience.playerAnimationRig.baseState).toBe('idle');
+      expect(experience.playerAnimationRig.actions?.idle).toBeTruthy();
+      expect(experience.playerAnimationRig.actions?.walk).toBeTruthy();
+      expect(experience.playerAnimationRig.actions.idle.isRunning()).toBe(true);
+      expect(experience.playerAnimationRig.actions.walk.isRunning()).toBe(true);
+      expect(experience.playerMixer).toBeTruthy();
     } finally {
       errorSpy.mockRestore();
       warnSpy.mockRestore();

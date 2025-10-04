@@ -9631,6 +9631,51 @@
       return rig;
     }
 
+    configurePlayerAnimationRig(model, animations = [], options = {}) {
+      if (!model) {
+        if (this.playerAnimationRig) {
+          this.disposeAnimationRig(this.playerAnimationRig);
+        }
+        this.playerAnimationRig = null;
+        this.playerMixer = null;
+        this.playerIdleAction = null;
+        return null;
+      }
+      const defaultState = options.defaultState || 'idle';
+      if (this.playerAnimationRig && this.playerAnimationRig.root === model) {
+        this.setAnimationRigState(this.playerAnimationRig, defaultState, {
+          fade: 0,
+          forceDuringPulse: true,
+          force: true,
+        });
+        this.playerMixer = this.playerAnimationRig.mixer || null;
+        this.playerIdleAction = this.playerAnimationRig.actions?.idle || null;
+        return this.playerAnimationRig;
+      }
+      if (this.playerAnimationRig) {
+        this.disposeAnimationRig(this.playerAnimationRig);
+      }
+      const rig = this.prepareAnimationRig('steve', model, animations, {
+        ...options,
+        defaultState,
+        fallbackContext: {
+          idleYOffset: -PLAYER_EYE_HEIGHT,
+          ...(options?.fallbackContext || {}),
+        },
+      });
+      this.playerAnimationRig = rig || null;
+      this.playerMixer = rig?.mixer || null;
+      this.playerIdleAction = rig?.actions?.idle || null;
+      if (rig) {
+        this.setAnimationRigState(rig, defaultState, {
+          fade: 0,
+          forceDuringPulse: true,
+          force: true,
+        });
+      }
+      return rig;
+    }
+
     setAnimationRigState(rig, state, options = {}) {
       if (!rig || !rig.actions) {
         return;
@@ -9846,6 +9891,8 @@
         const currentSeverity = severityOrder[currentReason] ?? 0;
         const nextSeverity = severityOrder[reasonLabel] ?? 0;
         if (nextSeverity < currentSeverity) {
+          this.configurePlayerAnimationRig(this.playerAvatar, [], { defaultState: 'idle' });
+          this.playerHeadAttachment = this.playerAvatar;
           return this.playerAvatar;
         }
         if (this.playerAvatar.material?.color) {
@@ -9862,15 +9909,17 @@
             if (typeof console !== 'undefined' && typeof console.debug === 'function') {
               console.debug('Unable to reparent camera to placeholder avatar.', error);
             }
-          }
         }
-        this.applyCameraPerspective(this.cameraPerspective);
-        this.ensurePlayerArmsVisible();
-        this.emitGameEvent('avatar-placeholder-activated', {
-          key: 'steve',
-          reason: reasonLabel,
-        });
-        return this.playerAvatar;
+      }
+      this.applyCameraPerspective(this.cameraPerspective);
+      this.ensurePlayerArmsVisible();
+      this.configurePlayerAnimationRig(this.playerAvatar, [], { defaultState: 'idle' });
+      this.playerHeadAttachment = this.playerAvatar;
+      this.emitGameEvent('avatar-placeholder-activated', {
+        key: 'steve',
+        reason: reasonLabel,
+      });
+      return this.playerAvatar;
       }
       const placeholder = this.buildAvatarPlaceholderMesh(reasonLabel);
       if (!placeholder) {
@@ -9901,6 +9950,8 @@
       }
       this.applyCameraPerspective(this.cameraPerspective);
       this.ensurePlayerArmsVisible();
+      this.configurePlayerAnimationRig(placeholder, [], { defaultState: 'idle' });
+      this.playerHeadAttachment = placeholder;
       this.emitGameEvent('avatar-placeholder-activated', {
         key: 'steve',
         reason: reasonLabel,
@@ -10140,6 +10191,11 @@
         if (this.playerAvatar?.userData) {
           this.playerAvatar.userData.placeholderSource = 'missing-animations';
         }
+        const placeholder = this.ensurePlayerAvatarPlaceholder('failed');
+        if (placeholder) {
+          this.configurePlayerAnimationRig(placeholder, [], { defaultState: 'idle' });
+          this.playerHeadAttachment = placeholder;
+        }
         return;
       }
 
@@ -10161,12 +10217,9 @@
 
       this.applyCameraPerspective(this.cameraPerspective);
 
-      this.playerAnimationRig = this.prepareAnimationRig('steve', model, asset.animations, {
+      this.configurePlayerAnimationRig(model, asset.animations, {
         defaultState: 'idle',
-        fallbackContext: { idleYOffset: -PLAYER_EYE_HEIGHT },
       });
-      this.playerMixer = this.playerAnimationRig?.mixer || null;
-      this.playerIdleAction = this.playerAnimationRig?.actions?.idle || null;
       console.info('Steve visible in scene — GLTF rig active.');
       console.info(
         'Avatar visibility confirmed — verify animation rig initialises correctly if the player appears static.',
