@@ -59,6 +59,33 @@
     return `rgb(${color.r}, ${color.g}, ${color.b})`;
   }
 
+  function normalisePositiveInteger(value, minimum) {
+    if (value === null || value === undefined) {
+      return null;
+    }
+    const number = Number(value);
+    if (!Number.isFinite(number)) {
+      return null;
+    }
+    const truncated = Math.floor(number);
+    return Math.max(minimum, truncated);
+  }
+
+  function resolveTextureRetryIntervalMs(source) {
+    if (!source || typeof source !== 'object') {
+      return null;
+    }
+    const milliseconds = normalisePositiveInteger(source.texturePackRetryIntervalMs, 1000);
+    if (milliseconds !== null) {
+      return milliseconds;
+    }
+    const seconds = normalisePositiveInteger(source.texturePackRetryIntervalSeconds, 1);
+    if (seconds !== null) {
+      return seconds * 1000;
+    }
+    return null;
+  }
+
   const FALLBACK_PROCEDURAL_RGB = Object.freeze({
     grass: { r: 111, g: 191, b: 115 },
     cloud: { r: 229, g: 247, b: 255 },
@@ -128,6 +155,67 @@
     shadow: '#3f7a3a',
     accent: '#8ad4ff',
   };
+  const PROCEDURAL_TEXTURE_FALLBACK_PALETTES = Object.freeze({
+    grass: {
+      base: '#2f9e44',
+      highlight: '#c3fa9b',
+      shadow: '#176123',
+      accent: '#8ce0ff',
+    },
+    dirt: {
+      base: '#b0793f',
+      highlight: '#f3c892',
+      shadow: '#5f3616',
+      accent: '#ffd8a8',
+    },
+    stone: {
+      base: '#94a3b8',
+      highlight: '#e2e8f0',
+      shadow: '#475569',
+      accent: '#cbd5f5',
+    },
+    rails: {
+      base: '#d97706',
+      highlight: '#fcd34d',
+      shadow: '#92400e',
+      accent: '#fde68a',
+    },
+    sand: {
+      base: '#f1d39c',
+      highlight: '#fff4d6',
+      shadow: '#c49a4a',
+      accent: '#ffe5b4',
+    },
+    gravel: {
+      base: '#8d8f98',
+      highlight: '#dce1e8',
+      shadow: '#53545b',
+      accent: '#bbc0c7',
+    },
+    obsidian: {
+      base: '#4338ca',
+      highlight: '#a5b4fc',
+      shadow: '#1e1b4b',
+      accent: '#c7d2fe',
+    },
+    portal: {
+      base: '#7c3aed',
+      highlight: '#c4b5fd',
+      shadow: '#4c1d95',
+      accent: '#a855f7',
+    },
+  });
+
+  function resolveProceduralVoxelPalette(key) {
+    if (typeof key !== 'string') {
+      return DEFAULT_PROCEDURAL_VOXEL_PALETTE;
+    }
+    const normalised = key.trim().toLowerCase();
+    if (!normalised) {
+      return DEFAULT_PROCEDURAL_VOXEL_PALETTE;
+    }
+    return PROCEDURAL_TEXTURE_FALLBACK_PALETTES[normalised] || DEFAULT_PROCEDURAL_VOXEL_PALETTE;
+  }
   const BLOCK_SIZE = 1;
   const EMBEDDED_TEXTURE_DATA = {
     grass: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAGUlEQVR4nGOMn2/KQApgIkn1qIZRDUNKAwDeMQFTRB/l3QAAAABJRU5ErkJggg==',
@@ -2343,9 +2431,13 @@
       this.textureRetrySchedules = new Map();
       this.textureUpgradeTargets = new Map();
       this.texturePackUnavailable = false;
-      this.texturePackRetryIntervalMs = Number.isFinite(options.texturePackRetryIntervalMs)
-        ? Math.max(1000, Math.floor(options.texturePackRetryIntervalMs))
-        : 60000;
+      const appConfig =
+        typeof window !== 'undefined' && window.APP_CONFIG && typeof window.APP_CONFIG === 'object'
+          ? window.APP_CONFIG
+          : null;
+      const optionRetryMs = resolveTextureRetryIntervalMs(options || {});
+      const configRetryMs = resolveTextureRetryIntervalMs(appConfig || {});
+      this.texturePackRetryIntervalMs = optionRetryMs ?? configRetryMs ?? 60000;
       this.lastTextureFallbackMessage = '';
       this.texturePackErrorNoticeThreshold = Math.max(
         1,
@@ -6926,7 +7018,8 @@
     }
 
     registerDefaultVoxelTexturePalette(key, palette) {
-      if (!key || !palette || typeof palette !== 'object') {
+      const normalised = typeof key === 'string' ? key.trim() : '';
+      if (!normalised || !palette || typeof palette !== 'object') {
         return;
       }
       const safePalette = {
@@ -6935,27 +7028,34 @@
         shadow: palette.shadow || palette.base || DEFAULT_PROCEDURAL_VOXEL_PALETTE.shadow,
         accent: palette.accent || palette.highlight || DEFAULT_PROCEDURAL_VOXEL_PALETTE.accent,
       };
-      this.defaultVoxelTexturePalettes.set(key, safePalette);
+      this.defaultVoxelTexturePalettes.set(normalised, safePalette);
     }
 
     ensureProceduralTexture(key) {
-      if (!key) {
+      const normalised = typeof key === 'string' ? key.trim() : '';
+      if (!normalised) {
         return null;
       }
-      let texture = this.textureCache.get(key) || null;
+      let texture = this.textureCache.get(normalised) || null;
       if (texture) {
         return texture;
       }
-      const storedPalette = this.defaultVoxelTexturePalettes.get(key) || DEFAULT_PROCEDURAL_VOXEL_PALETTE;
-      texture = this.createVoxelTexture(key, storedPalette);
+      if (!this.defaultVoxelTexturePalettes.has(normalised)) {
+        const fallbackPalette = resolveProceduralVoxelPalette(normalised);
+        this.registerDefaultVoxelTexturePalette(normalised, fallbackPalette);
+      }
+      const storedPalette = this.defaultVoxelTexturePalettes.get(normalised) || DEFAULT_PROCEDURAL_VOXEL_PALETTE;
+      texture = this.createVoxelTexture(normalised, storedPalette);
       return texture;
     }
 
     createVoxelTexture(key, palette) {
+      const normalised = typeof key === 'string' ? key.trim() : '';
+      const cacheKey = normalised || key;
       if (palette && typeof palette === 'object') {
-        this.registerDefaultVoxelTexturePalette(key, palette);
+        this.registerDefaultVoxelTexturePalette(cacheKey, palette);
       }
-      const cached = this.textureCache.get(key);
+      const cached = this.textureCache.get(cacheKey);
       if (cached) {
         return cached;
       }
@@ -6968,7 +7068,7 @@
       const ctx = canvas.getContext('2d');
       if (!ctx) {
         const fallback = createSkyGrassDataTexture(THREE, colorSet);
-        this.textureCache.set(key, fallback);
+        this.textureCache.set(cacheKey, fallback);
         return fallback;
       }
       const base = colorSet.grass;
@@ -7020,7 +7120,7 @@
       texture.wrapS = THREE.RepeatWrapping;
       texture.wrapT = THREE.RepeatWrapping;
       texture.needsUpdate = true;
-      this.textureCache.set(key, texture);
+      this.textureCache.set(cacheKey, texture);
       return texture;
     }
 

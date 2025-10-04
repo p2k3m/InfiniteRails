@@ -372,6 +372,76 @@ describe('simple experience terrain generation', () => {
     }
   });
 
+  it('honours texture pack retry interval seconds from configuration', () => {
+    vi.useFakeTimers();
+
+    const previousConfig = window.APP_CONFIG;
+    window.APP_CONFIG = { texturePackRetryIntervalSeconds: 10 };
+
+    const canvas = {
+      width: 512,
+      height: 512,
+      clientWidth: 512,
+      clientHeight: 512,
+      getContext: () => null,
+    };
+
+    const experience = window.SimpleExperience.create({ canvas, ui: {} });
+
+    const timerScope = typeof window.setTimeout === 'function' ? window : globalThis;
+    const setTimeoutSpy = vi.spyOn(timerScope, 'setTimeout');
+
+    try {
+      experience.noteTexturePackFallback('fallback-texture', { key: 'grass' });
+
+      expect(experience.texturePackRetryIntervalMs).toBe(10000);
+
+      const scheduledDelays = setTimeoutSpy.mock.calls
+        .map((call) => call[1])
+        .filter((value) => typeof value === 'number');
+      expect(scheduledDelays).toContain(10000);
+    } finally {
+      setTimeoutSpy.mockRestore();
+      if (previousConfig === undefined) {
+        delete window.APP_CONFIG;
+      } else {
+        window.APP_CONFIG = previousConfig;
+      }
+      vi.useRealTimers();
+    }
+  });
+
+  it('assigns distinct procedural palettes when textures fall back to procedural colours', () => {
+    const canvas = {
+      width: 512,
+      height: 512,
+      clientWidth: 512,
+      clientHeight: 512,
+      getContext: () => null,
+    };
+
+    const experience = window.SimpleExperience.create({ canvas, ui: {} });
+
+    experience.textureCache.clear();
+    experience.defaultVoxelTexturePalettes.clear();
+
+    experience.ensureProceduralTexture('grass');
+    experience.ensureProceduralTexture('dirt');
+    experience.ensureProceduralTexture('stone');
+
+    const grassPalette = experience.defaultVoxelTexturePalettes.get('grass');
+    const dirtPalette = experience.defaultVoxelTexturePalettes.get('dirt');
+    const stonePalette = experience.defaultVoxelTexturePalettes.get('stone');
+
+    expect(grassPalette).toMatchObject({ base: '#2f9e44' });
+    expect(dirtPalette).toMatchObject({ base: '#b0793f' });
+    expect(stonePalette).toMatchObject({ base: '#94a3b8' });
+
+    expect(grassPalette.base).not.toBe(dirtPalette.base);
+    expect(grassPalette.base).not.toBe(stonePalette.base);
+    expect(dirtPalette.base).not.toBe(stonePalette.base);
+  });
+
   it('applies per-dimension terrain profiles without generating flat or empty worlds', () => {
     const canvas = {
       width: 512,
