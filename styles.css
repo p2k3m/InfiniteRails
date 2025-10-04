@@ -65,6 +65,30 @@
   --hud-spacing: clamp(0.75rem, 2vw, 1.1rem);
   --hud-margin: clamp(1rem, 2.2vw, 1.5rem);
   --hud-bottom-gap: clamp(0.6rem, 1.2vw, 0.9rem);
+  --tutorial-panel-max-width: min(640px, 96vw);
+  --tutorial-panel-max-height: min(90vh, 720px);
+  --tutorial-panel-padding: clamp(24px, 4vw, 40px);
+  --tutorial-panel-gap: clamp(1rem, 3vw, 1.5rem);
+  --tutorial-close-size: clamp(34px, 4vw, 38px);
+  --tutorial-close-offset: clamp(10px, 3vw, 16px);
+  --tutorial-actions-direction: row;
+  --tutorial-actions-justify: flex-end;
+  --tutorial-actions-gap: 0.55rem;
+  --tutorial-primary-width: auto;
+  --mobile-controls-max-width: min(92vw, 520px);
+  --mobile-controls-gap: clamp(0.65rem, 3vw, 1.1rem);
+  --mobile-controls-padding-y: clamp(0.75rem, 2.5vw, 1rem);
+  --mobile-controls-padding-x: clamp(1rem, 4vw, 1.35rem);
+  --mobile-controls-direction: row;
+  --mobile-controls-justify: space-between;
+  --mobile-controls-align: flex-end;
+  --mobile-controls-cluster-gap: clamp(0.6rem, 3vw, 1rem);
+  --mobile-controls-action-gap: clamp(0.6rem, 3vw, 0.95rem);
+  --mobile-controls-dpad-cell: clamp(42px, 12vw, 58px);
+  --mobile-controls-button-size: clamp(48px, 12vw, 64px);
+  --mobile-controls-button-font: clamp(1.05rem, 4vw, 1.4rem);
+  --mobile-controls-button-primary-size: clamp(56px, 14vw, 72px);
+  --mobile-controls-button-primary-font: clamp(1.2rem, 4.6vw, 1.5rem);
   font-size: 16px;
 }
 
@@ -1764,18 +1788,18 @@ body.game-active #gameCanvas {
 
 .first-run-tutorial__panel {
   position: relative;
-  max-width: min(640px, 96vw);
+  max-width: var(--tutorial-panel-max-width, min(640px, 96vw));
   width: 100%;
   border-radius: 24px;
-  padding: clamp(24px, 4vw, 40px);
+  padding: var(--tutorial-panel-padding, clamp(24px, 4vw, 40px));
   background: rgba(10, 18, 38, 0.92);
   border: 1px solid rgba(94, 181, 255, 0.35);
   box-shadow: 0 26px 60px rgba(6, 14, 32, 0.5);
   color: #f4f9ff;
   display: flex;
   flex-direction: column;
-  gap: clamp(1rem, 3vw, 1.5rem);
-  max-height: min(90vh, 720px);
+  gap: var(--tutorial-panel-gap, clamp(1rem, 3vw, 1.5rem));
+  max-height: var(--tutorial-panel-max-height, min(90vh, 720px));
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-gutter: stable both-edges;
@@ -1785,10 +1809,10 @@ body.game-active #gameCanvas {
 
 .first-run-tutorial__close {
   position: absolute;
-  top: 16px;
-  right: 16px;
-  width: 38px;
-  height: 38px;
+  top: var(--tutorial-close-offset, 16px);
+  right: var(--tutorial-close-offset, 16px);
+  width: var(--tutorial-close-size, 38px);
+  height: var(--tutorial-close-size, 38px);
   border-radius: 50%;
   border: 1px solid rgba(128, 178, 255, 0.35);
   background: rgba(14, 26, 50, 0.85);
@@ -1920,27 +1944,28 @@ body.game-active #gameCanvas {
 .first-run-tutorial__actions {
   margin-top: 0;
   display: flex;
-  justify-content: flex-end;
+  flex-direction: var(--tutorial-actions-direction, row);
+  justify-content: var(--tutorial-actions-justify, flex-end);
+  gap: var(--tutorial-actions-gap, 0.55rem);
 }
 
 .first-run-tutorial__actions .primary {
   min-width: clamp(140px, 38vw, 180px);
   font-size: clamp(0.95rem, 3vw, 1rem);
   padding: clamp(10px, 3vw, 12px) clamp(16px, 5vw, 20px);
+  width: var(--tutorial-primary-width, auto);
 }
 
 @media (max-width: 640px) {
-  .first-run-tutorial__panel {
-    border-radius: 18px;
-    padding: clamp(20px, 6vw, 28px);
-    gap: clamp(0.85rem, 3vw, 1.25rem);
+  :root {
+    --tutorial-panel-padding: clamp(20px, 6vw, 28px);
+    --tutorial-panel-gap: clamp(0.85rem, 3vw, 1.25rem);
+    --tutorial-close-size: clamp(32px, 6vw, 34px);
+    --tutorial-close-offset: clamp(8px, 3vw, 10px);
   }
 
-  .first-run-tutorial__close {
-    top: 10px;
-    right: 10px;
-    width: 34px;
-    height: 34px;
+  .first-run-tutorial__panel {
+    border-radius: 18px;
   }
 
   .first-run-tutorial__list li {
@@ -1965,12 +1990,19 @@ body.game-active #gameCanvas {
 }
 
 @media (max-width: 480px) {
+  :root {
+    --tutorial-panel-max-width: min(92vw, 480px);
+    --tutorial-panel-max-height: min(88vh, 620px);
+    --tutorial-panel-padding: clamp(18px, 7vw, 24px);
+    --tutorial-panel-gap: clamp(0.75rem, 4vw, 1.1rem);
+    --tutorial-actions-direction: column;
+    --tutorial-actions-justify: center;
+    --tutorial-actions-gap: 0.75rem;
+    --tutorial-primary-width: 100%;
+  }
+
   .first-run-tutorial__panel {
-    max-width: min(92vw, 480px);
-    max-height: min(88vh, 620px);
-    padding: clamp(18px, 7vw, 24px);
     border-radius: 16px;
-    gap: clamp(0.75rem, 4vw, 1.1rem);
   }
 
   .first-run-tutorial__title {
@@ -1994,11 +2026,49 @@ body.game-active #gameCanvas {
   }
 
   .first-run-tutorial__actions {
-    justify-content: center;
+    width: 100%;
+  }
+}
+
+@media (max-height: 760px) {
+  :root {
+    --tutorial-panel-max-height: min(86vh, 640px);
+    --tutorial-panel-padding: clamp(20px, 4.5vh, 28px);
+    --tutorial-panel-gap: clamp(0.85rem, 3vh, 1.25rem);
+    --tutorial-actions-justify: center;
   }
 
-  .first-run-tutorial__actions .primary {
-    width: 100%;
+  .first-run-tutorial {
+    align-items: flex-start;
+    padding-top: clamp(18px, 6vh, 28px);
+  }
+}
+
+@media (max-height: 620px) {
+  :root {
+    --tutorial-actions-direction: column;
+    --tutorial-actions-gap: 0.75rem;
+    --tutorial-primary-width: 100%;
+  }
+}
+
+@media (pointer: coarse) {
+  :root {
+    --tutorial-panel-max-width: min(94vw, 680px);
+    --tutorial-panel-padding: clamp(24px, 6vw, 42px);
+    --tutorial-panel-gap: clamp(1.05rem, 4vw, 1.6rem);
+    --tutorial-close-size: clamp(36px, 7vw, 44px);
+    --tutorial-close-offset: clamp(12px, 4vw, 18px);
+    --tutorial-actions-gap: 0.8rem;
+    --mobile-controls-gap: clamp(0.75rem, 4vw, 1.25rem);
+    --mobile-controls-padding-y: clamp(0.85rem, 3.8vw, 1.25rem);
+    --mobile-controls-padding-x: clamp(1.1rem, 5vw, 1.6rem);
+    --mobile-controls-button-size: clamp(56px, 14vw, 76px);
+    --mobile-controls-button-primary-size: clamp(64px, 16vw, 88px);
+    --mobile-controls-button-font: clamp(1.2rem, 4.8vw, 1.55rem);
+    --mobile-controls-button-primary-font: clamp(1.35rem, 5.2vw, 1.7rem);
+    --mobile-controls-justify: center;
+    --mobile-controls-align: center;
   }
 }
 
@@ -7220,17 +7290,19 @@ body.colorblind-assist .subtitle-overlay {
   bottom: calc(1.25rem + env(safe-area-inset-bottom, 0px));
   transform: translateX(-50%);
   display: none;
-  width: min(92vw, 520px);
-  gap: clamp(0.65rem, 3vw, 1.1rem);
-  padding: clamp(0.75rem, 2.5vw, 1rem) clamp(1rem, 4vw, 1.35rem);
+  width: var(--mobile-controls-max-width, min(92vw, 520px));
+  gap: var(--mobile-controls-gap, clamp(0.65rem, 3vw, 1.1rem));
+  padding: var(--mobile-controls-padding-y, clamp(0.75rem, 2.5vw, 1rem))
+    var(--mobile-controls-padding-x, clamp(1rem, 4vw, 1.35rem));
   border-radius: 26px;
   border: 1px solid rgba(73, 242, 255, 0.25);
   background: linear-gradient(180deg, rgba(6, 12, 24, 0.92), rgba(2, 8, 18, 0.82));
   box-shadow: 0 18px 40px rgba(2, 8, 18, 0.55), 0 0 18px rgba(73, 242, 255, 0.18);
   backdrop-filter: blur(18px);
   z-index: 32;
-  align-items: flex-end;
-  justify-content: space-between;
+  align-items: var(--mobile-controls-align, flex-end);
+  justify-content: var(--mobile-controls-justify, space-between);
+  flex-direction: var(--mobile-controls-direction, row);
   flex-wrap: wrap;
 }
 
@@ -7241,7 +7313,7 @@ body.colorblind-assist .subtitle-overlay {
 .mobile-controls__cluster {
   display: flex;
   align-items: center;
-  gap: clamp(0.6rem, 3vw, 1rem);
+  gap: var(--mobile-controls-cluster-gap, clamp(0.6rem, 3vw, 1rem));
   flex: 1 1 220px;
   justify-content: center;
 }
@@ -7253,12 +7325,12 @@ body.colorblind-assist .subtitle-overlay {
 
 .mobile-controls__cluster--actions {
   justify-content: flex-end;
-  gap: clamp(0.6rem, 3vw, 0.95rem);
+  gap: var(--mobile-controls-action-gap, clamp(0.6rem, 3vw, 0.95rem));
   flex: 1 1 160px;
 }
 
 .mobile-controls__dpad {
-  --dpad-cell: clamp(42px, 12vw, 58px);
+  --dpad-cell: var(--mobile-controls-dpad-cell, clamp(42px, 12vw, 58px));
   display: grid;
   grid-template-columns: repeat(3, var(--dpad-cell));
   grid-template-rows: repeat(3, var(--dpad-cell));
@@ -7319,8 +7391,8 @@ body.colorblind-assist .subtitle-overlay {
 }
 
 .mobile-controls__button {
-  width: clamp(48px, 12vw, 64px);
-  height: clamp(48px, 12vw, 64px);
+  width: var(--mobile-controls-button-size, clamp(48px, 12vw, 64px));
+  height: var(--mobile-controls-button-size, clamp(48px, 12vw, 64px));
   border-radius: 18px;
   display: inline-flex;
   align-items: center;
@@ -7328,7 +7400,7 @@ body.colorblind-assist .subtitle-overlay {
   gap: 0.35rem;
   font-family: inherit;
   font-weight: 600;
-  font-size: clamp(1.05rem, 4vw, 1.4rem);
+  font-size: var(--mobile-controls-button-font, clamp(1.05rem, 4vw, 1.4rem));
   letter-spacing: 0.02em;
   line-height: 1;
   color: rgba(244, 249, 255, 0.92);
@@ -7351,10 +7423,13 @@ body.colorblind-assist .subtitle-overlay {
 }
 
 .mobile-controls__button--primary {
-  width: clamp(56px, 14vw, 72px);
-  height: clamp(56px, 14vw, 72px);
+  width: var(--mobile-controls-button-primary-size, clamp(56px, 14vw, 72px));
+  height: var(--mobile-controls-button-primary-size, clamp(56px, 14vw, 72px));
   border-radius: 22px;
-  font-size: clamp(1.2rem, 4.6vw, 1.5rem);
+  font-size: var(
+    --mobile-controls-button-primary-font,
+    clamp(1.2rem, 4.6vw, 1.5rem)
+  );
 }
 
 .mobile-controls__button--direction {
@@ -7873,6 +7948,14 @@ body.colorblind-assist .subtitle-overlay {
 @media (max-width: 860px) {
   :root {
     font-size: 15px;
+    --mobile-controls-max-width: min(96vw, 540px);
+    --mobile-controls-padding-y: clamp(0.65rem, 4vw, 0.95rem);
+    --mobile-controls-padding-x: clamp(0.85rem, 6vw, 1.2rem);
+    --mobile-controls-gap: clamp(0.6rem, 4vw, 1rem);
+    --mobile-controls-justify: center;
+    --mobile-controls-align: center;
+    --mobile-controls-cluster-gap: clamp(0.65rem, 5vw, 1.2rem);
+    --mobile-controls-action-gap: clamp(0.65rem, 5vw, 1.1rem);
   }
 
   .manu-logo {
@@ -8001,25 +8084,16 @@ body.colorblind-assist .subtitle-overlay {
     gap: 1rem;
   }
 
-  .mobile-controls {
-    width: min(96vw, 540px);
-    padding: clamp(0.65rem, 4vw, 0.95rem) clamp(0.85rem, 6vw, 1.2rem);
-    gap: clamp(0.6rem, 4vw, 1rem);
-    justify-content: center;
-  }
-
   .mobile-controls__cluster {
     flex: 1 1 100%;
     justify-content: center;
   }
 
   .mobile-controls__cluster--movement {
-    gap: clamp(0.65rem, 5vw, 1.2rem);
     flex-wrap: wrap;
   }
 
   .mobile-controls__cluster--actions {
-    gap: clamp(0.65rem, 5vw, 1.1rem);
     justify-content: center;
   }
 
@@ -8033,6 +8107,11 @@ body.colorblind-assist .subtitle-overlay {
 @media (max-width: 640px) {
   :root {
     font-size: 14px;
+    --mobile-controls-max-width: min(96vw, 500px);
+    --mobile-controls-padding-y: clamp(0.75rem, 5vw, 1.05rem);
+    --mobile-controls-padding-x: clamp(0.85rem, 6vw, 1.25rem);
+    --mobile-controls-gap: clamp(0.65rem, 5vw, 1rem);
+    --mobile-controls-dpad-cell: clamp(46px, 18vw, 56px);
   }
 
   .manu-logo {
@@ -8084,13 +8163,11 @@ body.colorblind-assist .subtitle-overlay {
   }
 
   .mobile-controls {
-    width: min(96vw, 500px);
     border-radius: 28px;
-    padding-bottom: calc(clamp(0.75rem, 5vw, 1.05rem) + env(safe-area-inset-bottom, 0px));
-  }
-
-  .mobile-controls__dpad {
-    --dpad-cell: clamp(46px, 18vw, 56px);
+    padding-bottom: calc(
+      var(--mobile-controls-padding-y, clamp(0.75rem, 5vw, 1.05rem)) +
+        env(safe-area-inset-bottom, 0px)
+    );
   }
 
   .mobile-controls__cluster--actions {
@@ -8099,10 +8176,11 @@ body.colorblind-assist .subtitle-overlay {
 }
 
 @media (max-width: 540px) {
-  .mobile-controls {
-    flex-direction: column;
-    align-items: stretch;
-    gap: clamp(0.65rem, 5vw, 1rem);
+  :root {
+    --mobile-controls-direction: column;
+    --mobile-controls-align: stretch;
+    --mobile-controls-justify: center;
+    --mobile-controls-gap: clamp(0.65rem, 5vw, 1rem);
   }
 
   .mobile-controls__cluster {
