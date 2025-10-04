@@ -76,20 +76,40 @@
   }
 
   function createSkyGrassDataTexture(THREE, colorSet) {
-    const width = 2;
-    const height = 2;
+    const width = 4;
+    const height = 4;
     const data = new Uint8Array(width * height * 4);
-    const topColor = mixRgb(colorSet.sky, colorSet.cloud, 0.4);
-    const bottomColor = mixRgb(colorSet.grass, colorSet.shadow, 0.25);
-    for (let y = 0; y < height; y += 1) {
-      const color = y === 0 ? topColor : bottomColor;
-      for (let x = 0; x < width; x += 1) {
-        const index = (y * width + x) * 4;
-        data[index] = color.r;
-        data[index + 1] = color.g;
-        data[index + 2] = color.b;
-        data[index + 3] = 255;
-      }
+    const base = colorSet.grass;
+    const highlight = mixRgb(base, colorSet.cloud, 0.6);
+    const midTone = mixRgb(base, colorSet.sky, 0.25);
+    const shadow = mixRgb(base, colorSet.shadow, 0.65);
+    const edgeHighlight = mixRgb(highlight, colorSet.cloud, 0.2);
+    const edgeShadow = mixRgb(shadow, colorSet.shadow, 0.25);
+    const pixels = [
+      edgeHighlight,
+      highlight,
+      highlight,
+      mixRgb(highlight, colorSet.sky, 0.35),
+      mixRgb(highlight, midTone, 0.5),
+      midTone,
+      midTone,
+      mixRgb(midTone, colorSet.sky, 0.4),
+      mixRgb(midTone, shadow, 0.25),
+      shadow,
+      shadow,
+      edgeShadow,
+      mixRgb(shadow, colorSet.shadow, 0.35),
+      edgeShadow,
+      edgeShadow,
+      mixRgb(edgeShadow, colorSet.shadow, 0.5),
+    ];
+    for (let i = 0; i < pixels.length; i += 1) {
+      const { r, g, b } = pixels[i];
+      const index = i * 4;
+      data[index] = r;
+      data[index + 1] = g;
+      data[index + 2] = b;
+      data[index + 3] = 255;
     }
     const texture = new THREE.DataTexture(data, width, height, THREE.RGBAFormat, THREE.UnsignedByteType);
     texture.colorSpace = THREE.SRGBColorSpace;
@@ -6951,33 +6971,44 @@
         this.textureCache.set(key, fallback);
         return fallback;
       }
-      const horizon = Math.floor(size * 0.55);
-      const skySegment = Math.max(1, horizon);
-      const groundSegment = Math.max(1, size - horizon);
-      const grassHighlight = mixRgb(colorSet.grass, colorSet.cloud, 0.18);
+      const base = colorSet.grass;
+      const highlight = mixRgb(base, colorSet.cloud, 0.6);
+      const midTone = mixRgb(base, colorSet.sky, 0.25);
+      const shadow = mixRgb(base, colorSet.shadow, 0.65);
+      const topBand = Math.max(2, Math.floor(size * 0.3));
+      const bottomBand = Math.max(2, Math.floor(size * 0.28));
+      const edgeBand = Math.max(1, Math.floor(size * 0.12));
+      const centerStart = Math.floor(size * 0.32);
+      const centerEnd = Math.ceil(size * 0.68);
       for (let y = 0; y < size; y += 1) {
-        const isSky = y < horizon;
-        const segmentLength = isSky ? skySegment : groundSegment;
-        const offset = isSky ? y : y - horizon;
-        const denominator = segmentLength <= 1 ? 1 : segmentLength - 1;
-        const progress = clamp01(denominator === 0 ? 0 : offset / denominator);
-        const startColor = isSky ? colorSet.sky : colorSet.grass;
-        const endColor = isSky ? colorSet.cloud : colorSet.shadow;
-        const baseColor = mixRgb(startColor, endColor, progress);
         for (let x = 0; x < size; x += 1) {
-          const noise = Math.abs(Math.sin(x * 7.1 + y * 3.3)) * 0.35;
-          const noiseTarget = isSky ? colorSet.cloud : colorSet.shadow;
-          let tinted = mixRgb(baseColor, noiseTarget, clamp01(noise));
-          if (isSky) {
-            const cloudNoise = Math.abs(Math.cos(x * 0.42 + y * 0.28));
-            const cloudAmount = clamp01((cloudNoise - 0.65) * 0.8);
-            tinted = mixRgb(tinted, colorSet.cloud, cloudAmount * 0.6);
+          let color;
+          if (y < topBand) {
+            color = highlight;
+          } else if (y >= size - bottomBand) {
+            color = shadow;
           } else {
-            const highlightNoise = Math.abs(Math.cos((x + 11.7) * 0.24 + y * 0.19));
-            const highlightAmount = clamp01((highlightNoise - 0.45) * 0.7);
-            tinted = mixRgb(tinted, grassHighlight, highlightAmount * 0.4);
+            color = midTone;
           }
-          ctx.fillStyle = rgbToCss(tinted);
+          if (x < edgeBand) {
+            color = mixRgb(color, highlight, 0.35);
+          } else if (x >= size - edgeBand) {
+            color = mixRgb(color, shadow, 0.4);
+          }
+          if (y < edgeBand) {
+            color = mixRgb(color, highlight, 0.3);
+          } else if (y >= size - edgeBand) {
+            color = mixRgb(color, shadow, 0.45);
+          }
+          if (x >= centerStart && x < centerEnd && y >= centerStart && y < centerEnd) {
+            color = mixRgb(color, colorSet.sky, 0.25);
+          }
+          const stripeIndex = Math.floor(x / 4) + Math.floor(y / 4);
+          const stripeMix = stripeIndex % 2 === 0 ? colorSet.cloud : colorSet.shadow;
+          color = mixRgb(color, stripeMix, stripeIndex % 2 === 0 ? 0.2 : 0.15);
+          const depthFactor = clamp01((x + y) / (size * 2));
+          color = mixRgb(color, colorSet.shadow, depthFactor * 0.12);
+          ctx.fillStyle = rgbToCss(color);
           ctx.fillRect(x, y, 1, 1);
         }
       }
