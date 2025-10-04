@@ -14458,40 +14458,12 @@
           console.warn('Portal transition mechanics failed', error);
         }
       }
-      await this.runDimensionExitHooks({
+      const assetSummary = await this.executeDimensionTravelSequence({
+        nextIndex,
         previousDimension: previousSettings,
         nextDimension: nextSettings,
         transition: transitionResult,
-      });
-      this.applyDimensionSettings(nextIndex);
-      if (transitionResult?.physics?.gravity !== undefined) {
-        this.gravityScale = transitionResult.physics.gravity;
-      }
-      if (this.dimensionSettings) {
-        console.error(
-          `Dimension unlock flow fired — ${this.dimensionSettings.name}. If the unlock fails to present rewards, audit quest requirements and persistence flags.`,
-        );
-      }
-      this.buildTerrain();
-      this.populateSceneAfterTerrain({ reason: 'dimension-transition' });
-      this.buildRails();
-      this.refreshPortalState();
-      const arrivalRules = this.buildDimensionRuleSummary(
-        this.dimensionSettings,
-        transitionResult?.dimensionRules ?? rulesSummary,
-      );
-      await this.handleDimensionPostInit({
-        previousDimension: previousSettings,
-        nextDimension: this.dimensionSettings,
-        transition: transitionResult,
-        arrivalRules,
-      });
-      const assetSummary = this.verifyDimensionAssetsAfterTransition({
-        previousDimension: previousSettings,
-        nextDimension: this.dimensionSettings,
-        transition: transitionResult,
-        reason: 'dimension-transition',
-        errors: this.lastScenePopulationSummaryContext?.errors ?? [],
+        rulesSummary,
       });
       if (dimensionTravelSucceeded && Number.isFinite(pointsAwarded)) {
         this.score += pointsAwarded;
@@ -14513,6 +14485,66 @@
       });
       this.publishStateSnapshot('dimension-advanced');
       this.markGuidanceProgress('dimension');
+    }
+
+    async executeDimensionTravelSequence(context = {}) {
+      const nextIndex = Number.isFinite(context.nextIndex) ? context.nextIndex : this.currentDimensionIndex + 1;
+      const plannedNext =
+        context.nextDimension ?? (Number.isFinite(nextIndex) ? DIMENSION_THEME[nextIndex] || null : null);
+      const previousDimension = context.previousDimension ?? this.dimensionSettings ?? null;
+      const transition = context.transition ?? null;
+      const fallbackRules =
+        typeof context.rulesSummary === 'string' && context.rulesSummary.trim().length
+          ? context.rulesSummary
+          : this.buildDimensionRuleSummary(plannedNext);
+
+      await this.runDimensionExitHooks({
+        previousDimension,
+        nextDimension: plannedNext,
+        transition,
+      });
+
+      if (Number.isFinite(nextIndex)) {
+        this.applyDimensionSettings(nextIndex);
+      } else {
+        this.applyDimensionSettings(this.currentDimensionIndex);
+      }
+
+      if (transition?.physics?.gravity !== undefined) {
+        this.gravityScale = transition.physics.gravity;
+      }
+
+      if (this.dimensionSettings) {
+        console.error(
+          `Dimension unlock flow fired — ${this.dimensionSettings.name}. If the unlock fails to present rewards, audit quest requirements and persistence flags.`,
+        );
+      }
+
+      this.buildTerrain();
+      this.populateSceneAfterTerrain({ reason: 'dimension-transition' });
+      this.buildRails();
+      this.refreshPortalState();
+
+      const effectiveNext = this.dimensionSettings ?? plannedNext ?? null;
+      const arrivalRules = this.buildDimensionRuleSummary(
+        effectiveNext,
+        transition?.dimensionRules ?? fallbackRules,
+      );
+
+      await this.handleDimensionPostInit({
+        previousDimension,
+        nextDimension: effectiveNext,
+        transition,
+        arrivalRules,
+      });
+
+      return this.verifyDimensionAssetsAfterTransition({
+        previousDimension,
+        nextDimension: effectiveNext,
+        transition,
+        reason: 'dimension-transition',
+        errors: this.lastScenePopulationSummaryContext?.errors ?? [],
+      });
     }
 
     rebindDimensionContext() {
