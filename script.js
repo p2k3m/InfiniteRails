@@ -6801,6 +6801,8 @@
       firstRunTutorialMoveDetail: byId('firstRunTutorialMoveDetail'),
       firstRunTutorialGatherDetail: byId('firstRunTutorialGatherDetail'),
       firstRunTutorialCraftDetail: byId('firstRunTutorialCraftDetail'),
+      firstRunTutorialIssues: byId('firstRunTutorialIssues'),
+      firstRunTutorialIssuesList: byId('firstRunTutorialIssuesList'),
       firstRunTutorialNote: byId('firstRunTutorialNote'),
       craftLauncherButton: byId('openCrafting'),
       craftingModal: byId('craftingModal'),
