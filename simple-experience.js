@@ -14380,6 +14380,25 @@
       }
       this.updateHud();
       this.scheduleScoreSync('loot-chest');
+      const lootItemsForEvent = Array.isArray(loot.items)
+        ? loot.items.map((entry) => {
+            const itemId = entry?.item ?? null;
+            const quantity = Number.isFinite(entry?.quantity) ? entry.quantity : 1;
+            const definition = getItemDefinition(itemId);
+            return {
+              id: itemId,
+              label: definition?.label ?? (itemId || 'Unknown loot'),
+              quantity,
+            };
+          })
+        : [];
+      this.emitGameEvent('loot-collected', {
+        chestId: chest.id ?? null,
+        dimension: this.dimensionSettings?.id ?? null,
+        items: lootItemsForEvent,
+        score: Number.isFinite(loot.score) ? loot.score : 0,
+        message: typeof loot.message === 'string' && loot.message.trim().length ? loot.message.trim() : null,
+      });
       if (loot.message) {
         this.showHint(loot.message);
       }

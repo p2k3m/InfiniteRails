@@ -4598,6 +4598,48 @@
     }
   }
 
+  function formatLootItemList(detail, options = {}) {
+    if (!detail || typeof detail !== 'object') {
+      return null;
+    }
+    const items = Array.isArray(detail.items) ? detail.items : [];
+    if (!items.length) {
+      return null;
+    }
+    const limit = Number.isFinite(options.limit) ? options.limit : 3;
+    const parts = [];
+    items.forEach((entry) => {
+      if (!entry) {
+        return;
+      }
+      const quantity = Number.isFinite(entry.quantity) ? entry.quantity : null;
+      const label =
+        typeof entry.label === 'string' && entry.label.trim().length
+          ? entry.label.trim()
+          : typeof entry.name === 'string' && entry.name.trim().length
+            ? entry.name.trim()
+            : typeof entry.id === 'string' && entry.id.trim().length
+              ? entry.id.trim()
+              : typeof entry.item === 'string' && entry.item.trim().length
+                ? entry.item.trim()
+                : null;
+      if (!label) {
+        return;
+      }
+      const part = quantity && quantity > 1 ? `${label} ×${quantity}` : label;
+      parts.push(part);
+    });
+    if (!parts.length) {
+      return null;
+    }
+    if (limit > 0 && parts.length > limit) {
+      const truncated = parts.slice(0, limit);
+      truncated.push('…');
+      return truncated.join(', ');
+    }
+    return parts.join(', ');
+  }
+
   function describeEventLogMessage(type, detail) {
     const summaryMessage = (text, fallback) => {
       if (typeof text === 'string' && text.trim().length) {
@@ -4685,6 +4727,24 @@
         return detail?.status === 'fulfilled'
           ? `Loaded ${label}${suffix}.`
           : `Failed to load ${label}${suffix}.`;
+      }
+      case 'loot-collected': {
+        const itemsSummary = formatLootItemList(detail);
+        const score = Number.isFinite(detail?.score) ? detail.score : null;
+        if (itemsSummary) {
+          if (score && score !== 0) {
+            const formattedScore =
+              typeof score.toLocaleString === 'function' ? score.toLocaleString() : String(score);
+            return `Loot secured — ${itemsSummary} (+${formattedScore} pts).`;
+          }
+          return `Loot secured — ${itemsSummary}.`;
+        }
+        const message = summaryMessage(detail?.message, 'Loot secured.');
+        if (score && score !== 0) {
+          const formattedScore = typeof score.toLocaleString === 'function' ? score.toLocaleString() : String(score);
+          return `${message} (+${formattedScore} pts).`;
+        }
+        return message;
       }
       case 'debug-mode':
         return detail?.enabled
@@ -4839,6 +4899,7 @@
       'asset-fallback',
       'asset-fetch-start',
       'asset-fetch-complete',
+      'loot-collected',
       'recipe-crafted',
       'pointer-lock-fallback',
       'score-sync-offline',
@@ -4855,6 +4916,426 @@
     }
     ensureEventLogListeners();
     refreshEventLogDebugDetails();
+  }
+
+  const eventOverlayState = {
+    container: null,
+    overlays: new Map(),
+    order: [],
+    listenersBound: false,
+    defaultDuration: 6500,
+    maxVisible: 4,
+  };
+
+  function getEventOverlayContainer() {
+    const container = eventOverlayState.container;
+    if (container && container.isConnected) {
+      return container;
+    }
+    if (!documentRef || typeof documentRef.getElementById !== 'function') {
+      return container || null;
+    }
+    const element = documentRef.getElementById('eventOverlayStack');
+    if (element) {
+      eventOverlayState.container = element;
+      return element;
+    }
+    return container || null;
+  }
+
+  function updateEventOverlayContainerState() {
+    const container = getEventOverlayContainer();
+    if (!container) {
+      return;
+    }
+    container.dataset.populated = container.childElementCount > 0 ? 'true' : 'false';
+  }
+
+  function setEventOverlayContainer(element) {
+    if (!element) {
+      return;
+    }
+    eventOverlayState.container = element;
+    eventOverlayState.order.forEach((record) => {
+      if (record?.element && record.element.parentNode !== element) {
+        element.appendChild(record.element);
+      }
+    });
+    updateEventOverlayContainerState();
+  }
+
+  function createEventOverlayRecord(doc) {
+    if (!doc) {
+      return null;
+    }
+    const element = doc.createElement('div');
+    element.className = 'event-overlay';
+    element.dataset.variant = 'info';
+    element.dataset.state = 'initial';
+    element.setAttribute('role', 'status');
+    element.setAttribute('aria-live', 'polite');
+    element.tabIndex = -1;
+
+    const iconEl = doc.createElement('span');
+    iconEl.className = 'event-overlay__icon';
+    iconEl.setAttribute('aria-hidden', 'true');
+    iconEl.textContent = '✨';
+
+    const contentEl = doc.createElement('div');
+    contentEl.className = 'event-overlay__content';
+
+    const titleEl = doc.createElement('p');
+    titleEl.className = 'event-overlay__title';
+    titleEl.hidden = true;
+
+    const messageEl = doc.createElement('p');
+    messageEl.className = 'event-overlay__message';
+    messageEl.dataset.empty = 'true';
+
+    contentEl.appendChild(titleEl);
+    contentEl.appendChild(messageEl);
+    element.appendChild(iconEl);
+    element.appendChild(contentEl);
+
+    return {
+      key: null,
+      element,
+      iconEl,
+      titleEl,
+      messageEl,
+      hideTimer: null,
+      flashTimer: null,
+      sticky: false,
+    };
+  }
+
+  function applyEventOverlayOptions(record, options = {}) {
+    if (!record?.element) {
+      return;
+    }
+    const {
+      icon,
+      title,
+      message,
+      variant,
+      duration,
+      sticky,
+      flash,
+    } = options;
+
+    if (typeof icon === 'string') {
+      record.iconEl.textContent = icon.trim().length ? icon : '✨';
+      record.iconEl.hidden = icon.trim().length === 0;
+    } else if (icon === null) {
+      record.iconEl.textContent = '';
+      record.iconEl.hidden = true;
+    }
+
+    if (title !== undefined) {
+      const text = typeof title === 'string' ? title.trim() : '';
+      record.titleEl.textContent = text;
+      record.titleEl.hidden = text.length === 0;
+    }
+
+    if (message !== undefined) {
+      const text = typeof message === 'string' ? message.trim() : '';
+      record.messageEl.textContent = text;
+      record.messageEl.dataset.empty = text.length ? 'false' : 'true';
+    }
+
+    const variantKey = typeof variant === 'string' && variant.trim().length ? variant.trim().toLowerCase() : null;
+    record.element.dataset.variant = variantKey || 'info';
+
+    if (sticky !== undefined) {
+      record.sticky = Boolean(sticky);
+    }
+
+    if (record.hideTimer) {
+      clearTimeout(record.hideTimer);
+      record.hideTimer = null;
+    }
+
+    let hideAfter = null;
+    if (duration === undefined) {
+      hideAfter = record.sticky ? null : eventOverlayState.defaultDuration;
+    } else if (Number.isFinite(duration) && duration > 0) {
+      hideAfter = duration;
+    } else {
+      hideAfter = null;
+    }
+
+    if (hideAfter && !record.sticky) {
+      record.hideTimer = setTimeout(() => {
+        dismissEventOverlay(record, 'timeout');
+      }, hideAfter);
+    }
+
+    if (flash !== false) {
+      if (record.flashTimer) {
+        clearTimeout(record.flashTimer);
+        record.flashTimer = null;
+      }
+      record.element.classList.remove('event-overlay--flash');
+      void record.element.offsetWidth;
+      record.element.classList.add('event-overlay--flash');
+      record.flashTimer = setTimeout(() => {
+        record.element.classList.remove('event-overlay--flash');
+        record.flashTimer = null;
+      }, 600);
+    }
+  }
+
+  function dismissEventOverlay(target, reason = 'manual') {
+    let record = target;
+    if (!record || typeof record !== 'object') {
+      const key = typeof target === 'string' && target.trim().length ? target.trim() : null;
+      record = key ? eventOverlayState.overlays.get(key) : null;
+    }
+    if (!record?.element) {
+      return false;
+    }
+    if (record.hideTimer) {
+      clearTimeout(record.hideTimer);
+      record.hideTimer = null;
+    }
+    if (record.flashTimer) {
+      clearTimeout(record.flashTimer);
+      record.flashTimer = null;
+      record.element.classList.remove('event-overlay--flash');
+    }
+    const element = record.element;
+    const removeRecord = () => {
+      if (record.key) {
+        eventOverlayState.overlays.delete(record.key);
+      }
+      eventOverlayState.order = eventOverlayState.order.filter((entry) => entry !== record);
+      if (element?.parentNode) {
+        element.parentNode.removeChild(element);
+      }
+      updateEventOverlayContainerState();
+    };
+    if (!element) {
+      removeRecord();
+      return true;
+    }
+    element.dataset.state = 'exit';
+    let removed = false;
+    const finalize = () => {
+      if (removed) {
+        return;
+      }
+      removed = true;
+      element.removeEventListener('transitionend', finalize);
+      removeRecord();
+    };
+    element.addEventListener('transitionend', finalize);
+    setTimeout(finalize, 360);
+    return true;
+  }
+
+  function enforceEventOverlayLimit() {
+    const limit = eventOverlayState.maxVisible;
+    if (!Number.isFinite(limit) || limit <= 0) {
+      return;
+    }
+    let candidate = eventOverlayState.order.find((record) => !record?.sticky);
+    while (candidate && eventOverlayState.order.length > limit) {
+      dismissEventOverlay(candidate, 'limit');
+      candidate = eventOverlayState.order.find((record) => !record?.sticky);
+    }
+  }
+
+  function showEventOverlay(options = {}) {
+    const container = getEventOverlayContainer();
+    if (!container) {
+      return null;
+    }
+    const key = typeof options.key === 'string' && options.key.trim().length ? options.key.trim() : null;
+    let record = key ? eventOverlayState.overlays.get(key) : null;
+    if (!record) {
+      const doc = container.ownerDocument || documentRef || (typeof document !== 'undefined' ? document : null);
+      const created = createEventOverlayRecord(doc);
+      if (!created) {
+        return null;
+      }
+      record = created;
+      record.key = key;
+      if (key) {
+        eventOverlayState.overlays.set(key, record);
+      }
+      eventOverlayState.order.push(record);
+      container.prepend(record.element);
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          record.element.dataset.state = 'visible';
+        });
+      });
+      applyEventOverlayOptions(record, { ...options, flash: false });
+    } else {
+      applyEventOverlayOptions(record, options);
+    }
+    enforceEventOverlayLimit();
+    updateEventOverlayContainerState();
+    return record;
+  }
+
+  function createAssetOverlayKey(kind, key) {
+    const safeKind = typeof kind === 'string' && kind.trim().length ? kind.trim().toLowerCase() : null;
+    const safeKey = typeof key === 'string' && key.trim().length ? key.trim().toLowerCase() : null;
+    if (safeKind && safeKey) {
+      return `asset:${safeKind}:${safeKey}`;
+    }
+    if (safeKey) {
+      return `asset:${safeKey}`;
+    }
+    if (safeKind) {
+      return `asset:${safeKind}`;
+    }
+    return null;
+  }
+
+  function handleDimensionAdvancedOverlay(detail = {}) {
+    const label = extractDimensionLabel(detail) || 'New dimension';
+    const assetsVerified = detail?.assetsVerified;
+    let message = `${label} secured.`;
+    let variant = 'success';
+    let icon = '🌌';
+    let duration;
+    if (assetsVerified === true) {
+      message = `${label} secured — all assets verified.`;
+    } else if (assetsVerified === false) {
+      message = `${label} secured — streaming missing assets.`;
+      variant = 'warning';
+      icon = '🛠️';
+      duration = 9000;
+    }
+    showEventOverlay({
+      title: 'Dimension unlocked',
+      message,
+      icon,
+      variant,
+      duration,
+    });
+  }
+
+  function handlePortalReadyOverlay(detail = {}) {
+    const placed = Number.isFinite(detail?.placed) ? detail.placed : null;
+    const required = Number.isFinite(detail?.required) ? detail.required : null;
+    const progressMessage =
+      placed !== null && required !== null ? `${placed}/${required} obsidian aligned — ignite when ready.` : 'Frame complete — ignite your torch.';
+    showEventOverlay({
+      title: 'Portal frame ready',
+      message: progressMessage,
+      icon: '🌀',
+      variant: 'info',
+      duration: 7000,
+    });
+  }
+
+  function handlePortalActivatedOverlay(detail = {}) {
+    const label = extractDimensionLabel(detail) || 'next dimension';
+    showEventOverlay({
+      title: 'Portal activated',
+      message: `Gateway to ${label} stabilised.`,
+      icon: '🚪',
+      variant: 'success',
+      duration: 6500,
+    });
+  }
+
+  function handleLootCollectedOverlay(detail = {}) {
+    const itemsSummary = formatLootItemList(detail);
+    const score = Number.isFinite(detail?.score) ? detail.score : null;
+    const parts = [];
+    if (itemsSummary) {
+      parts.push(itemsSummary);
+    }
+    const fallbackMessage = typeof detail?.message === 'string' && detail.message.trim().length ? detail.message.trim() : '';
+    if (!parts.length && fallbackMessage) {
+      parts.push(fallbackMessage);
+    }
+    let message = parts.length ? parts.join(' • ') : 'Resources added to your satchel.';
+    if (score && score !== 0) {
+      const formattedScore = typeof score.toLocaleString === 'function' ? score.toLocaleString() : String(score);
+      message += ` (+${formattedScore} pts)`;
+    }
+    showEventOverlay({
+      title: 'Loot secured',
+      message,
+      icon: '💎',
+      variant: 'success',
+      duration: 8000,
+    });
+  }
+
+  function handleAssetFetchStartOverlay(detail = {}) {
+    const label = formatAssetLogLabel(detail);
+    const key = createAssetOverlayKey(detail?.kind, detail?.key);
+    showEventOverlay({
+      key,
+      title: 'Streaming asset',
+      message: `Loading ${label}…`,
+      icon: '⏳',
+      variant: 'progress',
+      duration: null,
+      sticky: true,
+      flash: false,
+    });
+  }
+
+  function handleAssetFetchCompleteOverlay(detail = {}) {
+    const label = formatAssetLogLabel(detail);
+    const key = createAssetOverlayKey(detail?.kind, detail?.key);
+    const duration = Number.isFinite(detail?.duration) ? Math.round(detail.duration) : null;
+    const urlSummary = summariseAssetUrl(detail?.url);
+    const fulfilled = detail?.status === 'fulfilled';
+    let message = '';
+    if (fulfilled) {
+      message = duration ? `Loaded ${label} in ${duration}ms.` : `Loaded ${label}.`;
+      if (urlSummary) {
+        message += ` via ${urlSummary}.`;
+      }
+    } else {
+      message = duration ? `Failed to load ${label} after ${duration}ms.` : `Failed to load ${label}.`;
+      if (urlSummary) {
+        message += ` (last URL ${urlSummary}).`;
+      }
+    }
+    showEventOverlay({
+      key,
+      title: fulfilled ? 'Asset ready' : 'Asset failed',
+      message,
+      icon: fulfilled ? '✅' : '⚠️',
+      variant: fulfilled ? 'success' : 'danger',
+      duration: fulfilled ? 4000 : 9000,
+      sticky: false,
+    });
+  }
+
+  function ensureEventOverlayListeners() {
+    if (eventOverlayState.listenersBound || typeof globalScope?.addEventListener !== 'function') {
+      return;
+    }
+    const register = (type, handler) => {
+      globalScope.addEventListener(`infinite-rails:${type}`, (event) => {
+        handler(event?.detail ?? {}, event);
+      });
+    };
+    register('dimension-advanced', handleDimensionAdvancedOverlay);
+    register('portal-ready', handlePortalReadyOverlay);
+    register('portal-activated', handlePortalActivatedOverlay);
+    register('loot-collected', handleLootCollectedOverlay);
+    register('asset-fetch-start', handleAssetFetchStartOverlay);
+    register('asset-fetch-complete', handleAssetFetchCompleteOverlay);
+    eventOverlayState.listenersBound = true;
+  }
+
+  function bindExperienceEventOverlays(ui) {
+    if (ui?.eventOverlayStack) {
+      setEventOverlayContainer(ui.eventOverlayStack);
+    }
+    ensureEventOverlayListeners();
+    updateEventOverlayContainerState();
   }
 
   function getEventLogHistorySnapshot() {
@@ -7996,6 +8477,7 @@
       scorePortalsEl: byId('scorePortals'),
       scoreCombatEl: byId('scoreCombat'),
       scoreLootEl: byId('scoreLoot'),
+      eventOverlayStack: byId('eventOverlayStack'),
       portalStatusEl,
       portalStatusText: portalStatusEl ? portalStatusEl.querySelector('.portal-status__text') : null,
       portalStatusStateText: portalStatusEl ? portalStatusEl.querySelector('.portal-status__state') : null,
@@ -8094,6 +8576,7 @@
     bindBootDiagnosticsUi(ui);
     bindLiveDiagnosticsControls(ui);
     bindExperienceEventLog(ui);
+    bindExperienceEventOverlays(ui);
     let experience;
     try {
       experience = globalScope.SimpleExperience.create({
