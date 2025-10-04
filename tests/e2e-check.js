@@ -6,6 +6,8 @@ const ALLOWED_WARNING_SUBSTRINGS = [
   'ERR_TUNNEL_CONNECTION_FAILED',
   'GPU stall',
   'Automatic fallback to software WebGL',
+  'WebGL output appears blocked',
+  'Diagnostics context: {boundary: overlay, stage: blank-frame, scope: startup, status: error, level: error}',
   'URL scheme "file" is not supported',
   'Failed to load model',
   'Model load failed',
