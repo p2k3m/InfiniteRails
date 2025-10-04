@@ -1992,6 +1992,117 @@
     };
   }
 
+  function sanitiseDetailForLogging(detail) {
+    if (!detail || typeof detail !== 'object') {
+      return null;
+    }
+    try {
+      return JSON.parse(JSON.stringify(detail));
+    } catch (error) {
+      const fallback = {};
+      Object.keys(detail).forEach((key) => {
+        if (!Object.prototype.hasOwnProperty.call(detail, key)) {
+          return;
+        }
+        const value = detail[key];
+        if (typeof value === 'undefined') {
+          return;
+        }
+        if (value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+          fallback[key] = value;
+          return;
+        }
+        if (value instanceof Date) {
+          fallback[key] = value.toISOString();
+          return;
+        }
+        if (value instanceof Error) {
+          fallback[key] = {
+            name: typeof value.name === 'string' ? value.name : 'Error',
+            message: typeof value.message === 'string' ? value.message : String(value),
+            stack: typeof value.stack === 'string' ? value.stack : null,
+          };
+          return;
+        }
+        try {
+          fallback[key] = JSON.parse(JSON.stringify(value));
+        } catch (nestedError) {
+          fallback[key] = typeof value?.toString === 'function' ? value.toString() : '[unserialisable]';
+        }
+      });
+      return Object.keys(fallback).length ? fallback : null;
+    }
+  }
+
+  function logCriticalErrorToConsole(context = {}) {
+    const scopeRef =
+      typeof globalScope !== 'undefined'
+        ? globalScope
+        : typeof window !== 'undefined'
+          ? window
+          : globalThis;
+    const consoleRef = typeof console !== 'undefined' ? console : scopeRef?.console ?? null;
+    if (!consoleRef) {
+      return;
+    }
+    const rawMessage =
+      typeof context.message === 'string' && context.message.trim().length
+        ? context.message.trim()
+        : typeof context.diagnosticMessage === 'string' && context.diagnosticMessage.trim().length
+          ? context.diagnosticMessage.trim()
+          : typeof context.normalised?.message === 'string' && context.normalised.message.trim().length
+            ? context.normalised.message.trim()
+            : 'Critical runtime failure detected.';
+    const baseMessage = `[InfiniteRails] ${rawMessage}`;
+    const payload = {
+      boundary: context.boundary ?? null,
+      stage: context.stage ?? null,
+      scope: context.scope ?? null,
+      status: context.status ?? 'error',
+      level: context.level ?? 'error',
+      playerMessage: context.playerMessage ?? null,
+      diagnosticMessage: context.diagnosticMessage ?? null,
+      displayedToPlayer: true,
+      detail: sanitiseDetailForLogging(context.detail) ?? null,
+    };
+    if (context.normalised?.stack && !payload.stack) {
+      payload.stack = context.normalised.stack;
+    }
+    const errorInstance = context.error instanceof Error ? context.error : null;
+    const groupStart =
+      typeof consoleRef.groupCollapsed === 'function' ? consoleRef.groupCollapsed.bind(consoleRef) : null;
+    const groupEnd = typeof consoleRef.groupEnd === 'function' ? consoleRef.groupEnd.bind(consoleRef) : null;
+    const errorFn =
+      typeof consoleRef.error === 'function'
+        ? consoleRef.error.bind(consoleRef)
+        : typeof consoleRef.warn === 'function'
+          ? consoleRef.warn.bind(consoleRef)
+          : typeof consoleRef.log === 'function'
+            ? consoleRef.log.bind(consoleRef)
+            : null;
+    if (!errorFn) {
+      return;
+    }
+    if (groupStart && groupEnd && typeof consoleRef.error === 'function') {
+      groupStart(baseMessage);
+      consoleRef.error('Diagnostics context:', payload);
+      if (errorInstance) {
+        consoleRef.error(errorInstance);
+      } else if (context.normalised) {
+        consoleRef.error(context.normalised);
+      }
+      groupEnd();
+      return;
+    }
+    if (errorInstance) {
+      errorFn(baseMessage, payload, errorInstance);
+    } else if (context.normalised) {
+      errorFn(baseMessage, payload, context.normalised);
+    } else {
+      errorFn(baseMessage, payload);
+    }
+  }
+
   function markErrorAsHandled(error) {
     if (!error || typeof error !== 'object') {
       return;
@@ -2062,6 +2173,19 @@
       logLevel,
       detail,
       timestamp: options.timestamp,
+    });
+    logCriticalErrorToConsole({
+      message: logMessage,
+      diagnosticMessage,
+      playerMessage: userMessage,
+      level: logLevel,
+      scope: logScope,
+      status: diagnosticStatus,
+      boundary: boundaryKey,
+      stage,
+      detail,
+      error,
+      normalised,
     });
     if (typeof tryStartSimpleFallback === 'function') {
       try {
