@@ -3209,6 +3209,43 @@
       const status = context.status || (context.error ? 'error' : 'success');
       const phase = context.phase || 'start';
       const now = new Date();
+      const bootDiagnosticsSnapshot = {
+        timestamp: now.toISOString(),
+        status,
+        phase,
+        sections: {
+          engine: [],
+          assets: [],
+          models: [],
+          ui: [],
+        },
+      };
+      const appendBootDiagnostic = (section, severity, message, detail = null) => {
+        const scope = typeof section === 'string' ? section.trim().toLowerCase() : '';
+        if (!bootDiagnosticsSnapshot.sections[scope]) {
+          return;
+        }
+        const entry = {
+          severity: severity === 'error' || severity === 'warning' ? severity : 'ok',
+          message:
+            typeof message === 'string' && message.trim().length ? message.trim() : 'No additional details.',
+          detail: null,
+        };
+        if (detail !== null && detail !== undefined) {
+          if (typeof detail === 'string') {
+            entry.detail = detail;
+          } else if (typeof detail === 'number' || typeof detail === 'boolean') {
+            entry.detail = detail;
+          } else {
+            try {
+              entry.detail = JSON.parse(JSON.stringify(detail));
+            } catch (error) {
+              entry.detail = String(detail);
+            }
+          }
+        }
+        bootDiagnosticsSnapshot.sections[scope].push(entry);
+      };
       const rootGroupOpen =
         typeof consoleRef.groupCollapsed === 'function'
           ? consoleRef.groupCollapsed.bind(consoleRef)
@@ -3443,6 +3480,193 @@
         bootError,
       };
 
+      const assetPendingTotal = assetStatus.pendingLoads.reduce((total, entry) => {
+        const pending = Number.isFinite(entry?.pending) ? entry.pending : 0;
+        return total + pending;
+      }, 0);
+      const assetRecoveryPendingCount = Array.isArray(assetStatus.recovery?.pendingKeys)
+        ? assetStatus.recovery.pendingKeys.length
+        : 0;
+      const assetSummaryParts = [];
+      if (assetPendingTotal > 0) {
+        assetSummaryParts.push(
+          `${assetPendingTotal} pending load${assetPendingTotal === 1 ? '' : 's'}`,
+        );
+      }
+      if (assetRecoveryPendingCount > 0) {
+        assetSummaryParts.push(
+          `Recovery pending for ${assetRecoveryPendingCount} key${assetRecoveryPendingCount === 1 ? '' : 's'}`,
+        );
+      }
+      if (recentLoads.length > 0) {
+        assetSummaryParts.push(`Recent loads logged: ${recentLoads.length}`);
+      }
+      const assetSummaryDetail = assetSummaryParts.length ? assetSummaryParts.join(' • ') : null;
+      const assetSummarySeverity =
+        assetFailureEntries.length > 0
+          ? 'error'
+          : assetPendingTotal > 0 || assetStatus.recovery.promptActive
+            ? 'warning'
+            : 'ok';
+      appendBootDiagnostic(
+        'assets',
+        assetSummarySeverity,
+        assetFailureEntries.length > 0
+          ? 'Asset streaming encountered failures.'
+          : assetPendingTotal > 0
+            ? 'Asset streaming in progress.'
+            : 'Assets initialised successfully.',
+        assetSummaryDetail,
+      );
+      if (assetStatus.recovery.promptActive) {
+        appendBootDiagnostic('assets', 'warning', 'Asset recovery prompt displayed to the player.');
+      }
+      const recoveryKeys = Array.isArray(assetStatus.recovery.pendingKeys)
+        ? assetStatus.recovery.pendingKeys.filter((key) => typeof key === 'string' && key.trim().length)
+        : [];
+      if (recoveryKeys.length > 0) {
+        appendBootDiagnostic(
+          'assets',
+          'warning',
+          'Asset recovery pending for specific resources.',
+          recoveryKeys.slice(0, 6),
+        );
+      }
+      const assetDelayNotices = Array.isArray(assetStatus.recovery.delayNotices)
+        ? assetStatus.recovery.delayNotices
+        : [];
+      assetDelayNotices.forEach((notice) => {
+        if (typeof notice === 'string' && notice.trim().length) {
+          appendBootDiagnostic('assets', 'warning', notice.trim());
+        }
+      });
+      assetFailureEntries.forEach((entry) => {
+        const label = typeof entry?.key === 'string' && entry.key.trim().length ? entry.key.trim() : 'Unknown asset';
+        const attempts = Number.isFinite(entry?.failures) ? entry.failures : null;
+        const message =
+          attempts && attempts > 1
+            ? `${label} failed to load ${attempts} times.`
+            : `${label} failed to load.`;
+        appendBootDiagnostic('assets', 'error', message);
+      });
+      (errorStatus.assetNotices || []).forEach((notice) => {
+        if (typeof notice === 'string' && notice.trim().length) {
+          appendBootDiagnostic('assets', 'warning', notice.trim());
+        }
+      });
+
+      const modelSummaryParts = [];
+      if (Number.isFinite(modelStatus.loadedCount)) {
+        modelSummaryParts.push(`${modelStatus.loadedCount} loaded`);
+      }
+      if (Number.isFinite(modelStatus.pendingCount) && modelStatus.pendingCount > 0) {
+        modelSummaryParts.push(`${modelStatus.pendingCount} pending`);
+      }
+      if (Number.isFinite(modelStatus.warmupQueue) && modelStatus.warmupQueue > 0) {
+        modelSummaryParts.push(`Warmup queue: ${modelStatus.warmupQueue}`);
+      }
+      const modelSummaryDetail = modelSummaryParts.length ? modelSummaryParts.join(' • ') : null;
+      const modelSummarySeverity =
+        modelStatus.pendingCount > 0 || !modelStatus.playerAvatarLoaded || !modelStatus.handModelLoaded
+          ? 'warning'
+          : 'ok';
+      appendBootDiagnostic(
+        'models',
+        modelSummarySeverity,
+        modelSummarySeverity === 'ok' ? 'Model pipeline ready.' : 'Model pipeline warming up.',
+        modelSummaryDetail,
+      );
+      if (!modelStatus.playerAvatarLoaded) {
+        appendBootDiagnostic('models', 'warning', 'Player avatar model not yet loaded.');
+      }
+      if (!modelStatus.handModelLoaded) {
+        appendBootDiagnostic('models', 'warning', 'Hand model not yet loaded.');
+      }
+      const pendingModelKeysList = Array.isArray(modelStatus.samplePending)
+        ? modelStatus.samplePending.filter((key) => typeof key === 'string' && key.trim().length)
+        : [];
+      if (pendingModelKeysList.length > 0) {
+        appendBootDiagnostic('models', 'warning', 'Pending model keys detected.', pendingModelKeysList.slice(0, 6));
+      }
+      if (requiredSceneNodes && requiredSceneNodes.missing?.length) {
+        appendBootDiagnostic(
+          'models',
+          'error',
+          'Scene graph validation failed — required nodes missing.',
+          requiredSceneNodes.missing,
+        );
+      }
+
+      const scoreboardStatusText =
+        typeof uiStatus.scoreboardStatus === 'string' ? uiStatus.scoreboardStatus.trim() : '';
+      const scoreboardOffline = scoreboardStatusText.toLowerCase().includes('offline');
+      const pointerFallbackActive = Boolean(controlStatus.pointerFallbackActive);
+      const bindingFailureCount = Number.isFinite(controlStatus.bindingFailures)
+        ? controlStatus.bindingFailures
+        : 0;
+      const portalDetailIssue =
+        typeof uiStatus.portalDetail === 'string' && /fail|error|stalled|offline/i.test(uiStatus.portalDetail);
+      const uiSummaryParts = [];
+      if (typeof uiStatus.portalStatus === 'string' && uiStatus.portalStatus.trim().length) {
+        uiSummaryParts.push(`Portal: ${uiStatus.portalStatus.trim()}`);
+      }
+      if (scoreboardStatusText.length) {
+        uiSummaryParts.push(`Scoreboard: ${scoreboardStatusText}`);
+      }
+      const uiSummaryDetail = uiSummaryParts.length ? uiSummaryParts.join(' • ') : null;
+      const uiSummarySeverity =
+        scoreboardOffline || pointerFallbackActive || bindingFailureCount > 0 || portalDetailIssue ? 'warning' : 'ok';
+      appendBootDiagnostic(
+        'ui',
+        uiSummarySeverity,
+        uiSummarySeverity === 'ok' ? 'Interface ready.' : 'Interface reporting degraded state.',
+        uiSummaryDetail,
+      );
+      if (pointerFallbackActive) {
+        appendBootDiagnostic('ui', 'warning', 'Pointer lock fallback active.');
+      }
+      if (controlStatus.pointerFallbackNotice) {
+        appendBootDiagnostic('ui', 'warning', 'Pointer lock fallback notice shown to the player.');
+      }
+      if (bindingFailureCount > 0) {
+        appendBootDiagnostic(
+          'ui',
+          'warning',
+          `Input binding failures detected (${bindingFailureCount}).`,
+        );
+      }
+      if (scoreboardOffline && scoreboardStatusText.length) {
+        appendBootDiagnostic('ui', 'warning', scoreboardStatusText);
+      }
+      if (portalDetailIssue && typeof uiStatus.portalDetail === 'string') {
+        appendBootDiagnostic('ui', 'warning', 'Portal status reported an issue.', uiStatus.portalDetail);
+      }
+
+      const engineSummaryParts = [`Phase: ${phase}`];
+      if (bootError?.name || bootError?.message) {
+        const errorLabel = `${bootError?.name ?? 'Error'}${bootError?.message ? `: ${bootError.message}` : ''}`;
+        engineSummaryParts.push(errorLabel);
+      }
+      if (errorStatus.rendererUnavailable) {
+        engineSummaryParts.push('Renderer unavailable flag set.');
+      }
+      const engineSummaryDetail = engineSummaryParts.filter(Boolean).join(' • ') || null;
+      const engineSummarySeverity = status === 'error' || errorStatus.rendererUnavailable ? 'error' : 'ok';
+      appendBootDiagnostic(
+        'engine',
+        engineSummarySeverity,
+        engineSummarySeverity === 'error' ? 'Engine initialisation failed.' : 'Engine initialised successfully.',
+        engineSummaryDetail,
+      );
+      if (bootError?.stack) {
+        appendBootDiagnostic('engine', 'error', 'Boot error stack captured.', bootError.stack);
+      }
+      (errorStatus.eventNotices || []).forEach((notice) => {
+        if (typeof notice === 'string' && notice.trim().length) {
+          appendBootDiagnostic('engine', 'warning', notice.trim());
+        }
+      });
+
       logSection('Asset status', assetStatus);
       logSection('Model status', modelStatus);
       logSection('Scene objects', sceneStatus);
@@ -3450,6 +3674,24 @@
       logSection('AI navmesh', aiStatus);
       logSection('UI states', uiStatus);
       logSection('Errors', errorStatus);
+
+      this.lastBootDiagnostics = bootDiagnosticsSnapshot;
+      const globalScopeRef =
+        typeof globalThis !== 'undefined'
+          ? globalThis
+          : typeof window !== 'undefined'
+            ? window
+            : typeof global !== 'undefined'
+              ? global
+              : null;
+      const bootDiagnosticsApi = globalScopeRef?.InfiniteRails?.bootDiagnostics ?? null;
+      if (bootDiagnosticsApi && typeof bootDiagnosticsApi.update === 'function') {
+        try {
+          bootDiagnosticsApi.update(bootDiagnosticsSnapshot);
+        } catch (publishError) {
+          consoleRef.debug?.('Failed to publish boot diagnostics snapshot.', publishError);
+        }
+      }
 
       if (rootGroupOpen && groupEnd) {
         groupEnd();

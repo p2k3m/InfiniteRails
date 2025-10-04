@@ -216,6 +216,27 @@
     debugListenerCleanup: null,
   };
 
+  const BOOT_DIAGNOSTIC_SCOPES = Object.freeze(['engine', 'assets', 'models', 'ui']);
+  const BOOT_DIAGNOSTICS_SEVERITY_RANK = Object.freeze({ pending: 0, ok: 1, warning: 2, error: 3 });
+  const BOOT_DIAGNOSTICS_DEFAULT_MESSAGE = 'Waiting for launch…';
+
+  const bootDiagnosticsState = {
+    panel: null,
+    timestampEl: null,
+    downloadButton: null,
+    sections: {
+      engine: { container: null, list: null, status: null },
+      assets: { container: null, list: null, status: null },
+      models: { container: null, list: null, status: null },
+      ui: { container: null, list: null, status: null },
+    },
+    lastSnapshot: null,
+    listeners: new Set(),
+  };
+
+  globalScope.InfiniteRails = globalScope.InfiniteRails || {};
+  globalScope.InfiniteRails.bootDiagnostics = globalScope.InfiniteRails.bootDiagnostics || {};
+
   let activeExperienceInstance = null;
 
   function isDebugModeEnabled() {
@@ -265,6 +286,305 @@
   }
 
   loadInitialDeveloperStatsPreference();
+
+  function normaliseBootDiagnosticsSeverity(value, { allowPending = false } = {}) {
+    if (typeof value === 'string') {
+      const trimmed = value.trim().toLowerCase();
+      if (trimmed === 'error' || trimmed === 'warning' || trimmed === 'ok') {
+        return trimmed;
+      }
+      if (trimmed === 'success') {
+        return 'ok';
+      }
+      if (allowPending && (trimmed === 'pending' || trimmed === 'info')) {
+        return trimmed === 'pending' ? 'pending' : 'ok';
+      }
+    }
+    return allowPending ? 'pending' : 'ok';
+  }
+
+  function formatBootDiagnosticsTimestamp(value) {
+    if (!value) {
+      return null;
+    }
+    const date = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(date.getTime())) {
+      return null;
+    }
+    try {
+      return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    } catch (error) {
+      if (globalScope.console?.debug) {
+        globalScope.console.debug('Failed to format boot diagnostics timestamp.', error);
+      }
+      const hours = String(date.getHours()).padStart(2, '0');
+      const minutes = String(date.getMinutes()).padStart(2, '0');
+      const seconds = String(date.getSeconds()).padStart(2, '0');
+      return `${hours}:${minutes}:${seconds}`;
+    }
+  }
+
+  function formatBootDiagnosticsDetail(detail) {
+    if (detail === null || detail === undefined) {
+      return '';
+    }
+    if (typeof detail === 'string') {
+      return detail.trim();
+    }
+    if (typeof detail === 'number' || typeof detail === 'boolean') {
+      return String(detail);
+    }
+    try {
+      return JSON.stringify(detail);
+    } catch (error) {
+      if (globalScope.console?.debug) {
+        globalScope.console.debug('Failed to serialise boot diagnostics detail.', error);
+      }
+      return '';
+    }
+  }
+
+  function setBootDiagnosticsSectionStatus(sectionState, severity) {
+    if (!sectionState) {
+      return;
+    }
+    const normalised = normaliseBootDiagnosticsSeverity(severity, { allowPending: true });
+    const label =
+      normalised === 'error'
+        ? 'Error'
+        : normalised === 'warning'
+          ? 'Warning'
+          : normalised === 'ok'
+            ? 'OK'
+            : 'Pending';
+    if (sectionState.container) {
+      sectionState.container.dataset.status = normalised;
+    }
+    if (sectionState.status) {
+      sectionState.status.textContent = label;
+    }
+  }
+
+  function renderBootDiagnostics(snapshot = bootDiagnosticsState.lastSnapshot) {
+    const doc =
+      bootDiagnosticsState.panel?.ownerDocument ||
+      documentRef ||
+      (typeof document !== 'undefined' ? document : null);
+    if (bootDiagnosticsState.timestampEl) {
+      const formatted = snapshot?.timestamp ? formatBootDiagnosticsTimestamp(snapshot.timestamp) : null;
+      bootDiagnosticsState.timestampEl.textContent = formatted
+        ? `Last updated ${formatted}`
+        : 'Boot diagnostics will populate after launch.';
+    }
+    BOOT_DIAGNOSTIC_SCOPES.forEach((scope) => {
+      const sectionState = bootDiagnosticsState.sections[scope];
+      if (!sectionState) {
+        return;
+      }
+      const list = sectionState.list || null;
+      const listDoc = list?.ownerDocument || doc;
+      if (list) {
+        while (list.firstChild) {
+          list.removeChild(list.firstChild);
+        }
+      }
+      const entries = Array.isArray(snapshot?.sections?.[scope]) ? snapshot.sections[scope] : [];
+      const hasEntries = entries.length > 0;
+      const items = hasEntries
+        ? entries
+        : [
+            {
+              severity: 'pending',
+              message: BOOT_DIAGNOSTICS_DEFAULT_MESSAGE,
+              detail: null,
+            },
+          ];
+      let highestSeverity = hasEntries ? 'ok' : 'pending';
+      items.forEach((entry) => {
+        const severity = normaliseBootDiagnosticsSeverity(entry?.severity, { allowPending: true });
+        if (BOOT_DIAGNOSTICS_SEVERITY_RANK[severity] > BOOT_DIAGNOSTICS_SEVERITY_RANK[highestSeverity]) {
+          highestSeverity = severity;
+        }
+        if (!list || !listDoc) {
+          return;
+        }
+        const item = listDoc.createElement('li');
+        item.className = 'diagnostic-list__item boot-diagnostics__item';
+        item.dataset.status = severity;
+        const messageEl = listDoc.createElement('span');
+        messageEl.className = 'boot-diagnostics__message';
+        const messageText =
+          typeof entry?.message === 'string' && entry.message.trim().length
+            ? entry.message.trim()
+            : 'No additional details.';
+        messageEl.textContent = messageText;
+        item.appendChild(messageEl);
+        const detailText = formatBootDiagnosticsDetail(entry?.detail);
+        if (detailText) {
+          const detailEl = listDoc.createElement('span');
+          detailEl.className = 'boot-diagnostics__detail';
+          detailEl.textContent = detailText;
+          item.appendChild(detailEl);
+        }
+        list.appendChild(item);
+      });
+      if (!hasEntries) {
+        highestSeverity = 'pending';
+      }
+      setBootDiagnosticsSectionStatus(sectionState, highestSeverity);
+    });
+  }
+
+  function cloneBootDiagnosticsSnapshot(snapshot) {
+    if (!snapshot || typeof snapshot !== 'object') {
+      return null;
+    }
+    let clone;
+    try {
+      clone = JSON.parse(JSON.stringify(snapshot));
+    } catch (error) {
+      if (globalScope.console?.debug) {
+        globalScope.console.debug('Failed to clone boot diagnostics snapshot.', error);
+      }
+      clone = {
+        timestamp: snapshot.timestamp ?? null,
+        status: snapshot.status ?? null,
+        phase: snapshot.phase ?? null,
+        sections: {},
+      };
+      BOOT_DIAGNOSTIC_SCOPES.forEach((scope) => {
+        const entries = snapshot.sections?.[scope];
+        if (Array.isArray(entries)) {
+          clone.sections[scope] = entries.map((entry) => {
+            const severity = normaliseBootDiagnosticsSeverity(entry?.severity, { allowPending: true });
+            const message =
+              typeof entry?.message === 'string'
+                ? entry.message
+                : entry?.message !== undefined && entry?.message !== null
+                  ? String(entry.message)
+                  : '';
+            let detail = null;
+            if (entry?.detail !== undefined && entry?.detail !== null) {
+              if (typeof entry.detail === 'string') {
+                detail = entry.detail;
+              } else {
+                try {
+                  detail = JSON.parse(JSON.stringify(entry.detail));
+                } catch (detailError) {
+                  detail = String(entry.detail);
+                }
+              }
+            }
+            return { severity, message, detail };
+          });
+        } else {
+          clone.sections[scope] = [];
+        }
+      });
+    }
+    clone.sections = clone.sections || {};
+    BOOT_DIAGNOSTIC_SCOPES.forEach((scope) => {
+      if (!Array.isArray(clone.sections[scope])) {
+        clone.sections[scope] = [];
+      }
+    });
+    return clone;
+  }
+
+  function notifyBootDiagnosticsListeners(snapshot) {
+    bootDiagnosticsState.listeners.forEach((listener) => {
+      if (typeof listener !== 'function') {
+        return;
+      }
+      try {
+        listener(snapshot);
+      } catch (error) {
+        if (globalScope.console?.debug) {
+          globalScope.console.debug('Boot diagnostics listener failed.', error);
+        }
+      }
+    });
+  }
+
+  function updateBootDiagnosticsPanel(snapshot) {
+    const stored = cloneBootDiagnosticsSnapshot(snapshot);
+    bootDiagnosticsState.lastSnapshot = stored;
+    renderBootDiagnostics(stored);
+    notifyBootDiagnosticsListeners(stored);
+    return stored;
+  }
+
+  function addBootDiagnosticsChangeListener(listener) {
+    if (typeof listener !== 'function') {
+      return () => {};
+    }
+    bootDiagnosticsState.listeners.add(listener);
+    if (bootDiagnosticsState.lastSnapshot) {
+      try {
+        listener(cloneBootDiagnosticsSnapshot(bootDiagnosticsState.lastSnapshot));
+      } catch (error) {
+        if (globalScope.console?.debug) {
+          globalScope.console.debug('Boot diagnostics listener dispatch failed.', error);
+        }
+      }
+    }
+    return () => {
+      bootDiagnosticsState.listeners.delete(listener);
+    };
+  }
+
+  function bindBootDiagnosticsUi(ui) {
+    if (!ui) {
+      return;
+    }
+    if (ui.bootDiagnosticsPanel) {
+      bootDiagnosticsState.panel = ui.bootDiagnosticsPanel;
+    }
+    if (ui.bootDiagnosticsTimestamp) {
+      bootDiagnosticsState.timestampEl = ui.bootDiagnosticsTimestamp;
+    }
+    const sectionRefs = [
+      ['engine', ui.bootDiagnosticsEngineSection, ui.bootDiagnosticsEngineList, ui.bootDiagnosticsEngineStatus],
+      ['assets', ui.bootDiagnosticsAssetsSection, ui.bootDiagnosticsAssetsList, ui.bootDiagnosticsAssetsStatus],
+      ['models', ui.bootDiagnosticsModelsSection, ui.bootDiagnosticsModelsList, ui.bootDiagnosticsModelsStatus],
+      ['ui', ui.bootDiagnosticsUiSection, ui.bootDiagnosticsUiList, ui.bootDiagnosticsUiStatus],
+    ];
+    sectionRefs.forEach(([scope, container, list, status]) => {
+      if (!BOOT_DIAGNOSTIC_SCOPES.includes(scope)) {
+        return;
+      }
+      const target = bootDiagnosticsState.sections[scope];
+      if (!target) {
+        return;
+      }
+      if (container) {
+        target.container = container;
+      }
+      if (list) {
+        target.list = list;
+      }
+      if (status) {
+        target.status = status;
+      }
+    });
+    if (ui.bootDiagnosticsDownloadButton) {
+      bootDiagnosticsState.downloadButton = ui.bootDiagnosticsDownloadButton;
+      if (!ui.bootDiagnosticsDownloadButton.dataset.bootDiagnosticsBound) {
+        ui.bootDiagnosticsDownloadButton.addEventListener('click', (event) => {
+          event?.preventDefault?.();
+          downloadDiagnosticsReport();
+        });
+        ui.bootDiagnosticsDownloadButton.dataset.bootDiagnosticsBound = 'true';
+      }
+    }
+    BOOT_DIAGNOSTIC_SCOPES.forEach((scope) => {
+      const target = bootDiagnosticsState.sections[scope];
+      if (target) {
+        setBootDiagnosticsSectionStatus(target, 'pending');
+      }
+    });
+    renderBootDiagnostics();
+  }
 
   function setInert(element, shouldBeInert) {
     if (!element) {
@@ -6447,6 +6767,21 @@
       eventLogEl: byId('eventLog'),
       developerStatsToggle: byId('developerStatsToggle'),
       developerStatsPanel: byId('developerStatsPanel'),
+      bootDiagnosticsPanel: byId('bootDiagnosticsPanel'),
+      bootDiagnosticsTimestamp: byId('bootDiagnosticsTimestamp'),
+      bootDiagnosticsDownloadButton: byId('bootDiagnosticsDownload'),
+      bootDiagnosticsEngineSection: byId('bootDiagnosticsEngineSection'),
+      bootDiagnosticsEngineStatus: byId('bootDiagnosticsEngineStatus'),
+      bootDiagnosticsEngineList: byId('bootDiagnosticsEngineList'),
+      bootDiagnosticsAssetsSection: byId('bootDiagnosticsAssetsSection'),
+      bootDiagnosticsAssetsStatus: byId('bootDiagnosticsAssetsStatus'),
+      bootDiagnosticsAssetsList: byId('bootDiagnosticsAssetsList'),
+      bootDiagnosticsModelsSection: byId('bootDiagnosticsModelsSection'),
+      bootDiagnosticsModelsStatus: byId('bootDiagnosticsModelsStatus'),
+      bootDiagnosticsModelsList: byId('bootDiagnosticsModelsList'),
+      bootDiagnosticsUiSection: byId('bootDiagnosticsUiSection'),
+      bootDiagnosticsUiStatus: byId('bootDiagnosticsUiStatus'),
+      bootDiagnosticsUiList: byId('bootDiagnosticsUiList'),
       liveDiagnosticsToggle: byId('liveDiagnosticsToggle'),
       liveDiagnosticsPanel: byId('liveDiagnosticsPanel'),
       liveDiagnosticsList: byId('liveDiagnosticsList'),
@@ -6517,6 +6852,7 @@
     ensureHudStateBinding(ui);
     bindDebugModeControls(ui);
     bindDeveloperStatsControls(ui);
+    bindBootDiagnosticsUi(ui);
     bindLiveDiagnosticsControls(ui);
     bindExperienceEventLog(ui);
     let experience;
@@ -7164,6 +7500,13 @@
     recordLiveDiagnostic(type, message, detail, options);
   diagnosticsApi.getEntries = () => getLiveDiagnosticsEntriesSnapshot();
   globalScope.InfiniteRails.diagnostics = diagnosticsApi;
+
+  const bootDiagnosticsApi = globalScope.InfiniteRails.bootDiagnostics || {};
+  bootDiagnosticsApi.update = (snapshot) => updateBootDiagnosticsPanel(snapshot);
+  bootDiagnosticsApi.getSnapshot = () => cloneBootDiagnosticsSnapshot(bootDiagnosticsState.lastSnapshot);
+  bootDiagnosticsApi.onUpdate = (listener) => addBootDiagnosticsChangeListener(listener);
+  bootDiagnosticsApi.downloadReport = () => downloadDiagnosticsReport();
+  globalScope.InfiniteRails.bootDiagnostics = bootDiagnosticsApi;
 
   if (typeof globalScope.addEventListener === 'function') {
     globalScope.addEventListener(
