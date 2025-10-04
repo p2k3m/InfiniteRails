@@ -2435,6 +2435,8 @@
       this.firstRunTutorialMoveDetail = this.ui?.firstRunTutorialMoveDetail || null;
       this.firstRunTutorialGatherDetail = this.ui?.firstRunTutorialGatherDetail || null;
       this.firstRunTutorialCraftDetail = this.ui?.firstRunTutorialCraftDetail || null;
+      this.firstRunTutorialIssuesEl = this.ui?.firstRunTutorialIssues || null;
+      this.firstRunTutorialIssuesListEl = this.ui?.firstRunTutorialIssuesList || null;
       this.firstRunTutorialNoteEl = this.ui?.firstRunTutorialNote || null;
       this.firstRunTutorialControlsBound = false;
       this.firstRunTutorialHideTimer = null;
@@ -2450,6 +2452,8 @@
       this.firstRunTutorialSeenCache = null;
       this.onFirstRunTutorialClose = this.handleFirstRunTutorialClose.bind(this);
       this.onFirstRunTutorialKeyDown = this.handleFirstRunTutorialKeyDown.bind(this);
+      this.majorIssueLog = [];
+      this.majorIssueKeys = new Set();
       this.assetFailureNotices = new Set();
       this.eventFailureNotices = new Set();
       this.eventBindingFailureNotices = new Set();
@@ -4515,12 +4519,146 @@
       }
     }
 
+    recordMajorIssue(message, context = {}) {
+      const trimmed = typeof message === 'string' ? message.trim() : '';
+      if (!trimmed) {
+        return;
+      }
+      if (!Array.isArray(this.majorIssueLog)) {
+        this.majorIssueLog = [];
+      }
+      if (!(this.majorIssueKeys instanceof Set)) {
+        this.majorIssueKeys = new Set();
+      }
+      const scopeRaw = typeof context.scope === 'string' ? context.scope.trim().toLowerCase() : '';
+      const codeRaw = typeof context.code === 'string' ? context.code.trim().toLowerCase() : '';
+      const keyParts = [];
+      if (scopeRaw) {
+        keyParts.push(scopeRaw);
+      }
+      if (codeRaw) {
+        keyParts.push(codeRaw);
+      }
+      keyParts.push(trimmed.toLowerCase());
+      const key = keyParts.join('|');
+      if (this.majorIssueKeys.has(key)) {
+        return;
+      }
+      this.majorIssueKeys.add(key);
+      const entry = {
+        key,
+        scope: scopeRaw || null,
+        code: codeRaw || null,
+        message: trimmed,
+        timestamp: Date.now(),
+      };
+      this.majorIssueLog.push(entry);
+      const maxEntries = 12;
+      if (this.majorIssueLog.length > maxEntries) {
+        const removeCount = this.majorIssueLog.length - maxEntries;
+        const removed = this.majorIssueLog.splice(0, removeCount);
+        removed.forEach((item) => {
+          if (item?.key) {
+            this.majorIssueKeys.delete(item.key);
+          }
+        });
+      }
+      if (this.firstRunTutorialEl && this.firstRunTutorialEl.hidden === false) {
+        this.refreshFirstRunTutorialErrors();
+      }
+    }
+
+    clearMajorIssues(scope) {
+      const scopeKey = typeof scope === 'string' ? scope.trim().toLowerCase() : '';
+      if (!scopeKey || !Array.isArray(this.majorIssueLog) || this.majorIssueLog.length === 0) {
+        return;
+      }
+      const remaining = [];
+      for (const entry of this.majorIssueLog) {
+        if (entry?.scope === scopeKey) {
+          if (entry?.key) {
+            this.majorIssueKeys.delete(entry.key);
+          }
+          continue;
+        }
+        remaining.push(entry);
+      }
+      this.majorIssueLog = remaining;
+      if (this.firstRunTutorialEl && this.firstRunTutorialEl.hidden === false) {
+        this.refreshFirstRunTutorialErrors();
+      }
+    }
+
+    formatMajorIssueScope(scope) {
+      if (typeof scope !== 'string' || !scope.trim()) {
+        return '';
+      }
+      const normalised = scope.trim().toLowerCase();
+      const mapping = {
+        renderer: 'Renderer',
+        assets: 'Assets',
+        asset: 'Assets',
+        leaderboard: 'Leaderboard',
+        network: 'Network',
+        input: 'Input',
+      };
+      if (mapping[normalised]) {
+        return mapping[normalised];
+      }
+      return normalised.charAt(0).toUpperCase() + normalised.slice(1);
+    }
+
+    getMajorIssueEntries(limit = 4) {
+      if (!Array.isArray(this.majorIssueLog) || this.majorIssueLog.length === 0) {
+        return [];
+      }
+      const count = Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : this.majorIssueLog.length;
+      return this.majorIssueLog.slice(-count);
+    }
+
+    refreshFirstRunTutorialErrors() {
+      const container = this.firstRunTutorialIssuesEl || null;
+      const listEl = this.firstRunTutorialIssuesListEl || null;
+      if (!container || !listEl) {
+        return;
+      }
+      const entries = this.getMajorIssueEntries(4);
+      if (!entries.length) {
+        container.hidden = true;
+        container.dataset.visible = 'false';
+        safelySetAriaHidden(container, true);
+        listEl.textContent = '';
+        return;
+      }
+      const doc = listEl.ownerDocument || (typeof document !== 'undefined' ? document : null);
+      if (!doc || typeof doc.createDocumentFragment !== 'function') {
+        return;
+      }
+      const fragment = doc.createDocumentFragment();
+      entries.forEach((entry) => {
+        if (!entry || !entry.message) {
+          return;
+        }
+        const item = doc.createElement('li');
+        const scopeLabel = this.formatMajorIssueScope(entry.scope);
+        item.textContent = scopeLabel ? `${scopeLabel} — ${entry.message}` : entry.message;
+        fragment.appendChild(item);
+      });
+      listEl.textContent = '';
+      listEl.appendChild(fragment);
+      container.hidden = false;
+      container.dataset.visible = 'true';
+      safelySetAriaHidden(container, false);
+    }
+
     refreshFirstRunTutorialContent() {
       const moveDetail = this.firstRunTutorialMoveDetail || null;
       const gatherDetail = this.firstRunTutorialGatherDetail || null;
       const craftDetail = this.firstRunTutorialCraftDetail || null;
       const noteEl = this.firstRunTutorialNoteEl || null;
       if (!moveDetail && !gatherDetail && !craftDetail && !noteEl) {
+        this.refreshFirstRunTutorialErrors();
+        this.refreshLostGuidanceContent();
         return;
       }
       const prefersTouch = Boolean(this.isTouchPreferred);
@@ -4540,6 +4678,8 @@
         if (noteEl) {
           noteEl.innerHTML = 'Need a refresher later? Tap the <strong>Tutorial</strong> button in the HUD anytime.';
         }
+        this.refreshFirstRunTutorialErrors();
+        this.refreshLostGuidanceContent();
         return;
       }
       const movementKeys = formatKeyListForSentence(
@@ -4567,6 +4707,7 @@
       if (noteEl) {
         noteEl.innerHTML = `Need a refresher later? Press <strong>${tutorialKeys}</strong> or use the <strong>Tutorial</strong> button in the HUD.`;
       }
+      this.refreshFirstRunTutorialErrors();
       this.refreshLostGuidanceContent();
     }
 
@@ -5303,6 +5444,10 @@
           detail.error = errorMessage;
         }
       }
+      this.recordMajorIssue(statusMessage, {
+        scope: 'leaderboard',
+        code: detail.summary || detail.reason || detail.source || null,
+      });
       if (shouldEmitEvent) {
         this.emitGameEvent('score-sync-offline', detail);
       }
@@ -5315,6 +5460,7 @@
           ? options.message.trim()
           : null;
       this.setScoreboardStatus(message, { offline: false });
+      this.clearMajorIssues('leaderboard');
       if (this.hasQueuedScoreSyncEntries()) {
         const queuedMessage = message
           ? `${message} — syncing queued runs…`
@@ -17124,6 +17270,7 @@
       this.cancelQueuedModelPreload();
       this.rendererUnavailable = true;
       this.rendererFailureMessage = message;
+      this.recordMajorIssue(message, { scope: 'renderer', code: details?.stage || null });
       if (this.playerHintEl) {
         this.playerHintEl.textContent = message;
       }
@@ -20413,6 +20560,7 @@
         fallbackMessage = `${fallbackMessage} (Missing: ${missingLabel})`;
       }
       fallbackMessage = ensurePlaceholderExplanation(fallbackMessage);
+      this.recordMajorIssue(fallbackMessage, { scope: 'assets', code: typeof key === 'string' && key ? key : null });
       this.recordAssetFailure(key, { error, fallbackMessage, assetSummary: summary });
       if (!fallbackMessage) {
         return;
