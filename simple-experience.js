@@ -13507,11 +13507,11 @@
         return null;
       }
       const chunkKey = this.getChunkKeyForWorldPosition(x, z);
+      const navmesh = this.ensureNavigationMeshForWorldPosition(x, z);
       if (!chunkKey) {
         this.warnAiMovementFailure(actorType, { ...options, chunkKey: null, reason: 'chunk-missing', x, z });
-        return null;
+        return navmesh;
       }
-      const navmesh = this.ensureNavigationMeshForWorldPosition(x, z);
       if (!navmesh || !navmesh.walkableCellCount) {
         this.warnAiMovementFailure(actorType, {
           ...options,
