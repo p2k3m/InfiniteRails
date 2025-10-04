@@ -154,6 +154,209 @@
 
   ensureProductionAssetBase(globalScope, documentRef);
 
+  const responsiveUiState = {
+    detachListeners: null,
+  };
+
+  function clampNumber(value, min, max) {
+    let result = Number(value);
+    if (!Number.isFinite(result)) {
+      result = Number.isFinite(min) ? Number(min) : 0;
+    }
+    if (Number.isFinite(min)) {
+      result = Math.max(result, Number(min));
+    }
+    if (Number.isFinite(max)) {
+      result = Math.min(result, Number(max));
+    }
+    return result;
+  }
+
+  function getRootFontSize(doc) {
+    if (!doc?.documentElement) {
+      return 16;
+    }
+    const view = doc.defaultView || globalScope;
+    if (view?.getComputedStyle) {
+      try {
+        const computed = view.getComputedStyle(doc.documentElement);
+        const size = computed ? Number.parseFloat(computed.fontSize) : NaN;
+        if (Number.isFinite(size) && size > 0) {
+          return size;
+        }
+      } catch (error) {}
+    }
+    return 16;
+  }
+
+  function updateResponsiveUiVariables(scope, doc) {
+    if (!doc?.documentElement || !doc.documentElement.style) {
+      return;
+    }
+    const root = doc.documentElement;
+    const viewport = scope?.visualViewport;
+    const widthCandidate = viewport?.width ?? scope?.innerWidth ?? root.clientWidth ?? 0;
+    const heightCandidate = viewport?.height ?? scope?.innerHeight ?? root.clientHeight ?? 0;
+    const width = clampNumber(widthCandidate, 240, 8192);
+    const height = clampNumber(heightCandidate, 240, 8192);
+    if (!width || !height) {
+      return;
+    }
+    const pointerCoarse = Boolean(scope?.matchMedia && scope.matchMedia('(pointer: coarse)').matches);
+    const widthScale = width / 1440;
+    const heightScale = height / 900;
+    const hudScale = clampNumber(Math.min(widthScale, heightScale), pointerCoarse ? 0.8 : 0.66, pointerCoarse ? 1.05 : 1);
+    const hudSpacing = clampNumber(0.55 + hudScale * (pointerCoarse ? 0.9 : 0.7), pointerCoarse ? 0.75 : 0.6, pointerCoarse ? 1.35 : 1.1);
+    const hudMargin = clampNumber(0.78 + hudScale * (pointerCoarse ? 1.15 : 0.85), pointerCoarse ? 1 : 0.8, pointerCoarse ? 1.95 : 1.5);
+    const hudBottomGap = clampNumber(0.45 + hudScale * (pointerCoarse ? 0.85 : 0.6), pointerCoarse ? 0.6 : 0.45, pointerCoarse ? 1.2 : 0.9);
+    root.style.setProperty('--hud-scale', hudScale.toFixed(3));
+    root.style.setProperty('--hud-spacing', `${hudSpacing.toFixed(3)}rem`);
+    root.style.setProperty('--hud-margin', `${hudMargin.toFixed(3)}rem`);
+    root.style.setProperty('--hud-bottom-gap', `${hudBottomGap.toFixed(3)}rem`);
+
+    const baseFontSize = clampNumber(getRootFontSize(doc), 12, 24);
+    const tutorialWidth = clampNumber(width * (pointerCoarse ? 0.9 : 0.88), 320, pointerCoarse ? 720 : 640);
+    const tutorialHeight = clampNumber(height * (pointerCoarse ? 0.85 : 0.9), 420, pointerCoarse ? 700 : 720);
+    const tutorialPadding = clampNumber(height * (pointerCoarse ? 0.035 : 0.03), pointerCoarse ? 22 : 18, pointerCoarse ? 46 : 40);
+    const tutorialGap = clampNumber(0.72 + hudScale * (pointerCoarse ? 0.7 : 0.55), pointerCoarse ? 0.9 : 0.75, pointerCoarse ? 1.6 : 1.25);
+    const tutorialCloseSize = clampNumber(tutorialPadding * 1.35, pointerCoarse ? 34 : 30, pointerCoarse ? 48 : 40);
+    const tutorialCloseOffset = clampNumber(tutorialPadding * 0.55, 10, pointerCoarse ? 20 : 16);
+    root.style.setProperty('--tutorial-panel-max-width', `${Math.round(tutorialWidth)}px`);
+    root.style.setProperty('--tutorial-panel-max-height', `${Math.round(tutorialHeight)}px`);
+    root.style.setProperty('--tutorial-panel-padding', `${tutorialPadding.toFixed(1)}px`);
+    root.style.setProperty('--tutorial-panel-gap', `${tutorialGap.toFixed(3)}rem`);
+    root.style.setProperty('--tutorial-close-size', `${tutorialCloseSize.toFixed(1)}px`);
+    root.style.setProperty('--tutorial-close-offset', `${tutorialCloseOffset.toFixed(1)}px`);
+
+    const stackTutorialActions = height < 620 || width < 540;
+    const tutorialActionsGap = stackTutorialActions
+      ? clampNumber(0.65 + hudScale * 0.55, pointerCoarse ? 0.75 : 0.6, pointerCoarse ? 1.25 : 0.95)
+      : clampNumber(0.45 + hudScale * 0.35, pointerCoarse ? 0.6 : 0.45, pointerCoarse ? 0.95 : 0.75);
+    root.style.setProperty('--tutorial-actions-direction', stackTutorialActions ? 'column' : 'row');
+    root.style.setProperty('--tutorial-actions-justify', stackTutorialActions || pointerCoarse ? 'center' : 'flex-end');
+    root.style.setProperty('--tutorial-actions-gap', `${tutorialActionsGap.toFixed(3)}rem`);
+    root.style.setProperty('--tutorial-primary-width', stackTutorialActions ? '100%' : 'auto');
+
+    const mobileControlsWidth = clampNumber(width * (pointerCoarse ? 0.95 : 0.92), 280, pointerCoarse ? 640 : 520);
+    const mobileControlsGap = clampNumber(
+      0.6 + hudScale * (pointerCoarse ? 0.65 : 0.5),
+      pointerCoarse ? 0.75 : 0.6,
+      pointerCoarse ? 1.3 : 1.1,
+    );
+    const mobileControlsPaddingY = clampNumber(height * (pointerCoarse ? 0.022 : 0.018), pointerCoarse ? 14 : 10, pointerCoarse ? 26 : 20);
+    const mobileControlsPaddingX = clampNumber(width * (pointerCoarse ? 0.03 : 0.025), pointerCoarse ? 18 : 14, pointerCoarse ? 32 : 24);
+    const dpadCell = clampNumber(Math.min(width, height) * 0.09, pointerCoarse ? 58 : 42, pointerCoarse ? 82 : 60);
+    const mobileButtonSize = clampNumber(width * 0.09, pointerCoarse ? 60 : 48, pointerCoarse ? 82 : 64);
+    const mobilePrimaryButtonSize = clampNumber(width * 0.11, pointerCoarse ? 68 : 56, pointerCoarse ? 94 : 72);
+    const mobileButtonFont = clampNumber(mobileButtonSize * 0.28, pointerCoarse ? 18 : 16, pointerCoarse ? 26 : 22);
+    const mobilePrimaryButtonFont = clampNumber(
+      mobilePrimaryButtonSize * 0.3,
+      pointerCoarse ? 20 : 18,
+      pointerCoarse ? 30 : 24,
+    );
+    const mobileClusterGap = clampNumber(mobileControlsGap * 0.92, pointerCoarse ? 0.7 : 0.6, pointerCoarse ? 1.2 : 1.05);
+    const mobileActionGap = clampNumber(mobileClusterGap * 0.95, pointerCoarse ? 0.7 : 0.6, pointerCoarse ? 1.15 : 1);
+
+    root.style.setProperty('--mobile-controls-max-width', `${mobileControlsWidth.toFixed(1)}px`);
+    root.style.setProperty('--mobile-controls-gap', `${mobileControlsGap.toFixed(3)}rem`);
+    root.style.setProperty('--mobile-controls-padding-y', `${mobileControlsPaddingY.toFixed(1)}px`);
+    root.style.setProperty('--mobile-controls-padding-x', `${mobileControlsPaddingX.toFixed(1)}px`);
+    root.style.setProperty('--mobile-controls-dpad-cell', `${dpadCell.toFixed(1)}px`);
+    root.style.setProperty('--mobile-controls-button-size', `${mobileButtonSize.toFixed(1)}px`);
+    root.style.setProperty('--mobile-controls-button-primary-size', `${mobilePrimaryButtonSize.toFixed(1)}px`);
+    root.style.setProperty('--mobile-controls-button-font', `${(mobileButtonFont / baseFontSize).toFixed(3)}rem`);
+    root.style.setProperty(
+      '--mobile-controls-button-primary-font',
+      `${(mobilePrimaryButtonFont / baseFontSize).toFixed(3)}rem`,
+    );
+    root.style.setProperty('--mobile-controls-cluster-gap', `${mobileClusterGap.toFixed(3)}rem`);
+    root.style.setProperty('--mobile-controls-action-gap', `${mobileActionGap.toFixed(3)}rem`);
+
+    const stackMobileControls = width < 560 || height < 620;
+    const controlsDirection = stackMobileControls ? 'column' : 'row';
+    const controlsAlign = stackMobileControls ? 'stretch' : pointerCoarse ? 'center' : 'flex-end';
+    const controlsJustify = stackMobileControls ? 'center' : pointerCoarse ? 'center' : 'space-between';
+    root.style.setProperty('--mobile-controls-direction', controlsDirection);
+    root.style.setProperty('--mobile-controls-align', controlsAlign);
+    root.style.setProperty('--mobile-controls-justify', controlsJustify);
+  }
+
+  function setupResponsiveUi(scope, doc) {
+    if (!scope || !doc) {
+      return;
+    }
+    const update = () => updateResponsiveUiVariables(scope, doc);
+    update();
+    let updatePending = false;
+    const scheduleUpdate = () => {
+      if (updatePending) {
+        return;
+      }
+      updatePending = true;
+      const invoke = () => {
+        updatePending = false;
+        update();
+      };
+      if (typeof scope.requestAnimationFrame === 'function') {
+        scope.requestAnimationFrame(invoke);
+      } else if (typeof scope.setTimeout === 'function') {
+        scope.setTimeout(invoke, 66);
+      } else {
+        invoke();
+      }
+    };
+
+    const disposers = [];
+    if (typeof scope.addEventListener === 'function') {
+      const resizeHandler = () => scheduleUpdate();
+      scope.addEventListener('resize', resizeHandler, { passive: true });
+      disposers.push(() => scope.removeEventListener?.('resize', resizeHandler));
+      const orientationHandler = () => scheduleUpdate();
+      scope.addEventListener('orientationchange', orientationHandler, { passive: true });
+      disposers.push(() => scope.removeEventListener?.('orientationchange', orientationHandler));
+      const pageShowHandler = () => scheduleUpdate();
+      scope.addEventListener('pageshow', pageShowHandler, { passive: true });
+      disposers.push(() => scope.removeEventListener?.('pageshow', pageShowHandler));
+    }
+
+    if (scope?.visualViewport?.addEventListener) {
+      const viewportResize = () => scheduleUpdate();
+      scope.visualViewport.addEventListener('resize', viewportResize, { passive: true });
+      scope.visualViewport.addEventListener('scroll', viewportResize, { passive: true });
+      disposers.push(() => {
+        scope.visualViewport.removeEventListener('resize', viewportResize);
+        scope.visualViewport.removeEventListener('scroll', viewportResize);
+      });
+    }
+
+    if (scope?.matchMedia) {
+      try {
+        const pointerMedia = scope.matchMedia('(pointer: coarse)');
+        if (pointerMedia) {
+          const pointerListener = () => scheduleUpdate();
+          if (typeof pointerMedia.addEventListener === 'function') {
+            pointerMedia.addEventListener('change', pointerListener);
+            disposers.push(() => pointerMedia.removeEventListener('change', pointerListener));
+          } else if (typeof pointerMedia.addListener === 'function') {
+            pointerMedia.addListener(pointerListener);
+            disposers.push(() => pointerMedia.removeListener(pointerListener));
+          }
+        }
+      } catch (error) {}
+    }
+
+    responsiveUiState.detachListeners = () => {
+      while (disposers.length) {
+        const dispose = disposers.pop();
+        try {
+          dispose?.();
+        } catch (error) {}
+      }
+    };
+  }
+
+  setupResponsiveUi(globalScope, documentRef);
+
   if (!globalScope.__INFINITE_RAILS_STATE__) {
     globalScope.__INFINITE_RAILS_STATE__ = {
       isRunning: false,
