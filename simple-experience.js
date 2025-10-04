@@ -7099,6 +7099,8 @@
       const checkerOffset = hashSeed % 4;
       const accentModulo = 9 + (hashSeed % 5);
       const accentShift = (hashSeed >>> 5) % accentModulo;
+      const soilStart = topBand;
+      const soilEnd = size - bottomBand;
       for (let y = 0; y < size; y += 1) {
         for (let x = 0; x < size; x += 1) {
           const verticalRatio = clamp01((y - topBand) / Math.max(1, size - topBand - bottomBand));
@@ -7118,18 +7120,76 @@
             const accentRatio = clamp01((y - (size - accentBand - 1)) / accentBand);
             color = mixRgb(color, shadow, accentRatio * 0.3);
           }
+          const topBlend = y < topBand ? clamp01((topBand - y) / topBand) : 0;
+          const bottomBlend = y >= soilEnd ? clamp01((y - soilEnd) / Math.max(1, bottomBand)) : 0;
+          const surfaceNoise = pseudoRandom(x * 7, hashSeed + y * 13);
+          const detailNoise = pseudoRandom(hashSeed + x * 17, y * 29);
+          if (topBlend > 0) {
+            const bladeBase = mixRgb(highlight, mixRgb(colorSet.sky, colorSet.cloud, 0.35), 0.5);
+            const bladeStrength = topBlend * (0.3 + surfaceNoise * 0.4);
+            color = mixRgb(color, bladeBase, bladeStrength);
+            const stripeInterval = 3 + (hashSeed % 3);
+            if ((x + Math.floor(surfaceNoise * 5)) % stripeInterval === 0) {
+              const stripeColor = mixRgb(bladeBase, colorSet.shadow, 0.45);
+              color = mixRgb(color, stripeColor, 0.4 * topBlend);
+            }
+            const dewNoise = pseudoRandom(hashSeed ^ (x * 53), y * 97);
+            if (dewNoise > 0.88) {
+              const dewColor = mixRgb(colorSet.cloud, colorSet.sky, 0.5);
+              color = mixRgb(color, dewColor, 0.3 * topBlend);
+            }
+          } else if (bottomBlend > 0) {
+            const depth = bottomBlend;
+            const bedrockColor = mixRgb(shadow, colorSet.shadow, 0.5);
+            color = mixRgb(color, bedrockColor, 0.55 * depth);
+            const seamInterval = 4 + (hashSeed % 4);
+            if ((y + Math.floor(detailNoise * 3)) % seamInterval === 0) {
+              const seamColor = mixRgb(bedrockColor, colorSet.sky, 0.15);
+              color = mixRgb(color, seamColor, 0.3 * depth);
+            }
+            if (surfaceNoise > 0.82) {
+              const glintColor = mixRgb(colorSet.cloud, colorSet.sky, 0.2);
+              color = mixRgb(color, glintColor, 0.25 * depth);
+            }
+          } else {
+            const soilNoise = surfaceNoise;
+            const striationNoise = detailNoise;
+            const striation = (Math.floor((y - soilStart) / 2) + Math.floor(striationNoise * 3)) % 2 === 0;
+            const soilHighlight = mixRgb(midTone, colorSet.sky, 0.18);
+            const soilShadow = mixRgb(shadow, colorSet.shadow, 0.45);
+            color = mixRgb(color, soilNoise > 0.55 ? soilHighlight : soilShadow, 0.35);
+            if (striation) {
+              color = mixRgb(color, soilShadow, 0.2);
+            }
+            if (soilNoise > 0.9) {
+              const mica = mixRgb(colorSet.cloud, soilHighlight, 0.5);
+              color = mixRgb(color, mica, 0.28);
+            } else if (soilNoise < 0.08) {
+              const peat = mixRgb(colorSet.shadow, soilShadow, 0.6);
+              color = mixRgb(color, peat, 0.3);
+            }
+          }
           const checker = (Math.floor((x + checkerOffset) / 4) + Math.floor((y + checkerOffset) / 4)) % 2 === 0;
           const checkerMix = checker ? mixRgb(colorSet.cloud, colorSet.sky, 0.35) : mixRgb(colorSet.shadow, colorSet.sky, 0.25);
-          color = mixRgb(color, checkerMix, 0.12);
+          color = mixRgb(color, checkerMix, 0.1);
           const grain = pseudoRandom(x, y);
-          const grainMix = grain > 0.55 ? colorSet.cloud : colorSet.shadow;
-          color = mixRgb(color, grainMix, Math.abs(grain - 0.5) * 0.3);
+          const grainHighlight = mixRgb(colorSet.cloud, colorSet.sky, 0.3);
+          const grainShadow = mixRgb(colorSet.shadow, colorSet.grass, 0.6);
+          color = mixRgb(color, grain > 0.58 ? grainHighlight : grainShadow, Math.abs(grain - 0.5) * 0.22 + 0.05);
           if (((x + y * size + accentShift) % accentModulo) === 0) {
             const accentColor = mixRgb(colorSet.sky, colorSet.cloud, 0.4);
-            color = mixRgb(color, accentColor, 0.35);
+            color = mixRgb(color, accentColor, 0.32 + topBlend * 0.2);
           } else if (((x * 3 + y * 5 + accentShift) % (accentModulo + 3)) === 0) {
             const shadowAccent = mixRgb(colorSet.shadow, colorSet.grass, 0.5);
-            color = mixRgb(color, shadowAccent, 0.25);
+            color = mixRgb(color, shadowAccent, 0.2 + bottomBlend * 0.25);
+          }
+          const sparkle = pseudoRandom(x + hashSeed, y + hashSeed);
+          if (sparkle > 0.97 && topBlend > 0) {
+            const sparkleColor = mixRgb(colorSet.cloud, colorSet.sky, 0.6);
+            color = mixRgb(color, sparkleColor, 0.35 * topBlend);
+          } else if (sparkle < 0.03 && bottomBlend > 0) {
+            const emberColor = mixRgb(colorSet.shadow, colorSet.sky, 0.25);
+            color = mixRgb(color, emberColor, 0.25 * bottomBlend);
           }
           ctx.fillStyle = rgbToCss(color);
           ctx.fillRect(x, y, 1, 1);
