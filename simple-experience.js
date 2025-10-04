@@ -11162,65 +11162,152 @@
       return true;
     }
 
+    flagEntityModelUpgradeFailure(entity, key) {
+      if (!entity?.mesh) {
+        return false;
+      }
+      const mesh = entity.mesh;
+      mesh.userData = {
+        ...(mesh.userData || {}),
+        placeholder: true,
+        placeholderKey: key,
+        placeholderReason: 'failed',
+        placeholderSource: 'model-upgrade-failed',
+      };
+      const overlayName = key === 'golem' ? 'GolemErrorOverlay' : 'ZombieErrorOverlay';
+      const hasOverlay = Array.isArray(mesh.children)
+        ? mesh.children.some((child) => child?.userData?.placeholderOverlay && child.name === overlayName)
+        : false;
+      if (!hasOverlay) {
+        const overlayOptions =
+          key === 'golem'
+            ? {
+                key: 'golem',
+                reason: 'failed',
+                label: 'MODEL ERROR',
+                detail: 'Golem rig unavailable',
+                width: 1.9,
+                height: 0.65,
+                offsetY: 1.85,
+                backgroundColor: 'rgba(234, 88, 12, 0.9)',
+                borderColor: 'rgba(254, 243, 199, 0.4)',
+                textColor: '#fffbeb',
+                detailColor: '#fed7aa',
+                name: overlayName,
+              }
+            : {
+                key: 'zombie',
+                reason: 'failed',
+                label: 'MODEL ERROR',
+                detail: 'Zombie rig unavailable',
+                width: 1.65,
+                height: 0.6,
+                offsetY: 1.45,
+                backgroundColor: 'rgba(220, 38, 38, 0.92)',
+                borderColor: 'rgba(248, 250, 252, 0.45)',
+                textColor: '#f8fafc',
+                detailColor: '#fecaca',
+                name: overlayName,
+              };
+        this.attachModelFallbackErrorOverlay(mesh, overlayOptions);
+      }
+      if (entity.animation) {
+        this.disposeAnimationRig(entity.animation);
+        entity.animation = null;
+      }
+      entity.placeholder = true;
+      return true;
+    }
+
     upgradeZombie(zombie) {
       this.cloneModelScene('zombie')
         .then((asset) => {
-          if (!asset?.scene || !this.zombieGroup) return;
+          if (!this.zombieGroup) return;
           if (!this.zombies.includes(zombie)) return;
           const placeholder = zombie.mesh;
+          if (!asset?.scene) {
+            this.flagEntityModelUpgradeFailure(zombie, 'zombie');
+            return;
+          }
           const model = asset.scene;
           model.name = `ZombieModel-${zombie.id}`;
-          model.position.copy(placeholder.position);
-          model.rotation.copy(placeholder.rotation);
+          if (placeholder) {
+            model.position.copy(placeholder.position);
+            model.rotation.copy(placeholder.rotation);
+          }
           model.scale.setScalar(0.95);
           this.zombieGroup.add(model);
-          this.zombieGroup.remove(placeholder);
-          disposeObject3D(placeholder);
+          if (placeholder) {
+            this.zombieGroup.remove(placeholder);
+            disposeObject3D(placeholder);
+          }
           zombie.mesh = model;
           zombie.placeholder = model?.userData?.placeholder === true;
           if (zombie.animation) {
             this.disposeAnimationRig(zombie.animation);
           }
-          zombie.animation = this.prepareAnimationRig(`zombie-${zombie.id}`, model, asset.animations, {
-            defaultState: 'walk',
-          });
-          if (zombie.animation) {
-            this.setAnimationRigState(zombie.animation, 'walk', { fade: 0, forceDuringPulse: true });
+          if (!zombie.placeholder) {
+            zombie.animation = this.prepareAnimationRig(`zombie-${zombie.id}`, model, asset.animations, {
+              defaultState: 'walk',
+            });
+            if (zombie.animation) {
+              this.setAnimationRigState(zombie.animation, 'walk', { fade: 0, forceDuringPulse: true });
+            }
+          } else {
+            zombie.animation = null;
           }
         })
         .catch((error) => {
           console.error('Failed to upgrade zombie model', error);
+          if (this.zombies.includes(zombie)) {
+            this.flagEntityModelUpgradeFailure(zombie, 'zombie');
+          }
         });
     }
 
     upgradeGolem(golem) {
       this.cloneModelScene('golem')
         .then((asset) => {
-          if (!asset?.scene || !this.golemGroup) return;
+          if (!this.golemGroup) return;
           if (!this.golems.includes(golem)) return;
           const placeholder = golem.mesh;
+          if (!asset?.scene) {
+            this.flagEntityModelUpgradeFailure(golem, 'golem');
+            return;
+          }
           const model = asset.scene;
           model.name = `GolemModel-${golem.id ?? 'actor'}`;
-          model.position.copy(placeholder.position);
-          model.rotation.copy(placeholder.rotation);
+          if (placeholder) {
+            model.position.copy(placeholder.position);
+            model.rotation.copy(placeholder.rotation);
+          }
           model.scale.setScalar(1.1);
           this.golemGroup.add(model);
-          this.golemGroup.remove(placeholder);
-          disposeObject3D(placeholder);
+          if (placeholder) {
+            this.golemGroup.remove(placeholder);
+            disposeObject3D(placeholder);
+          }
           golem.mesh = model;
           golem.placeholder = model?.userData?.placeholder === true;
           if (golem.animation) {
             this.disposeAnimationRig(golem.animation);
           }
-          golem.animation = this.prepareAnimationRig(`golem-${golem.id ?? 'actor'}`, model, asset.animations, {
-            defaultState: 'idle',
-          });
-          if (golem.animation) {
-            this.setAnimationRigState(golem.animation, 'idle', { fade: 0, forceDuringPulse: true });
+          if (!golem.placeholder) {
+            golem.animation = this.prepareAnimationRig(`golem-${golem.id ?? 'actor'}`, model, asset.animations, {
+              defaultState: 'idle',
+            });
+            if (golem.animation) {
+              this.setAnimationRigState(golem.animation, 'idle', { fade: 0, forceDuringPulse: true });
+            }
+          } else {
+            golem.animation = null;
           }
         })
         .catch((error) => {
           console.error('Failed to upgrade golem model', error);
+          if (this.golems.includes(golem)) {
+            this.flagEntityModelUpgradeFailure(golem, 'golem');
+          }
         });
     }
 
