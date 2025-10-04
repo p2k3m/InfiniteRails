@@ -2826,6 +2826,7 @@
       this.scoreboardHydrated = false;
       this.scoreSyncHeartbeat = 0;
       this.scoreboardOffline = false;
+      this.localLeaderboardActive = false;
       this.portalFrameGeometryVertical = null;
       this.portalFrameGeometryHorizontal = null;
       this.portalPlaneGeometry = null;
@@ -5210,10 +5211,18 @@
     }
 
     handleLeaderboardOffline(error, options = {}) {
-      if (!this.apiBaseUrl) {
+      const forceLocalMode = options.forceLocalMode === true;
+      if (!this.apiBaseUrl && !forceLocalMode) {
         return;
       }
-      const { source = 'sync', reason = null } = options;
+      const source =
+        typeof options.source === 'string' && options.source.trim().length
+          ? options.source.trim()
+          : 'sync';
+      const providedReason =
+        typeof options.reason === 'string' && options.reason.trim().length
+          ? options.reason.trim()
+          : null;
       const method =
         typeof options.method === 'string' && options.method.trim().length
           ? options.method.trim().toUpperCase()
@@ -5234,29 +5243,40 @@
       const summary = this.formatBackendEndpointSummary({ method, endpoint, status: statusCode });
       const fallbackStatusMessage = summary
         ? `Leaderboard unreachable (${summary}) — progress saved locally.`
-        : 'Leaderboard offline — progress saved locally.';
+        : !this.apiBaseUrl && forceLocalMode
+          ? 'Offline mode: connect an API to sync runs.'
+          : 'Leaderboard offline — progress saved locally.';
       const statusMessage =
         typeof options.message === 'string' && options.message.trim().length
           ? options.message.trim()
           : fallbackStatusMessage;
       const fallbackHint = summary
         ? `Leaderboard unreachable (${summary}). Check your connection or API configuration.`
-        : 'Leaderboard offline — progress saved locally. Check your connection or API configuration.';
+        : !this.apiBaseUrl && forceLocalMode
+          ? 'Leaderboard API not configured — runs stored locally until a backend is connected.'
+          : 'Leaderboard offline — progress saved locally. Check your connection or API configuration.';
       const hintMessage =
         typeof options.hint === 'string' && options.hint.trim().length ? options.hint.trim() : fallbackHint;
       this.persistScoreboardEntries();
       this.setScoreboardStatus(statusMessage, { offline: true });
+      const now = this.getNowTimestamp();
+      const shouldEmitEvent = !this.localLeaderboardActive;
       if (typeof this.showHint === 'function') {
-        const now = this.getNowTimestamp();
-        if (!this.offlineSyncActive || now - this.lastOfflineSyncHintAt >= this.offlineSyncHintCooldownMs) {
+        if (
+          shouldEmitEvent ||
+          !this.offlineSyncActive ||
+          now - this.lastOfflineSyncHintAt >= this.offlineSyncHintCooldownMs
+        ) {
           this.showHint(hintMessage);
           this.lastOfflineSyncHintAt = now;
         }
       }
       this.offlineSyncActive = true;
+      this.localLeaderboardActive = true;
+      const resolvedReason = providedReason || (!this.apiBaseUrl && forceLocalMode ? 'missing-backend' : null);
       const detail = {
         source,
-        reason: reason ?? null,
+        reason: resolvedReason,
         message: statusMessage,
       };
       if (summary) {
@@ -5271,6 +5291,9 @@
       if (statusCode !== null) {
         detail.status = statusCode;
       }
+      if (hintMessage && hintMessage.length) {
+        detail.hint = hintMessage;
+      }
       if (error) {
         const errorMessage =
           typeof error.message === 'string' && error.message.trim().length
@@ -5280,7 +5303,9 @@
           detail.error = errorMessage;
         }
       }
-      this.emitGameEvent('score-sync-offline', detail);
+      if (shouldEmitEvent) {
+        this.emitGameEvent('score-sync-offline', detail);
+      }
       this.showScoreSyncWarning(statusMessage);
     }
 
@@ -5306,6 +5331,7 @@
       }
       this.offlineSyncActive = false;
       this.lastOfflineSyncHintAt = 0;
+      this.localLeaderboardActive = false;
       const detail = { source };
       if (typeof options.message === 'string' && options.message.trim().length) {
         detail.message = options.message.trim();
@@ -5316,14 +5342,16 @@
     async loadScoreboard({ force = false } = {}) {
       if (!this.apiBaseUrl) {
         this.scoreboardPollTimer = 0;
-        if (force) {
-          this.setScoreboardStatus('Offline mode: connect an API to sync runs.', { offline: true });
-        } else {
-          this.setScoreboardStatus(
-            'Local leaderboard active — set APP_CONFIG.apiBaseUrl to publish runs.',
-            { offline: true },
-          );
-        }
+        const statusMessage = force
+          ? 'Offline mode: connect an API to sync runs.'
+          : 'Local leaderboard active — set APP_CONFIG.apiBaseUrl to publish runs.';
+        this.handleLeaderboardOffline(null, {
+          source: 'load',
+          reason: 'missing-backend',
+          forceLocalMode: true,
+          message: statusMessage,
+          hint: 'Leaderboard API not configured — runs stored locally until a backend is connected.',
+        });
         if (!this.scoreboardHydrated) {
           this.renderScoreboard();
           this.scoreboardHydrated = true;
@@ -6134,6 +6162,14 @@
     scheduleScoreSync(reason) {
       this.updateLocalScoreEntry(reason);
       if (!this.apiBaseUrl) {
+        this.handleLeaderboardOffline(null, {
+          source: 'sync',
+          reason:
+            typeof reason === 'string' && reason.trim().length ? reason.trim() : 'missing-backend',
+          forceLocalMode: true,
+          message: 'Offline mode: connect an API to sync runs.',
+          hint: 'Leaderboard API not configured — runs stored locally until a backend is connected.',
+        });
         return;
       }
       this.pendingScoreSyncReason = reason;
@@ -22267,6 +22303,8 @@
       if (typeof this.updateHud === 'function') {
         this.updateHud({ reason: 'score-event' });
       }
+      const syncReason = normalizedKey ? `score-${normalizedKey}` : 'score-event';
+      this.scheduleScoreSync(syncReason);
     }
 
     formatPointValue(value) {
