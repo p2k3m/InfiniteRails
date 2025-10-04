@@ -4,11 +4,26 @@
 
   const assetBaseConsistencyState = { mismatchLogged: false };
 
+  const PRODUCTION_ASSET_ROOT = ensureTrailingSlash(
+    'https://d3gj6x3ityfh5o.cloudfront.net/',
+  );
+
   function ensureTrailingSlash(value) {
     if (!value || typeof value !== 'string') {
       return value;
     }
     return value.endsWith('/') ? value : `${value}/`;
+  }
+
+  function parseUrlOrNull(value) {
+    if (!value || typeof value !== 'string') {
+      return null;
+    }
+    try {
+      return new URL(value);
+    } catch (error) {
+      return null;
+    }
   }
 
   function resolveUrlWithBases(target, bases) {
@@ -96,7 +111,22 @@
         ? scope.APP_CONFIG
         : (scope.APP_CONFIG = {});
     const baseCandidates = [doc?.baseURI, scope?.location?.href];
-    const expectedBase = deriveProductionAssetRoot(scope, doc);
+    const derivedBase = deriveProductionAssetRoot(scope, doc);
+    const productionUrl = parseUrlOrNull(PRODUCTION_ASSET_ROOT);
+    let expectedBase = derivedBase;
+
+    if (productionUrl) {
+      const derivedUrl = parseUrlOrNull(derivedBase);
+      if (derivedUrl && derivedUrl.host === productionUrl.host) {
+        expectedBase = productionUrl.href;
+      } else if (!derivedUrl) {
+        const locationUrl = parseUrlOrNull(scope?.location?.href ?? null);
+        if (locationUrl && locationUrl.host === productionUrl.host) {
+          expectedBase = productionUrl.href;
+        }
+      }
+    }
+
     if (!expectedBase) {
       return;
     }
@@ -115,6 +145,7 @@
           configured: config.assetBaseUrl ?? null,
           normalisedConfigured: configuredBase,
           expected: expectedBase,
+          production: PRODUCTION_ASSET_ROOT,
         },
       );
     }
