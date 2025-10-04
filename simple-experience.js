@@ -7075,39 +7075,62 @@
       const highlight = mixRgb(base, colorSet.cloud, 0.6);
       const midTone = mixRgb(base, colorSet.sky, 0.25);
       const shadow = mixRgb(base, colorSet.shadow, 0.65);
-      const topBand = Math.max(2, Math.floor(size * 0.3));
-      const bottomBand = Math.max(2, Math.floor(size * 0.28));
-      const edgeBand = Math.max(1, Math.floor(size * 0.12));
-      const centerStart = Math.floor(size * 0.32);
-      const centerEnd = Math.ceil(size * 0.68);
+      const hashSeed = (() => {
+        if (!normalised) {
+          return 0x811c9dc5;
+        }
+        let hash = 0x811c9dc5;
+        for (let i = 0; i < normalised.length; i += 1) {
+          hash ^= normalised.charCodeAt(i) * (i + 11);
+          hash = (hash << 5) - hash;
+        }
+        return hash >>> 0;
+      })();
+      const pseudoRandom = (x, y) => {
+        let value = hashSeed + x * 374761393 + y * 668265263;
+        value = (value ^ (value >>> 13)) * 1274126177;
+        value = value ^ (value >>> 16);
+        return (value >>> 0) / 4294967295;
+      };
+      const topBand = Math.max(3, Math.floor(size * 0.22));
+      const bottomBand = Math.max(3, Math.floor(size * 0.26));
+      const edgeBand = Math.max(2, Math.floor(size * 0.14));
+      const accentBand = Math.max(1, Math.floor(size * 0.08));
+      const checkerOffset = hashSeed % 4;
+      const accentModulo = 9 + (hashSeed % 5);
+      const accentShift = (hashSeed >>> 5) % accentModulo;
       for (let y = 0; y < size; y += 1) {
         for (let x = 0; x < size; x += 1) {
-          let color;
-          if (y < topBand) {
-            color = highlight;
-          } else if (y >= size - bottomBand) {
-            color = shadow;
-          } else {
-            color = midTone;
-          }
+          const verticalRatio = clamp01((y - topBand) / Math.max(1, size - topBand - bottomBand));
+          let color = mixRgb(highlight, midTone, clamp01(y / topBand) * 0.5);
+          color = mixRgb(color, shadow, verticalRatio * 0.5);
           if (x < edgeBand) {
-            color = mixRgb(color, highlight, 0.35);
+            const edgeRatio = clamp01((edgeBand - x) / edgeBand);
+            color = mixRgb(color, highlight, edgeRatio * 0.3);
           } else if (x >= size - edgeBand) {
-            color = mixRgb(color, shadow, 0.4);
+            const edgeRatio = clamp01((x - (size - edgeBand - 1)) / edgeBand);
+            color = mixRgb(color, shadow, edgeRatio * 0.35);
           }
-          if (y < edgeBand) {
-            color = mixRgb(color, highlight, 0.3);
-          } else if (y >= size - edgeBand) {
-            color = mixRgb(color, shadow, 0.45);
+          if (y < accentBand) {
+            const accentRatio = clamp01((accentBand - y) / accentBand);
+            color = mixRgb(color, highlight, accentRatio * 0.25);
+          } else if (y >= size - accentBand) {
+            const accentRatio = clamp01((y - (size - accentBand - 1)) / accentBand);
+            color = mixRgb(color, shadow, accentRatio * 0.3);
           }
-          if (x >= centerStart && x < centerEnd && y >= centerStart && y < centerEnd) {
-            color = mixRgb(color, colorSet.sky, 0.25);
+          const checker = (Math.floor((x + checkerOffset) / 4) + Math.floor((y + checkerOffset) / 4)) % 2 === 0;
+          const checkerMix = checker ? mixRgb(colorSet.cloud, colorSet.sky, 0.35) : mixRgb(colorSet.shadow, colorSet.sky, 0.25);
+          color = mixRgb(color, checkerMix, 0.12);
+          const grain = pseudoRandom(x, y);
+          const grainMix = grain > 0.55 ? colorSet.cloud : colorSet.shadow;
+          color = mixRgb(color, grainMix, Math.abs(grain - 0.5) * 0.3);
+          if (((x + y * size + accentShift) % accentModulo) === 0) {
+            const accentColor = mixRgb(colorSet.sky, colorSet.cloud, 0.4);
+            color = mixRgb(color, accentColor, 0.35);
+          } else if (((x * 3 + y * 5 + accentShift) % (accentModulo + 3)) === 0) {
+            const shadowAccent = mixRgb(colorSet.shadow, colorSet.grass, 0.5);
+            color = mixRgb(color, shadowAccent, 0.25);
           }
-          const stripeIndex = Math.floor(x / 4) + Math.floor(y / 4);
-          const stripeMix = stripeIndex % 2 === 0 ? colorSet.cloud : colorSet.shadow;
-          color = mixRgb(color, stripeMix, stripeIndex % 2 === 0 ? 0.2 : 0.15);
-          const depthFactor = clamp01((x + y) / (size * 2));
-          color = mixRgb(color, colorSet.shadow, depthFactor * 0.12);
           ctx.fillStyle = rgbToCss(color);
           ctx.fillRect(x, y, 1, 1);
         }
