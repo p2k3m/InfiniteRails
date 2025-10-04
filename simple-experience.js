@@ -2719,6 +2719,7 @@
       this.navigationMeshGeneration = 0;
       this.navigationMeshBuildCounter = 0;
       this.navigationMeshSummary = { chunkCount: 0, walkableCells: 0, reason: 'init', updatedAt: 0 };
+      this.aiMovementWarningLog = new Map();
       this.navigationMeshMaintenanceHandle = null;
       this.navigationMeshMaintenanceCancel = null;
       this.navigationMeshMaintenanceReason = null;
@@ -11854,8 +11855,17 @@
       };
     }
 
-    buildTerrain() {
+    buildTerrain(options = {}) {
       const THREE = this.THREE;
+      const buildReasonRaw = typeof options.reason === 'string' ? options.reason.trim() : '';
+      const buildReason = buildReasonRaw.length ? buildReasonRaw : 'world-load';
+      const navmeshReasonRaw = typeof options.navmeshReason === 'string' ? options.navmeshReason.trim() : '';
+      const navmeshReason =
+        navmeshReasonRaw.length > 0
+          ? navmeshReasonRaw
+          : buildReason === 'world-load'
+            ? 'world-load'
+            : `${buildReason}-navmesh`;
       this.ensureWorldRootGroups();
       const resetTerrainState = () => {
         this.clearChests();
@@ -11882,6 +11892,9 @@
           this.dirtyNavigationChunks = new Set();
         } else {
           this.dirtyNavigationChunks.clear();
+        }
+        if (this.aiMovementWarningLog instanceof Map) {
+          this.aiMovementWarningLog.clear();
         }
         this.navigationMeshGeneration += 1;
         const meshInitTimestamp = Date.now();
@@ -12046,24 +12059,24 @@
           }
           return sum + chunk.children.length;
         }, 0);
-        const navigationSummary = this.refreshNavigationMeshes({ reason: 'world-load' });
+        const navigationSummary = this.refreshNavigationMeshes({ reason: navmeshReason });
         const navSummaryTimestamp = Date.now();
         if (!this.navigationMeshSummary) {
           this.navigationMeshSummary = {
             chunkCount: navigationSummary.chunkCount,
             walkableCells: navigationSummary.walkableCells,
-            reason: 'world-load',
+            reason: navmeshReason,
             updatedAt: navSummaryTimestamp,
           };
         } else {
           this.navigationMeshSummary.chunkCount = navigationSummary.chunkCount;
           this.navigationMeshSummary.walkableCells = navigationSummary.walkableCells;
-          this.navigationMeshSummary.reason = 'world-load';
+          this.navigationMeshSummary.reason = navmeshReason;
           this.navigationMeshSummary.updatedAt = navSummaryTimestamp;
         }
         if (typeof console !== 'undefined') {
           console.info(
-            `Navigation mesh initialization summary — ${navigationSummary.chunkCount} chunk meshes prepared with ${navigationSummary.walkableCells} walkable surfaces. If mobs stop moving, inspect chunk hydration and navmesh rebuilding.`,
+            `Navigation mesh initialization summary — ${navigationSummary.chunkCount} chunk meshes prepared with ${navigationSummary.walkableCells} walkable surfaces (${navmeshReason}). If mobs stop moving, inspect chunk hydration and navmesh rebuilding.`,
           );
         }
         this.terrainCullingAccumulator = this.terrainCullingInterval;
@@ -12599,6 +12612,77 @@
         }
       }
       this.navigationMeshMaintenanceReason = null;
+    }
+
+    warnAiMovementFailure(actorType, detail = {}) {
+      if (typeof console === 'undefined' || typeof console.warn !== 'function') {
+        return;
+      }
+      if (!(this.aiMovementWarningLog instanceof Map)) {
+        this.aiMovementWarningLog = new Map();
+      }
+      const typeKey = typeof actorType === 'string' && actorType.trim().length ? actorType.trim() : 'unknown';
+      const chunkRaw =
+        typeof detail.chunkKey === 'string' && detail.chunkKey.trim().length
+          ? detail.chunkKey.trim()
+          : detail.chunkKey === null || detail.chunkKey === undefined
+            ? null
+            : String(detail.chunkKey);
+      const stageKey = typeof detail.stage === 'string' && detail.stage.trim().length ? detail.stage.trim() : 'general';
+      const reasonKey = typeof detail.reason === 'string' && detail.reason.trim().length ? detail.reason.trim() : 'unspecified';
+      const throttleMs = Number.isFinite(detail.throttleMs) ? Math.max(0, detail.throttleMs) : 6000;
+      const key = `${typeKey}:${chunkRaw ?? 'none'}:${stageKey}:${reasonKey}`;
+      const now = Date.now();
+      const lastWarn = this.aiMovementWarningLog.get(key) || 0;
+      if (now - lastWarn < throttleMs) {
+        return;
+      }
+      this.aiMovementWarningLog.set(key, now);
+      const context = { ...detail, actorType: typeKey, chunkKey: chunkRaw, stage: stageKey, reason: reasonKey };
+      console.warn(
+        'AI movement failure detected. Verify navigation mesh rebuild scheduling and terrain coverage.',
+        context,
+      );
+    }
+
+    ensureNavigationMeshForActorChunk(actorType, chunkKey, options = {}) {
+      if (!chunkKey) {
+        this.warnAiMovementFailure(actorType, { ...options, chunkKey: null, reason: 'chunk-missing' });
+        return null;
+      }
+      const navmesh = this.ensureNavigationMeshForChunk(chunkKey, options);
+      if (!navmesh || !navmesh.walkableCellCount) {
+        this.warnAiMovementFailure(actorType, {
+          ...options,
+          chunkKey,
+          reason: navmesh ? 'navmesh-empty' : 'navmesh-missing',
+          walkableCells: navmesh?.walkableCellCount ?? 0,
+        });
+      }
+      return navmesh;
+    }
+
+    ensureNavigationMeshForActorPosition(actorType, x, z, options = {}) {
+      if (!Number.isFinite(x) || !Number.isFinite(z)) {
+        this.warnAiMovementFailure(actorType, { ...options, chunkKey: null, reason: 'position-invalid', x, z });
+        return null;
+      }
+      const chunkKey = this.getChunkKeyForWorldPosition(x, z);
+      if (!chunkKey) {
+        this.warnAiMovementFailure(actorType, { ...options, chunkKey: null, reason: 'chunk-missing', x, z });
+        return null;
+      }
+      const navmesh = this.ensureNavigationMeshForWorldPosition(x, z);
+      if (!navmesh || !navmesh.walkableCellCount) {
+        this.warnAiMovementFailure(actorType, {
+          ...options,
+          chunkKey,
+          reason: navmesh ? 'navmesh-empty' : 'navmesh-missing',
+          x,
+          z,
+        });
+      }
+      return navmesh;
     }
 
     ensureNavigationMeshForWorldPosition(x, z, options = {}) {
@@ -14820,7 +14904,7 @@
         );
       }
 
-      this.buildTerrain();
+      this.buildTerrain({ reason: 'dimension-transition', navmeshReason: 'dimension-transition' });
       this.populateSceneAfterTerrain({ reason: 'dimension-transition' });
       this.buildRails();
       this.refreshPortalState();
@@ -17242,7 +17326,10 @@
         this.lastZombieSpawn = this.elapsed;
       }
       const playerPosition = this.getPlayerWorldPosition(this.tmpVector3);
-      this.ensureNavigationMeshForWorldPosition(playerPosition.x, playerPosition.z);
+      this.ensureNavigationMeshForActorPosition('zombie', playerPosition.x, playerPosition.z, {
+        reason: 'zombie-target',
+        stage: 'player-tracking',
+      });
       const tmpDir = this.tmpVector;
       const tmpStep = this.tmpVector2;
       for (const zombie of this.zombies) {
@@ -17252,13 +17339,33 @@
         }
         const currentChunkKey = this.getChunkKeyForWorldPosition(mesh.position.x, mesh.position.z);
         if (currentChunkKey) {
-          this.ensureNavigationMeshForChunk(currentChunkKey, { reason: 'zombie-chase' });
-          zombie.navChunkKey = currentChunkKey;
+          const navmesh = this.ensureNavigationMeshForActorChunk('zombie', currentChunkKey, {
+            reason: 'zombie-chase',
+            stage: 'chase',
+            zombieId: zombie.id,
+          });
+          zombie.navChunkKey = navmesh ? currentChunkKey : null;
         } else {
           zombie.navChunkKey = null;
+          this.warnAiMovementFailure('zombie', {
+            stage: 'chase',
+            reason: 'chunk-missing',
+            zombieId: zombie.id,
+            x: mesh.position.x,
+            z: mesh.position.z,
+          });
         }
         tmpDir.subVectors(playerPosition, mesh.position);
         const distance = tmpDir.length();
+        if (!Number.isFinite(distance)) {
+          this.warnAiMovementFailure('zombie', {
+            stage: 'chase',
+            reason: 'distance-invalid',
+            zombieId: zombie.id,
+            chunkKey: zombie.navChunkKey ?? currentChunkKey ?? null,
+          });
+          continue;
+        }
         let baseState = 'idle';
         if (distance > 0.001) {
           tmpDir.normalize();
@@ -17271,6 +17378,21 @@
         }
         const groundHeight = this.sampleGroundHeight(mesh.position.x, mesh.position.z);
         mesh.position.y = THREE.MathUtils.lerp(mesh.position.y, groundHeight + 0.9, delta * 10);
+        if (
+          !Number.isFinite(mesh.position.x) ||
+          !Number.isFinite(mesh.position.y) ||
+          !Number.isFinite(mesh.position.z)
+        ) {
+          this.warnAiMovementFailure('zombie', {
+            stage: 'integration',
+            reason: 'position-invalid',
+            zombieId: zombie.id,
+            chunkKey: zombie.navChunkKey ?? currentChunkKey ?? null,
+            x: mesh.position.x,
+            y: mesh.position.y,
+            z: mesh.position.z,
+          });
+        }
         if (distance < ZOMBIE_CONTACT_RANGE && this.elapsed - zombie.lastAttack > 1.2) {
           this.damagePlayer(1);
           zombie.lastAttack = this.elapsed;
@@ -17998,7 +18120,10 @@
       if (!this.golems.length) return;
       const THREE = this.THREE;
       const playerPosition = this.getPlayerWorldPosition(this.tmpVector3);
-      this.ensureNavigationMeshForWorldPosition(playerPosition.x, playerPosition.z);
+      this.ensureNavigationMeshForActorPosition('golem', playerPosition.x, playerPosition.z, {
+        reason: 'golem-escort-target',
+        stage: 'player-tracking',
+      });
       for (const golem of this.golems) {
         if (!Number.isFinite(golem.collisionRadius)) {
           golem.collisionRadius = GOLEM_COLLISION_RADIUS;
@@ -18006,13 +18131,33 @@
         golem.cooldown = Math.max(0, golem.cooldown - delta);
         const target = this.findNearestZombie(golem.mesh.position) ?? null;
         const destination = target?.mesh?.position ?? playerPosition;
-        this.ensureNavigationMeshForWorldPosition(golem.mesh.position.x, golem.mesh.position.z);
+        const golemChunkKey = this.getChunkKeyForWorldPosition(golem.mesh.position.x, golem.mesh.position.z);
+        this.ensureNavigationMeshForActorPosition('golem', golem.mesh.position.x, golem.mesh.position.z, {
+          reason: 'golem-chase',
+          stage: 'current',
+          golemId: golem.id,
+        });
         if (destination) {
-          this.ensureNavigationMeshForWorldPosition(destination.x, destination.z);
+          this.ensureNavigationMeshForActorPosition('golem', destination.x, destination.z, {
+            reason: target ? 'golem-target' : 'golem-escort',
+            stage: target ? 'target' : 'escort',
+            golemId: golem.id,
+            zombieId: target?.id ?? null,
+          });
         }
         if (destination) {
           this.tmpVector.subVectors(destination, golem.mesh.position);
           const distance = this.tmpVector.length();
+          if (!Number.isFinite(distance)) {
+            this.warnAiMovementFailure('golem', {
+              stage: 'chase',
+              reason: 'distance-invalid',
+              golemId: golem.id,
+              zombieId: target?.id ?? null,
+              chunkKey: golemChunkKey ?? null,
+            });
+            continue;
+          }
           let baseState = 'idle';
           if (distance > 0.001) {
             this.tmpVector.normalize();
@@ -18025,6 +18170,22 @@
           }
           const ground = this.sampleGroundHeight(golem.mesh.position.x, golem.mesh.position.z);
           golem.mesh.position.y = THREE.MathUtils.lerp(golem.mesh.position.y, ground + 1.1, delta * 8);
+          if (
+            !Number.isFinite(golem.mesh.position.x) ||
+            !Number.isFinite(golem.mesh.position.y) ||
+            !Number.isFinite(golem.mesh.position.z)
+          ) {
+            this.warnAiMovementFailure('golem', {
+              stage: 'integration',
+              reason: 'position-invalid',
+              golemId: golem.id,
+              zombieId: target?.id ?? null,
+              chunkKey: golemChunkKey ?? null,
+              x: golem.mesh.position.x,
+              y: golem.mesh.position.y,
+              z: golem.mesh.position.z,
+            });
+          }
           if (target && distance < GOLEM_CONTACT_RANGE && golem.cooldown <= 0) {
             this.removeZombie(target);
             golem.cooldown = 1.1;
