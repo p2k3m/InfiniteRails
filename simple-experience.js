@@ -2798,6 +2798,7 @@
       this.portalHiddenInterior = [];
       this.portalFootprintObstructed = false;
       this.portalFootprintObstructionSummary = '';
+      this.portalDebugBypassObstructions = false;
       this.challengeGroup = null;
       this.railSegments = [];
       this.crumblingRails = [];
@@ -6839,13 +6840,19 @@
       const budget = Number.isFinite(this.assetLoadBudgetMs) ? this.assetLoadBudgetMs : 3000;
       const formattedDuration = duration.toFixed(0);
       const sourceLabel = details.url ? ` from ${details.url}` : '';
+      const runningFromFile =
+        typeof this.isRunningFromFileProtocol === 'function' && this.isRunningFromFileProtocol();
       if (details.success) {
-        if (duration > budget) {
+        if (duration > budget && !runningFromFile) {
           console.warn(
             `[AssetBudget] ${kind}:${key} ready in ${formattedDuration}ms (exceeds ${budget}ms budget)${sourceLabel}.`,
           );
         } else {
-          console.info(`[AssetBudget] ${kind}:${key} ready in ${formattedDuration}ms${sourceLabel}.`);
+          const label =
+            duration > budget && runningFromFile
+              ? `[AssetBudget] ${kind}:${key} ready in ${formattedDuration}ms (file protocol relaxed threshold)${sourceLabel}.`
+              : `[AssetBudget] ${kind}:${key} ready in ${formattedDuration}ms${sourceLabel}.`;
+          console.info(label);
         }
       } else if (!details.silent) {
         const attemptLabel = details.url ? ` (last attempted ${details.url})` : '';
@@ -10220,6 +10227,206 @@
       return 'Model loader unavailable — placeholder visuals active.';
     }
 
+    isRunningFromFileProtocol() {
+      const scope = typeof window !== 'undefined' ? window : typeof globalThis !== 'undefined' ? globalThis : null;
+      const protocol = scope?.location?.protocol ?? (typeof location !== 'undefined' ? location.protocol : null);
+      return protocol === 'file:';
+    }
+
+    shouldUseEmbeddedModelFallback(error) {
+      const message = typeof error?.message === 'string' ? error.message : '';
+      if (message && /URL scheme "file" is not supported/i.test(message)) {
+        return true;
+      }
+      if (message && /TypeError: Failed to fetch/i.test(message) && this.isRunningFromFileProtocol()) {
+        return true;
+      }
+      if (message && /Access to XMLHttpRequest at 'file:/i.test(message)) {
+        return true;
+      }
+      return false;
+    }
+
+    getEmbeddedModelBundle() {
+      const scope = typeof window !== 'undefined' ? window : typeof globalThis !== 'undefined' ? globalThis : null;
+      const assets = scope?.INFINITE_RAILS_EMBEDDED_ASSETS;
+      if (!assets || typeof assets !== 'object') {
+        return null;
+      }
+      const models = assets.models;
+      return models && typeof models === 'object' ? models : null;
+    }
+
+    resolveEmbeddedModelSource(key) {
+      const models = this.getEmbeddedModelBundle();
+      if (!models) {
+        return null;
+      }
+      if (typeof key !== 'string') {
+        return null;
+      }
+      const trimmed = key.trim();
+      if (!trimmed) {
+        return null;
+      }
+      const variants = new Set();
+      variants.add(trimmed);
+      const lowerTrimmed = trimmed.toLowerCase();
+      const camelVariant = trimmed.replace(/[-_\s]+([a-zA-Z0-9])/g, (_, ch) => ch.toUpperCase());
+      if (camelVariant && camelVariant !== trimmed) {
+        variants.add(camelVariant);
+        const lowerCamel = camelVariant.charAt(0).toLowerCase() + camelVariant.slice(1);
+        variants.add(lowerCamel);
+        const upperCamel = camelVariant.charAt(0).toUpperCase() + camelVariant.slice(1);
+        variants.add(upperCamel);
+      }
+      if (/iron/i.test(trimmed) && /golem/i.test(trimmed)) {
+        variants.add('ironGolem');
+      }
+      variants.add(trimmed.replace(/[-_\s]+/g, ''));
+      const aliasMap = {
+        golem: ['ironGolem'],
+        'iron golem': ['ironGolem'],
+        irongolem: ['ironGolem'],
+        'iron_golem': ['ironGolem'],
+        'iron-golem': ['ironGolem'],
+      };
+      if (aliasMap[lowerTrimmed]) {
+        aliasMap[lowerTrimmed].forEach((alias) => variants.add(alias));
+      }
+      for (const variant of variants) {
+        if (typeof variant !== 'string' || !variant) {
+          continue;
+        }
+        const candidate = models[variant];
+        if (typeof candidate === 'string' && candidate.trim().length) {
+          return { key: variant, data: candidate };
+        }
+      }
+      return null;
+    }
+
+    prepareLoadedModelPayload(key, gltf, { url = null } = {}) {
+      if (!gltf?.scene) {
+        if (url) {
+          throw new Error(`Model at ${url} is missing a scene graph.`);
+        }
+        throw new Error(`Model "${key}" is missing a scene graph.`);
+      }
+      gltf.scene.traverse((child) => {
+        if (child.isMesh) {
+          child.castShadow = true;
+          child.receiveShadow = true;
+        }
+      });
+      const payload = { scene: gltf.scene, animations: gltf.animations || [] };
+      if (key === 'steve') {
+        const metadata = validateSteveAvatarRig(gltf);
+        if (metadata) {
+          const rigMetadata = Object.freeze({
+            ...metadata,
+            meshAssignments: { ...metadata.meshAssignments },
+            hierarchy: { ...metadata.hierarchy },
+            meshExpectations: { ...metadata.meshExpectations },
+            meshNameByIndex: { ...metadata.meshNameByIndex },
+            missingNodes: metadata.missingNodes.slice(),
+            meshMismatches: metadata.meshMismatches.slice(),
+            hierarchyIssues: metadata.hierarchyIssues.slice(),
+            errors: metadata.errors.slice(),
+          });
+          payload.metadata = { avatarRig: rigMetadata };
+          payload.scene.userData = {
+            ...(payload.scene.userData || {}),
+            avatarRigMetadata: rigMetadata,
+          };
+        }
+      }
+      return payload;
+    }
+
+    async loadEmbeddedModelFromBundle(key, context = {}) {
+      const models = this.getEmbeddedModelBundle();
+      if (!models) {
+        return null;
+      }
+      const allowFallback =
+        context.force === true || this.isRunningFromFileProtocol() || this.shouldUseEmbeddedModelFallback(context.error);
+      if (!allowFallback) {
+        return null;
+      }
+      const source = this.resolveEmbeddedModelSource(key);
+      if (!source) {
+        return null;
+      }
+      try {
+        const LoaderClass =
+          context.loaderClass || (await ensureGltfLoader(this.THREE));
+        const gltf = await new Promise((resolve, reject) => {
+          try {
+            const loader = new LoaderClass();
+            const data = typeof source.data === 'string' ? source.data : JSON.stringify(source.data);
+            loader.parse(
+              data,
+              '',
+              (parsed) => resolve(parsed),
+              (parseError) => reject(parseError || new Error(`Failed to parse embedded model for ${key}.`)),
+            );
+          } catch (parseError) {
+            reject(parseError);
+          }
+        });
+        const payload = this.prepareLoadedModelPayload(key, gltf, {
+          url: context.url ?? `embedded://${source.key}`,
+        });
+        try {
+          Object.defineProperty(payload, '__embeddedModelFallback', {
+            value: true,
+            enumerable: false,
+            configurable: true,
+          });
+        } catch (definitionError) {
+          payload.__embeddedModelFallback = true;
+        }
+        const friendly = this.describeAssetKey(key);
+        const message = friendly
+          ? `${friendly.charAt(0).toUpperCase()}${friendly.slice(1)} loaded from embedded bundle.`
+          : `Model "${key}" loaded from embedded bundle.`;
+        console.info(message);
+        if (typeof notifyLiveDiagnostics === 'function') {
+          notifyLiveDiagnostics(
+            'model',
+            message,
+            { key, url: context.url ?? null, source: 'embedded-bundle' },
+            { level: 'info' },
+          );
+        }
+        return payload;
+      } catch (fallbackError) {
+        console.warn(`Embedded fallback model load failed for ${key}.`, fallbackError);
+        if (typeof notifyLiveDiagnostics === 'function') {
+          notifyLiveDiagnostics(
+            'model',
+            `Embedded fallback model unavailable for ${key}.`,
+            {
+              key,
+              url: context.url ?? null,
+              source: 'embedded-bundle',
+              error: typeof fallbackError?.message === 'string' ? fallbackError.message : null,
+            },
+            { level: 'warning' },
+          );
+        }
+        return null;
+      }
+    }
+
+    shouldPreemptEmbeddedModelLoad(key) {
+      if (!this.isRunningFromFileProtocol()) {
+        return false;
+      }
+      return Boolean(this.resolveEmbeddedModelSource(key));
+    }
+
     loadModel(key, overrideUrl) {
       const THREE = this.THREE;
       const url = overrideUrl ? resolveAssetUrl(overrideUrl) : MODEL_URLS[key];
@@ -10247,66 +10454,61 @@
         }
         return ensureGltfLoader(THREE)
           .then((LoaderClass) => {
-            return new Promise((resolve, reject) => {
-              try {
-                const loader = new LoaderClass();
-                loader.load(
-                  url,
-                  (gltf) => resolve(gltf),
-                  undefined,
-                  (error) => reject(error || new Error(`Failed to load GLTF: ${url}`)),
-                );
-              } catch (error) {
-                reject(error);
-              }
-            });
-          })
-          .then((gltf) => {
-            if (!gltf?.scene) {
-              throw new Error(`Model at ${url} is missing a scene graph.`);
+            const loadFromNetwork = () =>
+              new Promise((resolve, reject) => {
+                try {
+                  const loader = new LoaderClass();
+                  loader.load(
+                    url,
+                    (gltf) => resolve(gltf),
+                    undefined,
+                    (error) => reject(error || new Error(`Failed to load GLTF: ${url}`)),
+                  );
+                } catch (error) {
+                  reject(error);
+                }
+              }).then((gltf) => this.prepareLoadedModelPayload(key, gltf, { url }));
+            if (this.shouldPreemptEmbeddedModelLoad(key)) {
+              return this.loadEmbeddedModelFromBundle(key, {
+                url,
+                loaderClass: LoaderClass,
+                force: true,
+              }).then((payload) => {
+                if (payload) {
+                  return payload;
+                }
+                return loadFromNetwork();
+              });
             }
-            gltf.scene.traverse((child) => {
-              if (child.isMesh) {
-                child.castShadow = true;
-                child.receiveShadow = true;
-              }
-            });
-            const payload = { scene: gltf.scene, animations: gltf.animations || [] };
-            if (key === 'steve') {
-              const metadata = validateSteveAvatarRig(gltf);
-              if (metadata) {
-                const rigMetadata = Object.freeze({
-                  ...metadata,
-                  meshAssignments: { ...metadata.meshAssignments },
-                  hierarchy: { ...metadata.hierarchy },
-                  meshExpectations: { ...metadata.meshExpectations },
-                  meshNameByIndex: { ...metadata.meshNameByIndex },
-                  missingNodes: metadata.missingNodes.slice(),
-                  meshMismatches: metadata.meshMismatches.slice(),
-                  hierarchyIssues: metadata.hierarchyIssues.slice(),
-                  errors: metadata.errors.slice(),
-                });
-                payload.metadata = { avatarRig: rigMetadata };
-                payload.scene.userData = {
-                  ...(payload.scene.userData || {}),
-                  avatarRigMetadata: rigMetadata,
-                };
-              }
-            }
-            return payload;
+            return loadFromNetwork();
           })
           .catch((error) => {
-            if (attemptNumber < this.assetRetryLimit) {
-              const delay = this.computeAssetRetryDelay(attemptNumber);
-              this.noteAssetRetry(key, attemptNumber, error, url, delay);
-              return this.delay(delay).then(() => attemptLoad(attemptNumber + 1));
-            }
-            throw error;
+            return (async () => {
+              const fallbackPayload = await this.loadEmbeddedModelFromBundle(key, { url, error });
+              if (fallbackPayload) {
+                return fallbackPayload;
+              }
+              if (attemptNumber < this.assetRetryLimit) {
+                const delay = this.computeAssetRetryDelay(attemptNumber);
+                this.noteAssetRetry(key, attemptNumber, error, url, delay);
+                await this.delay(delay);
+                return attemptLoad(attemptNumber + 1);
+              }
+              throw error;
+            })();
           });
       };
       const promise = attemptLoad(1)
         .then((payload) => {
           const attemptsUsed = this.assetRetryState.get(key) || 1;
+          const fallbackUsed = Boolean(payload && payload.__embeddedModelFallback);
+          if (fallbackUsed) {
+            try {
+              delete payload.__embeddedModelFallback;
+            } catch (cleanupError) {
+              payload.__embeddedModelFallback = undefined;
+            }
+          }
           this.assetRetryState.delete(key);
           this.completeAssetTimer('models', key, { success: true, url });
           this.loadedModels.set(key, payload);
@@ -14908,14 +15110,26 @@
 
     refreshPortalObstructionState() {
       const obstructions = this.collectPortalFootprintObstructions();
-      const blocked = obstructions.length > 0;
-      const summary = blocked ? this.formatPortalObstructionMessage(obstructions) : '';
+      const effectiveObstructions = this.portalDebugBypassObstructions
+        ? obstructions.filter((entry) => {
+            if (!entry || typeof entry !== 'object') {
+              return false;
+            }
+            const kind = entry.kind ? String(entry.kind).toLowerCase() : '';
+            if (kind === 'zombie' || kind === 'golem') {
+              return false;
+            }
+            return true;
+          })
+        : obstructions;
+      const blocked = effectiveObstructions.length > 0;
+      const summary = blocked ? this.formatPortalObstructionMessage(effectiveObstructions) : '';
       const changed =
         this.portalFootprintObstructed !== blocked ||
         this.portalFootprintObstructionSummary !== summary;
       this.portalFootprintObstructed = blocked;
       this.portalFootprintObstructionSummary = summary;
-      return { blocked, summary, obstructions, changed };
+      return { blocked, summary, obstructions: effectiveObstructions, changed };
     }
 
     ignitePortal(tool = 'torch') {
@@ -15014,6 +15228,7 @@
       this.portalIgnitionLog = [];
       this.portalFootprintObstructed = false;
       this.portalFootprintObstructionSummary = '';
+      this.portalDebugBypassObstructions = false;
       this.restorePortalInteriorBlocks();
       this.updatePortalInteriorValidity();
       this.updatePortalProgress();
@@ -15152,14 +15367,15 @@
       this.hidePortalInteriorBlocks();
       this.updatePortalInteriorValidity();
       this.portalHintShown = true;
+      this.portalDebugBypassObstructions = false;
       this.updatePortalProgress();
       this.updateHud();
       this.scheduleScoreSync('portal-activated');
-      console.error(
+      console.info(
         'Portal activation triggered — ensure portal shaders and collision volumes initialise. Rebuild the portal pipeline if travellers become stuck.',
       );
       const activeDimension = this.dimensionSettings?.name || 'Unknown Dimension';
-      console.error(
+      console.info(
         `Portal dimension status — active dimension: ${activeDimension}. If transitions fail, verify the dimension registry and connection graph.`,
       );
       this.emitGameEvent('portal-activated', {
@@ -15536,7 +15752,7 @@
       }
 
       if (this.dimensionSettings) {
-        console.error(
+        console.info(
           `Dimension unlock flow fired — ${this.dimensionSettings.name}. If the unlock fails to present rewards, audit quest requirements and persistence flags.`,
         );
       }
@@ -18176,7 +18392,7 @@
       this.zombies.push(zombie);
       this.upgradeZombie(zombie);
       this.runImmediateGolemDefense();
-      console.error(
+      console.info(
         'Zombie spawn and chase triggered. If AI stalls or pathfinding breaks, validate the navmesh and spawn configuration.',
       );
     }
@@ -23729,6 +23945,8 @@
     }
 
     getDebugSnapshot() {
+      const sceneChildCount = Array.isArray(this.scene?.children) ? this.scene.children.length : 0;
+      const worldChildCount = Array.isArray(this.worldRoot?.children) ? this.worldRoot.children.length : 0;
       return {
         started: this.started,
         dimension: this.dimensionSettings?.name ?? null,
@@ -23741,7 +23959,7 @@
         score: Math.round(this.score ?? 0),
         hotbarSlots: Array.isArray(this.hotbar) ? this.hotbar.length : 0,
         hotbarExpanded: Boolean(this.hotbarExpanded),
-        sceneChildren: this.scene?.children?.length ?? 0,
+        sceneChildren: Math.max(sceneChildCount, worldChildCount),
         hudActive:
           typeof document !== 'undefined' ? document.body.classList.contains('game-active') : false,
         netheriteChallengeActive: Boolean(this.netheriteChallengeActive),
@@ -23866,6 +24084,12 @@
       });
       this.portalBlocksPlaced = this.portalFrameSlots.size;
       this.portalFrameInteriorValid = true;
+      this.portalFrameFootprintValid = true;
+      this.portalFrameValidationMessage = '';
+      this.highlightPortalFrameIssues([]);
+      this.portalFootprintObstructed = false;
+      this.portalFootprintObstructionSummary = '';
+      this.portalDebugBypassObstructions = true;
       this.checkPortalActivation();
       return this.portalReady;
     }
