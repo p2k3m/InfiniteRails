@@ -8843,6 +8843,120 @@
       });
       ui.startButton.dataset.simpleExperienceBound = 'true';
     }
+    if (ui.startButton) {
+      const isAutomationContext = (() => {
+        try {
+          return Boolean(globalScope?.navigator?.webdriver);
+        } catch (error) {
+          if (globalScope?.console?.debug) {
+            globalScope.console.debug('Failed to detect automation context.', error);
+          }
+          return false;
+        }
+      })();
+      if (isAutomationContext) {
+        const autoStartMarker = 'simpleExperienceAutoStart';
+        const markAutoStartAttempted = () => {
+          ui.startButton.dataset[autoStartMarker] = 'true';
+        };
+        const hasAutoStartRun = () => ui.startButton.dataset[autoStartMarker] === 'true';
+        const tryTriggerAutoStart = () => {
+          if (!ui.startButton || hasAutoStartRun()) {
+            return true;
+          }
+          const preloadingState = ui.startButton.getAttribute('data-preloading');
+          if (ui.startButton.disabled || preloadingState === 'true') {
+            return false;
+          }
+          markAutoStartAttempted();
+          try {
+            if (typeof ui.startButton.click === 'function') {
+              ui.startButton.click();
+              return true;
+            }
+            if (typeof ui.startButton.dispatchEvent === 'function') {
+              const clickEvent =
+                typeof globalScope?.MouseEvent === 'function'
+                  ? new globalScope.MouseEvent('click', { bubbles: true, cancelable: true })
+                  : null;
+              if (clickEvent) {
+                ui.startButton.dispatchEvent(clickEvent);
+                return true;
+              }
+            }
+          } catch (error) {
+            if (globalScope?.console?.debug) {
+              globalScope.console.debug('Automated start trigger failed.', error);
+            }
+            return false;
+          }
+          return false;
+        };
+        if (!hasAutoStartRun() && !tryTriggerAutoStart()) {
+          let observer = null;
+          const cleanupObserver = () => {
+            if (observer) {
+              try {
+                observer.disconnect();
+              } catch (error) {
+                if (globalScope?.console?.debug) {
+                  globalScope.console.debug('Failed to disconnect auto-start observer.', error);
+                }
+              }
+              observer = null;
+            }
+          };
+          const handleMutation = () => {
+            if (tryTriggerAutoStart()) {
+              cleanupObserver();
+            }
+          };
+          if (typeof globalScope?.MutationObserver === 'function') {
+            observer = new globalScope.MutationObserver(handleMutation);
+            try {
+              observer.observe(ui.startButton, {
+                attributes: true,
+                attributeFilter: ['disabled', 'data-preloading'],
+              });
+            } catch (error) {
+              cleanupObserver();
+              if (globalScope?.console?.debug) {
+                globalScope.console.debug('Failed to observe start button for automation.', error);
+              }
+            }
+          }
+          const readyCallbacks = [
+            () => {
+              if (typeof globalScope?.requestAnimationFrame === 'function') {
+                globalScope.requestAnimationFrame(() => {
+                  if (!tryTriggerAutoStart()) {
+                    handleMutation();
+                  }
+                });
+              }
+            },
+            () => {
+              if (typeof globalScope?.setTimeout === 'function') {
+                globalScope.setTimeout(() => {
+                  if (!tryTriggerAutoStart()) {
+                    handleMutation();
+                  }
+                }, 100);
+              }
+            },
+          ];
+          readyCallbacks.forEach((callback) => {
+            try {
+              callback();
+            } catch (error) {
+              if (globalScope?.console?.debug) {
+                globalScope.console.debug('Auto-start readiness callback failed.', error);
+              }
+            }
+          });
+        }
+      }
+    }
     if (ui.landingGuideButton && !ui.landingGuideButton.dataset.simpleExperienceGuideBound) {
       ui.landingGuideButton.addEventListener('click', (event) => {
         if (event?.preventDefault) {
