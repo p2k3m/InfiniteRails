@@ -4100,6 +4100,11 @@ body.sidebar-open .player-hint {
   background: rgba(248, 113, 113, 0.16);
 }
 
+.diagnostic-list__item[data-status='pending'] {
+  border-color: rgba(148, 163, 184, 0.4);
+  background: rgba(148, 163, 184, 0.12);
+}
+
 .diagnostic-list__label {
   font-weight: 600;
   font-size: 0.95rem;
@@ -5456,6 +5461,162 @@ body[data-debug-mode='verbose'] .event-log__debug {
   background: linear-gradient(180deg, rgba(8, 18, 32, 0.95), rgba(6, 14, 26, 0.9));
   display: grid;
   gap: 0.7rem;
+}
+
+.boot-diagnostics {
+  margin-top: 0.85rem;
+  padding: 0.85rem 0.95rem;
+  border-radius: 16px;
+  border: 1px solid rgba(134, 204, 255, 0.22);
+  background: linear-gradient(180deg, rgba(8, 18, 32, 0.94), rgba(5, 12, 22, 0.9));
+  display: grid;
+  gap: 0.8rem;
+}
+
+.boot-diagnostics__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.boot-diagnostics__title {
+  margin: 0;
+  font-size: 0.9rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: rgba(227, 240, 255, 0.85);
+}
+
+.boot-diagnostics__timestamp {
+  margin: 0;
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  color: rgba(202, 219, 239, 0.75);
+}
+
+.boot-diagnostics__grid {
+  display: grid;
+  gap: 0.75rem;
+}
+
+@media (min-width: 48rem) {
+  .boot-diagnostics__grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.boot-diagnostics__section {
+  display: grid;
+  gap: 0.55rem;
+  padding: 0.75rem 0.85rem;
+  border-radius: 14px;
+  border: 1px solid rgba(134, 204, 255, 0.14);
+  background: rgba(2, 8, 16, 0.65);
+  transition: border-color 0.2s ease, background 0.2s ease;
+}
+
+.boot-diagnostics__section[data-status='ok'] {
+  border-color: rgba(34, 197, 94, 0.5);
+  background: rgba(34, 197, 94, 0.1);
+}
+
+.boot-diagnostics__section[data-status='warning'] {
+  border-color: rgba(251, 191, 36, 0.45);
+  background: rgba(251, 191, 36, 0.12);
+}
+
+.boot-diagnostics__section[data-status='error'] {
+  border-color: rgba(248, 113, 113, 0.55);
+  background: rgba(248, 113, 113, 0.14);
+}
+
+.boot-diagnostics__section[data-status='pending'] {
+  border-color: rgba(148, 163, 184, 0.4);
+  background: rgba(148, 163, 184, 0.08);
+}
+
+.boot-diagnostics__section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
+.boot-diagnostics__section-title {
+  margin: 0;
+  font-size: 0.82rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(225, 238, 255, 0.9);
+}
+
+.boot-diagnostics__status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.65rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  background: rgba(8, 18, 32, 0.7);
+  border: 1px solid rgba(148, 163, 184, 0.4);
+  color: rgba(202, 219, 239, 0.85);
+}
+
+.boot-diagnostics__section[data-status='ok'] .boot-diagnostics__status {
+  border-color: rgba(34, 197, 94, 0.6);
+  color: rgba(203, 243, 213, 0.92);
+}
+
+.boot-diagnostics__section[data-status='warning'] .boot-diagnostics__status {
+  border-color: rgba(251, 191, 36, 0.6);
+  color: rgba(255, 229, 168, 0.92);
+}
+
+.boot-diagnostics__section[data-status='error'] .boot-diagnostics__status {
+  border-color: rgba(248, 113, 113, 0.65);
+  color: rgba(255, 205, 205, 0.95);
+}
+
+.boot-diagnostics__list {
+  margin: 0;
+}
+
+.boot-diagnostics__item {
+  padding: 0.6rem 0.7rem;
+  gap: 0.45rem;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.boot-diagnostics__message {
+  font-weight: 600;
+  font-size: 0.82rem;
+  letter-spacing: 0.04em;
+  color: rgba(227, 240, 255, 0.9);
+}
+
+.boot-diagnostics__detail {
+  font-size: 0.75rem;
+  line-height: 1.4;
+  color: rgba(202, 219, 239, 0.82);
+}
+
+.boot-diagnostics__item[data-status='warning'] .boot-diagnostics__message,
+.boot-diagnostics__item[data-status='warning'] .boot-diagnostics__detail {
+  color: rgba(255, 228, 185, 0.92);
+}
+
+.boot-diagnostics__item[data-status='error'] .boot-diagnostics__message,
+.boot-diagnostics__item[data-status='error'] .boot-diagnostics__detail {
+  color: rgba(255, 205, 205, 0.95);
+}
+
+.boot-diagnostics__item[data-status='pending'] .boot-diagnostics__message,
+.boot-diagnostics__item[data-status='pending'] .boot-diagnostics__detail {
+  color: rgba(202, 219, 239, 0.8);
 }
 
 .live-diagnostics[hidden] {

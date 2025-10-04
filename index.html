@@ -721,6 +721,85 @@
             <p class="live-diagnostics__empty" id="liveDiagnosticsEmpty">No diagnostics recorded.</p>
             <ul class="live-diagnostics__entries" id="liveDiagnosticsList" role="list"></ul>
           </div>
+          <div
+            class="boot-diagnostics"
+            id="bootDiagnosticsPanel"
+            role="region"
+            aria-live="polite"
+            aria-label="Boot diagnostics summary"
+          >
+            <div class="boot-diagnostics__header">
+              <p class="boot-diagnostics__title">Boot Diagnostics</p>
+              <button type="button" class="ghost small" id="bootDiagnosticsDownload">Download Launch Log</button>
+            </div>
+            <p class="boot-diagnostics__timestamp" id="bootDiagnosticsTimestamp">Boot diagnostics will populate after launch.</p>
+            <div class="boot-diagnostics__grid">
+              <section
+                class="boot-diagnostics__section"
+                id="bootDiagnosticsEngineSection"
+                data-scope="engine"
+                data-status="pending"
+              >
+                <header class="boot-diagnostics__section-header">
+                  <h4 class="boot-diagnostics__section-title">Engine</h4>
+                  <span class="boot-diagnostics__status" id="bootDiagnosticsEngineStatus">Pending</span>
+                </header>
+                <ul class="diagnostic-list boot-diagnostics__list" id="bootDiagnosticsEngineList" role="list">
+                  <li class="diagnostic-list__item boot-diagnostics__item" data-status="pending">
+                    <span class="boot-diagnostics__message">Waiting for launch…</span>
+                  </li>
+                </ul>
+              </section>
+              <section
+                class="boot-diagnostics__section"
+                id="bootDiagnosticsAssetsSection"
+                data-scope="assets"
+                data-status="pending"
+              >
+                <header class="boot-diagnostics__section-header">
+                  <h4 class="boot-diagnostics__section-title">Assets</h4>
+                  <span class="boot-diagnostics__status" id="bootDiagnosticsAssetsStatus">Pending</span>
+                </header>
+                <ul class="diagnostic-list boot-diagnostics__list" id="bootDiagnosticsAssetsList" role="list">
+                  <li class="diagnostic-list__item boot-diagnostics__item" data-status="pending">
+                    <span class="boot-diagnostics__message">Waiting for launch…</span>
+                  </li>
+                </ul>
+              </section>
+              <section
+                class="boot-diagnostics__section"
+                id="bootDiagnosticsModelsSection"
+                data-scope="models"
+                data-status="pending"
+              >
+                <header class="boot-diagnostics__section-header">
+                  <h4 class="boot-diagnostics__section-title">Models</h4>
+                  <span class="boot-diagnostics__status" id="bootDiagnosticsModelsStatus">Pending</span>
+                </header>
+                <ul class="diagnostic-list boot-diagnostics__list" id="bootDiagnosticsModelsList" role="list">
+                  <li class="diagnostic-list__item boot-diagnostics__item" data-status="pending">
+                    <span class="boot-diagnostics__message">Waiting for launch…</span>
+                  </li>
+                </ul>
+              </section>
+              <section
+                class="boot-diagnostics__section"
+                id="bootDiagnosticsUiSection"
+                data-scope="ui"
+                data-status="pending"
+              >
+                <header class="boot-diagnostics__section-header">
+                  <h4 class="boot-diagnostics__section-title">UI</h4>
+                  <span class="boot-diagnostics__status" id="bootDiagnosticsUiStatus">Pending</span>
+                </header>
+                <ul class="diagnostic-list boot-diagnostics__list" id="bootDiagnosticsUiList" role="list">
+                  <li class="diagnostic-list__item boot-diagnostics__item" data-status="pending">
+                    <span class="boot-diagnostics__message">Waiting for launch…</span>
+                  </li>
+                </ul>
+              </section>
+            </div>
+          </div>
         </section>
       </aside>
     </main>
