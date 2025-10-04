@@ -7848,9 +7848,25 @@
     createAudioController() {
       const scope = typeof window !== 'undefined' ? window : typeof globalThis !== 'undefined' ? globalThis : null;
       const samples = scope?.INFINITE_RAILS_EMBEDDED_ASSETS?.audioSamples || null;
+      const normaliseAudioName = (value) => {
+        if (typeof value !== 'string') {
+          return null;
+        }
+        const trimmed = value.trim();
+        return trimmed.length ? trimmed : null;
+      };
+      const knownPlayableNames = new Set();
+      const available = new Set();
       const sampleNames =
         samples && typeof samples === 'object' ? Object.keys(samples) : [];
-      const available = new Set(sampleNames);
+      sampleNames.forEach((name) => {
+        const normalised = normaliseAudioName(name);
+        if (!normalised) {
+          return;
+        }
+        available.add(normalised);
+        knownPlayableNames.add(normalised);
+      });
       const totalSamples = available.size;
       const HowlCtor = scope?.Howl;
       const useHowler = typeof HowlCtor === 'function';
@@ -7859,15 +7875,27 @@
         : null;
       const aliasSource = scope?.INFINITE_RAILS_AUDIO_ALIASES || null;
       const aliasMap = new Map();
+      const ensureKnownPlayableName = (name) => {
+        const normalised = normaliseAudioName(name);
+        if (!normalised) {
+          return null;
+        }
+        knownPlayableNames.add(normalised);
+        return normalised;
+      };
       if (aliasSource && typeof aliasSource === 'object') {
         Object.entries(aliasSource).forEach(([name, value]) => {
-          if (!name) return;
+          const aliasName = ensureKnownPlayableName(name);
+          if (!aliasName) {
+            return;
+          }
           const entries = Array.isArray(value) ? value : [value];
           const filtered = entries
             .map((item) => (typeof item === 'string' ? item.trim() : ''))
             .filter(Boolean);
           if (filtered.length) {
-            aliasMap.set(name, filtered);
+            filtered.forEach((candidate) => ensureKnownPlayableName(candidate));
+            aliasMap.set(aliasName, filtered);
           }
         });
       }
@@ -7878,6 +7906,7 @@
       const fallbackAlertName = '__fallback_alert__';
       const fallbackAlertSample =
         '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';
+      knownPlayableNames.add(fallbackAlertName);
       const getSamplePayload = (name) => {
         if (!name) return null;
         if (name === fallbackAlertName) {
@@ -7903,16 +7932,19 @@
         return true;
       };
       const resolveAudioName = (name) => {
-        if (!name) return null;
-        if (available.has(name)) {
-          return hasSamplePayload(name) ? name : null;
+        const lookupName = normaliseAudioName(name);
+        if (!lookupName) {
+          return null;
         }
-        if (aliasCache.has(name)) {
-          return aliasCache.get(name);
+        if (available.has(lookupName)) {
+          return hasSamplePayload(lookupName) ? lookupName : null;
         }
-        const candidates = aliasMap.get(name);
+        if (aliasCache.has(lookupName)) {
+          return aliasCache.get(lookupName);
+        }
+        const candidates = aliasMap.get(lookupName);
         if (!candidates || !candidates.length) {
-          aliasCache.set(name, null);
+          aliasCache.set(lookupName, null);
           return null;
         }
         let resolved = null;
@@ -7923,7 +7955,7 @@
             break;
           }
         }
-        aliasCache.set(name, resolved);
+        aliasCache.set(lookupName, resolved);
         return resolved;
       };
       const aliasIntegrityIssues = [];
@@ -7933,8 +7965,17 @@
         }
         let resolved = null;
         candidates.forEach((candidate) => {
-          if (hasSamplePayload(candidate, { stage: 'boot' }) && available.has(candidate) && resolved === null) {
-            resolved = candidate;
+          const normalisedCandidate = normaliseAudioName(candidate);
+          if (!normalisedCandidate) {
+            return;
+          }
+          ensureKnownPlayableName(normalisedCandidate);
+          if (!available.has(normalisedCandidate)) {
+            bootMissingSamples.add(normalisedCandidate);
+            return;
+          }
+          if (hasSamplePayload(normalisedCandidate, { stage: 'boot' }) && resolved === null) {
+            resolved = normalisedCandidate;
           }
         });
         if (!resolved) {
@@ -7945,6 +7986,7 @@
         hasSamplePayload(sampleName, { stage: 'boot' });
       });
       ['bubble', 'victoryCheer', 'miningA', 'miningB', 'crunch'].forEach((coreName) => {
+        ensureKnownPlayableName(coreName);
         hasSamplePayload(coreName, { stage: 'boot' });
       });
       if (!totalSamples && typeof console !== 'undefined' && typeof console.warn === 'function') {
@@ -8079,6 +8121,7 @@
       };
       const bootMissingSampleList = Array.from(bootMissingSamples).sort();
       const affectedAliasList = aliasIntegrityIssues.map((issue) => issue.aliasName).sort();
+      let bootStatusMessage = null;
       if (bootMissingSampleList.length || affectedAliasList.length) {
         const messageParts = [];
         if (bootMissingSampleList.length) {
@@ -8101,6 +8144,7 @@
         }
         messageParts.push('A fallback alert tone will be used until the audio files are restored.');
         const bootMessage = messageParts.join(' ');
+        bootStatusMessage = bootMessage;
         logAudioPlaybackIssue(
           bootMissingSampleList[0] || affectedAliasList[0] || null,
           bootMissingSampleList[0] || null,
@@ -8113,17 +8157,45 @@
             },
           },
         );
+      } else {
+        bootStatusMessage = 'Audio initialised successfully.';
+      }
+      if (typeof scope?.dispatchEvent === 'function' && typeof CustomEvent === 'function') {
+        const detail = {
+          missingSamples: bootMissingSampleList,
+          affectedAliases: affectedAliasList,
+          fallbackActive: Boolean(bootMissingSampleList.length || affectedAliasList.length),
+          message: bootStatusMessage,
+          timestamp: Date.now(),
+        };
+        try {
+          scope.dispatchEvent(new CustomEvent('infinite-rails:audio-boot-status', { detail }));
+        } catch (error) {
+          if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+            console.debug('Unable to dispatch audio boot status event.', error);
+          }
+        }
       }
 
       if (!useHowler && typeof AudioCtor !== 'function') {
         return {
-          has: (name) => available.has(name),
+          has: (name) => {
+            const resolved = resolveAudioName(name);
+            if (resolved) {
+              return true;
+            }
+            const normalised = normaliseAudioName(name);
+            return Boolean(normalised && knownPlayableNames.has(normalised));
+          },
           play: () => {},
           playRandom: () => {},
           stopAll: () => {},
           setMasterVolume: () => {},
           getLoadedSampleCount: () => totalSamples,
-          _resolve: (name) => (available.has(name) ? name : null),
+          _resolve: (name) => {
+            const resolved = resolveAudioName(name);
+            return resolved;
+          },
         };
       }
 
@@ -8437,6 +8509,9 @@
           fallbackOptions.volume = 0.7;
         }
         const nameForLog = typeof requestedName === 'string' && requestedName.trim().length ? requestedName : null;
+        if (nameForLog) {
+          ensureKnownPlayableName(nameForLog);
+        }
         if (nameForLog && !missingSampleNotified.has(nameForLog)) {
           logAudioPlaybackIssue(nameForLog, null, {
             message: `Audio sample "${nameForLog}" is unavailable. Playing fallback alert tone instead.`,
@@ -8448,7 +8523,12 @@
       };
       const controller = {
         has(name) {
-          return Boolean(resolveAudioName(name));
+          const resolved = resolveAudioName(name);
+          if (resolved) {
+            return true;
+          }
+          const normalised = normaliseAudioName(name);
+          return Boolean(normalised && knownPlayableNames.has(normalised));
         },
         play(name, options = {}) {
           const resolved = resolveAudioName(name);
