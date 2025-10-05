@@ -7,8 +7,9 @@
   const DEFAULT_ASSET_VERSION_TAG = '1';
 
   const SIGNED_URL_ALERT_EVENT = 'infinite-rails:signed-url-expiry';
-  const SIGNED_URL_IMMINENT_EXPIRY_WINDOW_MS = 24 * 60 * 60 * 1000;
+  const DEFAULT_SIGNED_URL_WARNING_WINDOW_MS = 24 * 60 * 60 * 1000;
   const signedUrlExpiryChecks = new Set();
+  let invalidSignedUrlWarningWindowLogged = false;
 
   function getConsoleRef() {
     if (globalScope?.console) {
@@ -207,6 +208,29 @@
     return { isSigned: true, expiresAt: Number.NaN, expirySource: null, failure: 'unrecognised-signed-url' };
   }
 
+  function resolveSignedUrlWarningWindowMs() {
+    const config = globalScope?.APP_CONFIG && typeof globalScope.APP_CONFIG === 'object' ? globalScope.APP_CONFIG : null;
+    const rawValue = config ? config.signedUrlWarningWindowMs : undefined;
+    if (rawValue === null || rawValue === undefined) {
+      return DEFAULT_SIGNED_URL_WARNING_WINDOW_MS;
+    }
+
+    const numeric = Number(rawValue);
+    if (Number.isFinite(numeric) && numeric > 0) {
+      return numeric;
+    }
+
+    if (!invalidSignedUrlWarningWindowLogged) {
+      invalidSignedUrlWarningWindowLogged = true;
+      logSignedUrlIssue(
+        'Invalid signed URL warning window configuration; falling back to default (24h). Provide APP_CONFIG.signedUrlWarningWindowMs as a positive millisecond duration.',
+        { configuredValue: rawValue },
+      );
+    }
+
+    return DEFAULT_SIGNED_URL_WARNING_WINDOW_MS;
+  }
+
   function dispatchSignedUrlAlert(detail) {
     if (!detail || typeof detail !== 'object') {
       return;
@@ -274,11 +298,15 @@
       return;
     }
 
+    const warningWindowMs = resolveSignedUrlWarningWindowMs();
+
     const context = {
       assetBaseUrl: typeof rawBaseUrl === 'string' ? rawBaseUrl : null,
       candidateUrl: typeof resolvedUrl === 'string' ? resolvedUrl : parsed.href,
       relativePath: relativePath ?? null,
+      warningWindowMs,
       expiresAtIso: Number.isFinite(analysis.expiresAt) ? new Date(analysis.expiresAt).toISOString() : null,
+      expiresAtEpochMs: Number.isFinite(analysis.expiresAt) ? analysis.expiresAt : null,
       expirySource: analysis.expirySource,
     };
 
@@ -305,7 +333,7 @@
       return;
     }
 
-    if (remainingMs <= SIGNED_URL_IMMINENT_EXPIRY_WINDOW_MS) {
+    if (remainingMs <= warningWindowMs) {
       context.severity = 'warning';
       logSignedUrlIssue(
         'Signed asset URL expires soon; rotate credentials or refresh APP_CONFIG.assetBaseUrl to avoid CDN outages.',
