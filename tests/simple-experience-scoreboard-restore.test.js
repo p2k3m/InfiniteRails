@@ -45,8 +45,10 @@ describe('simple experience scoreboard restore', () => {
     offlineExperience.updateLocalScoreEntry('offline-progress');
 
     const storedSnapshot = JSON.parse(localStorageStub.getItem(scoreboardStorageKey));
-    expect(Array.isArray(storedSnapshot)).toBe(true);
-    expect(storedSnapshot.length).toBeGreaterThan(0);
+    expect(storedSnapshot).toBeDefined();
+    expect(Array.isArray(storedSnapshot.entries)).toBe(true);
+    expect(storedSnapshot.entries.length).toBeGreaterThan(0);
+    expect(typeof storedSnapshot.updatedAt).toBe('number');
 
     const offlineEntry = offlineExperience.scoreEntries[0];
     const offlineIdentifier = offlineExperience.getScoreEntryIdentifier(offlineEntry);
@@ -77,8 +79,34 @@ describe('simple experience scoreboard restore', () => {
     expect(playerEntry.playerId).toBe('user-123');
 
     const persistedSnapshot = JSON.parse(localStorageStub.getItem(scoreboardStorageKey));
-    const persistedIdentifiers = persistedSnapshot.map((entry) => entry.googleId ?? entry.id ?? null);
+    expect(Array.isArray(persistedSnapshot.entries)).toBe(true);
+    const persistedIdentifiers = persistedSnapshot.entries.map((entry) => entry.googleId ?? entry.id ?? null);
     expect(persistedIdentifiers).toContain('user-123');
+  });
+
+  it('purges stale cached leaderboard snapshots before restoring entries', () => {
+    const scoreboardStorageKey = 'vitest-scoreboard-expiry';
+    const { experience } = createExperience({ scoreboardStorageKey });
+
+    experience.score = 2048;
+    experience.elapsed = 64;
+    experience.updateLocalScoreEntry('offline-progress');
+
+    const storedSnapshot = JSON.parse(localStorageStub.getItem(scoreboardStorageKey));
+    expect(Array.isArray(storedSnapshot.entries)).toBe(true);
+
+    const staleTimestamp = Date.now() - 1000 * 60 * 60 * 24 * 8;
+    localStorageStub.setItem(
+      scoreboardStorageKey,
+      JSON.stringify({ ...storedSnapshot, updatedAt: staleTimestamp }),
+    );
+
+    const removeCallCount = localStorageStub.removeItem.mock.calls.length;
+    const { experience: restoredExperience } = createExperience({ scoreboardStorageKey });
+
+    expect(restoredExperience.scoreEntries.length).toBe(0);
+    expect(localStorageStub.getItem(scoreboardStorageKey)).toBeNull();
+    expect(localStorageStub.removeItem.mock.calls.length).toBeGreaterThan(removeCallCount);
   });
 
   it('flushes queued offline runs to the backend once login succeeds', async () => {
