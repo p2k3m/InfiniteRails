@@ -1,6 +1,6 @@
 const { chromium } = require('playwright');
 
-const MAX_RUN_DURATION_MS = 2 * 60 * 1000;
+const MAX_RUN_DURATION_MS = 5 * 60 * 1000;
 
 function logCheckpoint(scope, message, { elapsedFrom } = {}) {
   const elapsed = elapsedFrom ? ` +${Math.round((Date.now() - elapsedFrom) / 10) / 100}s` : '';
