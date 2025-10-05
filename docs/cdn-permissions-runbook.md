@@ -112,7 +112,7 @@ When every request to `d3gj6x3ityfh5o.cloudfront.net/*.js` (or other static asse
 ## 6. Redeploy and invalidate
 
 1. After updating policies, wait for CloudFront to propagate the changes (or trigger a distribution update).
-2. Invalidate cached errors and always purge the distribution after each deploy so the latest bundles, textures, and GLTFs reach players immediately:
+2. Invalidate cached errors and always purge the distribution after each deploy so the latest bundles, textures, and GLTFs reach players immediately. Neglecting the flush leaves CloudFront serving stale or partially uploaded bundles, which shows up as missing UI chrome or corrupted geometry/audio on the next load. Trigger a full-path invalidation right after every S3 sync:
    ```bash
    aws cloudfront create-invalidation --distribution-id E1234567890 --paths "/*"
    ```
