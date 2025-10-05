@@ -3357,21 +3357,18 @@
       }
       lastRendererFailureDetail = detail;
       const failureMessage = formatRendererFailureMessage(detail);
-      bootstrapOverlay.showError({
+      presentCriticalErrorOverlay({
         title: 'Renderer unavailable',
         message: failureMessage,
+        diagnosticScope: 'renderer',
+        diagnosticStatus: 'error',
+        diagnosticMessage: failureMessage,
+        logScope: 'startup',
+        logMessage: failureMessage,
+        logLevel: 'error',
+        detail,
+        timestamp: Number.isFinite(detail?.timestamp) ? detail.timestamp : undefined,
       });
-      bootstrapOverlay.setDiagnostic('renderer', {
-        status: 'error',
-        message: failureMessage,
-      });
-      if (typeof logDiagnosticsEvent === 'function') {
-        logDiagnosticsEvent('startup', failureMessage, {
-          level: 'error',
-          detail,
-          timestamp: Number.isFinite(detail?.timestamp) ? detail.timestamp : undefined,
-        });
-      }
       const activeMode = resolveRendererModeForFallback(detail);
       if (activeMode !== 'simple') {
         const fallbackContext = {
