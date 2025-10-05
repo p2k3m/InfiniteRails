@@ -85,6 +85,49 @@ Resources:
               - "*"
           OriginOverride: true
 
+  AssetsMimeTypeFunction:
+    Type: AWS::CloudFront::Function
+    Properties:
+      Name: !Sub "${AWS::StackName}-assets-mime"
+      AutoPublish: true
+      FunctionConfig:
+        Comment: Ensure MIME and CORS headers for static assets
+        Runtime: cloudfront-js-1.0
+      FunctionCode: |
+        function handler(event) {
+          var response = event.response || {};
+          var headers = response.headers || {};
+          var request = event.request || {};
+          var uri = (request.uri || '').toLowerCase();
+
+          var mimeMap = {
+            '.gltf': 'model/gltf+json',
+            '.png': 'image/png',
+            '.mp3': 'audio/mpeg',
+            '.js': 'application/javascript'
+          };
+
+          var matched = null;
+          for (var ext in mimeMap) {
+            if (uri.endsWith(ext)) {
+              matched = ext;
+              break;
+            }
+          }
+
+          if (matched) {
+            var contentType = mimeMap[matched];
+            if (!headers['content-type'] || headers['content-type'].value !== contentType) {
+              headers['content-type'] = { value: contentType };
+            }
+          }
+
+          headers['access-control-allow-origin'] = { value: '*' };
+
+          response.headers = headers;
+          return response;
+        }
+
   AssetsDistribution:
     Type: AWS::CloudFront::Distribution
     Properties:
@@ -110,6 +153,9 @@ Resources:
           Compress: true
           OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac # Managed-CORS-S3Origin
           ResponseHeadersPolicyId: !Ref AssetsResponseHeadersPolicy
+          FunctionAssociations:
+            - EventType: viewer-response
+              FunctionARN: !GetAtt AssetsMimeTypeFunction.FunctionARN
           TargetOriginId: AssetsS3Origin
           ViewerProtocolPolicy: redirect-to-https
 
