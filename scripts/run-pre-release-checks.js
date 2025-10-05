@@ -15,7 +15,7 @@ const checks = [
   {
     label: 'Vitest unit suite',
     command: 'npm',
-    args: ['run', 'test'],
+    args: ['test'],
   },
   {
     label: 'Playwright E2E suite',

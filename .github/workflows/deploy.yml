@@ -29,18 +29,10 @@ jobs:
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
 
-      - name: Run unit tests
-        run: npm test
+      - name: Run pre-release test suite
+        run: npm run test:pre-release
         env:
           CI: true
-
-      - name: Run end-to-end smoke tests
-        run: npm run test:e2e
-        env:
-          CI: true
-
-      - name: Validate asset manifest coverage
-        run: node scripts/validate-asset-manifest.js
 
   deploy:
     if: github.event_name == 'push'
