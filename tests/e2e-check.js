@@ -201,6 +201,16 @@ async function maybeClickStart(page) {
     console.info('[E2E][StartButton] Start button became hidden before click; assuming renderer progressed.');
     return;
   }
+  const handledByAutomation = await page
+    .evaluate(() => {
+      const button = document.querySelector('#startButton');
+      return button?.dataset?.simpleExperienceAutoStart === 'true';
+    })
+    .catch(() => false);
+  if (handledByAutomation) {
+    console.info('[E2E][StartButton] Automation flagged auto-start; skipping manual click.');
+    return;
+  }
   await startButton.click();
   console.info('[E2E][StartButton] Click dispatched.');
 }
