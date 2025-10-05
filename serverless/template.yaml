@@ -62,6 +62,7 @@ Resources:
             Resource:
               - !Sub "${AssetsBucket.Arn}/assets/*"
               - !Sub "${AssetsBucket.Arn}/textures/*"
+              - !Sub "${AssetsBucket.Arn}/audio/*"
 
   AssetsDistribution:
     Type: AWS::CloudFront::Distribution
