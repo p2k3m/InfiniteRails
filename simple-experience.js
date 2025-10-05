@@ -86,6 +86,96 @@
     return null;
   }
 
+  const runtimeScope =
+    (typeof window !== 'undefined' && window) ||
+    (typeof globalThis !== 'undefined' && globalThis) ||
+    (typeof global !== 'undefined' && global) ||
+    null;
+
+  const DEFAULT_ASSET_VERSION_TAG = '1';
+
+  function normaliseAssetVersionTag(value) {
+    if (value === null || value === undefined) {
+      return '';
+    }
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return String(value);
+    }
+    if (typeof value === 'string') {
+      const trimmed = value.trim();
+      return trimmed.length > 0 ? trimmed : '';
+    }
+    if (typeof value?.toString === 'function') {
+      const stringified = String(value).trim();
+      return stringified.length > 0 ? stringified : '';
+    }
+    return '';
+  }
+
+  function resolveAssetVersionTag() {
+    const config = runtimeScope?.APP_CONFIG && typeof runtimeScope.APP_CONFIG === 'object'
+      ? runtimeScope.APP_CONFIG
+      : null;
+    const configured = normaliseAssetVersionTag(config?.assetVersionTag);
+    if (configured) {
+      runtimeScope.INFINITE_RAILS_ASSET_VERSION_TAG = configured;
+      return configured;
+    }
+
+    const ambient = normaliseAssetVersionTag(runtimeScope?.INFINITE_RAILS_ASSET_VERSION_TAG);
+    if (ambient) {
+      if (config) {
+        config.assetVersionTag = ambient;
+      }
+      return ambient;
+    }
+
+    if (config) {
+      config.assetVersionTag = DEFAULT_ASSET_VERSION_TAG;
+    }
+    if (runtimeScope) {
+      runtimeScope.INFINITE_RAILS_ASSET_VERSION_TAG = DEFAULT_ASSET_VERSION_TAG;
+    }
+    return DEFAULT_ASSET_VERSION_TAG;
+  }
+
+  function applyAssetVersionTag(url) {
+    if (typeof url !== 'string' || url.length === 0) {
+      return url;
+    }
+    if (/^(?:data|blob):/i.test(url)) {
+      return url;
+    }
+
+    const versionTag = resolveAssetVersionTag();
+    if (!versionTag) {
+      return url;
+    }
+
+    const [base, hash = ''] = url.split('#', 2);
+    if (/(?:^|[?&])assetVersion=/.test(base)) {
+      return url;
+    }
+
+    if (/^[a-z][a-z0-9+.-]*:/i.test(base)) {
+      try {
+        const parsed = new URL(url);
+        if (!parsed.searchParams.has('assetVersion')) {
+          parsed.searchParams.set('assetVersion', versionTag);
+        }
+        return parsed.toString();
+      } catch (error) {
+        // Fall through to manual handling when URL parsing fails (likely relative paths).
+      }
+    }
+
+    const separator = base.includes('?') ? '&' : '?';
+    const tagged = `${base}${separator}assetVersion=${encodeURIComponent(versionTag)}`;
+    return hash ? `${tagged}#${hash}` : tagged;
+  }
+
+  resolveAssetVersionTag();
+
   const FALLBACK_PROCEDURAL_RGB = Object.freeze({
     grass: { r: 111, g: 191, b: 115 },
     cloud: { r: 229, g: 247, b: 255 },
@@ -1198,16 +1288,29 @@
       if (!relativePath || typeof relativePath !== 'string') {
         return [];
       }
+      const candidates = [];
+      const seen = new Set();
+      const addCandidate = (value) => {
+        if (typeof value !== 'string' || value.length === 0) {
+          return;
+        }
+        const tagged = applyAssetVersionTag(value);
+        if (!tagged || seen.has(tagged)) {
+          return;
+        }
+        seen.add(tagged);
+        candidates.push(tagged);
+      };
       try {
         const base =
           (typeof document !== 'undefined' && document.baseURI) ||
           (typeof window !== 'undefined' && window.location?.href) ||
           undefined;
         const resolved = new URL(relativePath, base);
-        return [resolved.href, relativePath];
-      } catch (error) {
-        return [relativePath];
-      }
+        addCandidate(resolved.href);
+      } catch (error) {}
+      addCandidate(relativePath);
+      return candidates;
     });
 
   const resolveAssetUrl =

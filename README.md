@@ -112,8 +112,9 @@ These steps restore the intended first-person experience when a deployment or ca
 403 responses on textures, GLTFs, or audio files usually mean the CDN or hosting layer is blocking relative asset fetches:
 
 1. **Check `assetBaseUrl`.** When hosting from a subdirectory or CDN, ensure `APP_CONFIG.assetBaseUrl` points at the folder that exposes `assets/` and `vendor/`. Mismatched prefixes produce signed URL or CORS failures.
-2. **Validate headers.** Confirm the server is configured to serve static assets with the correct MIME types and CORS headers. Three.js will abort loads when GLTF files are returned as HTML error pages.
-3. **Regenerate tokens.** If you rely on signed URLs, regenerate the token bundle and redeploy. Expired credentials manifest as 403s even when the path is correct.
+2. **Bump `assetVersionTag`.** After refreshing your asset pack (textures, GLTFs, audio), increment `APP_CONFIG.assetVersionTag` so the client appends a fresh cache-busting query string. The bundled build seeds a default tag, but CDN deployments should advance it whenever files change.
+3. **Validate headers.** Confirm the server is configured to serve static assets with the correct MIME types and CORS headers. Three.js will abort loads when GLTF files are returned as HTML error pages.
+4. **Regenerate tokens.** If you rely on signed URLs, regenerate the token bundle and redeploy. Expired credentials manifest as 403s even when the path is correct.
 
 Once the CDN returns `200 OK` with the expected content type, the renderer will resume streaming the missing resources without requiring code changes.
 
