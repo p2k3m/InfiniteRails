@@ -9044,7 +9044,21 @@
           ui.startButton.dataset[autoStartMarker] = 'true';
         };
         const hasAutoStartRun = () => ui.startButton.dataset[autoStartMarker] === 'true';
-        const tryTriggerAutoStart = () => {
+        const tryTriggerAutoStart = ({ immediate = false } = {}) => {
+          if (!immediate) {
+            const scheduler =
+              typeof globalScope?.setTimeout === 'function'
+                ? globalScope.setTimeout.bind(globalScope)
+                : typeof setTimeout === 'function'
+                  ? setTimeout
+                  : null;
+            if (scheduler) {
+              scheduler(() => {
+                tryTriggerAutoStart({ immediate: true });
+              }, 160);
+              return false;
+            }
+          }
           if (!ui.startButton || hasAutoStartRun()) {
             return true;
           }
@@ -9091,7 +9105,7 @@
             }
           };
           const handleMutation = () => {
-            if (tryTriggerAutoStart()) {
+            if (tryTriggerAutoStart({ immediate: true })) {
               cleanupObserver();
             }
           };
@@ -9113,20 +9127,32 @@
             () => {
               if (typeof globalScope?.requestAnimationFrame === 'function') {
                 globalScope.requestAnimationFrame(() => {
-                  if (!tryTriggerAutoStart()) {
+                  if (!tryTriggerAutoStart({ immediate: true })) {
                     handleMutation();
                   }
                 });
+              } else if (!tryTriggerAutoStart({ immediate: true })) {
+                handleMutation();
               }
             },
             () => {
-              if (typeof globalScope?.setTimeout === 'function') {
-                globalScope.setTimeout(() => {
-                  if (!tryTriggerAutoStart()) {
-                    handleMutation();
-                  }
-                }, 100);
+              const scheduler =
+                typeof globalScope?.setTimeout === 'function'
+                  ? globalScope.setTimeout.bind(globalScope)
+                  : typeof setTimeout === 'function'
+                    ? setTimeout
+                    : null;
+              if (!scheduler) {
+                if (!tryTriggerAutoStart({ immediate: true })) {
+                  handleMutation();
+                }
+                return;
               }
+              scheduler(() => {
+                if (!tryTriggerAutoStart({ immediate: true })) {
+                  handleMutation();
+                }
+              }, 120);
             },
           ];
           readyCallbacks.forEach((callback) => {
