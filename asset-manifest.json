@@ -4,6 +4,7 @@
     "index.html",
     "styles.css",
     "script.js",
+    "test-driver.js",
     "simple-experience.js",
     "asset-resolver.js",
     "audio-aliases.js",
