@@ -64,13 +64,18 @@ function instantiateLoadScript({ documentStub, documentRef = null, globalScopeSt
   return factory(documentRef, globalScopeStub);
 }
 
-function instantiateCreateAssetUrlCandidates({ documentStub = null, globalScopeStub = {} } = {}) {
+function instantiateCreateAssetUrlCandidates({
+  documentStub = null,
+  globalScopeStub = {},
+  monitorStub = () => {},
+} = {}) {
   const factory = new Function(
     'documentRef',
     'globalScope',
+    'monitorSignedAssetUrl',
     "'use strict';" + createAssetUrlCandidatesSource + '\n  return createAssetUrlCandidates;'
   );
-  return factory(documentStub, globalScopeStub);
+  return factory(documentStub, globalScopeStub, monitorStub);
 }
 
 describe('loadScript helper', () => {
@@ -402,5 +407,91 @@ describe('createAssetUrlCandidates helper', () => {
     expect(
       createAssetUrlCandidates('https://static.example.com/vendor/three.min.js?v=030c75d4e909'),
     ).toEqual(['https://static.example.com/vendor/three.min.js?v=030c75d4e909&assetVersion=1']);
+  });
+
+  it('monitors signed asset bases for imminent expiry', () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2024-03-18T12:00:00Z'));
+
+      const dispatchEvent = vi.fn();
+      const consoleSpy = { error: vi.fn(), warn: vi.fn() };
+      const expirySeconds = Math.floor((Date.now() + 30 * 60 * 1000) / 1000);
+      const globalScopeStub = {
+        APP_CONFIG: {
+          assetBaseUrl: `https://cdn.example.com/assets/?Expires=${expirySeconds}&Signature=token`,
+        },
+        console: consoleSpy,
+        CustomEvent: class CustomEvent {
+          constructor(type, init = {}) {
+            this.type = type;
+            this.detail = init.detail;
+          }
+        },
+        location: { href: 'https://game.example.com/index.html' },
+      };
+
+      const documentStub = {
+        querySelector: vi.fn(() => null),
+        dispatchEvent,
+        baseURI: 'https://game.example.com/index.html',
+      };
+
+      const monitorStub = vi.fn((rawBaseUrl, resolvedUrl) => {
+        consoleSpy.error(
+          'Signed asset URL expires soon; rotate credentials or refresh APP_CONFIG.assetBaseUrl to avoid CDN outages.',
+          {
+            severity: 'warning',
+            assetBaseUrl: rawBaseUrl,
+            candidateUrl: resolvedUrl,
+          },
+        );
+        if (typeof documentStub.dispatchEvent === 'function') {
+          documentStub.dispatchEvent({
+            type: 'infinite-rails:signed-url-expiry',
+            detail: { severity: 'warning', millisecondsUntilExpiry: 30 * 60 * 1000 },
+          });
+        }
+      });
+
+      const createAssetUrlCandidates = instantiateCreateAssetUrlCandidates({
+        documentStub,
+        globalScopeStub,
+        monitorStub,
+      });
+
+      const candidates = createAssetUrlCandidates('textures/portal-core.png');
+      expect(candidates[0]).toContain('textures/portal-core.png');
+      expect(candidates[0]).toContain('assetVersion=1');
+
+      expect(monitorStub).toHaveBeenCalledTimes(1);
+      const [rawBaseUrl, resolvedUrl, relativePath] = monitorStub.mock.calls[0];
+      expect(rawBaseUrl).toBe(globalScopeStub.APP_CONFIG.assetBaseUrl);
+      const expectedResolved = new URL(
+        'textures/portal-core.png',
+        globalScopeStub.APP_CONFIG.assetBaseUrl.endsWith('/')
+          ? globalScopeStub.APP_CONFIG.assetBaseUrl
+          : `${globalScopeStub.APP_CONFIG.assetBaseUrl}/`,
+      ).href;
+      expect(resolvedUrl).toBe(expectedResolved);
+      expect(relativePath).toBe('textures/portal-core.png');
+
+      expect(consoleSpy.error).toHaveBeenCalledWith(
+        expect.stringContaining('Signed asset URL expires soon'),
+        expect.objectContaining({
+          severity: 'warning',
+          assetBaseUrl: expect.stringContaining('Expires='),
+        }),
+      );
+
+      expect(dispatchEvent).toHaveBeenCalledTimes(1);
+      const event = dispatchEvent.mock.calls[0][0];
+      expect(event.type).toBe('infinite-rails:signed-url-expiry');
+      expect(event.detail.severity).toBe('warning');
+      expect(event.detail.millisecondsUntilExpiry).toBeGreaterThan(0);
+      expect(event.detail.millisecondsUntilExpiry).toBeLessThanOrEqual(24 * 60 * 60 * 1000);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

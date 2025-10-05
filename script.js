@@ -6,6 +6,315 @@
 
   const DEFAULT_ASSET_VERSION_TAG = '1';
 
+  const SIGNED_URL_ALERT_EVENT = 'infinite-rails:signed-url-expiry';
+  const SIGNED_URL_IMMINENT_EXPIRY_WINDOW_MS = 24 * 60 * 60 * 1000;
+  const signedUrlExpiryChecks = new Set();
+
+  function getConsoleRef() {
+    if (globalScope?.console) {
+      return globalScope.console;
+    }
+    if (typeof console !== 'undefined') {
+      return console;
+    }
+    return null;
+  }
+
+  function logSignedUrlIssue(message, detail, error = null) {
+    const consoleRef = getConsoleRef();
+    if (!consoleRef) {
+      return;
+    }
+    const payload = detail ? { ...detail } : {};
+    if (error) {
+      payload.error = error;
+    }
+    if (typeof consoleRef.error === 'function') {
+      consoleRef.error(message, payload);
+      return;
+    }
+    if (typeof consoleRef.warn === 'function') {
+      consoleRef.warn(message, payload);
+      return;
+    }
+    if (typeof consoleRef.log === 'function') {
+      consoleRef.log(message, payload);
+    }
+  }
+
+  function getSearchParamEntries(searchParams) {
+    if (!searchParams || typeof searchParams.entries !== 'function') {
+      return [];
+    }
+    const entries = [];
+    for (const [key, value] of searchParams.entries()) {
+      entries.push({
+        key,
+        value,
+        lowerKey: typeof key === 'string' ? key.toLowerCase() : String(key ?? '').toLowerCase(),
+      });
+    }
+    return entries;
+  }
+
+  function findSearchParam(entries, target) {
+    const lower = target.toLowerCase();
+    return entries.find((entry) => entry.lowerKey === lower) ?? null;
+  }
+
+  function parseSignedIntegerSeconds(value) {
+    if (typeof value !== 'string') {
+      return Number.NaN;
+    }
+    const trimmed = value.trim();
+    if (!/^-?[0-9]+$/.test(trimmed)) {
+      return Number.NaN;
+    }
+    const numeric = Number.parseInt(trimmed, 10);
+    return Number.isFinite(numeric) ? numeric : Number.NaN;
+  }
+
+  function parseAwsIsoTimestamp(value) {
+    if (typeof value !== 'string' || !/^[0-9]{8}T[0-9]{6}Z$/.test(value)) {
+      return Number.NaN;
+    }
+    const iso = `${value.slice(0, 4)}-${value.slice(4, 6)}-${value.slice(6, 8)}T${value.slice(9, 11)}:${value.slice(
+      11,
+      13,
+    )}:${value.slice(13, 15)}Z`;
+    const parsed = Date.parse(iso);
+    return Number.isFinite(parsed) ? parsed : Number.NaN;
+  }
+
+  function parseSignedUnixTimestamp(value) {
+    const seconds = parseSignedIntegerSeconds(value);
+    if (!Number.isFinite(seconds)) {
+      return Number.NaN;
+    }
+    if (Math.abs(seconds) < 1_000_000_000_000) {
+      return seconds * 1000;
+    }
+    return seconds;
+  }
+
+  function analyseSignedUrl(parsedUrl) {
+    if (!parsedUrl || typeof parsedUrl.searchParams !== 'object') {
+      return { isSigned: false };
+    }
+    const entries = getSearchParamEntries(parsedUrl.searchParams);
+    if (entries.length === 0) {
+      return { isSigned: false };
+    }
+
+    const awsExpires = findSearchParam(entries, 'X-Amz-Expires');
+    const awsDate = findSearchParam(entries, 'X-Amz-Date');
+    const gcsExpires = findSearchParam(entries, 'X-Goog-Expires');
+    const gcsDate = findSearchParam(entries, 'X-Goog-Date');
+    const genericExpires = findSearchParam(entries, 'Expires');
+    const azureExpiry = findSearchParam(entries, 'se');
+
+    const isSigned = Boolean(awsExpires || gcsExpires || genericExpires || azureExpiry);
+    if (!isSigned) {
+      return { isSigned: false };
+    }
+
+    if (awsExpires) {
+      const durationSeconds = parseSignedIntegerSeconds(awsExpires.value);
+      if (Number.isFinite(durationSeconds) && durationSeconds > 0) {
+        const startTime = parseAwsIsoTimestamp(awsDate?.value ?? '');
+        if (Number.isFinite(startTime)) {
+          return {
+            isSigned: true,
+            expiresAt: startTime + durationSeconds * 1000,
+            expirySource: 'aws',
+          };
+        }
+        return {
+          isSigned: true,
+          expiresAt: Number.NaN,
+          expirySource: 'aws',
+          failure: 'missing-signed-start-time',
+        };
+      }
+      return {
+        isSigned: true,
+        expiresAt: Number.NaN,
+        expirySource: 'aws',
+        failure: 'invalid-expiry-duration',
+      };
+    }
+
+    if (gcsExpires) {
+      const durationSeconds = parseSignedIntegerSeconds(gcsExpires.value);
+      if (Number.isFinite(durationSeconds) && durationSeconds > 0) {
+        const startTime = parseAwsIsoTimestamp(gcsDate?.value ?? '');
+        if (Number.isFinite(startTime)) {
+          return {
+            isSigned: true,
+            expiresAt: startTime + durationSeconds * 1000,
+            expirySource: 'gcs',
+          };
+        }
+        return {
+          isSigned: true,
+          expiresAt: Number.NaN,
+          expirySource: 'gcs',
+          failure: 'missing-signed-start-time',
+        };
+      }
+      return {
+        isSigned: true,
+        expiresAt: Number.NaN,
+        expirySource: 'gcs',
+        failure: 'invalid-expiry-duration',
+      };
+    }
+
+    if (genericExpires) {
+      const timestamp = parseSignedUnixTimestamp(genericExpires.value);
+      if (Number.isFinite(timestamp)) {
+        return {
+          isSigned: true,
+          expiresAt: timestamp,
+          expirySource: 'generic-expires',
+        };
+      }
+      return {
+        isSigned: true,
+        expiresAt: Number.NaN,
+        expirySource: 'generic-expires',
+        failure: 'invalid-unix-expiry',
+      };
+    }
+
+    if (azureExpiry) {
+      const parsed = Date.parse(azureExpiry.value);
+      if (Number.isFinite(parsed)) {
+        return {
+          isSigned: true,
+          expiresAt: parsed,
+          expirySource: 'azure',
+        };
+      }
+      return {
+        isSigned: true,
+        expiresAt: Number.NaN,
+        expirySource: 'azure',
+        failure: 'invalid-iso-expiry',
+      };
+    }
+
+    return { isSigned: true, expiresAt: Number.NaN, expirySource: null, failure: 'unrecognised-signed-url' };
+  }
+
+  function dispatchSignedUrlAlert(detail) {
+    if (!detail || typeof detail !== 'object') {
+      return;
+    }
+    const target =
+      (documentRef && typeof documentRef.dispatchEvent === 'function' && documentRef) ||
+      (typeof globalScope?.dispatchEvent === 'function' ? globalScope : null);
+    if (!target) {
+      return;
+    }
+    const payload = { ...detail };
+    try {
+      if (typeof globalScope?.CustomEvent === 'function') {
+        target.dispatchEvent(new globalScope.CustomEvent(SIGNED_URL_ALERT_EVENT, { detail: payload }));
+        return;
+      }
+      if (typeof globalScope?.Event === 'function') {
+        const event = new globalScope.Event(SIGNED_URL_ALERT_EVENT);
+        event.detail = payload;
+        target.dispatchEvent(event);
+      }
+    } catch (error) {
+      logSignedUrlIssue(
+        'Failed to dispatch signed URL expiry alert event. Downstream monitors may miss impending CDN credential rotation.',
+        payload,
+        error,
+      );
+    }
+  }
+
+  function monitorSignedAssetUrl(rawBaseUrl, resolvedUrl, relativePath) {
+    const candidates = [];
+    if (typeof rawBaseUrl === 'string') {
+      candidates.push(rawBaseUrl);
+    }
+    if (typeof resolvedUrl === 'string') {
+      candidates.push(resolvedUrl);
+    }
+    if (!candidates.length) {
+      return;
+    }
+
+    let parsed = null;
+    for (const value of candidates) {
+      try {
+        parsed = new URL(value, globalScope?.location?.href ?? undefined);
+        break;
+      } catch (error) {
+        // Try the next candidate when URL construction fails.
+      }
+    }
+
+    if (!parsed) {
+      return;
+    }
+
+    const dedupeKey = typeof rawBaseUrl === 'string' ? rawBaseUrl : `${parsed.origin}|${parsed.search}`;
+    if (signedUrlExpiryChecks.has(dedupeKey)) {
+      return;
+    }
+    signedUrlExpiryChecks.add(dedupeKey);
+
+    const analysis = analyseSignedUrl(parsed);
+    if (!analysis.isSigned) {
+      return;
+    }
+
+    const context = {
+      assetBaseUrl: typeof rawBaseUrl === 'string' ? rawBaseUrl : null,
+      candidateUrl: typeof resolvedUrl === 'string' ? resolvedUrl : parsed.href,
+      relativePath: relativePath ?? null,
+      expiresAtIso: Number.isFinite(analysis.expiresAt) ? new Date(analysis.expiresAt).toISOString() : null,
+      expirySource: analysis.expirySource,
+    };
+
+    if (!Number.isFinite(analysis.expiresAt)) {
+      context.reason = analysis.failure ?? 'unknown-expiry-evaluation-failure';
+      logSignedUrlIssue(
+        'Signed asset URL detected but expiry could not be determined. Rotate APP_CONFIG.assetBaseUrl proactively to avoid runtime 403s.',
+        context,
+      );
+      return;
+    }
+
+    const now = Date.now();
+    const remainingMs = analysis.expiresAt - now;
+    context.millisecondsUntilExpiry = remainingMs;
+
+    if (remainingMs <= 0) {
+      context.severity = 'expired';
+      logSignedUrlIssue(
+        'Signed asset URL has expired; asset requests will fail until credentials are refreshed. Update APP_CONFIG.assetBaseUrl immediately.',
+        context,
+      );
+      dispatchSignedUrlAlert(context);
+      return;
+    }
+
+    if (remainingMs <= SIGNED_URL_IMMINENT_EXPIRY_WINDOW_MS) {
+      context.severity = 'warning';
+      logSignedUrlIssue(
+        'Signed asset URL expires soon; rotate credentials or refresh APP_CONFIG.assetBaseUrl to avoid CDN outages.',
+        context,
+      );
+      dispatchSignedUrlAlert(context);
+    }
+  }
+
   function normaliseAssetVersionTag(value) {
     if (value === null || value === undefined) {
       return '';
@@ -7552,7 +7861,9 @@
       if (assetBase) {
         try {
           const base = assetBase.endsWith('/') ? assetBase : `${assetBase}/`;
-          registerCandidate(new URL(normalisedPath, base).href);
+          const resolved = new URL(normalisedPath, base).href;
+          monitorSignedAssetUrl(assetBase, resolved, normalisedPath);
+          registerCandidate(resolved);
         } catch (error) {
           if (globalScope.console?.warn) {
             globalScope.console.warn('Failed to resolve assetBaseUrl candidate.', {
