@@ -4356,7 +4356,28 @@
       });
       return false;
     }
-    const results = await Promise.all(probes);
+    let results;
+    try {
+      results = await Promise.all(probes);
+    } catch (error) {
+      const detail = normaliseLiveCheckErrorDetail(error);
+      const summaryMessage = detail?.message && detail.message.trim().length
+        ? detail.message.trim()
+        : 'Unexpected error during backend validation';
+      const failureRecord = {
+        label: 'Backend validation',
+        method: 'VALIDATE',
+        url: identityState.configuredApiBaseUrl ?? configuredBase ?? null,
+        error,
+      };
+      markBackendLiveCheckFailure({
+        reason: detail?.reason ?? detail?.code ?? 'probe-error',
+        message: summaryMessage,
+        results: [],
+        failures: [failureRecord],
+      });
+      return false;
+    }
     const failures = results.filter((result) => !result.ok);
     if (failures.length) {
       const summary = failures.map((result) => formatBackendProbeSummary(result)).join('; ');
@@ -9227,6 +9248,10 @@
     try {
       const hooks = globalScope.__INFINITE_RAILS_TEST_HOOKS__ || (globalScope.__INFINITE_RAILS_TEST_HOOKS__ = {});
       hooks.ensureSimpleExperience = ensureSimpleExperience;
+      hooks.ensureBackendLiveCheck = ensureBackendLiveCheck;
+      hooks.performBackendLiveCheck = performBackendLiveCheck;
+      hooks.getIdentityState = () => identityState;
+      hooks.getBackendLiveCheckState = () => backendLiveCheckState;
     } catch (hookError) {
       if (globalScope.console?.debug) {
         globalScope.console.debug('Failed to expose ensureSimpleExperience to test hooks.', hookError);
