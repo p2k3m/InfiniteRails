@@ -537,6 +537,60 @@
     summary: null,
   };
 
+  function cloneManifestAssetCheckState(source = manifestAssetCheckState) {
+    if (!source) {
+      return null;
+    }
+    const missingEntries = Array.isArray(source.missing)
+      ? source.missing.map((entry) => ({ ...entry }))
+      : [];
+    const summary = source.summary
+      ? {
+          ...source.summary,
+          missing: Array.isArray(source.summary.missing)
+            ? source.summary.missing.map((entry) => ({ ...entry }))
+            : [],
+        }
+      : null;
+    const error = source.error ? { ...source.error } : null;
+    return {
+      status: source.status ?? null,
+      total: Number.isFinite(source.total) ? Number(source.total) : null,
+      checkedAt: source.checkedAt ?? null,
+      missing: missingEntries,
+      error,
+      summary,
+      pending: Boolean(source.promise),
+    };
+  }
+
+  function markManifestAssetCheckSkipped(reason = 'offline-mode', options = {}) {
+    if (manifestAssetCheckState.status !== 'idle' && options.force !== true) {
+      return manifestAssetCheckState;
+    }
+    const skippedAt = new Date().toISOString();
+    updateManifestAssetCheckState(
+      {
+        status: 'skipped',
+        error: null,
+        missing: [],
+        total: 0,
+        checkedAt: skippedAt,
+        summary: {
+          status: 'skipped',
+          reason,
+          missing: [],
+          total: 0,
+          reachable: 0,
+          checkedAt: skippedAt,
+          manifestUrl: null,
+        },
+      },
+      { render: options.render !== false },
+    );
+    return manifestAssetCheckState;
+  }
+
   globalScope.InfiniteRails = globalScope.InfiniteRails || {};
   globalScope.InfiniteRails.bootDiagnostics = globalScope.InfiniteRails.bootDiagnostics || {};
 
@@ -1458,26 +1512,12 @@
   }
 
   function buildManifestAssetCheckReport() {
-    const state = manifestAssetCheckState;
-    if (!state) {
+    const clone = cloneManifestAssetCheckState();
+    if (!clone) {
       return null;
     }
-    const summary = state.summary
-      ? {
-          ...state.summary,
-          missing: Array.isArray(state.summary.missing)
-            ? state.summary.missing.map((entry) => ({ ...entry }))
-            : [],
-        }
-      : null;
-    return {
-      status: state.status,
-      total: Number.isFinite(state.total) ? Number(state.total) : null,
-      checkedAt: state.checkedAt ?? null,
-      missing: Array.isArray(state.missing) ? state.missing.map((entry) => ({ ...entry })) : [],
-      error: state.error ? { ...state.error } : null,
-      summary,
-    };
+    const { pending, ...report } = clone;
+    return report;
   }
 
   function notifyBootDiagnosticsListeners(snapshot) {
@@ -9831,24 +9871,8 @@
           globalScope.console.debug('Failed to initiate manifest asset availability check.', error);
         }
       }
-    } else if (!shouldEnforceStrictAssets && manifestAssetCheckState.status === 'idle') {
-      const skippedAt = new Date().toISOString();
-      updateManifestAssetCheckState({
-        status: 'skipped',
-        error: null,
-        missing: [],
-        total: 0,
-        checkedAt: skippedAt,
-        summary: {
-          status: 'skipped',
-          reason: 'offline-mode',
-          missing: [],
-          total: 0,
-          reachable: 0,
-          checkedAt: skippedAt,
-          manifestUrl: null,
-        },
-      });
+    } else if (!shouldEnforceStrictAssets) {
+      markManifestAssetCheckSkipped('offline-mode');
     }
     if (shouldPreloadCriticalAssets && experience && typeof experience.preloadRequiredAssets === 'function') {
       try {
@@ -11068,6 +11092,19 @@
         const mode = startSimple ? 'simple' : 'advanced';
         setRendererModeIndicator(mode);
         scheduleRendererStartWatchdog(mode);
+        const locationProtocol = typeof scope?.location?.protocol === 'string' ? scope.location.protocol.toLowerCase() : '';
+        const runningFromFileProtocol = locationProtocol === 'file:';
+        if (runningFromFileProtocol) {
+          markManifestAssetCheckSkipped('offline-mode');
+        } else if (typeof startManifestAssetAvailabilityCheck === 'function') {
+          try {
+            startManifestAssetAvailabilityCheck();
+          } catch (error) {
+            if (scope.console?.debug) {
+              scope.console.debug('Failed to initiate manifest asset availability check during bootstrap.', error);
+            }
+          }
+        }
         if (scope.SimpleExperience?.create) {
           return ensureSimpleExperience(mode);
         }
@@ -11272,6 +11309,9 @@
   bootDiagnosticsApi.onUpdate = (listener) => addBootDiagnosticsChangeListener(listener);
   bootDiagnosticsApi.downloadReport = () => downloadDiagnosticsReport();
   bootDiagnosticsApi.getErrorSummary = () => summariseBootDiagnosticErrors(bootDiagnosticsState.lastSnapshot);
+  bootDiagnosticsApi.getManifestAssetCheckState = () => cloneManifestAssetCheckState();
+  bootDiagnosticsApi.startManifestAssetAvailabilityCheck = (options = {}) =>
+    startManifestAssetAvailabilityCheck(options);
   globalScope.InfiniteRails.bootDiagnostics = bootDiagnosticsApi;
 
   if (typeof globalScope.addEventListener === 'function') {
