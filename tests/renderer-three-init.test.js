@@ -494,4 +494,39 @@ describe('createAssetUrlCandidates helper', () => {
       vi.useRealTimers();
     }
   });
+
+  it('monitors signed bootstrap script fallbacks when resolving assets', () => {
+    const signedScriptSrc =
+      'https://cdn.example.com/build/script.js?Expires=1730000000&Signature=bootstrap-token';
+    const documentStub = {
+      querySelector: vi.fn(() => null),
+      currentScript: { src: signedScriptSrc },
+      getElementsByTagName: vi.fn(() => []),
+      baseURI: 'https://game.example.com/index.html',
+    };
+    const globalScopeStub = {
+      APP_CONFIG: {},
+      console: { warn: vi.fn() },
+      location: { href: 'https://game.example.com/index.html', origin: 'https://game.example.com' },
+    };
+    const monitorStub = vi.fn();
+
+    const createAssetUrlCandidates = instantiateCreateAssetUrlCandidates({
+      documentStub,
+      globalScopeStub,
+      monitorStub,
+    });
+
+    const candidates = createAssetUrlCandidates('textures/portal-core.png');
+    expect(candidates.length).toBeGreaterThan(0);
+
+    expect(monitorStub).toHaveBeenCalled();
+    const [rawBaseUrl, resolvedUrl, relativePath] = monitorStub.mock.calls[0];
+    expect(rawBaseUrl).toBe(signedScriptSrc);
+    const scriptUrl = new URL(signedScriptSrc, globalScopeStub.location.href);
+    const scriptDir = scriptUrl.href.replace(/[^/]*$/, '');
+    const expectedResolved = new URL('textures/portal-core.png', scriptDir).href;
+    expect(resolvedUrl).toBe(expectedResolved);
+    expect(relativePath).toBe('textures/portal-core.png');
+  });
 });
