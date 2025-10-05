@@ -6,6 +6,7 @@ const path = require('node:path');
 const repoRoot = path.resolve(__dirname, '..');
 const manifestPath = path.join(repoRoot, 'asset-manifest.json');
 const workflowPath = path.join(repoRoot, '.github', 'workflows', 'deploy.yml');
+const ASSET_PERMISSION_PREFIXES = ['assets', 'textures', 'audio'];
 
 function normalisePath(value) {
   if (!value || typeof value !== 'string') {
@@ -90,42 +91,97 @@ function listMissingFiles(assets) {
   });
 }
 
+function describePermissionIssues(fullPath, { includeStatErrors = false } = {}) {
+  let stats;
+  try {
+    stats = fs.statSync(fullPath);
+  } catch (error) {
+    if (includeStatErrors) {
+      return {
+        mode: '----',
+        problems: [`unable to stat file: ${error.message || error}`],
+      };
+    }
+    return null;
+  }
+
+  if (!stats.isFile()) {
+    return null;
+  }
+
+  const mode = stats.mode & 0o777;
+  const problems = [];
+  if ((mode & 0o400) === 0) {
+    problems.push('owner read bit is not set');
+  }
+  if ((mode & 0o040) === 0) {
+    problems.push('group read bit is not set');
+  }
+  if ((mode & 0o004) === 0) {
+    problems.push('world read bit is not set');
+  }
+  if ((mode & 0o022) !== 0) {
+    problems.push('unexpected write permissions detected');
+  }
+  if ((mode & 0o111) !== 0) {
+    problems.push('executable bit should not be set for static assets');
+  }
+
+  if (problems.length === 0) {
+    return null;
+  }
+
+  return {
+    mode: mode.toString(8).padStart(4, '0'),
+    problems,
+  };
+}
+
 function listPermissionIssues(assets) {
   const issues = [];
-  assets.forEach((asset) => {
+  for (const asset of assets) {
     const fullPath = path.join(repoRoot, asset);
-    let stats;
-    try {
-      stats = fs.statSync(fullPath);
-    } catch (error) {
-      return;
+    const problem = describePermissionIssues(fullPath);
+    if (problem) {
+      issues.push({ asset, ...problem });
     }
-    if (!stats.isFile()) {
-      return;
+  }
+  return issues;
+}
+
+function listFilesRecursive(directory) {
+  const entries = fs.readdirSync(directory, { withFileTypes: true });
+  const files = [];
+  for (const entry of entries) {
+    const entryPath = path.join(directory, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...listFilesRecursive(entryPath));
+    } else if (entry.isFile()) {
+      files.push(entryPath);
+    }
+  }
+  return files;
+}
+
+function listAssetDirectoryPermissionIssues(prefixes = ASSET_PERMISSION_PREFIXES) {
+  const issues = [];
+  for (const prefix of prefixes) {
+    const directory = path.join(repoRoot, prefix);
+    if (!fs.existsSync(directory)) {
+      continue;
     }
 
-    const mode = stats.mode & 0o777;
-    const problems = [];
-    if ((mode & 0o400) === 0) {
-      problems.push('owner read bit is not set');
+    const files = listFilesRecursive(directory);
+    for (const filePath of files) {
+      const problem = describePermissionIssues(filePath, { includeStatErrors: true });
+      if (problem) {
+        issues.push({
+          asset: path.relative(repoRoot, filePath).split(path.sep).join('/'),
+          ...problem,
+        });
+      }
     }
-    if ((mode & 0o040) === 0) {
-      problems.push('group read bit is not set');
-    }
-    if ((mode & 0o004) === 0) {
-      problems.push('world read bit is not set');
-    }
-    if ((mode & 0o022) !== 0) {
-      problems.push('unexpected write permissions detected');
-    }
-    if ((mode & 0o111) !== 0) {
-      problems.push('executable bit should not be set for static assets');
-    }
-
-    if (problems.length > 0) {
-      issues.push({ asset, mode: mode.toString(8).padStart(4, '0'), problems });
-    }
-  });
+  }
   return issues;
 }
 
@@ -200,6 +256,7 @@ async function main() {
     const duplicates = ensureUniqueAssets(assets);
     const missingFiles = listMissingFiles(assets);
     const permissionIssues = listPermissionIssues(assets);
+    const directoryPermissionIssues = listAssetDirectoryPermissionIssues();
 
     if (!fs.existsSync(workflowPath)) {
       throw new Error('Deployment workflow .github/workflows/deploy.yml is missing.');
@@ -233,6 +290,12 @@ async function main() {
         `Deployment workflow does not sync the following manifest assets: ${uncoveredAssets.join(', ')}`,
       );
     }
+    if (directoryPermissionIssues.length > 0) {
+      const formatted = directoryPermissionIssues
+        .map((issue) => `${issue.asset} (mode ${issue.mode}: ${issue.problems.join(', ')})`)
+        .join('; ');
+      issues.push(`Files under assets/, textures/, or audio/ have incorrect permissions: ${formatted}`);
+    }
     if (baseUrl && headFailures.length > 0) {
       const formatted = headFailures
         .map((failure) => {
@@ -260,7 +323,9 @@ async function main() {
         'ℹ️  asset-manifest.json validated locally – provide --base-url or set ASSET_MANIFEST_BASE_URL to enable HEAD checks.',
       );
     } else {
-      console.log('✅ asset-manifest.json validated – files exist, permissions are correct, and HEAD checks passed.');
+      console.log(
+        '✅ asset-manifest.json validated – files exist, permissions are correct (including assets/, textures/, audio/), and HEAD checks passed.',
+      );
     }
   } catch (error) {
     console.error(error.message || error);
@@ -277,6 +342,7 @@ module.exports = {
   ensureUniqueAssets,
   listMissingFiles,
   listPermissionIssues,
+  listAssetDirectoryPermissionIssues,
   extractIncludePatterns,
   patternMatchesAsset,
   listUncoveredAssets,
