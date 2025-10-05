@@ -8708,6 +8708,7 @@
             delete ui.startButton.dataset.preloadWarning;
           }
         }
+        hideBootstrapOverlay();
       };
       if (ui.startButton) {
         ui.startButton.disabled = true;
