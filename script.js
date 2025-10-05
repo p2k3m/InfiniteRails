@@ -9040,18 +9040,34 @@
       })();
       if (isAutomationContext) {
         const autoStartMarker = 'simpleExperienceAutoStart';
-        const markAutoStartAttempted = () => {
-          ui.startButton.dataset[autoStartMarker] = 'true';
+        const autoStartStates = {
+          pending: 'pending',
+          completed: 'true',
         };
-        const hasAutoStartRun = () => ui.startButton.dataset[autoStartMarker] === 'true';
+        const markAutoStartPending = () => {
+          try {
+            if (ui.startButton.dataset[autoStartMarker] !== autoStartStates.completed) {
+              ui.startButton.dataset[autoStartMarker] = autoStartStates.pending;
+            }
+          } catch (error) {
+            if (globalScope?.console?.debug) {
+              globalScope.console.debug('Failed to flag auto-start as pending.', error);
+            }
+          }
+        };
+        const markAutoStartAttempted = () => {
+          ui.startButton.dataset[autoStartMarker] = autoStartStates.completed;
+        };
+        const hasAutoStartRun = () => ui.startButton.dataset[autoStartMarker] === autoStartStates.completed;
+        markAutoStartPending();
         const tryTriggerAutoStart = ({ immediate = false } = {}) => {
           if (!immediate) {
             const scheduler =
               typeof globalScope?.setTimeout === 'function'
                 ? globalScope.setTimeout.bind(globalScope)
-                : typeof setTimeout === 'function'
-                  ? setTimeout
-                  : null;
+                  : typeof setTimeout === 'function'
+                    ? setTimeout
+                    : null;
             if (scheduler) {
               scheduler(() => {
                 tryTriggerAutoStart({ immediate: true });
@@ -9086,6 +9102,7 @@
             if (globalScope?.console?.debug) {
               globalScope.console.debug('Automated start trigger failed.', error);
             }
+            markAutoStartPending();
             return false;
           }
           return false;
