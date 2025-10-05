@@ -8943,6 +8943,7 @@
           }
         });
     } else {
+      releaseStartButton({ delayed: false });
       hideBootstrapOverlay();
     }
     if (typeof logDiagnosticsEvent === 'function') {
