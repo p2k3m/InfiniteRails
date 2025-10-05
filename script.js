@@ -8753,7 +8753,7 @@
           }
           hideBootstrapOverlay();
         })
-        .catch((error) => {
+        .catch(async (error) => {
           clearAssetPreloadFallbackTimer();
           if (globalScope.console?.error) {
             globalScope.console.error('Critical asset preload failed.', error);
@@ -8764,6 +8764,155 @@
               : 'Critical assets failed to preload. Reload to try again.';
           const errorName = typeof error?.name === 'string' && error.name.trim().length ? error.name.trim() : undefined;
           const errorStack = typeof error?.stack === 'string' && error.stack.trim().length ? error.stack.trim() : undefined;
+          const embeddedFallbackEligible = (() => {
+            if (!experience) {
+              return false;
+            }
+            try {
+              if (typeof experience.shouldUseEmbeddedModelFallback === 'function') {
+                const decision = experience.shouldUseEmbeddedModelFallback(error);
+                if (decision) {
+                  return true;
+                }
+              }
+            } catch (fallbackDecisionError) {
+              if (globalScope.console?.debug) {
+                globalScope.console.debug('Embedded fallback decision failed; falling back to message heuristics.', fallbackDecisionError);
+              }
+            }
+            const message = typeof error?.message === 'string' ? error.message : '';
+            if (message && /URL scheme "file" is not supported/i.test(message)) {
+              return true;
+            }
+            if (runningFromFileProtocol && message && /TypeError: Failed to fetch/i.test(message)) {
+              return true;
+            }
+            if (message && /Access to XMLHttpRequest at 'file:/i.test(message)) {
+              return true;
+            }
+            return false;
+          })();
+          if (embeddedFallbackEligible && experience && typeof experience.loadEmbeddedModelFromBundle === 'function') {
+            let fallbackSucceeded = false;
+            let retryError = null;
+            try {
+              if (globalScope.console?.warn) {
+                globalScope.console.warn(
+                  'Critical asset preload failed while running from file://; activating embedded asset bundle.',
+                  error,
+                );
+              }
+              if (overlayController?.setDiagnostic) {
+                overlayController.setDiagnostic('assets', {
+                  status: 'warning',
+                  message: 'Network assets unavailable — loading embedded bundle.',
+                });
+              }
+              if (typeof logDiagnosticsEvent === 'function') {
+                logDiagnosticsEvent('assets', 'Critical preload failed from file://; using embedded asset bundle.', {
+                  level: 'warning',
+                  detail: { reason: 'embedded-bundle', message: errorMessage },
+                });
+              }
+              const entries =
+                typeof experience.collectCriticalModelEntries === 'function'
+                  ? experience.collectCriticalModelEntries()
+                  : [];
+              const loadTasks = [];
+              if (Array.isArray(entries) && entries.length) {
+                for (const entry of entries) {
+                  if (!entry || typeof entry.key !== 'string' || !entry.key.trim()) {
+                    continue;
+                  }
+                  loadTasks.push(
+                    experience
+                      .loadEmbeddedModelFromBundle(entry.key.trim(), {
+                        force: true,
+                        url: typeof entry.url === 'string' ? entry.url : null,
+                        error,
+                      })
+                      .catch((fallbackError) => {
+                        if (globalScope.console?.debug) {
+                          globalScope.console.debug(
+                            `Embedded model preload failed for ${entry.key}.`,
+                            fallbackError,
+                          );
+                        }
+                        return null;
+                      }),
+                  );
+                }
+              } else {
+                loadTasks.push(Promise.resolve(null));
+              }
+              await Promise.all(loadTasks);
+              try {
+                experience.criticalAssetPreloadPromise = null;
+              } catch (stateResetError) {
+                if (globalScope.console?.debug) {
+                  globalScope.console.debug('Failed to reset critical preload promise state.', stateResetError);
+                }
+              }
+              if (typeof experience.preloadRequiredAssets === 'function') {
+                try {
+                  const retryResult = experience.preloadRequiredAssets();
+                  if (retryResult && typeof retryResult.then === 'function') {
+                    await retryResult;
+                  }
+                  fallbackSucceeded = true;
+                } catch (preloadRetryError) {
+                  retryError = preloadRetryError;
+                  fallbackSucceeded = false;
+                }
+              } else {
+                fallbackSucceeded = true;
+              }
+            } catch (fallbackError) {
+              retryError = fallbackError instanceof Error ? fallbackError : error;
+              fallbackSucceeded = false;
+            }
+            if (fallbackSucceeded) {
+              if (overlayController?.setDiagnostic) {
+                overlayController.setDiagnostic('assets', {
+                  status: 'ok',
+                  message: 'Embedded asset bundle active — world assets loading locally.',
+                });
+              }
+              if (typeof logDiagnosticsEvent === 'function') {
+                logDiagnosticsEvent('assets', 'Embedded asset bundle activated; continuing offline.', {
+                  level: 'info',
+                  detail: { reason: 'embedded-bundle' },
+                });
+              }
+              if (mode === 'advanced') {
+                try {
+                  setRendererModeIndicator?.('advanced');
+                } catch (indicatorError) {
+                  if (globalScope.console?.debug) {
+                    globalScope.console.debug('Failed to update renderer mode indicator after embedded fallback.', indicatorError);
+                  }
+                }
+                const state = globalScope?.__INFINITE_RAILS_STATE__;
+                if (state && typeof state === 'object') {
+                  try {
+                    state.rendererMode = 'advanced';
+                    state.reason = 'embedded-bundle';
+                    state.updatedAt = Date.now();
+                  } catch (stateError) {
+                    if (globalScope.console?.debug) {
+                      globalScope.console.debug('Failed to update renderer state for embedded bundle.', stateError);
+                    }
+                  }
+                }
+              }
+              releaseStartButton({ delayed: false });
+              hideBootstrapOverlay();
+              return;
+            }
+            if (retryError && globalScope.console?.error) {
+              globalScope.console.error('Embedded bundle recovery failed; renderer cannot continue.', retryError);
+            }
+          }
           presentCriticalErrorOverlay({
             title: 'Assets failed to load',
             message: 'Critical assets failed to preload. Reload to try again.',
@@ -8997,6 +9146,17 @@
       bootstrapOverlay.hide({ force: true });
     }
     return experience;
+  }
+
+  if (globalScope) {
+    try {
+      const hooks = globalScope.__INFINITE_RAILS_TEST_HOOKS__ || (globalScope.__INFINITE_RAILS_TEST_HOOKS__ = {});
+      hooks.ensureSimpleExperience = ensureSimpleExperience;
+    } catch (hookError) {
+      if (globalScope.console?.debug) {
+        globalScope.console.debug('Failed to expose ensureSimpleExperience to test hooks.', hookError);
+      }
+    }
   }
 
   const DEFAULT_RENDERER_START_TIMEOUT_MS = 12000;
@@ -9304,6 +9464,11 @@
     }
     return 'Offline mode active — storing scores locally.';
   })();
+  const skipBootstrapForTests = Boolean(globalScope?.__INFINITE_RAILS_TEST_SKIP_BOOTSTRAP__);
+  if (skipBootstrapForTests) {
+    globalScope.bootstrap = bootstrap;
+    return;
+  }
   updateScoreboardStatus(initialScoreboardMessage);
   applyIdentity(initialIdentity, { persist: false, silent: true });
 
