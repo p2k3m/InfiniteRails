@@ -80,5 +80,59 @@ describe('simple experience scoreboard restore', () => {
     const persistedIdentifiers = persistedSnapshot.map((entry) => entry.googleId ?? entry.id ?? null);
     expect(persistedIdentifiers).toContain('user-123');
   });
+
+  it('flushes queued offline runs to the backend once login succeeds', async () => {
+    const scoreboardStorageKey = 'vitest-scoreboard-sync';
+    const scoreSyncQueueKey = 'vitest-scoreboard-sync-queue';
+    const { experience } = createExperience({ scoreboardStorageKey, scoreSyncQueueKey });
+
+    experience.apiBaseUrl = 'https://api.example.com';
+    experience.score = 4096;
+    experience.elapsed = 256;
+
+    const originalFetch = globalThis.fetch;
+    const fetchMock = vi.fn().mockRejectedValue(new Error('Network down'));
+    globalThis.fetch = fetchMock;
+
+    try {
+      experience.scheduleScoreSync('offline-run');
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(experience.hasQueuedScoreSyncEntries()).toBe(true);
+      const [queued] = experience.scoreSyncQueue;
+      expect(queued).toBeDefined();
+      expect(queued.entry.googleId).toBeNull();
+      const sessionIdentifier = experience.getScoreEntryIdentifier({ id: experience.sessionId });
+      const entryIdentifier = experience.getScoreEntryIdentifier(queued.entry);
+      expect([queued.identifier, entryIdentifier]).toContain(sessionIdentifier);
+
+      fetchMock.mockReset();
+      fetchMock.mockResolvedValue({
+        ok: true,
+        json: async () => ({ items: [] }),
+      });
+
+      experience.setIdentity({ name: 'Cloud Hero', googleId: 'user-123' });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(fetchMock).toHaveBeenCalled();
+      const [, requestInit] = fetchMock.mock.calls[0];
+      const payload = JSON.parse(requestInit.body);
+      expect(payload.googleId).toBe('user-123');
+      expect(payload.playerId).toBe('user-123');
+      expect(payload.id).toBe('user-123');
+      expect(payload.name).toBe('Cloud Hero');
+
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(experience.hasQueuedScoreSyncEntries()).toBe(false);
+    } finally {
+      if (originalFetch) {
+        globalThis.fetch = originalFetch;
+      } else {
+        delete globalThis.fetch;
+      }
+    }
+  });
 });
 

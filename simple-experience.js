@@ -5760,6 +5760,104 @@
       this.renderScoreboard();
     }
 
+    normalizeQueuedScoreEntriesForIdentity(sourceIdentifiers) {
+      if (!Array.isArray(this.scoreSyncQueue) || !this.scoreSyncQueue.length) {
+        return false;
+      }
+      if (!this.playerGoogleId) {
+        return false;
+      }
+      const googleIdentifier = this.getScoreEntryIdentifier({ id: this.playerGoogleId });
+      if (!googleIdentifier) {
+        return false;
+      }
+      const identifiers = new Set();
+      const addIdentifier = (value) => {
+        if (typeof value !== 'string') {
+          return;
+        }
+        const trimmed = value.trim().toLowerCase();
+        if (trimmed && trimmed !== googleIdentifier) {
+          identifiers.add(trimmed);
+        }
+      };
+      if (sourceIdentifiers) {
+        if (typeof sourceIdentifiers.forEach === 'function') {
+          sourceIdentifiers.forEach(addIdentifier);
+        } else if (Array.isArray(sourceIdentifiers)) {
+          sourceIdentifiers.forEach(addIdentifier);
+        } else if (typeof sourceIdentifiers === 'string') {
+          addIdentifier(sourceIdentifiers);
+        }
+      } else if (this.restoredScoreEntryIdentifiers && typeof this.restoredScoreEntryIdentifiers.forEach === 'function') {
+        this.restoredScoreEntryIdentifiers.forEach(addIdentifier);
+      }
+      const sessionIdentifier = this.getScoreEntryIdentifier({ id: this.sessionId });
+      if (sessionIdentifier) {
+        addIdentifier(sessionIdentifier);
+      }
+      let queueChanged = false;
+      const nextQueue = this.scoreSyncQueue.map((record) => {
+        if (!record || typeof record !== 'object') {
+          return record;
+        }
+        const entry = record.entry && typeof record.entry === 'object' ? record.entry : null;
+        if (!entry) {
+          return record;
+        }
+        const rawIdentifier =
+          typeof record.identifier === 'string' && record.identifier.trim().length
+            ? record.identifier.trim().toLowerCase()
+            : this.getScoreEntryIdentifier(entry);
+        const identifier = rawIdentifier || null;
+        const shouldUpgrade = identifier && identifiers.has(identifier);
+        const alreadyPlayer = identifier === googleIdentifier;
+        if (!shouldUpgrade && !alreadyPlayer) {
+          return record;
+        }
+        const nextEntry = { ...entry };
+        let entryChanged = false;
+        if (nextEntry.id !== this.playerGoogleId) {
+          nextEntry.id = this.playerGoogleId;
+          entryChanged = true;
+        }
+        if (nextEntry.playerId !== this.playerGoogleId) {
+          nextEntry.playerId = this.playerGoogleId;
+          entryChanged = true;
+        }
+        if (nextEntry.googleId !== this.playerGoogleId) {
+          nextEntry.googleId = this.playerGoogleId;
+          entryChanged = true;
+        }
+        const desiredName =
+          typeof this.playerDisplayName === 'string' && this.playerDisplayName.trim().length
+            ? this.playerDisplayName
+            : nextEntry.name;
+        if (desiredName && desiredName !== nextEntry.name) {
+          nextEntry.name = desiredName;
+          entryChanged = true;
+        }
+        const currentIdentifier =
+          typeof record.identifier === 'string' && record.identifier.trim().length
+            ? record.identifier.trim().toLowerCase()
+            : null;
+        if (!entryChanged && currentIdentifier === googleIdentifier) {
+          return record;
+        }
+        queueChanged = true;
+        return {
+          ...record,
+          entry: entryChanged ? nextEntry : entry,
+          identifier: googleIdentifier,
+        };
+      });
+      if (queueChanged) {
+        this.scoreSyncQueue = nextQueue;
+        this.persistScoreSyncQueue();
+      }
+      return queueChanged;
+    }
+
     mergeRestoredLocalScoreEntriesWithIdentity() {
       if (!this.playerGoogleId) {
         return false;
@@ -5768,9 +5866,16 @@
       if (!googleIdentifier) {
         return false;
       }
-      const identifiers = new Set(this.restoredScoreEntryIdentifiers || []);
+      const identifiers = new Set();
+      if (this.restoredScoreEntryIdentifiers && typeof this.restoredScoreEntryIdentifiers.forEach === 'function') {
+        this.restoredScoreEntryIdentifiers.forEach((value) => {
+          if (typeof value === 'string' && value && value !== googleIdentifier) {
+            identifiers.add(value.trim().toLowerCase());
+          }
+        });
+      }
       const sessionIdentifier = this.getScoreEntryIdentifier({ id: this.sessionId });
-      if (sessionIdentifier) {
+      if (sessionIdentifier && sessionIdentifier !== googleIdentifier) {
         identifiers.add(sessionIdentifier);
       }
       if (!identifiers.size) {
@@ -5786,7 +5891,7 @@
       if (!identifiers.size) {
         this.pendingRestoredScoreMerge = false;
         this.restoredScoreEntryIdentifiers = new Set([googleIdentifier]);
-        return false;
+        return this.normalizeQueuedScoreEntriesForIdentity([sessionIdentifier]);
       }
       let updated = false;
       const nextEntries = this.scoreEntries.map((entry) => {
@@ -5809,10 +5914,11 @@
         updated = true;
         return next;
       });
+      const queueUpdated = this.normalizeQueuedScoreEntriesForIdentity(identifiers);
       this.pendingRestoredScoreMerge = false;
       this.restoredScoreEntryIdentifiers = new Set([googleIdentifier]);
       if (!updated) {
-        return false;
+        return queueUpdated;
       }
       const utils = this.scoreboardUtils;
       const normalized = utils?.normalizeScoreEntries
