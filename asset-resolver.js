@@ -14,6 +14,88 @@
 
   const assetWarningDeduper = new Set();
 
+  const DEFAULT_ASSET_VERSION_TAG = '1';
+
+  function normaliseAssetVersionTag(value) {
+    if (value === null || value === undefined) {
+      return '';
+    }
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return String(value);
+    }
+    if (typeof value === 'string') {
+      const trimmed = value.trim();
+      return trimmed.length > 0 ? trimmed : '';
+    }
+    if (typeof value?.toString === 'function') {
+      const stringified = String(value).trim();
+      return stringified.length > 0 ? stringified : '';
+    }
+    return '';
+  }
+
+  function resolveAssetVersionTag() {
+    const config = scope?.APP_CONFIG && typeof scope.APP_CONFIG === 'object' ? scope.APP_CONFIG : null;
+    const configured = normaliseAssetVersionTag(config?.assetVersionTag);
+    if (configured) {
+      scope.INFINITE_RAILS_ASSET_VERSION_TAG = configured;
+      return configured;
+    }
+
+    const ambient = normaliseAssetVersionTag(scope?.INFINITE_RAILS_ASSET_VERSION_TAG);
+    if (ambient) {
+      if (config) {
+        config.assetVersionTag = ambient;
+      }
+      return ambient;
+    }
+
+    if (config) {
+      config.assetVersionTag = DEFAULT_ASSET_VERSION_TAG;
+    }
+    if (scope) {
+      scope.INFINITE_RAILS_ASSET_VERSION_TAG = DEFAULT_ASSET_VERSION_TAG;
+    }
+    return DEFAULT_ASSET_VERSION_TAG;
+  }
+
+  function applyAssetVersionTag(url) {
+    if (typeof url !== 'string' || url.length === 0) {
+      return url;
+    }
+    if (/^(?:data|blob):/i.test(url)) {
+      return url;
+    }
+
+    const versionTag = resolveAssetVersionTag();
+    if (!versionTag) {
+      return url;
+    }
+
+    const [base, hash = ''] = url.split('#', 2);
+    if (/(?:^|[?&])assetVersion=/.test(base)) {
+      return url;
+    }
+
+    if (/^[a-z][a-z0-9+.-]*:/i.test(base)) {
+      try {
+        const parsed = new URL(url);
+        if (!parsed.searchParams.has('assetVersion')) {
+          parsed.searchParams.set('assetVersion', versionTag);
+        }
+        return parsed.toString();
+      } catch (error) {
+        // Fall through to manual fallback when URL construction fails (e.g. relative paths).
+      }
+    }
+
+    const separator = base.includes('?') ? '&' : '?';
+    const tagged = `${base}${separator}assetVersion=${encodeURIComponent(versionTag)}`;
+    return hash ? `${tagged}#${hash}` : tagged;
+  }
+
+  resolveAssetVersionTag();
+
   function logAssetIssue(message, error, context = {}) {
     const consoleRef = scope.console || (typeof console !== 'undefined' ? console : null);
     if (!consoleRef) {
@@ -62,8 +144,12 @@
     if (!value || seen.has(value)) {
       return;
     }
-    seen.add(value);
-    list.push(value);
+    const versioned = applyAssetVersionTag(value);
+    if (!versioned || seen.has(versioned)) {
+      return;
+    }
+    seen.add(versioned);
+    list.push(versioned);
   }
 
   function createAssetUrlCandidates(relativePath) {
@@ -155,6 +241,7 @@
     normaliseAssetBase,
     createAssetUrlCandidates,
     resolveAssetUrl,
+    applyAssetVersionTag,
   };
 
   scope.InfiniteRailsAssetResolver = resolver;

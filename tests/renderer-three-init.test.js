@@ -39,7 +39,7 @@ const createAssetUrlCandidatesSource = scriptSource.slice(
 
 function instantiateEnsureThree({
   loadScript,
-  scriptUrl = 'vendor/three.min.js',
+  scriptUrl = 'vendor/three.min.js?assetVersion=1',
   documentStub,
   reportThreeLoadFailure = () => {},
 }) {
@@ -234,7 +234,7 @@ describe('default renderer Three.js bootstrap', () => {
     const loadScript = vi.fn();
     const { ensureThree, resetLoader } = instantiateEnsureThree({
       loadScript,
-      scriptUrl: 'vendor/three.min.js',
+      scriptUrl: 'vendor/three.min.js?assetVersion=1',
       documentStub,
     });
 
@@ -261,7 +261,7 @@ describe('default renderer Three.js bootstrap', () => {
 
     const { ensureThree, resetLoader } = instantiateEnsureThree({
       loadScript,
-      scriptUrl: 'vendor/three.min.js',
+      scriptUrl: 'vendor/three.min.js?assetVersion=1',
       documentStub,
       reportThreeLoadFailure,
     });
@@ -295,7 +295,7 @@ describe('default renderer Three.js bootstrap', () => {
 
     const { ensureThree, resetLoader } = instantiateEnsureThree({
       loadScript,
-      scriptUrl: 'vendor/three.min.js',
+      scriptUrl: 'vendor/three.min.js?assetVersion=1',
       documentStub,
     });
 
@@ -303,7 +303,7 @@ describe('default renderer Three.js bootstrap', () => {
 
     expect(loadScript).toHaveBeenCalledTimes(1);
     expect(loadScript).toHaveBeenCalledWith(
-      'vendor/three.min.js',
+      'vendor/three.min.js?assetVersion=1',
       expect.objectContaining({ 'data-three-bootstrap': 'true' })
     );
     expect(result).toEqual(scope.THREE);
@@ -325,17 +325,23 @@ describe('default renderer Three.js bootstrap', () => {
 
     const { ensureThree, resetLoader } = instantiateEnsureThree({
       loadScript,
-      scriptUrl: 'vendor/three.min.js',
+      scriptUrl: 'vendor/three.min.js?assetVersion=1',
       documentStub,
       reportThreeLoadFailure,
     });
 
-    await expect(ensureThree()).rejects.toThrow('Unable to load Three.js from vendor/three.min.js.');
+    await expect(ensureThree()).rejects.toThrow(
+      'Unable to load Three.js from vendor/three.min.js?assetVersion=1.'
+    );
     expect(reportThreeLoadFailure).toHaveBeenCalledTimes(1);
     const [errorArg, contextArg] = reportThreeLoadFailure.mock.calls[0];
     expect(errorArg).toBeInstanceOf(Error);
-    expect(errorArg.message).toBe('Unable to load Three.js from vendor/three.min.js.');
-    expect(contextArg).toMatchObject({ reason: 'load-failed', url: 'vendor/three.min.js', error: 'offline' });
+    expect(errorArg.message).toBe('Unable to load Three.js from vendor/three.min.js?assetVersion=1.');
+    expect(contextArg).toMatchObject({
+      reason: 'load-failed',
+      url: 'vendor/three.min.js?assetVersion=1',
+      error: 'offline',
+    });
     resetLoader();
   });
 
@@ -366,7 +372,7 @@ describe('createAssetUrlCandidates helper', () => {
       preloadedSelector: 'script[data-preload-three]',
     });
     expect(documentStub.querySelector).toHaveBeenCalledWith('script[data-preload-three]');
-    expect(candidates).toEqual([preloadedSrc]);
+    expect(candidates).toEqual(['https://cdn.example.com/vendor/three.min.js?assetVersion=1']);
   });
 
   it('falls back to the configured asset base when no preloaded script is present', () => {
@@ -380,7 +386,9 @@ describe('createAssetUrlCandidates helper', () => {
       globalScopeStub,
     });
     const candidates = createAssetUrlCandidates('vendor/three.min.js');
-    expect(candidates).toEqual(['https://cdn.example.com/bundles/vendor/three.min.js']);
+    expect(candidates).toEqual([
+      'https://cdn.example.com/bundles/vendor/three.min.js?assetVersion=1',
+    ]);
   });
 
   it('returns the provided path when no overrides are configured', () => {
@@ -388,9 +396,11 @@ describe('createAssetUrlCandidates helper', () => {
       documentStub: { querySelector: vi.fn(() => null) },
       globalScopeStub: { APP_CONFIG: {}, console: { warn: vi.fn() } },
     });
-    expect(createAssetUrlCandidates('vendor/three.min.js')).toEqual(['vendor/three.min.js']);
+    expect(createAssetUrlCandidates('vendor/three.min.js')).toEqual([
+      'vendor/three.min.js?assetVersion=1',
+    ]);
     expect(createAssetUrlCandidates('https://static.example.com/vendor/three.min.js')).toEqual([
-      'https://static.example.com/vendor/three.min.js',
+      'https://static.example.com/vendor/three.min.js?assetVersion=1',
     ]);
   });
 });

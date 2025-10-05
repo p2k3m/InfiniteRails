@@ -4,6 +4,89 @@
 
   const assetBaseConsistencyState = { mismatchLogged: false };
 
+  const DEFAULT_ASSET_VERSION_TAG = '1';
+
+  function normaliseAssetVersionTag(value) {
+    if (value === null || value === undefined) {
+      return '';
+    }
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return String(value);
+    }
+    if (typeof value === 'string') {
+      const trimmed = value.trim();
+      return trimmed.length > 0 ? trimmed : '';
+    }
+    if (typeof value?.toString === 'function') {
+      const stringified = String(value).trim();
+      return stringified.length > 0 ? stringified : '';
+    }
+    return '';
+  }
+
+  function getAssetVersionTag() {
+    const config =
+      globalScope?.APP_CONFIG && typeof globalScope.APP_CONFIG === 'object'
+        ? globalScope.APP_CONFIG
+        : null;
+    const configured = normaliseAssetVersionTag(config?.assetVersionTag);
+    if (configured) {
+      globalScope.INFINITE_RAILS_ASSET_VERSION_TAG = configured;
+      return configured;
+    }
+
+    const ambient = normaliseAssetVersionTag(globalScope?.INFINITE_RAILS_ASSET_VERSION_TAG);
+    if (ambient) {
+      if (config) {
+        config.assetVersionTag = ambient;
+      }
+      return ambient;
+    }
+
+    if (config) {
+      config.assetVersionTag = DEFAULT_ASSET_VERSION_TAG;
+    }
+    if (globalScope) {
+      globalScope.INFINITE_RAILS_ASSET_VERSION_TAG = DEFAULT_ASSET_VERSION_TAG;
+    }
+    return DEFAULT_ASSET_VERSION_TAG;
+  }
+
+  function applyAssetVersionTag(url) {
+    if (typeof url !== 'string' || url.length === 0) {
+      return url;
+    }
+    if (/^(?:data|blob):/i.test(url)) {
+      return url;
+    }
+
+    const versionTag = getAssetVersionTag();
+    if (!versionTag) {
+      return url;
+    }
+
+    const [base, hash = ''] = url.split('#', 2);
+    if (/(?:^|[?&])assetVersion=/.test(base)) {
+      return url;
+    }
+
+    if (/^[a-z][a-z0-9+.-]*:/i.test(base)) {
+      try {
+        const parsed = new URL(url);
+        if (!parsed.searchParams.has('assetVersion')) {
+          parsed.searchParams.set('assetVersion', versionTag);
+        }
+        return parsed.toString();
+      } catch (error) {
+        // Ignore parse errors for relative paths and fall back to manual tagging.
+      }
+    }
+
+    const separator = base.includes('?') ? '&' : '?';
+    const tagged = `${base}${separator}assetVersion=${encodeURIComponent(versionTag)}`;
+    return hash ? `${tagged}#${hash}` : tagged;
+  }
+
   const PRODUCTION_ASSET_ROOT = ensureTrailingSlash(
     'https://d3gj6x3ityfh5o.cloudfront.net/',
   );
@@ -153,6 +236,7 @@
   }
 
   ensureProductionAssetBase(globalScope, documentRef);
+  getAssetVersionTag();
 
   const responsiveUiState = {
     detachListeners: null,
@@ -6629,6 +6713,89 @@
       return [];
     }
     const urls = [];
+    const seen = new Set();
+
+    const fallbackNormaliseTag = (value) => {
+      if (value === null || value === undefined) {
+        return '';
+      }
+      if (typeof value === 'number' && Number.isFinite(value)) {
+        return String(value);
+      }
+      if (typeof value === 'string') {
+        const trimmed = value.trim();
+        return trimmed.length > 0 ? trimmed : '';
+      }
+      if (typeof value?.toString === 'function') {
+        const stringified = String(value).trim();
+        return stringified.length > 0 ? stringified : '';
+      }
+      return '';
+    };
+
+    const fallbackResolveVersionTag = () => {
+      const config =
+        globalScope?.APP_CONFIG && typeof globalScope.APP_CONFIG === 'object'
+          ? globalScope.APP_CONFIG
+          : null;
+      const configured = fallbackNormaliseTag(config?.assetVersionTag);
+      if (configured) {
+        if (globalScope) {
+          globalScope.INFINITE_RAILS_ASSET_VERSION_TAG = configured;
+        }
+        return configured;
+      }
+      const ambient = fallbackNormaliseTag(globalScope?.INFINITE_RAILS_ASSET_VERSION_TAG);
+      if (ambient) {
+        if (config) {
+          config.assetVersionTag = ambient;
+        }
+        return ambient;
+      }
+      const defaultTag = typeof DEFAULT_ASSET_VERSION_TAG === 'string' ? DEFAULT_ASSET_VERSION_TAG : '1';
+      if (config) {
+        config.assetVersionTag = defaultTag;
+      }
+      if (globalScope) {
+        globalScope.INFINITE_RAILS_ASSET_VERSION_TAG = defaultTag;
+      }
+      return defaultTag;
+    };
+
+    const fallbackApplyVersionTag = (value) => {
+      if (typeof value !== 'string' || value.length === 0) {
+        return value;
+      }
+      if (/^(?:data|blob):/i.test(value)) {
+        return value;
+      }
+      const versionTag = fallbackResolveVersionTag();
+      if (!versionTag) {
+        return value;
+      }
+      const [base, hash = ''] = value.split('#', 2);
+      if (/(?:^|[?&])assetVersion=/.test(base)) {
+        return value;
+      }
+      const separator = base.includes('?') ? '&' : '?';
+      const tagged = `${base}${separator}assetVersion=${encodeURIComponent(versionTag)}`;
+      return hash ? `${tagged}#${hash}` : tagged;
+    };
+
+    const applyVersion =
+      typeof applyAssetVersionTag === 'function' ? applyAssetVersionTag : fallbackApplyVersionTag;
+
+    const registerCandidate = (value) => {
+      if (typeof value !== 'string' || value.length === 0) {
+        return;
+      }
+      const tagged = applyVersion(value);
+      if (typeof tagged !== 'string' || tagged.length === 0 || seen.has(tagged)) {
+        return;
+      }
+      seen.add(tagged);
+      urls.push(tagged);
+    };
     const normalisedPath = relativePath.replace(/^\.\//, '');
     const isHttpUrl = /^https?:/i.test(relativePath);
 
@@ -6636,7 +6803,7 @@
       try {
         const preloaded = documentRef.querySelector(options.preloadedSelector);
         if (preloaded?.src) {
-          urls.push(preloaded.src);
+          registerCandidate(preloaded.src);
         }
       } catch (error) {
         if (globalScope.console?.warn) {
@@ -6654,7 +6821,7 @@
       if (assetBase) {
         try {
           const base = assetBase.endsWith('/') ? assetBase : `${assetBase}/`;
-          urls.push(new URL(normalisedPath, base).href);
+          registerCandidate(new URL(normalisedPath, base).href);
         } catch (error) {
           if (globalScope.console?.warn) {
             globalScope.console.warn('Failed to resolve assetBaseUrl candidate.', {
@@ -6668,7 +6835,7 @@
     }
 
     if (!urls.length) {
-      urls.push(isHttpUrl ? relativePath : normalisedPath);
+      registerCandidate(isHttpUrl ? relativePath : normalisedPath);
     }
 
     return urls;
