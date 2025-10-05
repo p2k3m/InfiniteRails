@@ -523,6 +523,20 @@
     listeners: new Set(),
   };
 
+  const MANIFEST_ASSET_CHECK_DISPLAY_LIMIT = 12;
+  const MANIFEST_ASSET_CHECK_TIMEOUT_MS = 8000;
+  const MANIFEST_ASSET_CHECK_CONCURRENCY = 6;
+
+  const manifestAssetCheckState = {
+    status: 'idle',
+    promise: null,
+    total: 0,
+    missing: [],
+    error: null,
+    checkedAt: null,
+    summary: null,
+  };
+
   globalScope.InfiniteRails = globalScope.InfiniteRails || {};
   globalScope.InfiniteRails.bootDiagnostics = globalScope.InfiniteRails.bootDiagnostics || {};
 
@@ -590,6 +604,167 @@
       }
     }
     return allowPending ? 'pending' : 'ok';
+  }
+
+  function formatManifestAssetStatusLabel(entry) {
+    if (!entry) {
+      return 'Unavailable';
+    }
+    const status = Number.isFinite(entry.status) ? Number(entry.status) : null;
+    if (status === 403) {
+      return '403 Forbidden';
+    }
+    if (status === 404) {
+      return '404 Not Found';
+    }
+    if (status === 401) {
+      return '401 Unauthorized';
+    }
+    if (status === 400) {
+      return '400 Bad Request';
+    }
+    if (status === 410) {
+      return '410 Gone';
+    }
+    if (status !== null) {
+      return `${status}`;
+    }
+    const note = typeof entry.note === 'string' ? entry.note.trim() : '';
+    if (note === 'timeout') {
+      return 'Request timed out';
+    }
+    if (note === 'network-error') {
+      return 'Network error';
+    }
+    if (note === 'unresolvable') {
+      return 'Unresolvable path';
+    }
+    if (note) {
+      return note;
+    }
+    return 'Unavailable';
+  }
+
+  function formatManifestAssetDetail(entry) {
+    if (!entry) {
+      return '';
+    }
+    const parts = [];
+    if (entry.method && typeof entry.method === 'string') {
+      parts.push(`Probe: ${entry.method.toUpperCase()}`);
+    }
+    if (entry.url && typeof entry.url === 'string') {
+      parts.push(entry.url);
+    }
+    if (entry.note && typeof entry.note === 'string') {
+      const trimmed = entry.note.trim();
+      if (trimmed && !/^(?:timeout|network-error|unresolvable)$/i.test(trimmed)) {
+        parts.push(trimmed);
+      }
+    }
+    if (parts.length === 0) {
+      return '';
+    }
+    return parts.join(' • ');
+  }
+
+  function getManifestAssetDiagnosticsEntries() {
+    const state = manifestAssetCheckState;
+    if (!state || typeof state.status !== 'string') {
+      return [];
+    }
+    const status = state.status.trim().toLowerCase();
+    if (!status || status === 'idle') {
+      return [];
+    }
+    if (status === 'pending') {
+      const totalLabel = Number.isFinite(state.total) && state.total > 0
+        ? ` (${state.total})`
+        : '';
+      return [
+        {
+          severity: 'pending',
+          message: `Checking manifest asset availability${totalLabel ? ` for ${state.total} item${state.total === 1 ? '' : 's'}` : '…'}`,
+          detail: null,
+        },
+      ];
+    }
+    if (status === 'error') {
+      const detailParts = [];
+      const summary = state.summary || {};
+      if (typeof state.error?.message === 'string' && state.error.message.trim().length) {
+        detailParts.push(state.error.message.trim());
+      }
+      if (typeof state.error?.reason === 'string' && state.error.reason.trim().length) {
+        detailParts.push(state.error.reason.trim());
+      }
+      if (typeof summary.manifestUrl === 'string' && summary.manifestUrl.trim().length) {
+        detailParts.push(summary.manifestUrl.trim());
+      }
+      const detail = detailParts.length ? detailParts.join(' • ') : null;
+      return [
+        {
+          severity: 'warning',
+          message: 'Manifest asset availability check failed.',
+          detail,
+        },
+      ];
+    }
+    if (status === 'skipped') {
+      return [
+        {
+          severity: 'ok',
+          message: 'Manifest asset availability check skipped in offline mode.',
+          detail: null,
+        },
+      ];
+    }
+    const missingEntries = Array.isArray(state.missing) ? state.missing : [];
+    if (status === 'missing' && missingEntries.length) {
+      const entries = [];
+      const preview = missingEntries.slice(0, MANIFEST_ASSET_CHECK_DISPLAY_LIMIT);
+      const remaining = missingEntries.length - preview.length;
+      entries.push({
+        severity: 'warning',
+        message: `Manifest check missing ${missingEntries.length} asset${missingEntries.length === 1 ? '' : 's'}.`,
+        detail: remaining > 0 ? `Showing first ${preview.length} entries.` : null,
+      });
+      preview.forEach((entry) => {
+        const message = `${formatManifestAssetStatusLabel(entry)} — ${
+          typeof entry.path === 'string' && entry.path.trim().length ? entry.path.trim() : 'Unknown asset'
+        }`;
+        const detail = formatManifestAssetDetail(entry);
+        entries.push({
+          severity: 'error',
+          message,
+          detail: detail || null,
+        });
+      });
+      if (remaining > 0) {
+        entries.push({
+          severity: 'warning',
+          message: `+${remaining} additional manifest asset${remaining === 1 ? '' : 's'} unavailable.`,
+          detail: null,
+        });
+      }
+      return entries;
+    }
+    if (status === 'ok' || (status === 'missing' && missingEntries.length === 0)) {
+      const total = Number.isFinite(state.total) ? state.total : null;
+      const detailTimestamp = state.checkedAt ? formatBootDiagnosticsTimestamp(state.checkedAt) : null;
+      const detail = detailTimestamp ? `Checked at ${detailTimestamp}` : null;
+      return [
+        {
+          severity: 'ok',
+          message:
+            total && total > 0
+              ? `Manifest assets responded (${total} checked).`
+              : 'Manifest assets responded to availability probe.',
+          detail,
+        },
+      ];
+    }
+    return [];
   }
 
   function formatBootDiagnosticsTimestamp(value) {
@@ -726,13 +901,15 @@
           list.removeChild(list.firstChild);
         }
       }
-      const normalisedEntries = sortBootDiagnosticsEntries(
+      const baseEntries = sortBootDiagnosticsEntries(
         prepareBootDiagnosticsEntries(snapshot?.sections?.[scope]),
       );
-      const hasEntries = normalisedEntries.length > 0;
+      const manifestEntries = scope === 'assets' ? getManifestAssetDiagnosticsEntries() : [];
+      const combinedEntries = scope === 'assets' ? [...baseEntries, ...manifestEntries] : baseEntries;
+      const hasEntries = combinedEntries.length > 0;
       let highestSeverity = 'pending';
       let errorCount = 0;
-      normalisedEntries.forEach((entry) => {
+      combinedEntries.forEach((entry) => {
         const severity = entry.severity;
         if (severity === 'error') {
           errorCount += 1;
@@ -832,6 +1009,36 @@
         clone.sections[scope] = [];
       }
     });
+    const manifestEntries = getManifestAssetDiagnosticsEntries();
+    if (Array.isArray(clone.sections.assets) && manifestEntries.length) {
+      manifestEntries.forEach((entry) => {
+        if (!entry) {
+          return;
+        }
+        const severity = normaliseBootDiagnosticsSeverity(entry.severity, { allowPending: true });
+        let message = '';
+        if (typeof entry.message === 'string' && entry.message.trim().length) {
+          message = entry.message.trim();
+        } else if (entry.message !== undefined && entry.message !== null) {
+          message = String(entry.message);
+        }
+        let detail = null;
+        if (entry.detail !== undefined && entry.detail !== null) {
+          if (typeof entry.detail === 'string') {
+            detail = entry.detail;
+          } else if (typeof entry.detail === 'number' || typeof entry.detail === 'boolean') {
+            detail = String(entry.detail);
+          } else {
+            try {
+              detail = JSON.parse(JSON.stringify(entry.detail));
+            } catch (error) {
+              detail = String(entry.detail);
+            }
+          }
+        }
+        clone.sections.assets.push({ severity, message, detail });
+      });
+    }
     return clone;
   }
 
@@ -848,7 +1055,20 @@
       sections: {},
     };
     BOOT_DIAGNOSTIC_SCOPES.forEach((scope) => {
-      const entries = prepareBootDiagnosticsEntries(clone.sections?.[scope]);
+      let entries = prepareBootDiagnosticsEntries(clone.sections?.[scope]);
+      if (scope === 'assets') {
+        const manifestEntries = getManifestAssetDiagnosticsEntries().map((entry) => ({
+          severity: normaliseBootDiagnosticsSeverity(entry?.severity, { allowPending: true }),
+          message:
+            typeof entry?.message === 'string' && entry.message.trim().length
+              ? entry.message.trim()
+              : entry?.message !== undefined && entry?.message !== null
+                ? String(entry.message)
+                : '',
+          detail: entry?.detail ?? null,
+        }));
+        entries = entries.concat(manifestEntries);
+      }
       const errors = entries.filter((entry) => entry.severity === 'error').map((entry) => ({
         severity: 'error',
         message: entry.message && entry.message.length ? entry.message : 'No additional details.',
@@ -858,6 +1078,406 @@
       summary.totalErrorCount += errors.length;
     });
     return summary;
+  }
+
+  function updateManifestAssetCheckState(patch = {}, { render = true } = {}) {
+    if (!patch || typeof patch !== 'object') {
+      return manifestAssetCheckState;
+    }
+    Object.assign(manifestAssetCheckState, patch);
+    if (render) {
+      try {
+        renderBootDiagnostics();
+      } catch (error) {
+        if (globalScope?.console?.debug) {
+          globalScope.console.debug('Failed to render boot diagnostics after manifest asset state update.', error);
+        }
+      }
+    }
+    return manifestAssetCheckState;
+  }
+
+  function resolveManifestAssetUrl(path, baseCandidates) {
+    if (typeof path !== 'string') {
+      return null;
+    }
+    const trimmed = path.trim();
+    if (!trimmed) {
+      return null;
+    }
+    if (/^(?:data|blob):/i.test(trimmed)) {
+      return null;
+    }
+    if (/^[a-z][a-z0-9+.-]*:/i.test(trimmed)) {
+      try {
+        const absolute = new URL(trimmed);
+        return applyAssetVersionTag(absolute.href);
+      } catch (error) {
+        return applyAssetVersionTag(trimmed);
+      }
+    }
+    const bases = Array.isArray(baseCandidates) ? baseCandidates.filter(Boolean) : [];
+    const resolved = resolveUrlWithBases(trimmed, bases);
+    if (!resolved) {
+      return null;
+    }
+    return applyAssetVersionTag(resolved.href);
+  }
+
+  function startManifestAssetAvailabilityCheck(options = {}) {
+    if (manifestAssetCheckState.promise && options.force !== true) {
+      return manifestAssetCheckState.promise;
+    }
+    const scope = typeof globalScope !== 'undefined' ? globalScope : globalThis;
+    const fetchImpl =
+      (typeof scope.fetch === 'function' && scope.fetch.bind(scope)) ||
+      (typeof fetch === 'function' ? fetch : null);
+    if (!fetchImpl) {
+      const now = new Date().toISOString();
+      const summary = {
+        status: 'error',
+        reason: 'fetch-unavailable',
+        total: 0,
+        reachable: 0,
+        missing: [],
+        checkedAt: now,
+      };
+      updateManifestAssetCheckState({
+        status: 'error',
+        error: { reason: 'fetch-unavailable', message: 'Fetch API unavailable; manifest assets cannot be probed.' },
+        summary,
+        checkedAt: now,
+      });
+      return Promise.resolve(summary);
+    }
+
+    updateManifestAssetCheckState({
+      status: 'pending',
+      error: null,
+      summary: null,
+      missing: [],
+      checkedAt: null,
+      total: 0,
+    });
+
+    const baseCandidates = [];
+    const configuredBase = scope?.APP_CONFIG?.assetBaseUrl ?? null;
+    if (configuredBase) {
+      baseCandidates.push(configuredBase);
+    }
+    const derivedBase = deriveProductionAssetRoot(scope, documentRef);
+    if (derivedBase) {
+      baseCandidates.push(derivedBase);
+    }
+    if (documentRef?.baseURI) {
+      baseCandidates.push(documentRef.baseURI);
+    }
+    if (scope?.location?.href) {
+      baseCandidates.push(scope.location.href);
+    }
+
+    const manifestUrlCandidate = resolveUrlWithBases('asset-manifest.json', baseCandidates);
+    const manifestUrl = manifestUrlCandidate ? manifestUrlCandidate.href : 'asset-manifest.json';
+    const manifestRequestUrl = applyAssetVersionTag(manifestUrl);
+
+    const fetchWithTimeout = async (url, init = {}) => {
+      const optionsInit = {
+        method: 'HEAD',
+        cache: 'no-store',
+        redirect: 'follow',
+        mode: 'cors',
+        ...init,
+      };
+      const controller = typeof AbortController === 'function' ? new AbortController() : null;
+      if (controller) {
+        optionsInit.signal = controller.signal;
+      }
+      let timeoutHandle = null;
+      const timeoutMs = Number.isFinite(optionsInit.timeoutMs) ? optionsInit.timeoutMs : MANIFEST_ASSET_CHECK_TIMEOUT_MS;
+      if (timeoutMs && timeoutMs > 0) {
+        const setTimer = typeof scope.setTimeout === 'function' ? scope.setTimeout.bind(scope) : setTimeout;
+        timeoutHandle = setTimer(() => {
+          timeoutHandle = null;
+          if (controller) {
+            try {
+              controller.abort();
+            } catch (abortError) {}
+          }
+        }, timeoutMs);
+      }
+      try {
+        const response = await fetchImpl(url, optionsInit);
+        const ok = response.ok || response.type === 'opaque';
+        return {
+          ok,
+          status: response.status ?? null,
+          method: optionsInit.method || 'HEAD',
+          note: null,
+        };
+      } catch (error) {
+        const reason = error?.name === 'AbortError' ? 'timeout' : 'network-error';
+        return {
+          ok: false,
+          status: null,
+          method: optionsInit.method || 'HEAD',
+          note: reason,
+        };
+      } finally {
+        if (timeoutHandle !== null) {
+          const clearTimer = typeof scope.clearTimeout === 'function' ? scope.clearTimeout.bind(scope) : clearTimeout;
+          if (clearTimer) {
+            try {
+              clearTimer(timeoutHandle);
+            } catch (clearError) {}
+          }
+        }
+      }
+    };
+
+    const probeAsset = async (asset) => {
+      const headResult = await fetchWithTimeout(asset.url, { method: 'HEAD' });
+      if (headResult.ok) {
+        return headResult;
+      }
+      if (headResult.status === 405 || headResult.status === 501) {
+        const rangeResult = await fetchWithTimeout(asset.url, {
+          method: 'GET',
+          headers: { Range: 'bytes=0-0' },
+        });
+        if (rangeResult.ok) {
+          return rangeResult;
+        }
+        return rangeResult;
+      }
+      return headResult;
+    };
+
+    const promise = (async () => {
+      const summary = {
+        status: 'ok',
+        total: 0,
+        reachable: 0,
+        missing: [],
+        checkedAt: new Date().toISOString(),
+        manifestUrl: manifestRequestUrl,
+      };
+      try {
+        const response = await fetchImpl(manifestRequestUrl, {
+          method: 'GET',
+          cache: 'no-store',
+          redirect: 'follow',
+        });
+        if (!response.ok) {
+          summary.status = 'error';
+          summary.reason = 'manifest-request-failed';
+          summary.responseStatus = response.status ?? null;
+          return summary;
+        }
+        let manifestJson;
+        try {
+          manifestJson = await response.json();
+        } catch (parseError) {
+          summary.status = 'error';
+          summary.reason = 'manifest-parse-failed';
+          summary.error = { message: parseError?.message ?? String(parseError) };
+          return summary;
+        }
+        const assets = Array.isArray(manifestJson?.assets) ? manifestJson.assets : [];
+        const seen = new Set();
+        const paths = [];
+        assets.forEach((asset) => {
+          if (typeof asset !== 'string') {
+            return;
+          }
+          const trimmed = asset.trim();
+          if (!trimmed || seen.has(trimmed)) {
+            return;
+          }
+          seen.add(trimmed);
+          paths.push(trimmed);
+        });
+        summary.total = paths.length;
+        updateManifestAssetCheckState({ total: paths.length });
+        if (paths.length === 0) {
+          summary.checkedAt = new Date().toISOString();
+          return summary;
+        }
+        const assetsToProbe = paths.map((path) => ({
+          path,
+          url: resolveManifestAssetUrl(path, baseCandidates),
+        }));
+        const missing = [];
+        let reachable = 0;
+        assetsToProbe.forEach((asset) => {
+          if (!asset.url) {
+            missing.push({ path: asset.path, url: null, status: null, method: null, note: 'unresolvable' });
+          }
+        });
+        const queue = assetsToProbe.filter((asset) => Boolean(asset.url));
+        const workers = [];
+        const concurrency = Math.max(1, Math.min(MANIFEST_ASSET_CHECK_CONCURRENCY, queue.length || 1));
+        for (let index = 0; index < concurrency; index += 1) {
+          workers.push(
+            (async () => {
+              while (queue.length) {
+                const asset = queue.shift();
+                if (!asset) {
+                  break;
+                }
+                try {
+                  // eslint-disable-next-line no-await-in-loop
+                  const result = await probeAsset(asset);
+                  if (result.ok) {
+                    reachable += 1;
+                  } else {
+                    missing.push({
+                      path: asset.path,
+                      url: asset.url,
+                      status: Number.isFinite(result.status) ? Number(result.status) : null,
+                      method: typeof result.method === 'string' ? result.method : null,
+                      note: result.note || null,
+                    });
+                  }
+                } catch (probeError) {
+                  missing.push({
+                    path: asset.path,
+                    url: asset.url,
+                    status: null,
+                    method: null,
+                    note: 'network-error',
+                  });
+                  if (scope.console?.debug) {
+                    scope.console.debug('Manifest asset probe failed.', probeError, { asset });
+                  }
+                }
+              }
+            })(),
+          );
+        }
+        await Promise.all(workers);
+        summary.reachable = reachable;
+        summary.missing = missing;
+        summary.status = missing.length ? 'missing' : 'ok';
+        summary.checkedAt = new Date().toISOString();
+        return summary;
+      } catch (error) {
+        summary.status = 'error';
+        summary.reason = 'exception';
+        summary.error = { message: error?.message ?? String(error) };
+        return summary;
+      }
+    })();
+
+    manifestAssetCheckState.promise = promise;
+
+    return promise
+      .then((summary) => {
+        const status = summary.status === 'missing' ? 'missing' : summary.status === 'ok' ? 'ok' : summary.status || 'error';
+        const missing = Array.isArray(summary.missing)
+          ? summary.missing.map((entry) => ({
+              path: typeof entry?.path === 'string' ? entry.path : null,
+              url: typeof entry?.url === 'string' ? entry.url : null,
+              status: Number.isFinite(entry?.status) ? Number(entry.status) : null,
+              method: typeof entry?.method === 'string' ? entry.method : null,
+              note:
+                entry?.note !== undefined && entry?.note !== null
+                  ? typeof entry.note === 'string'
+                    ? entry.note
+                    : String(entry.note)
+                  : null,
+            }))
+          : [];
+        const checkedAt = summary.checkedAt ?? new Date().toISOString();
+        const summarySnapshot = {
+          ...summary,
+          missing: missing.map((entry) => ({ ...entry })),
+          checkedAt,
+        };
+        updateManifestAssetCheckState(
+          {
+            status,
+            missing,
+            total: Number.isFinite(summary.total) ? Number(summary.total) : missing.length,
+            checkedAt,
+            error:
+              status === 'error'
+                ? {
+                    ...(summary.error || {}),
+                    reason: summary.reason ?? null,
+                    status: summary.responseStatus ?? null,
+                  }
+                : null,
+            summary: summarySnapshot,
+          },
+          { render: true },
+        );
+        manifestAssetCheckState.promise = null;
+        if (status === 'missing') {
+          scope.console?.warn?.('Manifest asset availability check detected missing assets.', summarySnapshot);
+        } else if (status === 'error') {
+          scope.console?.warn?.('Manifest asset availability check failed.', summarySnapshot);
+        } else {
+          scope.console?.info?.('Manifest asset availability check completed.', {
+            total: summarySnapshot.total,
+            reachable: summarySnapshot.reachable,
+          });
+        }
+        return summarySnapshot;
+      })
+      .catch((error) => {
+        manifestAssetCheckState.promise = null;
+        const now = new Date().toISOString();
+        updateManifestAssetCheckState({
+          status: 'error',
+          error: { message: error?.message ?? String(error) },
+          checkedAt: now,
+          summary: {
+            status: 'error',
+            reason: 'exception',
+            missing: [],
+            total: 0,
+            reachable: 0,
+            checkedAt: now,
+            manifestUrl: manifestRequestUrl,
+          },
+        });
+        if (scope.console?.warn) {
+          scope.console.warn('Manifest asset availability check threw an error.', error);
+        }
+        return {
+          status: 'error',
+          reason: 'exception',
+          error: { message: error?.message ?? String(error) },
+          total: 0,
+          reachable: 0,
+          missing: [],
+          checkedAt: now,
+          manifestUrl: manifestRequestUrl,
+        };
+      });
+  }
+
+  function buildManifestAssetCheckReport() {
+    const state = manifestAssetCheckState;
+    if (!state) {
+      return null;
+    }
+    const summary = state.summary
+      ? {
+          ...state.summary,
+          missing: Array.isArray(state.summary.missing)
+            ? state.summary.missing.map((entry) => ({ ...entry }))
+            : [],
+        }
+      : null;
+    return {
+      status: state.status,
+      total: Number.isFinite(state.total) ? Number(state.total) : null,
+      checkedAt: state.checkedAt ?? null,
+      missing: Array.isArray(state.missing) ? state.missing.map((entry) => ({ ...entry })) : [],
+      error: state.error ? { ...state.error } : null,
+      summary,
+    };
   }
 
   function notifyBootDiagnosticsListeners(snapshot) {
@@ -5910,6 +6530,7 @@
       liveDiagnostics: getLiveDiagnosticsEntriesSnapshot(),
       bootDiagnostics: bootDiagnosticsSnapshot,
       bootDiagnosticsErrors,
+      manifestAssets: buildManifestAssetCheckReport(),
     };
   }
 
@@ -9177,6 +9798,7 @@
     const shouldPreloadCriticalAssets = !runningFromFileProtocol;
     let assetPreloadPromise = null;
     let assetAvailabilityPromise = null;
+    let manifestAssetCheckPromise = null;
     if (shouldEnforceStrictAssets && experience && typeof experience.enableStrictAssetValidation === 'function') {
       try {
         experience.enableStrictAssetValidation();
@@ -9199,6 +9821,34 @@
         }
         assetAvailabilityPromise = null;
       }
+    }
+    if (shouldEnforceStrictAssets && typeof startManifestAssetAvailabilityCheck === 'function') {
+      try {
+        manifestAssetCheckPromise = startManifestAssetAvailabilityCheck();
+      } catch (error) {
+        manifestAssetCheckPromise = null;
+        if (globalScope.console?.debug) {
+          globalScope.console.debug('Failed to initiate manifest asset availability check.', error);
+        }
+      }
+    } else if (!shouldEnforceStrictAssets && manifestAssetCheckState.status === 'idle') {
+      const skippedAt = new Date().toISOString();
+      updateManifestAssetCheckState({
+        status: 'skipped',
+        error: null,
+        missing: [],
+        total: 0,
+        checkedAt: skippedAt,
+        summary: {
+          status: 'skipped',
+          reason: 'offline-mode',
+          missing: [],
+          total: 0,
+          reachable: 0,
+          checkedAt: skippedAt,
+          manifestUrl: null,
+        },
+      });
     }
     if (shouldPreloadCriticalAssets && experience && typeof experience.preloadRequiredAssets === 'function') {
       try {
@@ -9283,6 +9933,36 @@
           });
         }
       };
+      const updateManifestOverlay = (summary) => {
+        if (!summary || !overlayController?.setDiagnostic) {
+          return;
+        }
+        const diagnosticsSnapshot = overlayController.diagnostics || {};
+        const currentStatus = diagnosticsSnapshot.assets?.status;
+        if (currentStatus === 'error') {
+          return;
+        }
+        if (summary.status === 'error') {
+          overlayController.setDiagnostic('assets', {
+            status: 'warning',
+            message: 'Manifest asset availability check failed — review diagnostics.',
+          });
+          return;
+        }
+        if (summary.status === 'missing' && Array.isArray(summary.missing) && summary.missing.length > 0) {
+          const previewEntries = summary.missing.slice(0, 3);
+          const previewNames = previewEntries.map((entry) =>
+            typeof entry?.path === 'string' && entry.path.trim().length ? entry.path.trim() : 'Unknown asset',
+          );
+          const remaining = summary.missing.length - previewNames.length;
+          const suffix = remaining > 0 ? `, +${remaining} more` : '';
+          const previewLabel = previewNames.join(', ');
+          overlayController.setDiagnostic('assets', {
+            status: 'warning',
+            message: `Manifest check missing ${summary.missing.length} asset${summary.missing.length === 1 ? '' : 's'} (${previewLabel}${suffix}).`,
+          });
+        }
+      };
       if (assetAvailabilityPromise && typeof assetAvailabilityPromise.then === 'function') {
         assetAvailabilityPromise
           .then(updateAvailabilityOverlay)
@@ -9298,6 +9978,23 @@
             });
             if (globalScope.console?.debug) {
               globalScope.console.debug('Asset availability overlay update failed.', error);
+            }
+          });
+      }
+      if (manifestAssetCheckPromise && typeof manifestAssetCheckPromise.then === 'function') {
+        manifestAssetCheckPromise
+          .then(updateManifestOverlay)
+          .catch((error) => {
+            const diagnosticsSnapshot = overlayController.diagnostics || {};
+            const currentStatus = diagnosticsSnapshot.assets?.status;
+            if (currentStatus !== 'error') {
+              overlayController.setDiagnostic('assets', {
+                status: 'warning',
+                message: 'Manifest asset availability check failed — review diagnostics.',
+              });
+            }
+            if (globalScope.console?.debug) {
+              globalScope.console.debug('Manifest asset availability overlay update failed.', error);
             }
           });
       }
