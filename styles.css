@@ -3521,6 +3521,20 @@ body.hud-inactive #gameHud .craft-launcher {
   pointer-events: none;
 }
 
+/* Keep the How to Play trigger usable even while the HUD is dimmed for active play. */
+body.hud-inactive #gameHud .hud-card--actions,
+body.hud-inactive #gameHud .hud-card--actions .hud-actions {
+  pointer-events: auto;
+}
+
+body.hud-inactive #gameHud .hud-card--actions .hud-actions button {
+  pointer-events: none;
+}
+
+body.hud-inactive #gameHud #openTutorial {
+  pointer-events: auto;
+}
+
 .victory-banner {
   position: absolute;
   top: 1.5rem;
