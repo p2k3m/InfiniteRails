@@ -361,6 +361,7 @@
   const HOTBAR_SLOTS = 10;
   const KEY_BINDINGS_STORAGE_KEY = 'infinite-rails-keybindings';
   const SCOREBOARD_STORAGE_KEY = 'infinite-dimension-scoreboard';
+  const SCOREBOARD_CACHE_MAX_AGE_MS = 1000 * 60 * 60 * 24 * 7;
   const SCORE_SYNC_QUEUE_STORAGE_KEY = 'infinite-dimension-score-queue';
   const SCORE_SYNC_QUEUE_LIMIT = 25;
   const FIRST_RUN_TUTORIAL_STORAGE_KEY = 'infinite-rails-first-run-tutorial';
@@ -3008,6 +3009,7 @@
       this.scoreEntries = [];
       this.restoredScoreEntryIdentifiers = new Set();
       this.pendingRestoredScoreMerge = false;
+      this.scoreboardCacheExpired = false;
       this.restoreScoreboardEntries();
       this.sessionId =
         (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
@@ -5849,19 +5851,35 @@
     }
 
     getStoredScoreboardEntries() {
+      const emptySnapshot = { entries: [], expired: false, updatedAt: 0, legacy: false };
       if (typeof localStorage === 'undefined' || !this.scoreboardStorageKey) {
-        return [];
+        return emptySnapshot;
       }
       try {
         const raw = localStorage.getItem(this.scoreboardStorageKey);
         if (!raw) {
-          return [];
+          return emptySnapshot;
         }
         const parsed = JSON.parse(raw);
-        return Array.isArray(parsed) ? parsed : [];
+        if (Array.isArray(parsed)) {
+          return { entries: parsed, expired: false, updatedAt: 0, legacy: true };
+        }
+        if (!parsed || typeof parsed !== 'object') {
+          return emptySnapshot;
+        }
+        const entries = Array.isArray(parsed.entries) ? parsed.entries : [];
+        const updatedAt = Number(parsed.updatedAt) || 0;
+        if (entries.length && updatedAt) {
+          const age = Date.now() - updatedAt;
+          if (age > SCOREBOARD_CACHE_MAX_AGE_MS) {
+            localStorage.removeItem(this.scoreboardStorageKey);
+            return { entries: [], expired: true, updatedAt, legacy: false };
+          }
+        }
+        return { entries, expired: false, updatedAt, legacy: false };
       } catch (error) {
         console.warn('Unable to load cached scoreboard snapshot', error);
-        return [];
+        return emptySnapshot;
       }
     }
 
@@ -5892,7 +5910,12 @@
           localStorage.removeItem(this.scoreboardStorageKey);
           return;
         }
-        localStorage.setItem(this.scoreboardStorageKey, JSON.stringify(entries));
+        const snapshot = {
+          version: 1,
+          updatedAt: Date.now(),
+          entries,
+        };
+        localStorage.setItem(this.scoreboardStorageKey, JSON.stringify(snapshot));
       } catch (error) {
         console.warn('Unable to persist scoreboard snapshot', error);
       }
@@ -5900,15 +5923,17 @@
 
     restoreScoreboardEntries() {
       const stored = this.getStoredScoreboardEntries();
+      this.scoreboardCacheExpired = stored.expired === true;
       this.restoredScoreEntryIdentifiers = new Set();
-      if (!stored.length) {
+      const entries = Array.isArray(stored.entries) ? stored.entries : [];
+      if (!entries.length) {
         this.pendingRestoredScoreMerge = false;
         return;
       }
       const utils = this.scoreboardUtils;
       const normalized = utils?.normalizeScoreEntries
-        ? utils.normalizeScoreEntries(stored)
-        : stored.slice();
+        ? utils.normalizeScoreEntries(entries)
+        : entries.slice();
       this.scoreEntries = normalized;
       normalized.forEach((entry) => {
         const identifier = this.getScoreEntryIdentifier(entry);
@@ -5918,6 +5943,7 @@
       });
       this.pendingRestoredScoreMerge = this.restoredScoreEntryIdentifiers.size > 0;
       this.renderScoreboard();
+      this.persistScoreboardEntries();
     }
 
     normalizeQueuedScoreEntriesForIdentity(sourceIdentifiers) {
