@@ -196,6 +196,11 @@ async function maybeClickStart(page) {
   );
 
   console.info('[E2E][StartButton] Dispatching click.');
+  const readyVisible = await startButton.isVisible().catch(() => false);
+  if (!readyVisible) {
+    console.info('[E2E][StartButton] Start button became hidden before click; assuming renderer progressed.');
+    return;
+  }
   await startButton.click();
   console.info('[E2E][StartButton] Click dispatched.');
 }
