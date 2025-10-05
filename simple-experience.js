@@ -320,6 +320,10 @@
     stone: [EMBEDDED_TEXTURE_DATA.stone],
     rails: [EMBEDDED_TEXTURE_DATA.rails],
   };
+
+  const CRITICAL_ASSET_AVAILABILITY_DEFAULT_TIMEOUT_MS = 1800;
+  const CRITICAL_ASSET_AVAILABILITY_MAX_CONCURRENCY = 4;
+  const CRITICAL_ASSET_AVAILABILITY_MAX_FAILURES = 10;
   const TEXTURE_PACK_ERROR_NOTICE_THRESHOLD = 3;
   const MIN_COLUMN_HEIGHT = 1;
   const MAX_COLUMN_HEIGHT = 6;
@@ -1319,6 +1323,57 @@
       const candidates = createAssetUrlCandidates(relativePath);
       return candidates.length ? candidates[0] : relativePath;
     });
+
+  function normaliseAssetAvailabilityCandidates(sources) {
+    const results = [];
+    const seen = new Set();
+    const values = Array.isArray(sources) ? sources : [];
+    values.forEach((value) => {
+      if (typeof value !== 'string') {
+        return;
+      }
+      const trimmed = value.trim();
+      if (!trimmed) {
+        return;
+      }
+      const tagged = applyAssetVersionTag(trimmed);
+      if (/^(?:data|blob):/i.test(tagged)) {
+        if (!seen.has(tagged)) {
+          seen.add(tagged);
+          results.push({ url: tagged, inline: true, raw: trimmed });
+        }
+        return;
+      }
+      const candidates = createAssetUrlCandidates(tagged);
+      candidates.forEach((candidate) => {
+        if (typeof candidate !== 'string') {
+          return;
+        }
+        const finalValue = candidate.trim();
+        if (!finalValue || seen.has(finalValue)) {
+          return;
+        }
+        let absolute = finalValue;
+        if (!/^(?:https?:|data:|blob:)/i.test(finalValue)) {
+          try {
+            const scope =
+              (typeof window !== 'undefined' && window.location?.href)
+              || (typeof globalThis !== 'undefined' && globalThis.location?.href)
+              || undefined;
+            absolute = new URL(finalValue, scope).href;
+          } catch (error) {
+            absolute = null;
+          }
+        }
+        if (!absolute) {
+          return;
+        }
+        seen.add(absolute);
+        results.push({ url: absolute, inline: false, raw: trimmed });
+      });
+    });
+    return results;
+  }
 
   const GLTF_LOADER_URL = resolveAssetUrl('vendor/GLTFLoader.js');
 
@@ -2742,6 +2797,8 @@
         ? Math.max(1000, options.assetDelayIndicatorThresholdMs)
         : 1000;
       this.assetLoadLog = [];
+      this.criticalAssetAvailabilityPromise = null;
+      this.lastCriticalAssetAvailabilitySummary = null;
       this.criticalAssetPreloadPromise = null;
       this.criticalAssetPreloadFailed = false;
       this.criticalAssetPreloadComplete = false;
@@ -10981,11 +11038,477 @@
       return entries;
     }
 
+    async verifyCriticalAssetAvailability(options = {}) {
+      if (this.criticalAssetAvailabilityPromise && options.force !== true) {
+        return this.criticalAssetAvailabilityPromise;
+      }
+      const fetchImpl =
+        typeof options.fetch === 'function'
+          ? options.fetch
+          : typeof fetch === 'function'
+            ? fetch.bind(typeof window !== 'undefined' ? window : globalThis)
+            : null;
+      const timeoutMs = Number.isFinite(options.timeoutMs)
+        ? Math.max(300, Math.floor(options.timeoutMs))
+        : CRITICAL_ASSET_AVAILABILITY_DEFAULT_TIMEOUT_MS;
+      const concurrency = Number.isFinite(options.concurrency)
+        ? Math.max(1, Math.min(CRITICAL_ASSET_AVAILABILITY_MAX_CONCURRENCY, Math.floor(options.concurrency)))
+        : CRITICAL_ASSET_AVAILABILITY_MAX_CONCURRENCY;
+      const timestamp = Date.now();
+
+      const summariseFailures = (failures) =>
+        failures.slice(0, CRITICAL_ASSET_AVAILABILITY_MAX_FAILURES).map((failure) => ({
+          key: failure.key,
+          type: failure.type,
+          label: failure.label,
+          attempts: failure.attempts.slice(0, 3).map((attempt) => ({
+            url: attempt.url,
+            status: attempt.status,
+            method: attempt.method,
+            note: attempt.note,
+          })),
+        }));
+
+      if (!fetchImpl) {
+        const summary = {
+          status: 'skipped',
+          reason: 'fetch-unavailable',
+          total: 0,
+          reachable: 0,
+          inline: 0,
+          missing: [],
+          failures: [],
+          timestamp,
+        };
+        this.lastCriticalAssetAvailabilitySummary = summary;
+        this.announceCriticalAssetAvailability(summary);
+        this.criticalAssetAvailabilityPromise = Promise.resolve(summary);
+        return this.criticalAssetAvailabilityPromise;
+      }
+
+      const buildAssetsToCheck = () => {
+        const assets = [];
+        const textures = this.collectCriticalTextureKeys();
+        textures.forEach((key) => {
+          const normalisedKey = typeof key === 'string' ? key.trim() : '';
+          if (!normalisedKey) {
+            return;
+          }
+          const sources = this.resolveAssetSourceCandidates(`texture:${normalisedKey}`);
+          const candidates = normaliseAssetAvailabilityCandidates(sources);
+          assets.push({
+            key: `texture:${normalisedKey}`,
+            type: 'texture',
+            label: this.describeAssetKey(`texture:${normalisedKey}`),
+            candidates,
+          });
+        });
+        const models = this.collectCriticalModelEntries();
+        models.forEach(({ key, url }) => {
+          if (typeof key !== 'string') {
+            return;
+          }
+          const normalisedKey = key.trim();
+          if (!normalisedKey) {
+            return;
+          }
+          const sources = this.resolveAssetSourceCandidates(normalisedKey);
+          if (typeof url === 'string' && url.trim().length) {
+            sources.push(url);
+          }
+          const candidates = normaliseAssetAvailabilityCandidates(sources);
+          assets.push({
+            key: normalisedKey,
+            type: 'model',
+            label: this.describeAssetKey(normalisedKey),
+            candidates,
+          });
+        });
+        return assets;
+      };
+
+      const attemptFetch = async (url, init = {}) => {
+        const optionsInit = {
+          method: 'HEAD',
+          cache: 'no-store',
+          redirect: 'follow',
+          mode: 'cors',
+          ...init,
+        };
+        let timeoutHandle = null;
+        const controller = typeof AbortController === 'function' ? new AbortController() : null;
+        if (controller) {
+          optionsInit.signal = controller.signal;
+        }
+        const timeoutPromise =
+          Number.isFinite(timeoutMs) && timeoutMs > 0
+            ? new Promise((resolve) => {
+                const scope =
+                  (typeof window !== 'undefined' && window) ||
+                  (typeof globalThis !== 'undefined' && globalThis) ||
+                  null;
+                const setTimer = typeof scope?.setTimeout === 'function' ? scope.setTimeout.bind(scope) : setTimeout;
+                timeoutHandle = setTimer(() => {
+                  timeoutHandle = null;
+                  if (controller) {
+                    try {
+                      controller.abort();
+                    } catch (abortError) {}
+                  }
+                  resolve({ timedOut: true });
+                }, timeoutMs);
+              })
+            : null;
+        try {
+          const fetchPromise = fetchImpl(url, optionsInit);
+          const response = timeoutPromise
+            ? await Promise.race([fetchPromise, timeoutPromise])
+            : await fetchPromise;
+          if (response && response.timedOut) {
+            return { ok: false, status: null, timedOut: true, method: optionsInit.method };
+          }
+          return {
+            ok: response.ok || response.type === 'opaque',
+            status: response.status ?? null,
+            method: optionsInit.method,
+            type: response.type || 'default',
+          };
+        } catch (error) {
+          const reason =
+            error && typeof error === 'object' && typeof error.name === 'string' && error.name === 'AbortError'
+              ? 'aborted'
+              : 'network-error';
+          return { ok: false, status: null, method: optionsInit.method, note: reason };
+        } finally {
+          if (timeoutHandle !== null) {
+            const scope =
+              (typeof window !== 'undefined' && window) ||
+              (typeof globalThis !== 'undefined' && globalThis) ||
+              null;
+            const clearTimer = typeof scope?.clearTimeout === 'function' ? scope.clearTimeout.bind(scope) : clearTimeout;
+            try {
+              clearTimer(timeoutHandle);
+            } catch (error) {}
+          }
+        }
+      };
+
+      const assets = buildAssetsToCheck();
+      const results = [];
+      const failures = [];
+      const missing = [];
+      let reachable = 0;
+      let inlineCount = 0;
+
+      const checkAsset = async (asset) => {
+        const detail = {
+          key: asset.key,
+          type: asset.type,
+          label: asset.label,
+          attempts: [],
+        };
+        const inlineCandidate = asset.candidates.find((candidate) => candidate.inline);
+        if (inlineCandidate) {
+          inlineCount += 1;
+          reachable += 1;
+          detail.status = 'inline';
+          detail.attempts.push({ url: inlineCandidate.url, status: 'inline', method: 'inline', note: 'embedded' });
+          results.push(detail);
+          return;
+        }
+        const networkCandidates = asset.candidates.filter((candidate) => !candidate.inline);
+        if (!networkCandidates.length) {
+          detail.status = 'missing';
+          detail.attempts.push({ url: null, status: null, method: null, note: 'no-sources' });
+          missing.push(asset.key);
+          failures.push(detail);
+          results.push(detail);
+          return;
+        }
+        for (const candidate of networkCandidates) {
+          const headResult = await attemptFetch(candidate.url, { method: 'HEAD' });
+          detail.attempts.push({
+            url: candidate.url,
+            status: headResult.status,
+            method: headResult.method,
+            note: headResult.timedOut ? 'timeout' : headResult.note || null,
+          });
+          if (headResult.ok) {
+            reachable += 1;
+            detail.status = 'reachable';
+            results.push(detail);
+            return;
+          }
+          if (headResult.status === 405 || headResult.status === 501) {
+            const rangeResult = await attemptFetch(candidate.url, {
+              method: 'GET',
+              headers: { Range: 'bytes=0-0' },
+            });
+            detail.attempts.push({
+              url: candidate.url,
+              status: rangeResult.status,
+              method: rangeResult.method,
+              note: rangeResult.timedOut ? 'timeout' : rangeResult.note || null,
+            });
+            if (rangeResult.ok) {
+              reachable += 1;
+              detail.status = 'reachable';
+              results.push(detail);
+              return;
+            }
+          }
+        }
+        detail.status = 'missing';
+        missing.push(asset.key);
+        failures.push(detail);
+        results.push(detail);
+      };
+
+      const queue = assets.slice();
+      const workers = [];
+      for (let i = 0; i < concurrency; i += 1) {
+        workers.push(
+          (async () => {
+            while (queue.length) {
+              const asset = queue.shift();
+              if (!asset) {
+                break;
+              }
+              try {
+                // eslint-disable-next-line no-await-in-loop
+                await checkAsset(asset);
+              } catch (error) {
+                const detail = {
+                  key: asset.key,
+                  type: asset.type,
+                  label: asset.label,
+                  attempts: [
+                    {
+                      url: null,
+                      status: null,
+                      method: null,
+                      note: 'unhandled-error',
+                    },
+                  ],
+                  status: 'missing',
+                };
+                failures.push(detail);
+                missing.push(asset.key);
+                results.push(detail);
+              }
+            }
+          })(),
+        );
+      }
+
+      const execute = async () => {
+        await Promise.all(workers);
+        const summary = {
+          status: missing.length > 0 ? 'missing' : 'ok',
+          total: assets.length,
+          reachable,
+          inline: inlineCount,
+          missing,
+          failures: summariseFailures(failures),
+          timestamp,
+        };
+        this.lastCriticalAssetAvailabilitySummary = summary;
+        this.announceCriticalAssetAvailability(summary);
+        return summary;
+      };
+
+      this.criticalAssetAvailabilityPromise = execute().catch((error) => {
+        const summary = {
+          status: 'error',
+          total: assets.length,
+          reachable,
+          inline: inlineCount,
+          missing,
+          failures: summariseFailures(failures),
+          error: error && typeof error === 'object' ? { name: error.name, message: error.message } : { message: String(error) },
+          timestamp,
+        };
+        this.lastCriticalAssetAvailabilitySummary = summary;
+        this.announceCriticalAssetAvailability(summary);
+        return summary;
+      });
+      return this.criticalAssetAvailabilityPromise;
+    }
+
+    publishCriticalAssetAvailabilityDiagnostics(summary) {
+      if (!summary) {
+        return;
+      }
+      const scope =
+        (typeof globalThis !== 'undefined' && globalThis)
+        || (typeof window !== 'undefined' && window)
+        || null;
+      const api = scope?.InfiniteRails?.bootDiagnostics ?? null;
+      if (!api || typeof api.update !== 'function') {
+        return;
+      }
+      let snapshot = null;
+      if (typeof api.getSnapshot === 'function') {
+        try {
+          snapshot = api.getSnapshot();
+        } catch (error) {
+          snapshot = null;
+        }
+      }
+      if (!snapshot) {
+        snapshot = {
+          timestamp: new Date().toISOString(),
+          status: summary.status === 'missing' ? 'warning' : summary.status === 'error' ? 'warning' : 'ok',
+          phase: 'asset-verification',
+          sections: { engine: [], assets: [], models: [], ui: [] },
+        };
+      } else {
+        snapshot = JSON.parse(JSON.stringify(snapshot));
+        snapshot.timestamp = new Date().toISOString();
+      }
+      const ensureSections = ['engine', 'assets', 'models', 'ui'];
+      snapshot.sections = snapshot.sections && typeof snapshot.sections === 'object' ? snapshot.sections : {};
+      ensureSections.forEach((section) => {
+        if (!Array.isArray(snapshot.sections[section])) {
+          snapshot.sections[section] = [];
+        }
+      });
+      const filteredAssets = snapshot.sections.assets.filter((entry) => {
+        if (!entry || typeof entry !== 'object') {
+          return true;
+        }
+        if (!entry.detail || typeof entry.detail !== 'object') {
+          return true;
+        }
+        return entry.detail.category !== 'critical-asset-availability';
+      });
+      snapshot.sections.assets = filteredAssets;
+      const missingCount = Array.isArray(summary.missing) ? summary.missing.length : 0;
+      const severity =
+        summary.status === 'missing'
+          ? 'warning'
+          : summary.status === 'error'
+            ? 'warning'
+            : summary.status === 'skipped'
+              ? 'ok'
+              : 'ok';
+      const message =
+        summary.status === 'missing'
+          ? `Availability check detected ${missingCount} missing critical asset${missingCount === 1 ? '' : 's'}.`
+          : summary.status === 'error'
+            ? 'Availability check failed — probe error.'
+            : summary.status === 'skipped'
+              ? 'Availability check skipped — fetch unavailable.'
+              : 'Availability check passed — all critical assets reachable.';
+      snapshot.sections.assets.push({
+        severity,
+        message,
+        detail: {
+          category: 'critical-asset-availability',
+          status: summary.status,
+          total: summary.total,
+          missing: summary.missing ? summary.missing.slice(0, 12) : [],
+          reachable: summary.reachable ?? 0,
+          inline: summary.inline ?? 0,
+          failures: summary.failures ? summary.failures.slice(0, CRITICAL_ASSET_AVAILABILITY_MAX_FAILURES) : [],
+          timestamp: summary.timestamp ?? Date.now(),
+        },
+      });
+      if (summary.status === 'missing' || summary.status === 'error') {
+        snapshot.status = snapshot.status === 'error' ? 'error' : 'warning';
+      }
+      this.lastBootDiagnostics = snapshot;
+      try {
+        api.update(snapshot);
+      } catch (error) {}
+    }
+
+    announceCriticalAssetAvailability(summary) {
+      if (!summary) {
+        return;
+      }
+      const consoleRef = typeof console !== 'undefined' ? console : null;
+      const missingCount = Array.isArray(summary.missing) ? summary.missing.length : 0;
+      const baseDetail = {
+        status: summary.status,
+        total: summary.total,
+        reachable: summary.reachable,
+        inline: summary.inline,
+        missing: summary.missing,
+        failures: summary.failures,
+        timestamp: summary.timestamp,
+        reason: summary.reason ?? null,
+        error: summary.error ?? null,
+      };
+      const emitDetail = {
+        status: summary.status,
+        total: summary.total,
+        reachable: summary.reachable,
+        inline: summary.inline,
+        missing: summary.missing ? summary.missing.slice(0, 12) : [],
+        failures: summary.failures || [],
+        timestamp: summary.timestamp ?? Date.now(),
+        reason: summary.reason ?? null,
+      };
+      if (summary.status === 'skipped') {
+        const message = 'Critical asset availability check skipped — fetch API unavailable in this environment.';
+        if (consoleRef?.info) {
+          consoleRef.info(message, baseDetail);
+        }
+        this.emitGameEvent('asset-availability', emitDetail);
+        return;
+      }
+      if (summary.status === 'error') {
+        const message = 'Critical asset availability check failed — probe encountered an error.';
+        if (consoleRef?.warn) {
+          consoleRef.warn(message, baseDetail);
+        }
+        if (typeof notifyLiveDiagnostics === 'function') {
+          notifyLiveDiagnostics('assets', message, baseDetail, { level: 'warning' });
+        }
+        this.emitGameEvent('asset-availability', emitDetail);
+        this.publishCriticalAssetAvailabilityDiagnostics(summary);
+        return;
+      }
+      if (missingCount > 0) {
+        const listPreview = summary.missing.slice(0, 3).join(', ');
+        const suffix = missingCount > 3 ? `, +${missingCount - 3} more` : '';
+        const message = `Critical asset availability check detected ${missingCount} missing asset${missingCount === 1 ? '' : 's'} (${listPreview}${suffix}).`;
+        if (consoleRef?.warn) {
+          consoleRef.warn(message, baseDetail);
+        }
+        if (typeof notifyLiveDiagnostics === 'function') {
+          notifyLiveDiagnostics('assets', message, baseDetail, { level: 'warning' });
+        }
+        this.emitGameEvent('asset-availability', emitDetail);
+        this.publishCriticalAssetAvailabilityDiagnostics(summary);
+        return;
+      }
+      const successMessage = 'Critical asset availability check passed — all critical assets reachable.';
+      if (consoleRef?.info) {
+        consoleRef.info(successMessage, baseDetail);
+      }
+      if (typeof notifyLiveDiagnostics === 'function') {
+        notifyLiveDiagnostics('assets', successMessage, baseDetail, { level: 'info' });
+      }
+      this.emitGameEvent('asset-availability', emitDetail);
+      this.publishCriticalAssetAvailabilityDiagnostics(summary);
+    }
+
     preloadRequiredAssets() {
       if (this.criticalAssetPreloadPromise) {
         return this.criticalAssetPreloadPromise;
       }
       this.enableStrictAssetValidation();
+      if (typeof this.verifyCriticalAssetAvailability === 'function') {
+        try {
+          this.verifyCriticalAssetAvailability();
+        } catch (error) {
+          if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+            console.debug('Failed to schedule asset availability verification.', error);
+          }
+        }
+      }
       const textureKeys = this.collectCriticalTextureKeys();
       const modelEntries = this.collectCriticalModelEntries();
       const tasks = [];
