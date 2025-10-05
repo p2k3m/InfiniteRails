@@ -306,15 +306,15 @@ If no CloudFront distribution matches the S3 bucket, the workflow fails with ins
 
 ### Static asset permissions
 
-Every file uploaded during the deploy—including JavaScript bundles, GLTF models, textures, ambient audio, and any future additions under `assets/` or `vendor/`—must be readable by CloudFront. The GitHub Actions workflow configures the bucket with a permissive `s3:GetObject` statement by default and now emits an explicit read grant for every GLTF/GLB/BIN model file and texture prefix under `assets/`. Infrastructure teams can swap this for an Origin Access Identity (OAI) or Origin Access Control (OAC) as long as the identity retains read access to the same object prefixes.
+Every file uploaded during the deploy—including JavaScript bundles, GLTF models, textures, ambient audio, and any future additions under `assets/`, `textures/`, `audio/`, or `vendor/`—must be readable by CloudFront. The deploy workflow now **requires** a CloudFront Origin Access Identity (OAI) and configures the S3 bucket with an `s3:GetObject` grant that is scoped to the identity and the relevant prefixes. Public ACLs and anonymous bucket policies are no longer permitted; the job fails if the distribution does not expose an OAI.
 
 To confirm nothing blocks the experience from loading:
 
-1. Run `aws s3api get-bucket-policy --bucket <bucket>` and ensure either the public-read statement or an OAI/OAC-specific principal grants `s3:GetObject` to `arn:aws:s3:::<bucket>/*`.
-2. Pick a representative asset (for example `assets/steve.gltf` or `assets/audio-samples.json`) and fetch it anonymously: `curl -I https://<distribution-domain>/assets/steve.gltf`. A `200` response confirms CloudFront can reach the object.
-3. Repeat the curl check for any new asset prefix you introduce (such as `textures/` or `audio/`) to avoid regressions.
+1. Run `aws s3api get-bucket-policy --bucket <bucket>` and ensure the `Principal` is the CloudFront OAI canonical user (for example `arn:aws:iam::cloudfront:user/CloudFront Origin Access Identity E3ABC123`). The statement must only grant `s3:GetObject` to the explicit site bundles plus `assets/*`, `textures/*`, `audio/*`, and `vendor/*`.
+2. Run `node scripts/validate-asset-manifest.js` locally. The validator fails if any file under `assets/`, `textures/`, or `audio/` lacks world-readable permissions or if the deploy workflow omits a prefix.
+3. Pick a representative asset (for example `assets/steve.gltf` or `assets/audio-samples.json`) and fetch it anonymously through CloudFront: `curl -I https://<distribution-domain>/assets/steve.gltf`. A `200` response confirms CloudFront can reach the object.
 
-If the curl test returns `403`, revisit the bucket policy or OAI/OAC bindings until the CDN can retrieve every static asset.
+If the curl test returns `403`, revisit the bucket policy or OAI bindings until the CDN can retrieve every static asset.
 
 ## Enhancement Roadmap
 

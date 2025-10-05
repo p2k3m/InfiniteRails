@@ -26,18 +26,20 @@ When every request to `d3gj6x3ityfh5o.cloudfront.net/*.js` (or other static asse
 2. Ensure it includes a statement similar to:
    ```json
    {
-     "Sid": "AllowCloudFrontServicePrincipalReadOnly",
+     "Sid": "AllowCloudFrontOAIReadOnly",
      "Effect": "Allow",
      "Principal": {
        "AWS": "arn:aws:iam::cloudfront:user/CloudFront Origin Access Identity E3ABCDEFG1234"
      },
-     "Action": [
-       "s3:GetObject",
-       "s3:ListBucket"
-     ],
+     "Action": "s3:GetObject",
      "Resource": [
-       "arn:aws:s3:::infinite-rails-prod-assets",
-       "arn:aws:s3:::infinite-rails-prod-assets/*"
+       "arn:aws:s3:::infinite-rails-prod-assets/index.html",
+       "arn:aws:s3:::infinite-rails-prod-assets/styles.css",
+       "arn:aws:s3:::infinite-rails-prod-assets/script.js",
+       "arn:aws:s3:::infinite-rails-prod-assets/assets/*",
+       "arn:aws:s3:::infinite-rails-prod-assets/textures/*",
+       "arn:aws:s3:::infinite-rails-prod-assets/audio/*",
+       "arn:aws:s3:::infinite-rails-prod-assets/vendor/*"
      ]
    }
    ```
@@ -49,7 +51,7 @@ When every request to `d3gj6x3ityfh5o.cloudfront.net/*.js` (or other static asse
   ```bash
   aws s3api get-public-access-block --bucket infinite-rails-prod-assets
   ```
-- All four properties (`BlockPublicAcls`, `IgnorePublicAcls`, `BlockPublicPolicy`, `RestrictPublicBuckets`) should be `true`. If any are `false`, enable them to avoid relying on public ACLs.
+- All four properties (`BlockPublicAcls`, `IgnorePublicAcls`, `BlockPublicPolicy`, `RestrictPublicBuckets`) should be `true`. If any are `false`, enable them to avoid relying on public ACLs. The deploy workflow enforces these settings before applying the bucket policy.
 
 ### 2.4 Audit object ACLs
 
@@ -63,8 +65,8 @@ When every request to `d3gj6x3ityfh5o.cloudfront.net/*.js` (or other static asse
 
 - Choose a few asset types (for example `script.js`, `assets/steve.gltf`, `textures/grass.png`, and `assets/audio-samples.json`).
 - If the bucket relies on an OAI/OAC, fetch the files through CloudFront: `curl -I https://d3gj6x3ityfh5o.cloudfront.net/assets/steve.gltf`.
-- If the bucket is intentionally public, fetch directly from S3 with anonymous credentials: `curl -I https://infinite-rails-prod-assets.s3.${AWS_REGION}.amazonaws.com/assets/steve.gltf`.
-- All requests must return `200` responses. A `403` or `404` indicates the bucket policy is missing a wildcard grant (`arn:aws:s3:::<bucket>/*`) or that the object ACL blocked access. Update the policy or re-upload the object until every asset path responds successfully.
+- If you temporarily bypass the OAI requirement outside the automated workflow (for example, while testing a sandbox bucket), fetch directly from S3 with anonymous credentials: `curl -I https://infinite-rails-prod-assets.s3.${AWS_REGION}.amazonaws.com/assets/steve.gltf`.
+- All requests must return `200` responses. A `403` or `404` indicates the OAI grant is missing a required prefix or that the object ACL blocked access. Update the policy or re-upload the object until every asset path responds successfully, then restore the OAI restrictions.
 
 ## 3. Validate the CloudFront Origin Access Identity / Control
 
