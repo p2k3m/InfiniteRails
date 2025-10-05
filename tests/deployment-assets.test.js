@@ -9,6 +9,7 @@ const indexHtmlPath = path.join(repoRoot, 'index.html');
 const workflowPath = path.join(repoRoot, '.github', 'workflows', 'deploy.yml');
 const manifestPath = path.join(repoRoot, 'asset-manifest.json');
 const templatePath = path.join(repoRoot, 'serverless', 'template.yaml');
+const scriptPath = path.join(repoRoot, 'script.js');
 
 const indexHtml = fs.readFileSync(indexHtmlPath, 'utf8');
 const workflowContents = fs.readFileSync(workflowPath, 'utf8');
@@ -21,6 +22,79 @@ const sanitizedTemplateContents = templateContents
 const templateDocument = parseYaml(sanitizedTemplateContents);
 const require = createRequire(import.meta.url);
 const { listUnreachableManifestAssets } = require('../scripts/lib/manifest-coverage.js');
+
+function ensureTrailingSlash(value) {
+  if (!value || typeof value !== 'string') {
+    return value;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return trimmed;
+  }
+  return trimmed.endsWith('/') ? trimmed : `${trimmed}/`;
+}
+
+function loadManifestDocument() {
+  if (!fs.existsSync(manifestPath)) {
+    throw new Error('asset-manifest.json is missing from the repository root.');
+  }
+
+  let manifest;
+  try {
+    manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  } catch (error) {
+    throw new Error(`asset-manifest.json is not valid JSON: ${error.message}`);
+  }
+
+  if (!manifest || typeof manifest !== 'object') {
+    throw new Error('asset-manifest.json must export an object.');
+  }
+
+  if (!Array.isArray(manifest.assets)) {
+    throw new Error('asset-manifest.json must define an "assets" array.');
+  }
+
+  if (typeof manifest.assetBaseUrl !== 'string' || !manifest.assetBaseUrl.trim()) {
+    throw new Error('asset-manifest.json must define an "assetBaseUrl" string.');
+  }
+
+  let assetBaseUrl;
+  try {
+    assetBaseUrl = ensureTrailingSlash(new URL(manifest.assetBaseUrl.trim()).toString());
+  } catch (error) {
+    throw new Error(
+      `asset-manifest.json "assetBaseUrl" must be an absolute URL. Found: ${manifest.assetBaseUrl}`,
+    );
+  }
+
+  return { ...manifest, assetBaseUrl };
+}
+
+function extractBootstrapProductionAssetRoot() {
+  if (!fs.existsSync(scriptPath)) {
+    throw new Error('script.js is missing from the repository root.');
+  }
+
+  const scriptSource = fs.readFileSync(scriptPath, 'utf8');
+  const match = scriptSource.match(
+    /const\s+PRODUCTION_ASSET_ROOT\s*=\s*ensureTrailingSlash\(\s*['"]([^'"\s]+)['"]\s*(?:,\s*)?\)/,
+  );
+
+  if (!match || !match[1]) {
+    throw new Error('Unable to locate PRODUCTION_ASSET_ROOT constant in script.js.');
+  }
+
+  const raw = match[1].trim();
+  try {
+    return ensureTrailingSlash(new URL(raw).toString());
+  } catch (error) {
+    throw new Error(`script.js PRODUCTION_ASSET_ROOT must be an absolute URL. Found: ${raw}`);
+  }
+}
+
+const manifestDocument = loadManifestDocument();
+const bootstrapAssetRoot = extractBootstrapProductionAssetRoot();
+const manifestAssetBaseUrl = manifestDocument.assetBaseUrl;
 
 function extractLocalScriptSources(html) {
   const results = new Set();
@@ -178,26 +252,7 @@ function collectGltfAssets() {
 }
 
 function loadManifestAssets() {
-  if (!fs.existsSync(manifestPath)) {
-    throw new Error('asset-manifest.json is missing from the repository root.');
-  }
-
-  let manifest;
-  try {
-    manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-  } catch (error) {
-    throw new Error(`asset-manifest.json is not valid JSON: ${error.message}`);
-  }
-
-  if (!manifest || typeof manifest !== 'object') {
-    throw new Error('asset-manifest.json must export an object.');
-  }
-
-  if (!Array.isArray(manifest.assets)) {
-    throw new Error('asset-manifest.json must define an "assets" array.');
-  }
-
-  return manifest.assets
+  return manifestDocument.assets
     .map((asset) => normalisePath(asset))
     .filter((asset) => typeof asset === 'string' && asset.length > 0);
 }
@@ -206,6 +261,10 @@ const manifestAssets = loadManifestAssets();
 const manifestAssetSet = new Set(manifestAssets);
 
 describe('deployment workflow asset coverage', () => {
+  it('aligns manifest assetBaseUrl with the bootstrap production asset root', () => {
+    expect(manifestAssetBaseUrl).toBe(bootstrapAssetRoot);
+  });
+
   it('lists every local asset referenced by index.html', () => {
     const localAssets = new Set([
       ...extractLocalScriptSources(indexHtml),

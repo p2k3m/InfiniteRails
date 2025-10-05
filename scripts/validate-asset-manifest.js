@@ -10,9 +10,48 @@ const repoRoot = path.resolve(__dirname, '..');
 const manifestPath = path.join(repoRoot, 'asset-manifest.json');
 const workflowPath = path.join(repoRoot, '.github', 'workflows', 'deploy.yml');
 const templatePath = path.join(repoRoot, 'serverless', 'template.yaml');
+const scriptPath = path.join(repoRoot, 'script.js');
 const ASSET_PERMISSION_PREFIXES = ['assets', 'textures', 'audio'];
 const HASH_ALGORITHM = 'sha256';
 const HASH_LENGTH = 12;
+
+function ensureTrailingSlash(value) {
+  if (!value || typeof value !== 'string') {
+    return value;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return trimmed;
+  }
+  return trimmed.endsWith('/') ? trimmed : `${trimmed}/`;
+}
+
+function extractBootstrapProductionAssetRoot() {
+  if (!fs.existsSync(scriptPath)) {
+    throw new Error('script.js is missing from the repository root.');
+  }
+
+  const scriptSource = fs.readFileSync(scriptPath, 'utf8');
+  const match = scriptSource.match(
+    /const\s+PRODUCTION_ASSET_ROOT\s*=\s*ensureTrailingSlash\(\s*['"]([^'"\s]+)['"]\s*(?:,\s*)?\)/,
+  );
+
+  if (!match || !match[1]) {
+    throw new Error('Unable to locate PRODUCTION_ASSET_ROOT constant in script.js.');
+  }
+
+  const raw = match[1].trim();
+  let parsed;
+  try {
+    parsed = new URL(raw);
+  } catch (error) {
+    throw new Error(`script.js PRODUCTION_ASSET_ROOT must be an absolute URL. Found: ${raw}`);
+  }
+
+  return ensureTrailingSlash(parsed.toString());
+}
+
+const bootstrapAssetRoot = extractBootstrapProductionAssetRoot();
 
 function createSearchParamEntries(query) {
   if (!query) {
@@ -182,13 +221,32 @@ function loadManifest() {
     throw new Error('asset-manifest.json must define an "assets" array.');
   }
 
+  if (typeof raw.assetBaseUrl !== 'string' || !raw.assetBaseUrl.trim()) {
+    throw new Error('asset-manifest.json must define an "assetBaseUrl" string.');
+  }
+
+  let manifestBaseUrl;
+  try {
+    manifestBaseUrl = ensureTrailingSlash(new URL(raw.assetBaseUrl.trim()).toString());
+  } catch (error) {
+    throw new Error(
+      `asset-manifest.json "assetBaseUrl" must be an absolute URL. Found: ${raw.assetBaseUrl}`,
+    );
+  }
+
+  if (bootstrapAssetRoot && manifestBaseUrl !== bootstrapAssetRoot) {
+    throw new Error(
+      `asset-manifest.json assetBaseUrl (${manifestBaseUrl}) must match script.js PRODUCTION_ASSET_ROOT (${bootstrapAssetRoot}).`,
+    );
+  }
+
   const entries = raw.assets.map((asset, index) => parseManifestAsset(asset, index));
 
   if (!entries.length) {
     throw new Error('asset-manifest.json must list at least one asset.');
   }
 
-  return { entries };
+  return { entries, assetBaseUrl: manifestBaseUrl };
 }
 
 function ensureUniqueAssets(assets) {
@@ -511,13 +569,6 @@ function resolveBaseUrl(argv = process.argv.slice(2), env = process.env) {
   return candidates.find((value) => typeof value === 'string' && value.trim().length > 0)?.trim() || '';
 }
 
-function ensureTrailingSlash(value) {
-  if (!value.endsWith('/')) {
-    return `${value}/`;
-  }
-  return value;
-}
-
 async function listFailedHeadRequests(entries, baseUrl, fetchImpl = globalThis.fetch) {
   if (!baseUrl) {
     return [];
@@ -562,6 +613,7 @@ async function main() {
   try {
     const manifest = loadManifest();
     const manifestEntries = manifest.entries;
+    const manifestBaseUrl = manifest.assetBaseUrl || '';
     const assets = manifestEntries.map((entry) => entry.path);
     const duplicates = ensureUniqueAssets(assets);
     const missingFiles = listMissingFiles(assets);
@@ -581,10 +633,25 @@ async function main() {
       baseDir: repoRoot,
     });
 
-    const baseUrl = resolveBaseUrl();
+    const providedBaseUrl = resolveBaseUrl();
+    let headValidationBase = '';
     let headFailures = [];
-    if (baseUrl) {
-      headFailures = await listFailedHeadRequests(manifestEntries, baseUrl);
+    if (providedBaseUrl) {
+      let normalisedBase;
+      try {
+        normalisedBase = ensureTrailingSlash(new URL(providedBaseUrl).toString());
+      } catch (error) {
+        throw new Error(`Invalid base URL provided for validation: ${providedBaseUrl}`);
+      }
+
+      if (manifestBaseUrl && normalisedBase !== manifestBaseUrl) {
+        throw new Error(
+          `Provided base URL (${normalisedBase}) does not match asset-manifest.json assetBaseUrl (${manifestBaseUrl}).`,
+        );
+      }
+
+      headValidationBase = normalisedBase;
+      headFailures = await listFailedHeadRequests(manifestEntries, headValidationBase);
     }
 
     const versionIssues = listVersionedAssetIssues(manifestEntries);
@@ -642,7 +709,7 @@ async function main() {
         .join('; ');
       issues.push(`Manifest asset hashes are outdated: ${formatted}`);
     }
-    if (baseUrl && headFailures.length > 0) {
+    if (headValidationBase && headFailures.length > 0) {
       const formatted = headFailures
         .map((failure) => {
           if (failure.error) {
@@ -664,9 +731,10 @@ async function main() {
       return;
     }
 
-    if (!baseUrl) {
+    if (!headValidationBase) {
+      const hint = manifestBaseUrl ? ` The manifest currently points to ${manifestBaseUrl}.` : '';
       console.warn(
-        'ℹ️  asset-manifest.json validated locally – provide --base-url or set ASSET_MANIFEST_BASE_URL to enable HEAD checks.',
+        `ℹ️  asset-manifest.json validated locally – provide --base-url or set ASSET_MANIFEST_BASE_URL to enable HEAD checks.${hint}`,
       );
     } else {
       console.log(
