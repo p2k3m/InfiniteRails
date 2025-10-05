@@ -10,56 +10,13 @@
   <body data-color-mode="dark" data-color-mode-preference="auto">
     <div class="background-sheen"></div>
     <div class="manu-logo" id="logo" aria-hidden="false" data-hint="Created by Manu">
-      <svg
+      <img
+        src="assets/manu-logo.svg"
+        alt=""
         class="manu-logo__glyph"
-        viewBox="0 0 48 48"
-        role="img"
-        aria-labelledby="logoTitle logoDesc"
-      >
-        <title id="logoTitle">Manu voxel monogram</title>
-        <desc id="logoDesc">Stylised glowing M emblem rendered with a blue gradient.</desc>
-        <defs>
-          <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
-            <stop offset="0%" stop-color="#00aaff"></stop>
-            <stop offset="100%" stop-color="#0044ff"></stop>
-          </linearGradient>
-          <filter id="voxelGlow" x="-40%" y="-40%" width="180%" height="180%">
-            <feGaussianBlur in="SourceGraphic" stdDeviation="2.6" result="blur"></feGaussianBlur>
-            <feMerge>
-              <feMergeNode in="blur"></feMergeNode>
-              <feMergeNode in="SourceGraphic"></feMergeNode>
-            </feMerge>
-          </filter>
-        </defs>
-        <rect x="4" y="4" width="40" height="40" rx="10" fill="url(#grad)" filter="url(#voxelGlow)"></rect>
-        <path
-          d="M12 32V16l6 8l6-8v16"
-          fill="none"
-          stroke="rgba(255, 255, 255, 0.88)"
-          stroke-width="4"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-        ></path>
-        <path
-          d="M24 16l6 8l6-8v16"
-          fill="none"
-          stroke="rgba(180, 220, 255, 0.82)"
-          stroke-width="4"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-        ></path>
-        <text
-          x="24"
-          y="32"
-          text-anchor="middle"
-          fill="white"
-          font-family="'Chakra Petch', 'Exo 2', sans-serif"
-          font-size="16"
-          font-weight="700"
-        >
-          M
-        </text>
-      </svg>
+        aria-hidden="true"
+        decoding="async"
+      />
       <span class="manu-logo__label" aria-hidden="true">Created by Manu</span>
       <span class="sr-only">Created by Manu</span>
     </div>

@@ -1436,6 +1436,7 @@
   }
 
   const GLTF_LOADER_URL = resolveAssetUrl('vendor/GLTFLoader.js');
+  const HOWLER_STUB_URL = resolveAssetUrl('vendor/howler-stub.js');
 
   const RECIPE_UNLOCK_STORAGE_KEY = 'infinite-rails-recipe-unlocks';
 
@@ -9143,6 +9144,18 @@
 
     createAudioController() {
       const scope = typeof window !== 'undefined' ? window : typeof globalThis !== 'undefined' ? globalThis : null;
+      if (HOWLER_STUB_URL && scope) {
+        try {
+          scope.InfiniteRails = scope.InfiniteRails || {};
+          if (!scope.InfiniteRails.howlerStubUrl) {
+            scope.InfiniteRails.howlerStubUrl = HOWLER_STUB_URL;
+          }
+        } catch (error) {
+          if (scope?.console?.debug) {
+            scope.console.debug('Unable to expose Howler stub URL for diagnostics.', error);
+          }
+        }
+      }
       const samples = scope?.INFINITE_RAILS_EMBEDDED_ASSETS?.audioSamples || null;
       const normaliseAudioName = (value) => {
         if (typeof value !== 'string') {
