@@ -2,10 +2,12 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { parse: parseYaml } = require('yaml');
 
 const repoRoot = path.resolve(__dirname, '..');
 const manifestPath = path.join(repoRoot, 'asset-manifest.json');
 const workflowPath = path.join(repoRoot, '.github', 'workflows', 'deploy.yml');
+const templatePath = path.join(repoRoot, 'serverless', 'template.yaml');
 const ASSET_PERMISSION_PREFIXES = ['assets', 'textures', 'audio'];
 
 function normalisePath(value) {
@@ -176,6 +178,13 @@ function listDirectoriesRecursive(directory, { includeSelf = false } = {}) {
   return directories;
 }
 
+function toArray(value) {
+  if (!value) {
+    return [];
+  }
+  return Array.isArray(value) ? value : [value];
+}
+
 function describeDirectoryPermissionIssues(fullPath, { includeStatErrors = false } = {}) {
   let stats;
   try {
@@ -265,6 +274,103 @@ function listUncoveredAssets(assets, patterns) {
   return assets.filter((asset) => !patterns.some((pattern) => patternMatchesAsset(pattern, asset)));
 }
 
+function sanitizeCloudFormationYaml(contents) {
+  return contents.replace(/!Ref\s+/g, '').replace(/!GetAtt\s+/g, '').replace(/!Sub\s+/g, '');
+}
+
+function loadTemplateDocument() {
+  if (!fs.existsSync(templatePath)) {
+    throw new Error('CloudFormation template serverless/template.yaml is missing.');
+  }
+
+  const raw = fs.readFileSync(templatePath, 'utf8');
+  const sanitized = sanitizeCloudFormationYaml(raw);
+
+  try {
+    return parseYaml(sanitized);
+  } catch (error) {
+    throw new Error(`Unable to parse serverless/template.yaml: ${error.message || error}`);
+  }
+}
+
+function describeBucketPolicyIssues(templateDocument) {
+  const issues = [];
+  const bucketPolicy =
+    templateDocument?.Resources?.AssetsBucketPolicy?.Properties?.PolicyDocument || null;
+
+  if (!bucketPolicy) {
+    issues.push('AssetsBucketPolicy.PolicyDocument is missing.');
+    return issues;
+  }
+
+  const statements = toArray(bucketPolicy.Statement);
+  if (statements.length === 0) {
+    issues.push('AssetsBucketPolicy has no statements.');
+    return issues;
+  }
+
+  const readStatement = statements.find(
+    (statement) => statement && statement.Sid === 'AllowCloudFrontOriginAccessIdentityRead',
+  );
+
+  if (!readStatement) {
+    issues.push('Missing AllowCloudFrontOriginAccessIdentityRead statement.');
+  } else {
+    if (readStatement.Effect !== 'Allow') {
+      issues.push('AllowCloudFrontOriginAccessIdentityRead statement must have Effect: Allow.');
+    }
+
+    const principal = readStatement.Principal || {};
+    const canonicalUser = typeof principal.CanonicalUser === 'string' ? principal.CanonicalUser : '';
+    if (!canonicalUser) {
+      issues.push('CloudFront OAI canonical user must be defined for the read statement.');
+    } else if (!canonicalUser.includes('AssetsCloudFrontOAI')) {
+      issues.push('Read statement must reference AssetsCloudFrontOAI canonical user.');
+    }
+
+    const actions = new Set(toArray(readStatement.Action));
+    if (actions.size !== 1 || !actions.has('s3:GetObject')) {
+      issues.push('Read statement must grant only s3:GetObject.');
+    }
+
+    const resources = new Set(toArray(readStatement.Resource));
+    const expectedResources = ASSET_PERMISSION_PREFIXES.map(
+      (prefix) => '${AssetsBucket.Arn}/' + prefix + '/*',
+    );
+
+    for (const expectedResource of expectedResources) {
+      if (!resources.has(expectedResource)) {
+        issues.push(`Read statement must include ${expectedResource}.`);
+      }
+    }
+
+    const unexpectedResources = Array.from(resources).filter(
+      (resource) => !expectedResources.includes(resource),
+    );
+    if (unexpectedResources.length > 0) {
+      issues.push(
+        `Read statement must not include additional resources: ${unexpectedResources.join(', ')}`,
+      );
+    }
+  }
+
+  const otherGetObjectStatements = statements.filter((statement) => {
+    if (!statement || statement === readStatement) {
+      return false;
+    }
+    if (statement.Effect !== 'Allow') {
+      return false;
+    }
+    return toArray(statement.Action).includes('s3:GetObject');
+  });
+
+  if (otherGetObjectStatements.length > 0) {
+    issues.push('Only the CloudFront OAI read statement may allow s3:GetObject.');
+  }
+
+  return issues;
+}
+
 function resolveBaseUrl(argv = process.argv.slice(2), env = process.env) {
   const inline = argv.find((arg) => arg.startsWith('--base-url='));
   if (inline) {
@@ -333,6 +439,8 @@ async function main() {
     const missingFiles = listMissingFiles(assets);
     const permissionIssues = listPermissionIssues(assets);
     const directoryPermissionIssues = listAssetDirectoryPermissionIssues();
+    const templateDocument = loadTemplateDocument();
+    const bucketPolicyIssues = describeBucketPolicyIssues(templateDocument);
 
     if (!fs.existsSync(workflowPath)) {
       throw new Error('Deployment workflow .github/workflows/deploy.yml is missing.');
@@ -371,6 +479,13 @@ async function main() {
         .map((issue) => `${issue.asset} (mode ${issue.mode}: ${issue.problems.join(', ')})`)
         .join('; ');
       issues.push(`Paths under assets/, textures/, or audio/ have incorrect permissions: ${formatted}`);
+    }
+    if (bucketPolicyIssues.length > 0) {
+      issues.push(
+        `CloudFormation AssetsBucketPolicy must grant only the CloudFront OAI s3:GetObject access to assets/, textures/, and audio/: ${bucketPolicyIssues.join(
+          '; ',
+        )}`,
+      );
     }
     if (baseUrl && headFailures.length > 0) {
       const formatted = headFailures
