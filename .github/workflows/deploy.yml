@@ -555,17 +555,66 @@ jobs:
             echo "::notice::Submitted CloudFront invalidation ${INVALIDATION_ID}"
 
             echo "Waiting for CloudFront invalidation ${INVALIDATION_ID} to complete..."
-            aws cloudfront wait invalidation-completed \
-              --distribution-id "${DISTRIBUTION_ID}" \
-              --id "${INVALIDATION_ID}"
 
-            {
-              echo '### 🧹 CloudFront cache flushed'
-              echo ''
-              echo "- Distribution ID: \`${DISTRIBUTION_ID}\`"
-              echo "- Invalidation ID: \`${INVALIDATION_ID}\`"
-              echo "- Paths: \`/*\`"
-            } >> "$GITHUB_STEP_SUMMARY"
+            MAX_WAIT_ATTEMPTS=60
+            WAIT_DELAY=30
+            WAIT_ATTEMPT=1
+            INVALIDATION_STATUS=""
+            TOTAL_WAIT=$(((MAX_WAIT_ATTEMPTS - 1) * WAIT_DELAY))
+
+            while [ "${WAIT_ATTEMPT}" -le "${MAX_WAIT_ATTEMPTS}" ]; do
+              if GET_OUTPUT=$(aws cloudfront get-invalidation \
+                --distribution-id "${DISTRIBUTION_ID}" \
+                --id "${INVALIDATION_ID}" 2>&1); then
+                INVALIDATION_STATUS=$(echo "${GET_OUTPUT}" | jq -r '.Invalidation.Status // empty')
+
+                if [ "${INVALIDATION_STATUS}" = "Completed" ]; then
+                  echo "::notice::CloudFront invalidation ${INVALIDATION_ID} completed (attempt ${WAIT_ATTEMPT}/${MAX_WAIT_ATTEMPTS})."
+                  break
+                fi
+
+                if [ -z "${INVALIDATION_STATUS}" ]; then
+                  echo "::warning::CloudFront get-invalidation response did not include a status. Output: ${GET_OUTPUT}"
+                else
+                  echo "::notice::CloudFront invalidation ${INVALIDATION_ID} status: ${INVALIDATION_STATUS} (attempt ${WAIT_ATTEMPT}/${MAX_WAIT_ATTEMPTS}). Waiting ${WAIT_DELAY}s before re-checking."
+                fi
+              else
+                STATUS=$?
+                echo "::warning::Failed to fetch status for CloudFront invalidation ${INVALIDATION_ID} (attempt ${WAIT_ATTEMPT}/${MAX_WAIT_ATTEMPTS}). AWS CLI exited with status ${STATUS}. Output: ${GET_OUTPUT}"
+              fi
+
+              if [ "${WAIT_ATTEMPT}" -eq "${MAX_WAIT_ATTEMPTS}" ]; then
+                break
+              fi
+
+              sleep "${WAIT_DELAY}"
+              WAIT_ATTEMPT=$((WAIT_ATTEMPT + 1))
+            done
+
+            if [ "${INVALIDATION_STATUS}" != "Completed" ]; then
+              echo "::warning::CloudFront invalidation ${INVALIDATION_ID} did not reach the Completed state after ${TOTAL_WAIT}s of polling. The deployment will continue, but cached assets may remain until the invalidation finishes."
+
+              {
+                echo '### ⚠️ CloudFront invalidation in progress'
+                echo ''
+                echo "- Distribution ID: \`${DISTRIBUTION_ID}\`"
+                echo "- Invalidation ID: \`${INVALIDATION_ID}\`"
+                echo "- Paths: \`/*\`"
+                if [ "${TOTAL_WAIT}" -gt 0 ]; then
+                  echo "- Waited: ~${TOTAL_WAIT}s"
+                fi
+                echo ''
+                echo 'The distribution will finish propagating changes once the invalidation completes.'
+              } >> "$GITHUB_STEP_SUMMARY"
+            else
+              {
+                echo '### 🧹 CloudFront cache flushed'
+                echo ''
+                echo "- Distribution ID: \`${DISTRIBUTION_ID}\`"
+                echo "- Invalidation ID: \`${INVALIDATION_ID}\`"
+                echo "- Paths: \`/*\`"
+              } >> "$GITHUB_STEP_SUMMARY"
+            fi
           fi
 
       - name: Announce deployment URL
