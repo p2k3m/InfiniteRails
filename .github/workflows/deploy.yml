@@ -144,6 +144,7 @@ jobs:
             --include "portal-mechanics.js" \
             --include "scoreboard-utils.js" \
             --include "assets/**" \
+            --include "audio/**" \
             --include "textures/**" \
             --include "vendor/*"
 
@@ -208,6 +209,7 @@ jobs:
                       ("arn:aws:s3:::" + $bucket + "/script.js"),
                       ("arn:aws:s3:::" + $bucket + "/simple-experience.js"),
                       ("arn:aws:s3:::" + $bucket + "/assets/*"),
+                      ("arn:aws:s3:::" + $bucket + "/audio/*"),
                       ("arn:aws:s3:::" + $bucket + "/textures/*"),
                       ("arn:aws:s3:::" + $bucket + "/vendor/*")
                     ]
