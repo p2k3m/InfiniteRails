@@ -64,14 +64,65 @@ async function maybeClickStart(page) {
     return;
   }
 
+  const initialState = await page.evaluate(() => {
+    const button = document.querySelector('#startButton');
+    if (!button) {
+      return { disabled: null, preloading: null };
+    }
+    return {
+      disabled: Boolean(button.disabled),
+      preloading: button.getAttribute('data-preloading'),
+    };
+  });
+
+  console.info(
+    `[E2E][StartButton] Initial state: disabled=${initialState.disabled} data-preloading=${
+      initialState.preloading ?? 'null'
+    }.`,
+  );
+
+  if (initialState.preloading && initialState.preloading !== 'true') {
+    throw new Error(
+      `Start button entered a failure state before automation attempt (data-preloading="${initialState.preloading}").`,
+    );
+  }
+
+  const waitStart = Date.now();
   await page.waitForFunction(
     () => {
       const button = document.querySelector('#startButton');
-      if (!button) return false;
-      const stillPreloading = button.getAttribute('data-preloading') === 'true';
-      return !button.disabled && !stillPreloading;
+      if (!button) return { status: 'failure', reason: 'missing button' };
+      const preloading = button.getAttribute('data-preloading');
+      if (preloading && preloading !== 'true') {
+        return { status: 'failure', reason: `data-preloading="${preloading}"` };
+      }
+      if (!button.disabled && preloading !== 'true') {
+        return { status: 'ready', disabled: button.disabled, preloading };
+      }
+      return false;
     },
     { timeout: 30000 },
+  ).then(
+    (result) => {
+      if (result?.status === 'failure') {
+        throw new Error(
+          `Start button reported a failure state while waiting (${result.reason}).`,
+        );
+      }
+      if (result?.status !== 'ready') {
+        throw new Error('Start button did not become ready for automation.');
+      }
+      const waitDurationSeconds = Math.round((Date.now() - waitStart) / 10) / 100;
+      console.info(
+        `[E2E][StartButton] Waited ${waitDurationSeconds}s until disabled=${result.disabled} data-preloading=${
+          result.preloading ?? 'null'
+        }.`,
+      );
+      return result;
+    },
+    (error) => {
+      throw error;
+    },
   );
 
   await startButton.click();
