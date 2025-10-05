@@ -410,6 +410,48 @@ describe('deployment workflow asset coverage', () => {
     });
   });
 
+  it('CloudFront function enforces MIME type and CORS headers for CDN assets', () => {
+    const functionResource = templateDocument?.Resources?.AssetsMimeTypeFunction || null;
+
+    expect(functionResource).toBeTruthy();
+
+    const properties = functionResource.Properties || {};
+    expect(properties.FunctionConfig?.Runtime).toBe('cloudfront-js-1.0');
+
+    const functionCode = properties.FunctionCode;
+    expect(typeof functionCode).toBe('string');
+
+    const expectedMimeMap = {
+      ".gltf": 'model/gltf+json',
+      ".png": 'image/png',
+      ".mp3": 'audio/mpeg',
+      ".js": 'application/javascript',
+    };
+
+    Object.entries(expectedMimeMap).forEach(([extension, contentType]) => {
+      expect(functionCode.includes(`'${extension}': '${contentType}'`)).toBe(true);
+    });
+
+    expect(functionCode.includes("headers['access-control-allow-origin'] = { value: '*' };")).toBe(true);
+
+    const distributionConfig =
+      templateDocument?.Resources?.AssetsDistribution?.Properties?.DistributionConfig || null;
+
+    expect(distributionConfig).toBeTruthy();
+
+    const associations =
+      distributionConfig?.DefaultCacheBehavior?.FunctionAssociations || [];
+
+    expect(
+      associations.some(
+        (association) =>
+          association &&
+          association.EventType === 'viewer-response' &&
+          association.FunctionARN === 'AssetsMimeTypeFunction.FunctionARN',
+      ),
+    ).toBe(true);
+  });
+
   it('does not include unreachable manifest assets', () => {
     const { unreachable } = listUnreachableManifestAssets(manifestAssets, { baseDir: repoRoot });
 
