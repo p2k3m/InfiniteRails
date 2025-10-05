@@ -213,8 +213,31 @@ async function maybeClickStart(page) {
     );
     return;
   }
-  await startButton.click();
-  console.info('[E2E][StartButton] Click dispatched.');
+  try {
+    await startButton.click({ timeout: 5000 });
+    console.info('[E2E][StartButton] Click dispatched.');
+    return;
+  } catch (error) {
+    console.info('[E2E][StartButton] Primary click attempt failed; evaluating DOM fallback.');
+    const fallbackResult = await page
+      .evaluate(() => {
+        const button = document.querySelector('#startButton');
+        if (!button || typeof button.click !== 'function') {
+          return { clicked: false, reason: button ? 'no-click-method' : 'missing' };
+        }
+        button.click();
+        return { clicked: true };
+      })
+      .catch(() => ({ clicked: false, reason: 'evaluation-error' }));
+    if (fallbackResult.clicked) {
+      console.info('[E2E][StartButton] Click dispatched via DOM fallback.');
+      return;
+    }
+    console.info(
+      `[E2E][StartButton] DOM fallback failed (${fallbackResult.reason ?? 'unknown'}); rethrowing primary error.`,
+    );
+    throw error;
+  }
 }
 
 async function ensureGameHudReady(page, { requireNight = false } = {}) {
