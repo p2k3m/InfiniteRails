@@ -1627,7 +1627,17 @@
               </li>
               <li class="diagnostic-list__item" data-diagnostic="assets" data-status="pending">
                 <span class="diagnostic-list__label">Assets</span>
-                <span class="diagnostic-list__status" id="globalOverlayAssetsStatus">Streaming core assets…</span>
+                <span class="diagnostic-list__meta">
+                  <span class="diagnostic-list__status" id="globalOverlayAssetsStatus">Streaming core assets…</span>
+                  <button
+                    type="button"
+                    class="diagnostic-list__action"
+                    data-diagnostic-action="reload-assets"
+                    hidden
+                  >
+                    Reload assets
+                  </button>
+                </span>
               </li>
               <li class="diagnostic-list__item" data-diagnostic="audio" data-status="pending">
                 <span class="diagnostic-list__label">Audio</span>
