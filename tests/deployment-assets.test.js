@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
+import { parse as parseYaml } from 'yaml';
 
 const repoRoot = path.resolve(__dirname, '..');
 const indexHtmlPath = path.join(repoRoot, 'index.html');
@@ -12,6 +13,11 @@ const indexHtml = fs.readFileSync(indexHtmlPath, 'utf8');
 const workflowContents = fs.readFileSync(workflowPath, 'utf8');
 const assetsDir = path.join(repoRoot, 'assets');
 const templateContents = fs.readFileSync(templatePath, 'utf8');
+const sanitizedTemplateContents = templateContents
+  .replace(/!Ref\s+/g, '')
+  .replace(/!GetAtt\s+/g, '')
+  .replace(/!Sub\s+/g, '');
+const templateDocument = parseYaml(sanitizedTemplateContents);
 
 function extractLocalScriptSources(html) {
   const results = new Set();
@@ -82,6 +88,13 @@ function listFilesRecursive(directory) {
     }
   }
   return files;
+}
+
+function toArray(value) {
+  if (!value) {
+    return [];
+  }
+  return Array.isArray(value) ? value : [value];
 }
 
 function isWorldReadableFile(filePath) {
@@ -256,14 +269,37 @@ describe('deployment workflow asset coverage', () => {
     expect(missing).toEqual([]);
   });
 
-  it('CloudFormation bucket policy grants the OAI read access to asset prefixes', () => {
-    expect(templateContents).toMatch(/AssetsCloudFrontOAI/);
-    expect(templateContents).toMatch(/CanonicalUser:\s*!GetAtt AssetsCloudFrontOAI\.S3CanonicalUserId/);
-    expect(templateContents).toMatch(/Action:\s*\n\s*- s3:GetObject/);
+  it('CloudFormation bucket policy grants only the CloudFront OAI read access to asset prefixes', () => {
+    const bucketPolicy =
+      templateDocument?.Resources?.AssetsBucketPolicy?.Properties?.PolicyDocument || null;
 
-    for (const prefix of ['assets', 'textures', 'audio']) {
-      const resourceSnippet = '${AssetsBucket.Arn}/' + prefix + '/*';
-      expect(templateContents).toContain(resourceSnippet);
-    }
+    expect(bucketPolicy).toBeTruthy();
+
+    const statements = toArray(bucketPolicy.Statement);
+    const readStatement = statements.find(
+      (statement) => statement && statement.Sid === 'AllowCloudFrontOriginAccessIdentityRead',
+    );
+
+    expect(readStatement).toBeTruthy();
+    expect(readStatement.Effect).toBe('Allow');
+
+    const principal = readStatement.Principal || {};
+    expect(typeof principal.CanonicalUser).toBe('string');
+    expect(principal.CanonicalUser).toContain('AssetsCloudFrontOAI');
+
+    const actions = toArray(readStatement.Action);
+    expect(actions).toEqual(['s3:GetObject']);
+
+    const resources = new Set(toArray(readStatement.Resource));
+    const expectedResources = [
+      '${AssetsBucket.Arn}/assets/*',
+      '${AssetsBucket.Arn}/textures/*',
+      '${AssetsBucket.Arn}/audio/*',
+    ];
+
+    expect(resources.size).toBe(expectedResources.length);
+    expectedResources.forEach((resource) => {
+      expect(resources.has(resource)).toBe(true);
+    });
   });
 });
