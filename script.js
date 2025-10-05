@@ -1329,6 +1329,7 @@
       counter: 0,
     };
     const recoveryActionState = { cleanup: null };
+    const diagnosticActionState = { options: new Map() };
 
     function getDocument() {
       if (documentRef) {
@@ -1359,10 +1360,11 @@
         const statusEl = doc.getElementById(
           `globalOverlay${type.charAt(0).toUpperCase()}${type.slice(1)}Status`,
         );
-        acc[type] = { container, statusEl };
+        const actionButton = container?.querySelector('[data-diagnostic-action]') ?? null;
+        acc[type] = { container, statusEl, actionButton };
         return acc;
       }, {});
-      return {
+      const refs = {
         overlay,
         dialog: doc.getElementById('globalOverlayDialog'),
         spinner: doc.getElementById('globalOverlaySpinner'),
@@ -1378,6 +1380,8 @@
         actions: doc.getElementById('globalOverlayActions'),
         recoveryButton: doc.getElementById('globalOverlayRecoveryButton'),
       };
+      bindDiagnosticActionHandlers(refs);
+      return refs;
     }
 
     function cancelFallbackTimer() {
@@ -1404,22 +1408,117 @@
       }
     }
 
+    function handleDiagnosticActionClick(type, event) {
+      const action = diagnosticActionState.options.get(type);
+      if (!action) {
+        return;
+      }
+      if (event?.preventDefault) {
+        event.preventDefault();
+      }
+      if (typeof action.onSelect === 'function') {
+        const context = {
+          type,
+          detail: action.detail ?? null,
+          source: action.source || 'diagnostics',
+          label: action.label,
+          action: action.action ?? null,
+        };
+        action.onSelect(event, context);
+      }
+    }
+
+    function bindDiagnosticActionHandlers(refs) {
+      if (!refs?.diagnosticItems) {
+        return;
+      }
+      DIAGNOSTIC_TYPES.forEach((type) => {
+        const button = refs.diagnosticItems?.[type]?.actionButton || null;
+        if (!button || button.dataset.diagnosticActionBound === 'true') {
+          return;
+        }
+        button.addEventListener('click', (event) => {
+          handleDiagnosticActionClick(type, event);
+        });
+        button.dataset.diagnosticActionBound = 'true';
+      });
+    }
+
+    function shouldDisplayDiagnosticAction(action, status) {
+      if (!action) {
+        return false;
+      }
+      const statuses = Array.isArray(action.statuses) && action.statuses.length
+        ? action.statuses
+        : ['error'];
+      if (!status) {
+        return false;
+      }
+      return statuses.includes(status);
+    }
+
+    function applyDiagnosticActionState(button, action, status) {
+      if (!button) {
+        return;
+      }
+      if (!shouldDisplayDiagnosticAction(action, status)) {
+        button.hidden = true;
+        button.setAttribute('hidden', '');
+        button.disabled = false;
+        button.removeAttribute('aria-label');
+        button.removeAttribute('title');
+        return;
+      }
+      const label = action.label || 'Reload assets';
+      button.hidden = false;
+      button.removeAttribute('hidden');
+      button.disabled = action.disabled === true;
+      if (button.textContent !== label) {
+        button.textContent = label;
+      }
+      if (typeof action.action === 'string' && action.action.trim().length) {
+        button.dataset.diagnosticAction = action.action.trim();
+      } else {
+        button.removeAttribute('data-diagnostic-action');
+      }
+      if (typeof action.ariaLabel === 'string' && action.ariaLabel.trim().length) {
+        button.setAttribute('aria-label', action.ariaLabel.trim());
+      } else if (typeof action.description === 'string' && action.description.trim().length) {
+        button.setAttribute('aria-label', `${label}. ${action.description.trim()}`);
+      } else {
+        button.removeAttribute('aria-label');
+      }
+      if (typeof action.description === 'string' && action.description.trim().length) {
+        button.title = action.description.trim();
+      } else {
+        button.removeAttribute('title');
+      }
+    }
+
     function updateDiagnosticsElements(elements = null) {
       const doc = elements ? null : getDocument();
       const refs = elements || getElements(doc);
       if (!refs?.diagnosticsRoot) {
         return;
       }
+      bindDiagnosticActionHandlers(refs);
       DIAGNOSTIC_TYPES.forEach((type) => {
         const current = diagnosticsState[type] || {};
         const container = refs.diagnosticItems?.[type]?.container || null;
         const statusEl = refs.diagnosticItems?.[type]?.statusEl || null;
+        const statusValue =
+          typeof current.status === 'string' && current.status.trim().length
+            ? current.status.trim().toLowerCase()
+            : 'pending';
         if (container) {
-          container.setAttribute('data-status', current.status || 'pending');
+          container.setAttribute('data-status', statusValue);
         }
         if (statusEl) {
           statusEl.textContent = current.message || '';
         }
+        const actionButton = refs.diagnosticItems?.[type]?.actionButton || null;
+        const action = diagnosticActionState.options.get(type) || null;
+        applyDiagnosticActionState(actionButton, action, statusValue);
       });
     }
 
@@ -1632,18 +1731,89 @@
       };
     }
 
+    function setDiagnosticActionForType(type, options = null) {
+      if (!type || !DIAGNOSTIC_TYPES.includes(type)) {
+        return;
+      }
+      if (!options || typeof options.label !== 'string' || !options.label.trim().length) {
+        if (diagnosticActionState.options.delete(type)) {
+          updateDiagnosticsElements();
+        }
+        return;
+      }
+      const label = options.label.trim();
+      const statuses = Array.isArray(options.statuses) && options.statuses.length
+        ? options.statuses
+            .map((value) => (typeof value === 'string' ? value.trim().toLowerCase() : ''))
+            .filter(Boolean)
+        : ['error'];
+      const entry = {
+        label,
+        description:
+          typeof options.description === 'string' && options.description.trim().length
+            ? options.description.trim()
+            : null,
+        action:
+          typeof options.action === 'string' && options.action.trim().length
+            ? options.action.trim()
+            : null,
+        ariaLabel:
+          typeof options.ariaLabel === 'string' && options.ariaLabel.trim().length
+            ? options.ariaLabel.trim()
+            : null,
+        statuses,
+        detail: options.detail ?? null,
+        source:
+          typeof options.source === 'string' && options.source.trim().length
+            ? options.source.trim()
+            : 'diagnostics',
+        onSelect: typeof options.onSelect === 'function' ? options.onSelect : null,
+        disabled: options.disabled === true,
+      };
+      diagnosticActionState.options.set(type, entry);
+      updateDiagnosticsElements();
+    }
+
+    function clearDiagnosticActionForType(type = null) {
+      if (type && !DIAGNOSTIC_TYPES.includes(type)) {
+        return;
+      }
+      if (type) {
+        if (diagnosticActionState.options.delete(type)) {
+          updateDiagnosticsElements();
+        }
+        return;
+      }
+      if (diagnosticActionState.options.size) {
+        diagnosticActionState.options.clear();
+        updateDiagnosticsElements();
+      }
+    }
+
     function setDiagnostic(type, update = {}) {
       if (!type || !DIAGNOSTIC_TYPES.includes(type)) {
         return diagnosticsState;
       }
       const existing = diagnosticsState[type] || {};
+      const existingStatus =
+        typeof existing.status === 'string' && existing.status.trim().length
+          ? existing.status.trim().toLowerCase()
+          : 'pending';
       const next = {
-        status: typeof update.status === 'string' && update.status.trim().length ? update.status.trim() : existing.status,
+        status:
+          typeof update.status === 'string' && update.status.trim().length
+            ? update.status.trim().toLowerCase()
+            : existingStatus,
         message:
           typeof update.message === 'string' && update.message.trim().length
             ? update.message.trim()
             : existing.message,
       };
+      const nextStatus = next.status || 'pending';
+      const action = diagnosticActionState.options.get(type) || null;
+      if (action && !shouldDisplayDiagnosticAction(action, nextStatus)) {
+        diagnosticActionState.options.delete(type);
+      }
       diagnosticsState[type] = next;
       updateDiagnosticsElements();
       return next;
@@ -1736,6 +1906,12 @@
         return { ...state };
       },
       setDiagnostic,
+      setDiagnosticAction(type, options = null) {
+        setDiagnosticActionForType(type, options);
+      },
+      clearDiagnosticAction(type = null) {
+        clearDiagnosticActionForType(type);
+      },
       setRecoveryAction(options = null) {
         applyRecoveryAction(options);
       },
@@ -2014,6 +2190,117 @@
     sendDiagnosticsEventToServer(entry);
   }
 
+  function includesTextureLanguage(value) {
+    if (typeof value !== 'string' || !value.trim().length) {
+      return false;
+    }
+    return /texture|skin|material|albedo|diffuse/i.test(value);
+  }
+
+  function resolveAssetReloadActionLabel(detail = null) {
+    const fallback = 'Reload assets';
+    if (!detail || typeof detail !== 'object') {
+      return fallback;
+    }
+    const overrideKeys = ['reloadLabel', 'reloadActionLabel', 'actionLabel', 'buttonLabel'];
+    for (const key of overrideKeys) {
+      const candidate = detail[key];
+      if (typeof candidate === 'string' && candidate.trim().length) {
+        return candidate.trim();
+      }
+    }
+    const keyValue = typeof detail.key === 'string' ? detail.key.trim().toLowerCase() : '';
+    if (keyValue.startsWith('texture:')) {
+      return 'Refresh textures';
+    }
+    const extension = typeof detail.assetExtension === 'string' ? detail.assetExtension.trim().toLowerCase() : '';
+    if (extension && ['png', 'jpg', 'jpeg', 'webp', 'ktx', 'ktx2', 'dds'].includes(extension)) {
+      return 'Refresh textures';
+    }
+    const descriptors = [
+      detail.assetFriendlyName,
+      detail.assetLabel,
+      detail.assetSourceLabel,
+      detail.assetSummaryLabel,
+    ];
+    if (descriptors.some((value) => includesTextureLanguage(value))) {
+      return 'Refresh textures';
+    }
+    return fallback;
+  }
+
+  function attemptAssetReloadFromDiagnostics({
+    source = 'diagnostics-overlay',
+    detail = null,
+    control = null,
+    logMessage = 'Player initiated asset reload from diagnostics overlay.',
+    logLevel = 'warning',
+  } = {}) {
+    const controlElement = control && typeof control === 'object' ? control : null;
+    if (controlElement) {
+      try {
+        controlElement.disabled = true;
+      } catch (error) {
+        if (globalScope?.console?.debug) {
+          globalScope.console.debug('Unable to disable diagnostics action control.', error);
+        }
+      }
+    }
+    let detailSnapshot = null;
+    if (detail && typeof detail === 'object') {
+      try {
+        detailSnapshot = JSON.parse(JSON.stringify(detail));
+      } catch (error) {
+        detailSnapshot = { ...detail };
+      }
+    }
+    if (typeof logDiagnosticsEvent === 'function') {
+      const recoveryDetail = detailSnapshot ? { ...detailSnapshot } : {};
+      recoveryDetail.source = source;
+      logDiagnosticsEvent('assets', logMessage, {
+        level: logLevel,
+        detail: recoveryDetail,
+      });
+    }
+    if (typeof globalScope?.dispatchEvent === 'function' && typeof globalScope?.CustomEvent === 'function') {
+      try {
+        const eventDetail = { source };
+        if (detailSnapshot) {
+          eventDetail.context = detailSnapshot;
+        }
+        globalScope.dispatchEvent(
+          new globalScope.CustomEvent('infinite-rails:asset-recovery-reload-requested', {
+            detail: eventDetail,
+          }),
+        );
+      } catch (dispatchError) {
+        if (globalScope?.console?.debug) {
+          globalScope.console.debug('Unable to dispatch asset recovery reload event.', dispatchError);
+        }
+      }
+    }
+    const locationTarget = globalScope?.location;
+    if (locationTarget && typeof locationTarget.reload === 'function') {
+      locationTarget.reload();
+      return;
+    }
+    if (controlElement) {
+      try {
+        controlElement.disabled = false;
+      } catch (error) {
+        if (globalScope?.console?.debug) {
+          globalScope.console.debug('Unable to re-enable diagnostics action control.', error);
+        }
+      }
+    }
+    showHudAlert({
+      title: 'Reload unavailable',
+      message: 'Reload the page manually to restore missing assets.',
+      severity: 'warning',
+      autoHideMs: 7000,
+    });
+  }
+
   function presentCriticalErrorOverlay({
     title = 'Something went wrong',
     message = 'An unexpected error occurred. Reload to try again.',
@@ -2056,59 +2343,25 @@
       severity,
       autoHideMs: severity === 'success' || severity === 'info' ? 6000 : null,
     });
+    const detailSnapshot = detail && typeof detail === 'object' ? { ...detail } : null;
     if (typeof bootstrapOverlay?.setRecoveryAction === 'function') {
       if (diagnosticStatus === 'error') {
-        const detailSnapshot = detail && typeof detail === 'object' ? { ...detail } : null;
         if (diagnosticScope === 'assets') {
+          const actionLabel = resolveAssetReloadActionLabel(detailSnapshot);
+          const recoveryLogMessage =
+            actionLabel === 'Refresh textures'
+              ? 'Player initiated texture refresh from diagnostics overlay.'
+              : 'Player initiated asset reload from diagnostics overlay.';
           bootstrapOverlay.setRecoveryAction({
-            label: 'Reload Assets',
+            label: actionLabel,
             action: 'reload-assets',
             description: 'Reloads the experience and requests missing assets again.',
             onSelect: (event) => {
-              if (event?.currentTarget) {
-                event.currentTarget.disabled = true;
-              }
-              if (typeof logDiagnosticsEvent === 'function') {
-                const recoveryDetail = detailSnapshot ? { ...detailSnapshot } : {};
-                recoveryDetail.source = 'global-overlay';
-                logDiagnosticsEvent('assets', 'Player initiated asset reload from diagnostics overlay.', {
-                  level: 'warning',
-                  detail: recoveryDetail,
-                });
-              }
-              if (
-                typeof globalScope?.dispatchEvent === 'function' &&
-                typeof globalScope?.CustomEvent === 'function'
-              ) {
-                try {
-                  const eventDetail = { source: 'global-overlay' };
-                  if (detailSnapshot) {
-                    eventDetail.context = detailSnapshot;
-                  }
-                  globalScope.dispatchEvent(
-                    new globalScope.CustomEvent('infinite-rails:asset-recovery-reload-requested', {
-                      detail: eventDetail,
-                    }),
-                  );
-                } catch (dispatchError) {
-                  if (globalScope?.console?.debug) {
-                    globalScope.console.debug('Unable to dispatch asset recovery reload event.', dispatchError);
-                  }
-                }
-              }
-              const locationTarget = globalScope?.location;
-              if (locationTarget && typeof locationTarget.reload === 'function') {
-                locationTarget.reload();
-                return;
-              }
-              if (event?.currentTarget) {
-                event.currentTarget.disabled = false;
-              }
-              showHudAlert({
-                title: 'Reload unavailable',
-                message: 'Reload the page manually to restore missing assets.',
-                severity: 'warning',
-                autoHideMs: 7000,
+              attemptAssetReloadFromDiagnostics({
+                source: 'global-overlay',
+                detail: detailSnapshot,
+                control: event?.currentTarget ?? null,
+                logMessage: recoveryLogMessage,
               });
             },
           });
@@ -2140,6 +2393,8 @@
         }
       } else if (typeof bootstrapOverlay?.clearRecoveryAction === 'function') {
         bootstrapOverlay.clearRecoveryAction();
+      } else {
+        bootstrapOverlay.setRecoveryAction(null);
       }
     }
     if (
@@ -2155,6 +2410,33 @@
         if (globalScope?.console?.warn) {
           globalScope.console.warn('Unable to update diagnostic status for critical error.', diagnosticError);
         }
+      }
+    }
+    if (typeof bootstrapOverlay?.setDiagnosticAction === 'function') {
+      if (diagnosticScope === 'assets' && diagnosticStatus === 'error') {
+        const actionLabel = resolveAssetReloadActionLabel(detailSnapshot);
+        const statusLogMessage =
+          actionLabel === 'Refresh textures'
+            ? 'Player initiated texture refresh from diagnostics overlay status control.'
+            : 'Player initiated asset reload from diagnostics overlay status control.';
+        bootstrapOverlay.setDiagnosticAction('assets', {
+          label: actionLabel,
+          action: 'reload-assets',
+          description: 'Reloads the experience and requests missing assets again.',
+          detail: detailSnapshot ? { ...detailSnapshot } : null,
+          source: 'global-overlay-diagnostics',
+          statuses: ['error'],
+          onSelect: (event) => {
+            attemptAssetReloadFromDiagnostics({
+              source: 'global-overlay-diagnostics',
+              detail: detailSnapshot,
+              control: event?.currentTarget ?? null,
+              logMessage: statusLogMessage,
+            });
+          },
+        });
+      } else {
+        bootstrapOverlay.clearDiagnosticAction('assets');
       }
     }
     if (logToConsole && typeof logCriticalErrorToConsole === 'function') {
