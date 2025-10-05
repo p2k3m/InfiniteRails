@@ -7843,6 +7843,7 @@
       try {
         const preloaded = documentRef.querySelector(options.preloadedSelector);
         if (preloaded?.src) {
+          monitorSignedAssetUrl(preloaded.src, preloaded.src, normalisedPath);
           registerCandidate(preloaded.src);
         }
       } catch (error) {
@@ -7873,6 +7874,79 @@
             });
           }
         }
+      }
+    }
+
+    if (!urls.length && documentRef) {
+      const findScriptElement = () => {
+        if (documentRef.currentScript) {
+          return documentRef.currentScript;
+        }
+        if (typeof documentRef.getElementsByTagName !== 'function') {
+          return null;
+        }
+        try {
+          const scripts = Array.from(documentRef.getElementsByTagName('script'));
+          return scripts.find((element) =>
+            typeof element?.src === 'string' && /\bscript\.js(?:[?#].*)?$/i.test(element.src || ''),
+          );
+        } catch (error) {
+          logSignedUrlIssue(
+            'Unable to enumerate script elements while resolving asset URLs; continuing with other fallbacks.',
+            { asset: relativePath, error },
+          );
+          return null;
+        }
+      };
+
+      const scriptElement = findScriptElement();
+      if (scriptElement?.src) {
+        try {
+          const scriptUrl = new URL(scriptElement.src, globalScope?.location?.href);
+          const scriptDir = scriptUrl.href.replace(/[^/]*$/, '');
+          const fromScriptDir = new URL(normalisedPath, scriptDir).href;
+          monitorSignedAssetUrl(scriptElement.src, fromScriptDir, normalisedPath);
+          registerCandidate(fromScriptDir);
+        } catch (error) {
+          logSignedUrlIssue(
+            'Unable to derive asset URL from current script location; trying alternative fallbacks. Ensure script.js is served from the asset bundle root or configure APP_CONFIG.assetBaseUrl explicitly.',
+            { scriptSrc: scriptElement?.src ?? null, asset: relativePath, error },
+          );
+        }
+      }
+
+      if (!urls.length && documentRef.baseURI) {
+        try {
+          const fromBaseUri = new URL(normalisedPath, documentRef.baseURI).href;
+          monitorSignedAssetUrl(documentRef.baseURI, fromBaseUri, normalisedPath);
+          registerCandidate(fromBaseUri);
+        } catch (error) {
+          logSignedUrlIssue(
+            'Document base URI produced an invalid asset URL; continuing with other fallbacks. Review the <base href> element so it references the directory that hosts your Infinite Rails assets.',
+            { baseURI: documentRef.baseURI, asset: relativePath, error },
+          );
+        }
+      }
+    }
+
+    if (!urls.length && globalScope?.location) {
+      try {
+        const origin = typeof globalScope.location.origin === 'string' ? globalScope.location.origin : null;
+        const base = origin ? `${origin}/` : globalScope.location.href;
+        const fromWindowOrigin = new URL(normalisedPath, base).href;
+        const rawLocationBase =
+          typeof globalScope.location.href === 'string'
+            ? globalScope.location.href
+            : origin
+              ? `${origin}/`
+              : null;
+        monitorSignedAssetUrl(rawLocationBase, fromWindowOrigin, normalisedPath);
+        registerCandidate(fromWindowOrigin);
+      } catch (error) {
+        logSignedUrlIssue(
+          'Window origin fallback failed while resolving asset URL; relying on relative paths. Confirm window.location.origin is reachable or configure APP_CONFIG.assetBaseUrl to bypass this fallback.',
+          { origin: globalScope?.location?.origin ?? null, asset: relativePath, error },
+        );
       }
     }
 

@@ -475,8 +475,13 @@
         try {
           const scriptUrl = new URL(currentScript.src, windowRef?.location?.href);
           const scriptDir = scriptUrl.href.replace(/[^/]*$/, '');
-          pushCandidate(candidates, seen, new URL(relativePath, scriptDir).href);
-          pushCandidate(candidates, seen, new URL(relativePath, `${scriptUrl.origin}/`).href);
+          const fromScriptDir = new URL(relativePath, scriptDir).href;
+          monitorSignedAssetUrl(currentScript.src, fromScriptDir, relativePath);
+          pushCandidate(candidates, seen, fromScriptDir);
+
+          const fromScriptOrigin = new URL(relativePath, `${scriptUrl.origin}/`).href;
+          monitorSignedAssetUrl(currentScript.src, fromScriptOrigin, relativePath);
+          pushCandidate(candidates, seen, fromScriptOrigin);
         } catch (error) {
           logAssetIssue(
             'Unable to derive asset URL from current script location; trying alternative fallbacks. Ensure script.js is served from the asset bundle root or configure APP_CONFIG.assetBaseUrl explicitly.',
@@ -488,7 +493,9 @@
 
       if (documentRef.baseURI) {
         try {
-          pushCandidate(candidates, seen, new URL(relativePath, documentRef.baseURI).href);
+          const fromBaseUri = new URL(relativePath, documentRef.baseURI).href;
+          monitorSignedAssetUrl(documentRef.baseURI, fromBaseUri, relativePath);
+          pushCandidate(candidates, seen, fromBaseUri);
         } catch (error) {
           logAssetIssue(
             'Document base URI produced an invalid asset URL; continuing with other fallbacks. Review the <base href> element so it references the directory that hosts your Infinite Rails assets.',
@@ -501,7 +508,15 @@
 
     if (windowRef?.location) {
       try {
-        pushCandidate(candidates, seen, new URL(relativePath, `${windowRef.location.origin}/`).href);
+        const fromWindowOrigin = new URL(relativePath, `${windowRef.location.origin}/`).href;
+        const rawLocationBase =
+          typeof windowRef.location.href === 'string'
+            ? windowRef.location.href
+            : typeof windowRef.location.origin === 'string'
+              ? `${windowRef.location.origin}/`
+              : null;
+        monitorSignedAssetUrl(rawLocationBase, fromWindowOrigin, relativePath);
+        pushCandidate(candidates, seen, fromWindowOrigin);
       } catch (error) {
         logAssetIssue(
           'Window origin fallback failed while resolving asset URL; relying on relative paths. Confirm window.location.origin is reachable or configure APP_CONFIG.assetBaseUrl to bypass this fallback.',

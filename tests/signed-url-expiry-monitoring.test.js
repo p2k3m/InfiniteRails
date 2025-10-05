@@ -134,4 +134,29 @@ describe('signed asset URL monitoring', () => {
     expect(event.detail.millisecondsUntilExpiry).toBeLessThanOrEqual(30 * 60 * 1000);
     expect(event.detail.millisecondsUntilExpiry).toBeGreaterThan(0);
   });
+
+  it('monitors signed bootstrap script URLs when resolving assets', async () => {
+    const now = Date.now();
+    const warningWindowSeconds = Math.floor((now + 45 * 60 * 1000) / 1000);
+    const signedScriptSrc = `https://cdn.example.com/build/script.js?Expires=${warningWindowSeconds}&Signature=bootstrap-token`;
+    global.document.currentScript = { src: signedScriptSrc };
+
+    const resolver = await loadResolver();
+    resolver.resolveAssetUrl('textures/portal-core.png');
+
+    expect(global.console.error).toHaveBeenCalledWith(
+      expect.stringContaining('Signed asset URL expires soon'),
+      expect.objectContaining({
+        assetBaseUrl: signedScriptSrc,
+        severity: 'warning',
+      }),
+    );
+
+    expect(documentDispatch).toHaveBeenCalledTimes(1);
+    const event = documentDispatch.mock.calls[0][0];
+    expect(event.type).toBe('infinite-rails:signed-url-expiry');
+    expect(event.detail.assetBaseUrl).toBe(signedScriptSrc);
+    expect(event.detail.relativePath).toBe('textures/portal-core.png');
+    expect(event.detail.severity).toBe('warning');
+  });
 });
