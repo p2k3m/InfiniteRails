@@ -293,7 +293,7 @@ The script prints actionable errors when any check fails, including the offendin
 
 > **Always invalidate the CDN on every deploy.**
 >
-> Even when you ship manually (outside the GitHub Actions workflow), run a full CloudFront invalidation right after syncing the latest assets to S3 so browsers stop serving cached bundles. Skipping this step leaves stale JavaScript, CSS, or GLTF files in place and frequently manifests as missing HUD assets or boot-time script errors. Trigger the flush with:
+> Even when you ship manually (outside the GitHub Actions workflow), run a full CloudFront invalidation right after syncing the latest assets to S3 so browsers stop serving cached bundles. Skipping this step leaves stale JavaScript, CSS, or GLTF files in place, and often looks like missing HUD art, half-loaded geometry, or corrupted audio/textures because the browser pulled an outdated bundle from CloudFront. Always flush the distribution immediately after each sync to guarantee players download the refreshed build. Trigger the flush with:
 >
 > ```bash
 > aws cloudfront create-invalidation \
