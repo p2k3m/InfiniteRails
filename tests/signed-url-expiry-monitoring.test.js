@@ -109,11 +109,14 @@ describe('signed asset URL monitoring', () => {
     const event = documentDispatch.mock.calls[0][0];
     expect(event.type).toBe('infinite-rails:signed-url-expiry');
     expect(event.detail.severity).toBe('expired');
+    expect(event.detail.warningWindowMs).toBe(24 * 60 * 60 * 1000);
+    expect(event.detail.expiresAtEpochMs).toBe(1_700_000_000_000);
   });
 
   it('warns when signed asset base URLs approach expiry', async () => {
     const now = Date.now();
     const thirtyMinutesFromNowSeconds = Math.floor((now + 30 * 60 * 1000) / 1000);
+    const expectedExpiry = thirtyMinutesFromNowSeconds * 1000;
     global.APP_CONFIG.assetBaseUrl = `https://cdn.example.com/assets/?Expires=${thirtyMinutesFromNowSeconds}&Signature=rotating-token`;
 
     const resolver = await loadResolver();
@@ -133,11 +136,14 @@ describe('signed asset URL monitoring', () => {
     expect(event.detail.severity).toBe('warning');
     expect(event.detail.millisecondsUntilExpiry).toBeLessThanOrEqual(30 * 60 * 1000);
     expect(event.detail.millisecondsUntilExpiry).toBeGreaterThan(0);
+    expect(event.detail.warningWindowMs).toBe(24 * 60 * 60 * 1000);
+    expect(event.detail.expiresAtEpochMs).toBe(expectedExpiry);
   });
 
   it('monitors signed bootstrap script URLs when resolving assets', async () => {
     const now = Date.now();
     const warningWindowSeconds = Math.floor((now + 45 * 60 * 1000) / 1000);
+    const expectedExpiry = warningWindowSeconds * 1000;
     const signedScriptSrc = `https://cdn.example.com/build/script.js?Expires=${warningWindowSeconds}&Signature=bootstrap-token`;
     global.document.currentScript = { src: signedScriptSrc };
 
@@ -158,5 +164,35 @@ describe('signed asset URL monitoring', () => {
     expect(event.detail.assetBaseUrl).toBe(signedScriptSrc);
     expect(event.detail.relativePath).toBe('textures/portal-core.png');
     expect(event.detail.severity).toBe('warning');
+    expect(event.detail.warningWindowMs).toBe(24 * 60 * 60 * 1000);
+    expect(event.detail.expiresAtEpochMs).toBe(expectedExpiry);
+  });
+
+  it('respects custom signed URL warning window overrides', async () => {
+    const now = Date.now();
+    const warningWindowMs = 5 * 60 * 1000;
+    const imminentExpirySeconds = Math.floor((now + 4 * 60 * 1000) / 1000);
+
+    global.APP_CONFIG.assetBaseUrl = `https://cdn.example.com/assets/?Expires=${imminentExpirySeconds}&Signature=custom-window`;
+    global.APP_CONFIG.signedUrlWarningWindowMs = warningWindowMs;
+
+    const resolver = await loadResolver();
+    resolver.resolveAssetUrl('textures/portal-core.png');
+
+    expect(global.console.error).toHaveBeenCalledWith(
+      expect.stringContaining('Signed asset URL expires soon'),
+      expect.objectContaining({
+        assetBaseUrl: expect.stringContaining('custom-window'),
+        severity: 'warning',
+      }),
+    );
+
+    expect(documentDispatch).toHaveBeenCalledTimes(1);
+    const event = documentDispatch.mock.calls[0][0];
+    expect(event.type).toBe('infinite-rails:signed-url-expiry');
+    expect(event.detail.warningWindowMs).toBe(warningWindowMs);
+    expect(event.detail.expiresAtEpochMs).toBe(imminentExpirySeconds * 1000);
+    expect(event.detail.millisecondsUntilExpiry).toBeLessThanOrEqual(4 * 60 * 1000);
+    expect(event.detail.millisecondsUntilExpiry).toBeGreaterThan(0);
   });
 });
