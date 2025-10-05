@@ -5272,9 +5272,11 @@
     const placed = Number.isFinite(detail?.placed) ? detail.placed : null;
     const required = Number.isFinite(detail?.required) ? detail.required : null;
     const progressMessage =
-      placed !== null && required !== null ? `${placed}/${required} obsidian aligned — ignite when ready.` : 'Frame complete — ignite your torch.';
+      placed !== null && required !== null
+        ? `${placed}/${required} obsidian aligned — ignite when ready.`
+        : 'Frame complete — ignite your torch.';
     showEventOverlay({
-      title: 'Portal frame ready',
+      title: 'Portal built',
       message: progressMessage,
       icon: '🌀',
       variant: 'info',
@@ -5310,7 +5312,7 @@
       message += ` (+${formattedScore} pts)`;
     }
     showEventOverlay({
-      title: 'Loot secured',
+      title: 'Loot found',
       message,
       icon: '💎',
       variant: 'success',
