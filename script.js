@@ -7763,13 +7763,13 @@
   }
 
   const THREE_SCRIPT_URL = (() => {
-    const candidates = createAssetUrlCandidates('vendor/three.min.js', {
+    const candidates = createAssetUrlCandidates('vendor/three.min.js?v=030c75d4e909', {
       preloadedSelector: 'script[data-preload-three]',
     });
     return candidates.length ? candidates[0] : null;
   })();
   const GLTF_LOADER_URL = (() => {
-    const candidates = createAssetUrlCandidates('vendor/GLTFLoader.js');
+    const candidates = createAssetUrlCandidates('vendor/GLTFLoader.js?v=0e92b0589a2a');
     return candidates.length ? candidates[0] : null;
   })();
 

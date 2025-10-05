@@ -1435,8 +1435,8 @@
     return results;
   }
 
-  const GLTF_LOADER_URL = resolveAssetUrl('vendor/GLTFLoader.js');
-  const HOWLER_STUB_URL = resolveAssetUrl('vendor/howler-stub.js');
+  const GLTF_LOADER_URL = resolveAssetUrl('vendor/GLTFLoader.js?v=0e92b0589a2a');
+  const HOWLER_STUB_URL = resolveAssetUrl('vendor/howler-stub.js?v=bcf1ff344bc2');
 
   const RECIPE_UNLOCK_STORAGE_KEY = 'infinite-rails-recipe-unlocks';
 
@@ -1448,10 +1448,10 @@
   const IDENTITY_STORAGE_KEY = 'infinite-rails-simple-identity';
 
   const MODEL_URLS = {
-    arm: resolveAssetUrl('assets/arm.gltf'),
-    steve: resolveAssetUrl('assets/steve.gltf'),
-    zombie: resolveAssetUrl('assets/zombie.gltf'),
-    golem: resolveAssetUrl('assets/iron_golem.gltf'),
+    arm: resolveAssetUrl('assets/arm.gltf?v=f66dc9be906d'),
+    steve: resolveAssetUrl('assets/steve.gltf?v=9935456e2321'),
+    zombie: resolveAssetUrl('assets/zombie.gltf?v=7b92d3aaee8c'),
+    golem: resolveAssetUrl('assets/iron_golem.gltf?v=69a93ff7df34'),
   };
 
   const MODEL_URL_LOOKUP = (() => {

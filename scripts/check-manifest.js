@@ -146,11 +146,23 @@ function loadOfflineAssets() {
   return assets;
 }
 
+function stripCacheBuster(value) {
+  if (typeof value !== 'string') {
+    return value;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return trimmed;
+  }
+  return trimmed.split('?')[0];
+}
+
 function isRelativePath(value) {
   if (!value || typeof value !== 'string') {
     return false;
   }
-  return !/^(?:[a-z]+:)?\/\//i.test(value) && !value.startsWith('data:');
+  const normalised = stripCacheBuster(value);
+  return !/^(?:[a-z]+:)?\/\//i.test(normalised) && !normalised.startsWith('data:');
 }
 
 function toOfflineCandidates(modelPath, manifestKey) {
@@ -159,7 +171,8 @@ function toOfflineCandidates(modelPath, manifestKey) {
     candidates.add(manifestKey);
   }
   if (typeof modelPath === 'string') {
-    const basename = path.basename(modelPath, path.extname(modelPath));
+    const cleanPath = stripCacheBuster(modelPath);
+    const basename = path.basename(cleanPath, path.extname(cleanPath));
     if (basename) {
       candidates.add(basename);
       const camel = basename
@@ -261,8 +274,9 @@ function validateManifest() {
           return;
         }
 
+        const cleanModelPath = stripCacheBuster(modelPath);
         if (isRelativePath(modelPath)) {
-          const filePath = path.resolve(repoRoot, modelPath);
+          const filePath = path.resolve(repoRoot, cleanModelPath);
           if (!fs.existsSync(filePath)) {
             issues.push(
               `Dimension "${dimensionId}" model "${modelKey}" references missing file: ${modelPath}`,
