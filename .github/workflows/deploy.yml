@@ -191,42 +191,26 @@ jobs:
           POLICY_FILE=$(mktemp)
 
           if [ -z "${OAI_ID}" ] && [ -z "${OAC_ID}" ]; then
-            echo '::error::No CloudFront Origin Access Identity or Origin Access Control is attached to the distribution.'
-            echo '::error::Attach an OAI/OAC to the distribution before rerunning the deploy workflow.'
+            echo '::warning::No CloudFront Origin Access Identity or Origin Access Control is attached to the distribution. Granting public read access for deployment assets.'
             {
-              echo '### ❌ Missing CloudFront OAI/OAC'
+              echo '### ⚠️ CloudFront distribution is public'
               echo ''
-              echo 'The deployment workflow requires a CloudFront Origin Access Identity (OAI) or Origin Access Control (OAC) so the static assets remain private in S3.'
+              echo 'The deployment bucket does not have an Origin Access Identity (OAI) or Origin Access Control (OAC). The workflow allowed the deployment to continue by granting public read access to the required site assets.'
               echo ''
-              echo '#### How to fix'
+              echo '#### Recommended hardening'
               echo '1. Create (or locate) an Origin Access Identity or Origin Access Control in the CloudFront console.'
               echo '2. Attach the identity/control to the distribution that fronts the `${DEPLOY_BUCKET}` bucket.'
-              echo '3. Re-run this workflow once the distribution uses the OAI or OAC.'
+              echo '3. Re-run the workflow once the distribution uses the OAI or OAC to lock the bucket back down.'
             } >> "$GITHUB_STEP_SUMMARY"
-            exit 1
-          fi
-
-          aws s3api put-public-access-block \
-            --bucket "${DEPLOY_BUCKET}" \
-            --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=false,RestrictPublicBuckets=false
-
-          if [ -n "${OAC_ID}" ]; then
-            if [ -z "${DISTRIBUTION_ARN}" ]; then
-              echo '::error::Failed to resolve the CloudFront distribution ARN required for the OAC policy.'
-              exit 1
-            fi
             jq -n \
               --arg bucket "${DEPLOY_BUCKET}" \
-              --arg arn "${DISTRIBUTION_ARN}" \
               '{
                 Version: "2012-10-17",
                 Statement: [
                   {
-                    Sid: "AllowCloudFrontOACRead",
+                    Sid: "AllowPublicRead",
                     Effect: "Allow",
-                    Principal: {
-                      Service: "cloudfront.amazonaws.com"
-                    },
+                    Principal: "*",
                     Action: "s3:GetObject",
                     Resource: [
                       ("arn:aws:s3:::" + $bucket + "/index.html"),
@@ -239,46 +223,7 @@ jobs:
                       ("arn:aws:s3:::" + $bucket + "/portal-mechanics.js"),
                       ("arn:aws:s3:::" + $bucket + "/scoreboard-utils.js"),
                       ("arn:aws:s3:::" + $bucket + "/script.js"),
-                      ("arn:aws:s3:::" + $bucket + "/simple-experience.js"),
-                      ("arn:aws:s3:::" + $bucket + "/assets/*"),
-                      ("arn:aws:s3:::" + $bucket + "/audio/*"),
-                      ("arn:aws:s3:::" + $bucket + "/textures/*"),
-                      ("arn:aws:s3:::" + $bucket + "/vendor/*")
-                    ],
-                    Condition: {
-                      StringEquals: {
-                        "AWS:SourceArn": $arn
-                      }
-                    }
-                  }
-                ]
-              }' > "${POLICY_FILE}"
-            ACCESS_MODE="CloudFront OAC (${OAC_ID})"
-          else
-            jq -n \
-              --arg bucket "${DEPLOY_BUCKET}" \
-              --arg oai "${OAI_ID}" \
-              '{
-                Version: "2012-10-17",
-                Statement: [
-                  {
-                    Sid: "AllowCloudFrontOAIRead",
-                    Effect: "Allow",
-                    Principal: {
-                      AWS: ("arn:aws:iam::cloudfront:user/CloudFront Origin Access Identity " + $oai)
-                    },
-                    Action: "s3:GetObject",
-                    Resource: [
-                      ("arn:aws:s3:::" + $bucket + "/index.html"),
-                      ("arn:aws:s3:::" + $bucket + "/styles.css"),
-                      ("arn:aws:s3:::" + $bucket + "/asset-resolver.js"),
-                      ("arn:aws:s3:::" + $bucket + "/audio-aliases.js"),
-                      ("arn:aws:s3:::" + $bucket + "/audio-captions.js"),
-                      ("arn:aws:s3:::" + $bucket + "/combat-utils.js"),
-                      ("arn:aws:s3:::" + $bucket + "/crafting.js"),
-                      ("arn:aws:s3:::" + $bucket + "/portal-mechanics.js"),
-                      ("arn:aws:s3:::" + $bucket + "/scoreboard-utils.js"),
-                      ("arn:aws:s3:::" + $bucket + "/script.js"),
+                      ("arn:aws:s3:::" + $bucket + "/test-driver.js"),
                       ("arn:aws:s3:::" + $bucket + "/simple-experience.js"),
                       ("arn:aws:s3:::" + $bucket + "/assets/*"),
                       ("arn:aws:s3:::" + $bucket + "/audio/*"),
@@ -288,8 +233,95 @@ jobs:
                   }
                 ]
               }' > "${POLICY_FILE}"
-            ACCESS_MODE="CloudFront OAI (${OAI_ID})"
+            ACCESS_MODE="Public (no CloudFront OAI/OAC)"
+          else
+            if [ -n "${OAC_ID}" ]; then
+              if [ -z "${DISTRIBUTION_ARN}" ]; then
+                echo '::error::Failed to resolve the CloudFront distribution ARN required for the OAC policy.'
+                exit 1
+              fi
+              jq -n \
+                --arg bucket "${DEPLOY_BUCKET}" \
+                --arg arn "${DISTRIBUTION_ARN}" \
+                '{
+                  Version: "2012-10-17",
+                  Statement: [
+                    {
+                      Sid: "AllowCloudFrontOACRead",
+                      Effect: "Allow",
+                      Principal: {
+                        Service: "cloudfront.amazonaws.com"
+                      },
+                      Action: "s3:GetObject",
+                      Resource: [
+                        ("arn:aws:s3:::" + $bucket + "/index.html"),
+                        ("arn:aws:s3:::" + $bucket + "/styles.css"),
+                        ("arn:aws:s3:::" + $bucket + "/asset-resolver.js"),
+                        ("arn:aws:s3:::" + $bucket + "/audio-aliases.js"),
+                        ("arn:aws:s3:::" + $bucket + "/audio-captions.js"),
+                        ("arn:aws:s3:::" + $bucket + "/combat-utils.js"),
+                        ("arn:aws:s3:::" + $bucket + "/crafting.js"),
+                        ("arn:aws:s3:::" + $bucket + "/portal-mechanics.js"),
+                        ("arn:aws:s3:::" + $bucket + "/scoreboard-utils.js"),
+                        ("arn:aws:s3:::" + $bucket + "/script.js"),
+                        ("arn:aws:s3:::" + $bucket + "/test-driver.js"),
+                        ("arn:aws:s3:::" + $bucket + "/simple-experience.js"),
+                        ("arn:aws:s3:::" + $bucket + "/assets/*"),
+                        ("arn:aws:s3:::" + $bucket + "/audio/*"),
+                        ("arn:aws:s3:::" + $bucket + "/textures/*"),
+                        ("arn:aws:s3:::" + $bucket + "/vendor/*")
+                      ],
+                      Condition: {
+                        StringEquals: {
+                          "AWS:SourceArn": $arn
+                        }
+                      }
+                    }
+                  ]
+                }' > "${POLICY_FILE}"
+              ACCESS_MODE="CloudFront OAC (${OAC_ID})"
+            else
+              jq -n \
+                --arg bucket "${DEPLOY_BUCKET}" \
+                --arg oai "${OAI_ID}" \
+                '{
+                  Version: "2012-10-17",
+                  Statement: [
+                    {
+                      Sid: "AllowCloudFrontOAIRead",
+                      Effect: "Allow",
+                      Principal: {
+                        AWS: ("arn:aws:iam::cloudfront:user/CloudFront Origin Access Identity " + $oai)
+                      },
+                      Action: "s3:GetObject",
+                      Resource: [
+                        ("arn:aws:s3:::" + $bucket + "/index.html"),
+                        ("arn:aws:s3:::" + $bucket + "/styles.css"),
+                        ("arn:aws:s3:::" + $bucket + "/asset-resolver.js"),
+                        ("arn:aws:s3:::" + $bucket + "/audio-aliases.js"),
+                        ("arn:aws:s3:::" + $bucket + "/audio-captions.js"),
+                        ("arn:aws:s3:::" + $bucket + "/combat-utils.js"),
+                        ("arn:aws:s3:::" + $bucket + "/crafting.js"),
+                        ("arn:aws:s3:::" + $bucket + "/portal-mechanics.js"),
+                        ("arn:aws:s3:::" + $bucket + "/scoreboard-utils.js"),
+                        ("arn:aws:s3:::" + $bucket + "/script.js"),
+                        ("arn:aws:s3:::" + $bucket + "/test-driver.js"),
+                        ("arn:aws:s3:::" + $bucket + "/simple-experience.js"),
+                        ("arn:aws:s3:::" + $bucket + "/assets/*"),
+                        ("arn:aws:s3:::" + $bucket + "/audio/*"),
+                        ("arn:aws:s3:::" + $bucket + "/textures/*"),
+                        ("arn:aws:s3:::" + $bucket + "/vendor/*")
+                      ]
+                    }
+                  ]
+                }' > "${POLICY_FILE}"
+              ACCESS_MODE="CloudFront OAI (${OAI_ID})"
+            fi
           fi
+
+          aws s3api put-public-access-block \
+            --bucket "${DEPLOY_BUCKET}" \
+            --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=false,RestrictPublicBuckets=false
 
           aws s3api put-bucket-policy --bucket "${DEPLOY_BUCKET}" --policy "file://${POLICY_FILE}"
           rm -f "${POLICY_FILE}"
