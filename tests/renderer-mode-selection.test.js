@@ -810,7 +810,7 @@ describe('renderer mode selection', () => {
     it('returns false when the simple sandbox is unavailable', () => {
       const scope = {
         APP_CONFIG: {},
-        console: { warn: () => {}, error: () => {} },
+        console: { warn: () => {}, error: () => {}, debug: () => {} },
         bootstrap: () => {
           throw new Error('should not be called');
         },
@@ -823,8 +823,26 @@ describe('renderer mode selection', () => {
         },
       };
       const { tryStartSimpleFallback, getAttempted } = instantiateSimpleFallback(scope);
-      expect(tryStartSimpleFallback(new Error('missing'), { reason: 'no-simple' })).toBe(false);
+      const fallbackError = new Error('missing');
+      expect(tryStartSimpleFallback(fallbackError, { reason: 'no-simple' })).toBe(false);
       expect(getAttempted()).toBe(false);
+      expect(scope.bootstrapOverlay.showError).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.stringContaining('mission briefing mode'),
+        }),
+      );
+      expect(scope.bootstrapOverlay.setDiagnostic).toHaveBeenCalledWith(
+        'renderer',
+        expect.objectContaining({
+          message: expect.stringContaining('Mission briefing mode'),
+        }),
+      );
+      expect(scope.bootstrapOverlay.setRecoveryAction).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'open-mission-briefing',
+          label: 'Open Mission Briefing Mode',
+        }),
+      );
     });
 
     it('invokes the fallback bootstrap when a start-error event is emitted', () => {

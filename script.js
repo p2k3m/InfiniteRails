@@ -9536,6 +9536,8 @@
       hooks.performBackendLiveCheck = performBackendLiveCheck;
       hooks.getIdentityState = () => identityState;
       hooks.getBackendLiveCheckState = () => backendLiveCheckState;
+      hooks.activateMissionBriefingFallback = activateMissionBriefingFallback;
+      hooks.offerMissionBriefingFallback = offerMissionBriefingFallback;
     } catch (hookError) {
       if (globalScope.console?.debug) {
         globalScope.console.debug('Failed to expose ensureSimpleExperience to test hooks.', hookError);
@@ -9547,6 +9549,9 @@
   let simpleFallbackAttempted = false;
   let rendererStartWatchdogHandle = null;
   let rendererStartWatchdogMode = null;
+  let missionBriefingFallbackActivated = false;
+  let missionBriefingFallbackDetail = null;
+  let missionBriefingFallbackStartLabel = null;
 
   function resolveRendererStartTimeout(config) {
     if (config && typeof config === 'object') {
@@ -9583,6 +9588,279 @@
     }
     rendererStartWatchdogHandle = null;
     rendererStartWatchdogMode = null;
+  }
+
+  function activateMissionBriefingFallback(options = {}) {
+    if (missionBriefingFallbackActivated) {
+      return true;
+    }
+    const scope =
+      typeof globalScope !== 'undefined'
+        ? globalScope
+        : typeof window !== 'undefined'
+          ? window
+          : globalThis;
+    const doc = documentRef || scope.document || null;
+    if (!doc || typeof doc.getElementById !== 'function') {
+      scope.console?.error?.('Mission briefing fallback unavailable — document is not accessible.');
+      return false;
+    }
+    const briefing = doc.getElementById('gameBriefing');
+    if (!briefing) {
+      scope.console?.error?.('Mission briefing fallback unavailable — #gameBriefing is missing.');
+      return false;
+    }
+    const startButton = doc.getElementById('startButton') ?? null;
+    const dismissButton = doc.getElementById('dismissBriefing') ?? null;
+    const stepsList = doc.getElementById('gameBriefingSteps') ?? null;
+    const briefingContent =
+      typeof briefing.querySelector === 'function' ? briefing.querySelector('.game-briefing__content') : null;
+    const briefingEyebrow =
+      typeof briefing.querySelector === 'function' ? briefing.querySelector('.game-briefing__eyebrow') : null;
+    const briefingTitle =
+      typeof briefing.querySelector === 'function' ? briefing.querySelector('.game-briefing__title') : null;
+    if (startButton) {
+      if (missionBriefingFallbackStartLabel === null) {
+        missionBriefingFallbackStartLabel =
+          typeof startButton.textContent === 'string' && startButton.textContent.length
+            ? startButton.textContent
+            : null;
+      }
+      startButton.disabled = true;
+      if (typeof startButton.setAttribute === 'function') {
+        startButton.setAttribute('aria-disabled', 'true');
+      }
+      startButton.dataset = startButton.dataset || {};
+      startButton.dataset.fallbackMode = 'briefing';
+      startButton.textContent = 'Renderer offline — mission briefing mode active';
+    }
+    if (typeof briefing.removeAttribute === 'function') {
+      briefing.removeAttribute('hidden');
+    }
+    briefing.hidden = false;
+    briefing.dataset = briefing.dataset || {};
+    briefing.dataset.fallbackMode = 'briefing';
+    if (briefing.classList?.add) {
+      briefing.classList.add('is-visible');
+    }
+    if (briefingEyebrow) {
+      briefingEyebrow.textContent = 'Mission Briefing — Text Mode';
+    }
+    if (briefingTitle) {
+      briefingTitle.textContent = 'Renderer Offline — Review Objectives';
+    }
+    if (briefingContent && typeof doc.createElement === 'function') {
+      let fallbackNotice = doc.getElementById('gameBriefingFallbackNotice');
+      if (!fallbackNotice) {
+        fallbackNotice = doc.createElement('p');
+        if (fallbackNotice) {
+          fallbackNotice.id = 'gameBriefingFallbackNotice';
+          fallbackNotice.className = 'game-briefing__fallback';
+          if (briefingContent.firstChild) {
+            briefingContent.insertBefore(fallbackNotice, briefingContent.firstChild);
+          } else {
+            briefingContent.appendChild(fallbackNotice);
+          }
+        }
+      }
+      if (fallbackNotice) {
+        fallbackNotice.textContent =
+          typeof options.notice === 'string' && options.notice.trim().length
+            ? options.notice.trim()
+            : 'Renderer systems are offline. Review the mission briefing and objectives while diagnostics continue.';
+      }
+    }
+    if (stepsList && Array.isArray(options.additionalSteps) && options.additionalSteps.length) {
+      try {
+        while (stepsList.firstChild) {
+          stepsList.removeChild(stepsList.firstChild);
+        }
+        options.additionalSteps.forEach((step) => {
+          if (typeof step !== 'string' || !step.trim().length) {
+            return;
+          }
+          if (typeof doc.createElement === 'function') {
+            const item = doc.createElement('li');
+            if (item) {
+              item.textContent = step.trim();
+              stepsList.appendChild(item);
+            }
+          }
+        });
+      } catch (error) {
+        scope.console?.debug?.('Failed to update mission briefing fallback steps.', error);
+      }
+    }
+    if (dismissButton) {
+      dismissButton.textContent = 'Reload and Retry Renderer';
+      dismissButton.dataset = dismissButton.dataset || {};
+      if (!dismissButton.dataset.lowFidelityBound && typeof dismissButton.addEventListener === 'function') {
+        dismissButton.addEventListener('click', (event) => {
+          if (event?.preventDefault) {
+            event.preventDefault();
+          }
+          const locationRef = scope?.location ?? null;
+          if (locationRef && typeof locationRef.reload === 'function') {
+            try {
+              locationRef.reload();
+            } catch (reloadError) {
+              scope.console?.error?.('Failed to reload the page from mission briefing fallback.', reloadError);
+            }
+          }
+        });
+        dismissButton.dataset.lowFidelityBound = 'true';
+      }
+    }
+    const canvas = doc.getElementById('gameCanvas');
+    if (canvas) {
+      if (typeof canvas.setAttribute === 'function') {
+        canvas.setAttribute('aria-hidden', 'true');
+      }
+      canvas.style = canvas.style || {};
+      canvas.style.display = 'none';
+    }
+    if (doc.body?.setAttribute) {
+      doc.body.setAttribute('data-renderer-mode', 'briefing');
+      doc.body.setAttribute('data-low-fidelity-mode', 'briefing');
+    }
+    if (doc.documentElement?.setAttribute) {
+      doc.documentElement.setAttribute('data-renderer-mode', 'briefing');
+    }
+    setRendererModeIndicator('briefing');
+    const state = scope.__INFINITE_RAILS_STATE__ || (scope.__INFINITE_RAILS_STATE__ = {});
+    try {
+      state.rendererMode = 'briefing';
+      state.isRunning = false;
+      state.reason = options.reason || 'mission-briefing-fallback';
+      state.updatedAt = Date.now();
+    } catch (error) {
+      scope.console?.debug?.('Failed to record mission briefing fallback state.', error);
+    }
+    scope.__MISSION_BRIEFING_FALLBACK_ACTIVE__ = true;
+    missionBriefingFallbackActivated = true;
+    missionBriefingFallbackDetail = {
+      reason: options.reason || null,
+      context:
+        options.context && typeof options.context === 'object' ? { ...options.context } : undefined,
+      timestamp: Date.now(),
+    };
+    if (typeof bootstrapOverlay !== 'undefined') {
+      try {
+        if (typeof bootstrapOverlay.setDiagnostic === 'function') {
+          bootstrapOverlay.setDiagnostic('renderer', {
+            status: 'warning',
+            message: 'Renderer offline — mission briefing mode is active.',
+          });
+        }
+        if (typeof bootstrapOverlay.setRecoveryAction === 'function') {
+          bootstrapOverlay.setRecoveryAction(null);
+        }
+      } catch (overlayError) {
+        scope.console?.debug?.('Failed to update bootstrap overlay for mission briefing fallback.', overlayError);
+      }
+    }
+    if (typeof logDiagnosticsEvent === 'function') {
+      logDiagnosticsEvent('startup', 'Mission briefing fallback activated.', {
+        level: 'warning',
+        detail: {
+          reason: options.reason || 'mission-briefing-fallback',
+          context:
+            options.context && typeof options.context === 'object' ? { ...options.context } : undefined,
+        },
+      });
+    } else {
+      scope.console?.warn?.('Mission briefing fallback activated.');
+    }
+    return true;
+  }
+
+  function offerMissionBriefingFallback(options = {}) {
+    const scope =
+      typeof globalScope !== 'undefined'
+        ? globalScope
+        : typeof window !== 'undefined'
+          ? window
+          : globalThis;
+    const overlay = typeof bootstrapOverlay !== 'undefined' ? bootstrapOverlay : null;
+    const reason =
+      typeof options.reason === 'string' && options.reason.trim().length
+        ? options.reason.trim()
+        : 'mission-briefing-fallback';
+    const contextDetail =
+      options.context && typeof options.context === 'object' ? { ...options.context } : undefined;
+    const errorDetail = options.error instanceof Error ? options.error : null;
+    const detail = {
+      fallbackMode: 'briefing',
+      reason,
+    };
+    if (contextDetail) {
+      detail.context = contextDetail;
+    }
+    if (errorDetail) {
+      detail.errorMessage = errorDetail.message;
+      detail.errorName = errorDetail.name;
+    }
+    scope.__MISSION_BRIEFING_FALLBACK_AVAILABLE__ = true;
+    let offered = false;
+    if (overlay && typeof overlay.setRecoveryAction === 'function') {
+      try {
+        overlay.setRecoveryAction({
+          label: 'Open Mission Briefing Mode',
+          description: 'Displays the text-based mission briefing so you can continue without WebGL rendering.',
+          action: 'open-mission-briefing',
+          onSelect: () => {
+            if (typeof logDiagnosticsEvent === 'function') {
+              logDiagnosticsEvent('startup', 'Player launched mission briefing fallback.', {
+                level: 'info',
+                detail: { ...detail, trigger: 'player-selection' },
+              });
+            }
+            const activated = activateMissionBriefingFallback({
+              reason: `${reason}:selected`,
+              context: contextDetail,
+            });
+            if (activated && overlay && typeof overlay.hide === 'function') {
+              try {
+                overlay.hide({ force: true });
+              } catch (hideError) {
+                scope.console?.debug?.(
+                  'Failed to hide bootstrap overlay after mission briefing fallback activation.',
+                  hideError,
+                );
+              }
+            }
+          },
+        });
+        offered = true;
+      } catch (overlayError) {
+        scope.console?.debug?.('Failed to register mission briefing fallback recovery action.', overlayError);
+      }
+    }
+    if (overlay && typeof overlay.setDiagnostic === 'function') {
+      try {
+        overlay.setDiagnostic('renderer', {
+          status: 'warning',
+          message: 'Renderer unavailable — mission briefing mode is available.',
+        });
+      } catch (overlayError) {
+        scope.console?.debug?.('Failed to update renderer diagnostic for mission briefing fallback.', overlayError);
+      }
+    }
+    if (!offered) {
+      offered = activateMissionBriefingFallback({
+        reason: `${reason}:auto`,
+        context: contextDetail,
+      });
+    }
+    if (typeof logDiagnosticsEvent === 'function') {
+      logDiagnosticsEvent('startup', 'Offering mission briefing fallback.', {
+        level: 'warning',
+        detail,
+      });
+    } else {
+      scope.console?.warn?.('Offering mission briefing fallback.', detail);
+    }
+    return offered;
   }
 
   function scheduleRendererStartWatchdog(mode) {
@@ -9719,6 +9997,12 @@
         detail: fallbackFailureDetail,
         rethrow: false,
       });
+      offerMissionBriefingFallback({
+        reason: 'simple-fallback-bootstrap-failed',
+        context: fallbackFailureDetail,
+        error: bootstrapError,
+      });
+      return false;
     }
     return true;
   }
@@ -9763,13 +10047,19 @@
       if (typeof bootstrapOverlay !== 'undefined') {
         bootstrapOverlay.showError({
           title: 'Renderer unavailable',
-          message: 'Fallback renderer is unavailable. Check your extensions or reload the page.',
+          message:
+            'Fallback renderer is unavailable. Launch mission briefing mode or reload the page to retry.',
         });
         bootstrapOverlay.setDiagnostic('renderer', {
           status: 'error',
-          message: 'Fallback renderer is unavailable. Check extensions or reload.',
+          message: 'Fallback renderer is unavailable. Mission briefing mode can continue without WebGL.',
         });
       }
+      offerMissionBriefingFallback({
+        reason: 'simple-experience-unavailable',
+        context,
+        error,
+      });
       return false;
     }
     return startSimpleFallbackBootstrap(scope, error, context);

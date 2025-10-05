@@ -1765,6 +1765,43 @@ body.game-active #gameCanvas {
   opacity: 0.95;
 }
 
+body[data-renderer-mode='briefing'] .primary-panel {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: clamp(1.5rem, 6vw, 3rem);
+}
+
+body[data-renderer-mode='briefing'] #gameCanvas {
+  display: none;
+}
+
+body[data-renderer-mode='briefing'] .game-briefing {
+  position: relative;
+  left: auto;
+  top: auto;
+  transform: none;
+  opacity: 1;
+  pointer-events: auto;
+  width: min(92%, 560px);
+  margin: clamp(1.5rem, 8vh, 3.5rem) auto;
+}
+
+body[data-renderer-mode='briefing'] .game-briefing.is-visible {
+  transform: none;
+}
+
+.game-briefing__fallback {
+  margin: 0;
+  padding: 0.9rem 1.1rem;
+  border-radius: 18px;
+  border: 1px dashed rgba(73, 242, 255, 0.45);
+  background: rgba(8, 22, 40, 0.72);
+  font-size: 0.9rem;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
 .first-run-tutorial {
   position: fixed;
   inset: 0;
