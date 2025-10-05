@@ -2,6 +2,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const crypto = require('node:crypto');
 const { parse: parseYaml } = require('yaml');
 const { listUnreachableManifestAssets } = require('./lib/manifest-coverage.js');
 
@@ -10,6 +11,128 @@ const manifestPath = path.join(repoRoot, 'asset-manifest.json');
 const workflowPath = path.join(repoRoot, '.github', 'workflows', 'deploy.yml');
 const templatePath = path.join(repoRoot, 'serverless', 'template.yaml');
 const ASSET_PERMISSION_PREFIXES = ['assets', 'textures', 'audio'];
+const HASH_ALGORITHM = 'sha256';
+const HASH_LENGTH = 12;
+
+function createSearchParamEntries(query) {
+  if (!query) {
+    return [];
+  }
+
+  const params = new URLSearchParams(query);
+  const entries = [];
+  params.forEach((value, key) => {
+    entries.push({ key, value });
+  });
+  return entries;
+}
+
+function parseManifestAsset(asset, index) {
+  if (typeof asset !== 'string') {
+    throw new Error(`asset-manifest.json entry at index ${index} must be a string.`);
+  }
+
+  const trimmed = asset.trim();
+  if (!trimmed) {
+    throw new Error(`asset-manifest.json entry at index ${index} cannot be empty.`);
+  }
+
+  const [pathAndQuery] = trimmed.split('#', 1);
+  const [rawPath, rawQuery = ''] = pathAndQuery.split('?', 2);
+  const pathOnly = normalisePath(rawPath);
+  if (!pathOnly) {
+    throw new Error(`asset-manifest.json entry at index ${index} is missing a valid path.`);
+  }
+
+  const queryEntries = createSearchParamEntries(rawQuery);
+  const versionValues = queryEntries.filter((entry) => entry.key === 'v').map((entry) => entry.value);
+  const extraParams = Array.from(
+    new Set(queryEntries.filter((entry) => entry.key !== 'v').map((entry) => entry.key)),
+  );
+
+  return {
+    original: trimmed,
+    path: pathOnly,
+    versionedPath: rawQuery ? `${pathOnly}?${rawQuery}` : pathOnly,
+    query: rawQuery,
+    versionValues,
+    version: versionValues.length ? versionValues[versionValues.length - 1] : null,
+    extraParams,
+  };
+}
+
+function computeAssetDigest(fullPath) {
+  const contents = fs.readFileSync(fullPath);
+  return crypto.createHash(HASH_ALGORITHM).update(contents).digest('hex').slice(0, HASH_LENGTH);
+}
+
+function listVersionedAssetIssues(entries) {
+  const issues = [];
+  if (!Array.isArray(entries) || entries.length === 0) {
+    return issues;
+  }
+
+  for (const entry of entries) {
+    if (!entry || typeof entry.path !== 'string' || !entry.path) {
+      continue;
+    }
+
+    const fullPath = path.join(repoRoot, entry.path);
+    let stats;
+    try {
+      stats = fs.statSync(fullPath);
+    } catch (error) {
+      continue;
+    }
+
+    if (!stats.isFile()) {
+      continue;
+    }
+
+    const expected = computeAssetDigest(fullPath);
+    if (!entry.versionValues || entry.versionValues.length === 0) {
+      issues.push({
+        asset: entry.path,
+        expected,
+        actual: null,
+        reason: 'missing',
+      });
+      continue;
+    }
+
+    if (entry.versionValues.length > 1) {
+      issues.push({
+        asset: entry.versionedPath,
+        expected,
+        actual: entry.versionValues.join(', '),
+        reason: 'duplicate',
+      });
+      continue;
+    }
+
+    if (entry.extraParams && entry.extraParams.length > 0) {
+      issues.push({
+        asset: entry.versionedPath,
+        expected,
+        actual: entry.extraParams.join(', '),
+        reason: 'unexpected-params',
+      });
+      continue;
+    }
+
+    const actual = entry.versionValues[0];
+    if (actual !== expected) {
+      issues.push({
+        asset: entry.versionedPath,
+        expected,
+        actual,
+        reason: 'mismatch',
+      });
+    }
+  }
+
+  return issues;
+}
 
 function normalisePath(value) {
   if (!value || typeof value !== 'string') {
@@ -59,15 +182,13 @@ function loadManifest() {
     throw new Error('asset-manifest.json must define an "assets" array.');
   }
 
-  const assets = raw.assets
-    .map((asset) => normalisePath(asset))
-    .filter((asset) => typeof asset === 'string' && asset.length > 0);
+  const entries = raw.assets.map((asset, index) => parseManifestAsset(asset, index));
 
-  if (assets.length === 0) {
+  if (!entries.length) {
     throw new Error('asset-manifest.json must list at least one asset.');
   }
 
-  return assets;
+  return { entries };
 }
 
 function ensureUniqueAssets(assets) {
@@ -397,7 +518,7 @@ function ensureTrailingSlash(value) {
   return value;
 }
 
-async function listFailedHeadRequests(assets, baseUrl, fetchImpl = globalThis.fetch) {
+async function listFailedHeadRequests(entries, baseUrl, fetchImpl = globalThis.fetch) {
   if (!baseUrl) {
     return [];
   }
@@ -414,20 +535,24 @@ async function listFailedHeadRequests(assets, baseUrl, fetchImpl = globalThis.fe
   const normalisedBase = ensureTrailingSlash(parsedBase.toString());
 
   const failures = [];
-  for (const asset of assets) {
-    const targetUrl = new URL(asset, normalisedBase).toString();
+  for (const entry of entries) {
+    const target = entry?.versionedPath || entry?.path || entry;
+    if (typeof target !== 'string' || !target) {
+      continue;
+    }
+    const targetUrl = new URL(target, normalisedBase).toString();
     try {
       const response = await fetchImpl(targetUrl, { method: 'HEAD' });
       if (!response.ok) {
         failures.push({
-          asset,
+          asset: target,
           url: targetUrl,
           status: response.status,
           statusText: response.statusText,
         });
       }
     } catch (error) {
-      failures.push({ asset, url: targetUrl, error: error.message || String(error) });
+      failures.push({ asset: target, url: targetUrl, error: error.message || String(error) });
     }
   }
   return failures;
@@ -435,7 +560,9 @@ async function listFailedHeadRequests(assets, baseUrl, fetchImpl = globalThis.fe
 
 async function main() {
   try {
-    const assets = loadManifest();
+    const manifest = loadManifest();
+    const manifestEntries = manifest.entries;
+    const assets = manifestEntries.map((entry) => entry.path);
     const duplicates = ensureUniqueAssets(assets);
     const missingFiles = listMissingFiles(assets);
     const permissionIssues = listPermissionIssues(assets);
@@ -457,8 +584,10 @@ async function main() {
     const baseUrl = resolveBaseUrl();
     let headFailures = [];
     if (baseUrl) {
-      headFailures = await listFailedHeadRequests(assets, baseUrl);
+      headFailures = await listFailedHeadRequests(manifestEntries, baseUrl);
     }
+
+    const versionIssues = listVersionedAssetIssues(manifestEntries);
 
     const issues = [];
     if (duplicates.length > 0) {
@@ -493,6 +622,25 @@ async function main() {
           '; ',
         )}`,
       );
+    }
+    if (versionIssues.length > 0) {
+      const formatted = versionIssues
+        .map((issue) => {
+          switch (issue.reason) {
+            case 'missing':
+              return `${issue.asset} is missing a ?v=${issue.expected} digest.`;
+            case 'duplicate':
+              return `${issue.asset} defines multiple v parameters (${issue.actual}); expected ${issue.expected}.`;
+            case 'unexpected-params':
+              return `${issue.asset} includes unsupported query parameters (${issue.actual}); only ?v= is allowed.`;
+            case 'mismatch':
+              return `${issue.asset} has v=${issue.actual} but should be ${issue.expected}.`;
+            default:
+              return `${issue.asset} has an unknown version issue.`;
+          }
+        })
+        .join('; ');
+      issues.push(`Manifest asset hashes are outdated: ${formatted}`);
     }
     if (baseUrl && headFailures.length > 0) {
       const formatted = headFailures
