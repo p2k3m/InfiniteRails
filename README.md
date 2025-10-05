@@ -282,11 +282,12 @@ This repository ships with a GitHub Actions workflow that deploys the static sit
 
 The manifest lives at the repository root (`asset-manifest.json`) and serves as the canonical checklist of production assets. Update it whenever you add or retire a runtime bundle, vendor shim, or static asset that must ship with the experience. The deployment tests and workflow both fail fast if the manifest is missing entries or points at non-existent files.
 
-Run `node scripts/validate-asset-manifest.js` before publishing to ensure nothing falls through the cracks. Pass `--base-url https://<domain>/` (or set `ASSET_MANIFEST_BASE_URL`) so the validator can issue anonymous `HEAD` requests against every entry. The command now verifies three buckets:
+Run `node scripts/validate-asset-manifest.js` before publishing to ensure nothing falls through the cracks. Pass `--base-url https://<domain>/` (or set `ASSET_MANIFEST_BASE_URL`) so the validator can issue anonymous `HEAD` requests against every entry. The command now verifies four buckets:
 
 1. Every manifest entry maps to a file on disk.
 2. Static assets are world-readable without unexpected write or execute bits (required for CDN delivery).
-3. The target endpoint responds to `HEAD` requests with a 2xx status for each asset.
+3. The CloudFormation template grants the CloudFront Origin Access Identity (OAI) `s3:GetObject` access only to `assets/`, `textures/`, and `audio/` prefixes.
+4. The target endpoint responds to `HEAD` requests with a 2xx status for each asset.
 
 The script prints actionable errors when any check fails, including the offending permissions or HTTP status codes. Skip the `--base-url` flag when running locally to perform the on-disk and workflow checks only.
 
