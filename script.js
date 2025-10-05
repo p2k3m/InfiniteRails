@@ -5090,6 +5090,25 @@
         return 'Eternal Ingot secured — mission accomplished!';
       case 'asset-fallback':
         return summaryMessage(detail?.message, 'Asset fallback engaged to keep the run active.');
+      case 'asset-availability': {
+        const missing = Array.isArray(detail?.missing) ? detail.missing.length : 0;
+        const total = Number.isFinite(detail?.total) ? detail.total : null;
+        if (detail?.status === 'skipped') {
+          return 'Critical asset availability check skipped — probe unavailable.';
+        }
+        if (detail?.status === 'error') {
+          return 'Critical asset availability check failed — probe error.';
+        }
+        if (missing > 0) {
+          const preview = Array.isArray(detail?.missing) ? detail.missing.slice(0, 3).join(', ') : '';
+          const suffix = missing > 3 ? `, +${missing - 3} more` : '';
+          if (total !== null) {
+            return `Critical asset availability check failed — ${missing}/${total} missing (${preview}${suffix}).`;
+          }
+          return `Critical asset availability check failed — ${missing} missing (${preview}${suffix}).`;
+        }
+        return 'Critical asset availability check passed — all assets reachable.';
+      }
       case 'recipe-crafted':
         return summaryMessage(detail?.recipeLabel ? `Crafted ${detail.recipeLabel}.` : '', 'Recipe crafted.');
       case 'pointer-lock-fallback': {
@@ -5315,6 +5334,7 @@
       'asset-fallback',
       'asset-fetch-start',
       'asset-fetch-complete',
+      'asset-availability',
       'loot-collected',
       'recipe-crafted',
       'pointer-lock-fallback',
@@ -5730,6 +5750,53 @@
     });
   }
 
+  function handleAssetAvailabilityOverlay(detail = {}) {
+    const missing = Array.isArray(detail?.missing) ? detail.missing.length : 0;
+    const total = Number.isFinite(detail?.total) ? detail.total : null;
+    if (detail?.status === 'skipped') {
+      showEventOverlay({
+        title: 'Asset availability skipped',
+        message: 'Probe unavailable in this environment.',
+        icon: 'ℹ️',
+        variant: 'info',
+        duration: 5000,
+      });
+      return;
+    }
+    if (detail?.status === 'error') {
+      showEventOverlay({
+        title: 'Asset availability failed',
+        message: 'Probe encountered an error — review diagnostics.',
+        icon: '⚠️',
+        variant: 'danger',
+        duration: 9000,
+      });
+      return;
+    }
+    if (missing > 0) {
+      const preview = Array.isArray(detail?.missing) ? detail.missing.slice(0, 3).join(', ') : '';
+      const suffix = missing > 3 ? `, +${missing - 3} more` : '';
+      const message = total !== null
+        ? `${missing}/${total} missing — ${preview}${suffix}`
+        : `${missing} missing — ${preview}${suffix}`;
+      showEventOverlay({
+        title: 'Critical assets missing',
+        message,
+        icon: '🚨',
+        variant: 'warning',
+        duration: 10000,
+      });
+      return;
+    }
+    showEventOverlay({
+      title: 'Assets verified',
+      message: 'All critical assets reachable.',
+      icon: '✅',
+      variant: 'success',
+      duration: 5000,
+    });
+  }
+
   function ensureEventOverlayListeners() {
     if (eventOverlayState.listenersBound || typeof globalScope?.addEventListener !== 'function') {
       return;
@@ -5745,6 +5812,7 @@
     register('loot-collected', handleLootCollectedOverlay);
     register('asset-fetch-start', handleAssetFetchStartOverlay);
     register('asset-fetch-complete', handleAssetFetchCompleteOverlay);
+    register('asset-availability', handleAssetAvailabilityOverlay);
     eventOverlayState.listenersBound = true;
   }
 
@@ -9108,6 +9176,7 @@
     const shouldEnforceStrictAssets = !runningFromFileProtocol;
     const shouldPreloadCriticalAssets = !runningFromFileProtocol;
     let assetPreloadPromise = null;
+    let assetAvailabilityPromise = null;
     if (shouldEnforceStrictAssets && experience && typeof experience.enableStrictAssetValidation === 'function') {
       try {
         experience.enableStrictAssetValidation();
@@ -9120,6 +9189,16 @@
       globalScope.console.info(
         'Skipping strict asset validation while running from the file:// protocol; placeholder assets will be allowed.',
       );
+    }
+    if (experience && typeof experience.verifyCriticalAssetAvailability === 'function') {
+      try {
+        assetAvailabilityPromise = experience.verifyCriticalAssetAvailability();
+      } catch (error) {
+        if (globalScope.console?.debug) {
+          globalScope.console.debug('Failed to initiate critical asset availability check.', error);
+        }
+        assetAvailabilityPromise = null;
+      }
     }
     if (shouldPreloadCriticalAssets && experience && typeof experience.preloadRequiredAssets === 'function') {
       try {
@@ -9178,6 +9257,49 @@
           status: 'ok',
           message: 'World assets ready.',
         });
+      }
+      const updateAvailabilityOverlay = (summary) => {
+        if (!summary || !overlayController?.setDiagnostic) {
+          return;
+        }
+        const diagnosticsSnapshot = overlayController.diagnostics || {};
+        const currentStatus = diagnosticsSnapshot.assets?.status;
+        if (currentStatus === 'error') {
+          return;
+        }
+        if (summary.status === 'error') {
+          overlayController.setDiagnostic('assets', {
+            status: 'warning',
+            message: 'Asset availability check failed — review diagnostics.',
+          });
+          return;
+        }
+        if (Array.isArray(summary.missing) && summary.missing.length > 0) {
+          const preview = summary.missing.slice(0, 3).join(', ');
+          const suffix = summary.missing.length > 3 ? `, +${summary.missing.length - 3} more` : '';
+          overlayController.setDiagnostic('assets', {
+            status: 'warning',
+            message: `Availability check missing ${summary.missing.length} asset${summary.missing.length === 1 ? '' : 's'} (${preview}${suffix}).`,
+          });
+        }
+      };
+      if (assetAvailabilityPromise && typeof assetAvailabilityPromise.then === 'function') {
+        assetAvailabilityPromise
+          .then(updateAvailabilityOverlay)
+          .catch((error) => {
+            const diagnosticsSnapshot = overlayController.diagnostics || {};
+            const currentStatus = diagnosticsSnapshot.assets?.status;
+            if (currentStatus === 'error') {
+              return;
+            }
+            overlayController.setDiagnostic('assets', {
+              status: 'warning',
+              message: 'Asset availability check failed — review diagnostics.',
+            });
+            if (globalScope.console?.debug) {
+              globalScope.console.debug('Asset availability overlay update failed.', error);
+            }
+          });
       }
     }
     const releaseStartButton = ({ delayed } = {}) => {
