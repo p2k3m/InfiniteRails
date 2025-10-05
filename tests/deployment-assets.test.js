@@ -397,6 +397,19 @@ describe('deployment workflow asset coverage', () => {
     expect(missing).toEqual([]);
   });
 
+  it('deploy workflow normalizes CDN MIME types for critical assets', () => {
+    const expectedSnippets = [
+      "ensure_content_type '.gltf' 'model/gltf+json'",
+      "ensure_content_type '.png' 'image/png'",
+      "ensure_content_type '.mp3' 'audio/mpeg'",
+      "ensure_content_type '.js' 'application/javascript'",
+    ];
+
+    expectedSnippets.forEach((snippet) => {
+      expect(workflowContents.includes(snippet)).toBe(true);
+    });
+  });
+
   it('does not include unreachable manifest assets', () => {
     const { unreachable } = listUnreachableManifestAssets(manifestAssets, { baseDir: repoRoot });
 
@@ -458,5 +471,39 @@ describe('deployment workflow asset coverage', () => {
     const principal = statement.Principal || {};
     expect(typeof principal.CanonicalUser).toBe('string');
     expect(principal.CanonicalUser).toContain('AssetsCloudFrontOAI');
+  });
+
+  it('CloudFront distribution applies a permissive CORS response headers policy for CDN assets', () => {
+    const distributionConfig =
+      templateDocument?.Resources?.AssetsDistribution?.Properties?.DistributionConfig || null;
+
+    expect(distributionConfig).toBeTruthy();
+
+    const cacheBehavior = distributionConfig?.DefaultCacheBehavior || null;
+    expect(cacheBehavior).toBeTruthy();
+    expect(cacheBehavior.ResponseHeadersPolicyId).toBe('AssetsResponseHeadersPolicy');
+
+    const policyConfig =
+      templateDocument?.Resources?.AssetsResponseHeadersPolicy?.Properties?.ResponseHeadersPolicyConfig || null;
+
+    expect(policyConfig).toBeTruthy();
+
+    const corsConfig = policyConfig.CorsConfig || {};
+    expect(corsConfig.AccessControlAllowCredentials).toBe(false);
+    expect(corsConfig.OriginOverride).toBe(true);
+
+    const allowHeaders = new Set(toArray(corsConfig.AccessControlAllowHeaders?.Items));
+    expect(allowHeaders.has('*')).toBe(true);
+    expect(allowHeaders.size).toBe(1);
+
+    const allowOrigins = new Set(toArray(corsConfig.AccessControlAllowOrigins?.Items));
+    expect(allowOrigins.has('*')).toBe(true);
+    expect(allowOrigins.size).toBe(1);
+
+    const allowMethods = new Set(toArray(corsConfig.AccessControlAllowMethods?.Items));
+    ['GET', 'HEAD', 'OPTIONS'].forEach((method) => {
+      expect(allowMethods.has(method)).toBe(true);
+    });
+    expect(allowMethods.size).toBe(3);
   });
 });

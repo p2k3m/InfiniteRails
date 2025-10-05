@@ -148,6 +148,106 @@ jobs:
             --include "textures/**" \
             --include "vendor/*"
 
+      - name: Normalize CDN MIME types
+        env:
+          DEPLOY_BUCKET: ${{ secrets.AWS_S3_BUCKET }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DEPLOY_BUCKET}" ]; then
+            echo '::error::Deployment bucket name is empty. Ensure AWS_S3_BUCKET is set.'
+            exit 1
+          fi
+
+          ensure_content_type() {
+            local extension="$1"
+            local content_type="$2"
+            local prefix="${3:-}"
+            local token=""
+
+            while :; do
+              local response
+              if [ -n "${token}" ]; then
+                response=$(aws s3api list-objects-v2 --bucket "${DEPLOY_BUCKET}" --prefix "${prefix}" --continuation-token "${token}")
+              else
+                response=$(aws s3api list-objects-v2 --bucket "${DEPLOY_BUCKET}" --prefix "${prefix}")
+              fi
+
+              local keys
+              keys=$(echo "${response}" | jq -r --arg ext "${extension}" '.Contents[]? | select(.Key | endswith($ext)) | .Key')
+              if [ -n "${keys}" ]; then
+                while IFS= read -r key; do
+                  [ -z "${key}" ] && continue
+                  local metadata
+                  metadata=$(aws s3api head-object --bucket "${DEPLOY_BUCKET}" --key "${key}")
+                  local current_content_type
+                  current_content_type=$(echo "${metadata}" | jq -r '.ContentType // empty')
+                  if [ "${current_content_type}" = "${content_type}" ]; then
+                    continue
+                  fi
+
+                  echo "Updating ${key} content-type to ${content_type}"
+
+                  local cache_control
+                  cache_control=$(echo "${metadata}" | jq -r '.CacheControl // empty')
+                  local content_disposition
+                  content_disposition=$(echo "${metadata}" | jq -r '.ContentDisposition // empty')
+                  local content_encoding
+                  content_encoding=$(echo "${metadata}" | jq -r '.ContentEncoding // empty')
+                  local content_language
+                  content_language=$(echo "${metadata}" | jq -r '.ContentLanguage // empty')
+                  local expires
+                  expires=$(echo "${metadata}" | jq -r '.Expires // empty')
+                  local metadata_entries
+                  metadata_entries=$(echo "${metadata}" | jq -r '.Metadata | to_entries | map("\(.key)=\(.value)") | join(",")')
+
+                  local args=(
+                    --bucket "${DEPLOY_BUCKET}"
+                    --copy-source "${DEPLOY_BUCKET}/${key}"
+                    --key "${key}"
+                    --metadata-directive REPLACE
+                    --content-type "${content_type}"
+                  )
+                  if [ -n "${cache_control}" ]; then
+                    args+=(--cache-control "${cache_control}")
+                  fi
+                  if [ -n "${content_disposition}" ]; then
+                    args+=(--content-disposition "${content_disposition}")
+                  fi
+                  if [ -n "${content_encoding}" ]; then
+                    args+=(--content-encoding "${content_encoding}")
+                  fi
+                  if [ -n "${content_language}" ]; then
+                    args+=(--content-language "${content_language}")
+                  fi
+                  if [ -n "${expires}" ]; then
+                    args+=(--expires "${expires}")
+                  fi
+                  if [ -n "${metadata_entries}" ]; then
+                    args+=(--metadata "${metadata_entries}")
+                  fi
+
+                  aws s3api copy-object "${args[@]}" >/dev/null
+                done <<< "${keys}"
+              fi
+
+              local truncated
+              truncated=$(echo "${response}" | jq -r '.IsTruncated // false')
+              if [ "${truncated}" != "true" ]; then
+                break
+              fi
+
+              token=$(echo "${response}" | jq -r '.NextContinuationToken // empty')
+              if [ -z "${token}" ] || [ "${token}" = "null" ]; then
+                break
+              fi
+            done
+          }
+
+          ensure_content_type '.gltf' 'model/gltf+json'
+          ensure_content_type '.png' 'image/png'
+          ensure_content_type '.mp3' 'audio/mpeg'
+          ensure_content_type '.js' 'application/javascript'
+
       - name: Configure bucket access policy
         env:
           DEPLOY_BUCKET: ${{ secrets.AWS_S3_BUCKET }}

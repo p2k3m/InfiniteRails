@@ -64,6 +64,27 @@ Resources:
               - !Sub "${AssetsBucket.Arn}/textures/*"
               - !Sub "${AssetsBucket.Arn}/audio/*"
 
+  AssetsResponseHeadersPolicy:
+    Type: AWS::CloudFront::ResponseHeadersPolicy
+    Properties:
+      ResponseHeadersPolicyConfig:
+        Name: AssetsResponseHeaders
+        Comment: CORS headers for Infinite Rails assets distribution
+        CorsConfig:
+          AccessControlAllowCredentials: false
+          AccessControlAllowHeaders:
+            Items:
+              - "*"
+          AccessControlAllowMethods:
+            Items:
+              - GET
+              - HEAD
+              - OPTIONS
+          AccessControlAllowOrigins:
+            Items:
+              - "*"
+          OriginOverride: true
+
   AssetsDistribution:
     Type: AWS::CloudFront::Distribution
     Properties:
@@ -88,6 +109,7 @@ Resources:
           CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6 # Managed-CachingOptimized
           Compress: true
           OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac # Managed-CORS-S3Origin
+          ResponseHeadersPolicyId: !Ref AssetsResponseHeadersPolicy
           TargetOriginId: AssetsS3Origin
           ViewerProtocolPolicy: redirect-to-https
 
