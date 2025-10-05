@@ -63,33 +63,39 @@
   --hud-progress-track: rgba(116, 195, 101, 0.28);
   --hud-progress-glow: rgba(210, 255, 168, 0.55);
   --hud-scale: 1;
-  --hud-spacing: clamp(0.75rem, 2vw, 1.1rem);
-  --hud-margin: clamp(1rem, 2.2vw, 1.5rem);
-  --hud-bottom-gap: clamp(0.6rem, 1.2vw, 0.9rem);
-  --tutorial-panel-max-width: min(640px, 96vw);
-  --tutorial-panel-max-height: min(90vh, 720px);
-  --tutorial-panel-padding: clamp(24px, 4vw, 40px);
-  --tutorial-panel-gap: clamp(1rem, 3vw, 1.5rem);
-  --tutorial-close-size: clamp(34px, 4vw, 38px);
-  --tutorial-close-offset: clamp(10px, 3vw, 16px);
+  --viewport-short: min(100vw, 100vh);
+  --viewport-long: max(100vw, 100vh);
+  --hud-spacing: clamp(0.75rem, calc(var(--viewport-short) * 0.025), 1.1rem);
+  --hud-margin: clamp(1rem, calc(var(--viewport-short) * 0.03), 1.5rem);
+  --hud-bottom-gap: clamp(0.6rem, calc(var(--viewport-short) * 0.02), 0.9rem);
+  --tutorial-panel-max-width: min(640px, calc(var(--viewport-short) * 0.96));
+  --tutorial-panel-max-height: min(90vh, calc(var(--viewport-long) * 0.8));
+  --tutorial-panel-padding: clamp(24px, calc(var(--viewport-short) * 0.05), 40px);
+  --tutorial-panel-gap: clamp(1rem, calc(var(--viewport-short) * 0.035), 1.5rem);
+  --tutorial-close-size: clamp(34px, calc(var(--viewport-short) * 0.06), 38px);
+  --tutorial-close-offset: clamp(10px, calc(var(--viewport-short) * 0.035), 16px);
   --tutorial-actions-direction: row;
   --tutorial-actions-justify: flex-end;
-  --tutorial-actions-gap: 0.55rem;
+  --tutorial-actions-gap: clamp(0.55rem, calc(var(--viewport-short) * 0.02), 0.75rem);
   --tutorial-primary-width: auto;
-  --mobile-controls-max-width: min(92vw, 520px);
-  --mobile-controls-gap: clamp(0.65rem, 3vw, 1.1rem);
-  --mobile-controls-padding-y: clamp(0.75rem, 2.5vw, 1rem);
-  --mobile-controls-padding-x: clamp(1rem, 4vw, 1.35rem);
+  --mobile-controls-max-width: min(
+    520px,
+    calc(var(--viewport-short) * 0.96),
+    calc(var(--viewport-long) * 0.52)
+  );
+  --mobile-controls-gap: clamp(0.65rem, calc(var(--viewport-short) * 0.035), 1.1rem);
+  --mobile-controls-padding-y: clamp(0.75rem, calc(var(--viewport-short) * 0.04), 1rem);
+  --mobile-controls-padding-x: clamp(1rem, calc(var(--viewport-short) * 0.05), 1.35rem);
   --mobile-controls-direction: row;
   --mobile-controls-justify: space-between;
   --mobile-controls-align: flex-end;
-  --mobile-controls-cluster-gap: clamp(0.6rem, 3vw, 1rem);
-  --mobile-controls-action-gap: clamp(0.6rem, 3vw, 0.95rem);
-  --mobile-controls-dpad-cell: clamp(42px, 12vw, 58px);
-  --mobile-controls-button-size: clamp(48px, 12vw, 64px);
-  --mobile-controls-button-font: clamp(1.05rem, 4vw, 1.4rem);
-  --mobile-controls-button-primary-size: clamp(56px, 14vw, 72px);
-  --mobile-controls-button-primary-font: clamp(1.2rem, 4.6vw, 1.5rem);
+  --mobile-controls-cluster-gap: clamp(0.6rem, calc(var(--viewport-short) * 0.035), 1rem);
+  --mobile-controls-action-gap: clamp(0.6rem, calc(var(--viewport-short) * 0.035), 0.95rem);
+  --mobile-controls-dpad-cell: clamp(42px, calc(var(--viewport-short) * 0.16), 58px);
+  --mobile-controls-button-size: clamp(48px, calc(var(--viewport-short) * 0.2), 64px);
+  --mobile-controls-button-font: clamp(1.05rem, calc(var(--viewport-short) * 0.04), 1.4rem);
+  --mobile-controls-button-primary-size: clamp(56px, calc(var(--viewport-short) * 0.24), 72px);
+  --mobile-controls-button-primary-font: clamp(1.2rem, calc(var(--viewport-short) * 0.045), 1.5rem);
   font-size: 16px;
 }
 
@@ -2054,21 +2060,65 @@ body.game-active #gameCanvas {
   }
 }
 
+@media (orientation: landscape) and (max-height: 540px) {
+  :root {
+    --hud-scale: 0.68;
+    --hud-spacing: clamp(0.45rem, calc(var(--viewport-short) * 0.03), 0.75rem);
+    --hud-margin: clamp(0.5rem, calc(var(--viewport-short) * 0.045), 0.85rem);
+    --hud-bottom-gap: clamp(0.35rem, calc(var(--viewport-short) * 0.025), 0.6rem);
+    --tutorial-panel-max-height: min(82vh, calc(var(--viewport-short) * 0.92));
+    --tutorial-panel-padding: clamp(18px, calc(var(--viewport-short) * 0.06), 26px);
+    --tutorial-panel-gap: clamp(0.75rem, calc(var(--viewport-short) * 0.035), 1.1rem);
+    --tutorial-actions-direction: column;
+    --tutorial-actions-justify: center;
+    --tutorial-actions-gap: clamp(0.6rem, calc(var(--viewport-short) * 0.03), 0.9rem);
+    --tutorial-primary-width: 100%;
+    --mobile-controls-direction: row;
+    --mobile-controls-align: center;
+    --mobile-controls-justify: center;
+    --mobile-controls-gap: clamp(0.55rem, calc(var(--viewport-short) * 0.04), 0.85rem);
+    --mobile-controls-padding-y: clamp(0.55rem, calc(var(--viewport-short) * 0.05), 0.9rem);
+    --mobile-controls-button-size: clamp(44px, calc(var(--viewport-short) * 0.22), 60px);
+    --mobile-controls-button-primary-size: clamp(52px, calc(var(--viewport-short) * 0.26), 72px);
+  }
+
+  .first-run-tutorial {
+    align-items: center;
+    padding-top: clamp(12px, calc(var(--viewport-short) * 0.08), 24px);
+  }
+
+  .first-run-tutorial__panel {
+    border-radius: 16px;
+  }
+
+  .mobile-controls {
+    gap: clamp(0.55rem, calc(var(--viewport-short) * 0.04), 0.85rem);
+  }
+
+  .mobile-controls__cluster {
+    flex: 1 1 160px;
+  }
+
+  .mobile-controls__cluster--actions {
+    width: auto;
+  }
+}
+
 @media (pointer: coarse) {
   :root {
-    --tutorial-panel-max-width: min(94vw, 680px);
-    --tutorial-panel-padding: clamp(24px, 6vw, 42px);
-    --tutorial-panel-gap: clamp(1.05rem, 4vw, 1.6rem);
-    --tutorial-close-size: clamp(36px, 7vw, 44px);
-    --tutorial-close-offset: clamp(12px, 4vw, 18px);
-    --tutorial-actions-gap: 0.8rem;
-    --mobile-controls-gap: clamp(0.75rem, 4vw, 1.25rem);
-    --mobile-controls-padding-y: clamp(0.85rem, 3.8vw, 1.25rem);
-    --mobile-controls-padding-x: clamp(1.1rem, 5vw, 1.6rem);
-    --mobile-controls-button-size: clamp(56px, 14vw, 76px);
-    --mobile-controls-button-primary-size: clamp(64px, 16vw, 88px);
-    --mobile-controls-button-font: clamp(1.2rem, 4.8vw, 1.55rem);
-    --mobile-controls-button-primary-font: clamp(1.35rem, 5.2vw, 1.7rem);
+    --tutorial-panel-max-width: min(680px, 94vw, calc(var(--viewport-short) * 0.98));
+    --tutorial-panel-padding: clamp(24px, calc(var(--viewport-short) * 0.055), 42px);
+    --tutorial-panel-gap: clamp(1.05rem, calc(var(--viewport-short) * 0.04), 1.6rem);
+    --tutorial-close-size: clamp(36px, calc(var(--viewport-short) * 0.07), 44px);
+    --tutorial-close-offset: clamp(12px, calc(var(--viewport-short) * 0.045), 18px);
+    --tutorial-actions-gap: clamp(0.7rem, calc(var(--viewport-short) * 0.025), 0.9rem);
+    --mobile-controls-gap: clamp(0.75rem, calc(var(--viewport-short) * 0.04), 1.25rem);
+    --mobile-controls-padding-y: clamp(0.85rem, calc(var(--viewport-short) * 0.045), 1.25rem);
+    --mobile-controls-padding-x: clamp(1.1rem, calc(var(--viewport-short) * 0.055), 1.6rem);
+    --mobile-controls-button-size: clamp(56px, calc(var(--viewport-short) * 0.22), 76px);
+    --mobile-controls-button-primary-size: clamp(64px, calc(var(--viewport-short) * 0.26), 88px);
+    --mobile-controls-button-font: clamp(1.2rem, calc(var(--viewport-short) * 0.045), 1.55rem);
+    --mobile-controls-button-primary-font: clamp(1.35rem, calc(var(--viewport-short) * 0.05), 1.7rem);
     --mobile-controls-justify: center;
     --mobile-controls-align: center;
   }
