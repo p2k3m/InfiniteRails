@@ -4,10 +4,10 @@
   "assets": [
     "index.html?v=4d386d0878e0",
     "styles.css?v=5cd08e365733",
-    "script.js?v=7729787bec1c",
+    "script.js?v=0e19021bf65c",
     "test-driver.js?v=0074c367d97c",
     "simple-experience.js?v=25d01c5aa72e",
-    "asset-resolver.js?v=c27046dcbc19",
+    "asset-resolver.js?v=8da1764a4b9e",
     "audio-aliases.js?v=8db3f846ecb9",
     "audio-captions.js?v=101e375dcd9e",
     "combat-utils.js?v=e9d584a91843",
