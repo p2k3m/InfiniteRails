@@ -6742,7 +6742,20 @@
       const api = scope?.InfiniteRails?.developerStats || null;
       if (api && typeof api.toggle === 'function') {
         try {
-          api.toggle({ source: source ?? 'experience-hotkey' });
+          const toggled = api.toggle({ source: source ?? 'experience-hotkey' });
+          let enabledState = null;
+          if (typeof toggled === 'boolean') {
+            enabledState = toggled;
+          } else if (typeof api.isEnabled === 'function') {
+            try {
+              enabledState = Boolean(api.isEnabled());
+            } catch (readError) {
+              enabledState = null;
+            }
+          }
+          if (enabledState !== null) {
+            this.reportDeveloperOverlayState(enabledState, source);
+          }
           return true;
         } catch (error) {
           if (typeof console !== 'undefined' && typeof console.debug === 'function') {
@@ -6759,6 +6772,127 @@
         this.developerOverlayWarningIssued = true;
       }
       return false;
+    }
+
+    reportDeveloperOverlayState(enabled, source = 'experience-hotkey') {
+      const origin = typeof source === 'string' && source.trim() ? source.trim() : 'experience-hotkey';
+      const detail = { source: origin, enabled: Boolean(enabled) };
+      const showHint = typeof this.showHint === 'function' ? this.showHint.bind(this) : null;
+      if (!enabled) {
+        if (showHint) {
+          showHint('Developer stats overlay hidden.');
+        }
+        if (typeof notifyLiveDiagnostics === 'function') {
+          notifyLiveDiagnostics('hotkey', 'Developer stats overlay hidden.', detail, { level: 'info' });
+        }
+        if (typeof console !== 'undefined' && typeof console.info === 'function') {
+          console.info('Developer stats overlay hidden.', detail);
+        }
+        return;
+      }
+
+      let metrics = null;
+      if (typeof this.getDeveloperMetrics === 'function') {
+        try {
+          metrics = this.getDeveloperMetrics();
+        } catch (error) {
+          metrics = null;
+        }
+      }
+
+      const normalisedMetrics = {
+        fps: null,
+        pendingAssets: null,
+        missingAssets: null,
+        scene: {
+          sceneChildren: null,
+          worldChildren: null,
+          terrainMeshes: null,
+          actorCount: null,
+        },
+      };
+
+      if (metrics && typeof metrics === 'object') {
+        if (Number.isFinite(metrics.fps) && metrics.fps > 0) {
+          normalisedMetrics.fps = metrics.fps;
+        }
+        const assets = metrics.assets && typeof metrics.assets === 'object' ? metrics.assets : null;
+        if (assets) {
+          if (Number.isFinite(assets.pending)) {
+            normalisedMetrics.pendingAssets = Math.max(0, assets.pending);
+          }
+          if (Number.isFinite(assets.failures)) {
+            normalisedMetrics.missingAssets = Math.max(0, assets.failures);
+          }
+        }
+        const scene = metrics.scene && typeof metrics.scene === 'object' ? metrics.scene : null;
+        if (scene) {
+          if (Number.isFinite(scene.sceneChildren)) {
+            normalisedMetrics.scene.sceneChildren = Math.max(0, scene.sceneChildren);
+          }
+          if (Number.isFinite(scene.worldChildren)) {
+            normalisedMetrics.scene.worldChildren = Math.max(0, scene.worldChildren);
+          }
+          if (Number.isFinite(scene.terrainMeshes)) {
+            normalisedMetrics.scene.terrainMeshes = Math.max(0, scene.terrainMeshes);
+          }
+          if (Number.isFinite(scene.actorCount)) {
+            normalisedMetrics.scene.actorCount = Math.max(0, scene.actorCount);
+          }
+        }
+      }
+
+      const summaryParts = [];
+      if (normalisedMetrics.fps !== null) {
+        const fpsValue = normalisedMetrics.fps;
+        const fpsLabel = fpsValue >= 100 ? Math.round(fpsValue).toString() : fpsValue.toFixed(1);
+        summaryParts.push(`FPS ${fpsLabel}`);
+      } else {
+        summaryParts.push('FPS —');
+      }
+      if (normalisedMetrics.pendingAssets !== null) {
+        summaryParts.push(`pending assets ${normalisedMetrics.pendingAssets}`);
+      } else {
+        summaryParts.push('pending assets —');
+      }
+      if (normalisedMetrics.missingAssets !== null) {
+        summaryParts.push(`missing assets ${normalisedMetrics.missingAssets}`);
+      } else {
+        summaryParts.push('missing assets —');
+      }
+      const sceneParts = [];
+      const sceneMetrics = normalisedMetrics.scene;
+      const sceneChildLabel =
+        sceneMetrics.sceneChildren !== null ? sceneMetrics.sceneChildren.toLocaleString(undefined) : '—';
+      const worldChildLabel =
+        sceneMetrics.worldChildren !== null ? sceneMetrics.worldChildren.toLocaleString(undefined) : '—';
+      if (sceneMetrics.sceneChildren !== null || sceneMetrics.worldChildren !== null) {
+        sceneParts.push(`${sceneChildLabel} scene / ${worldChildLabel} world`);
+      }
+      if (sceneMetrics.terrainMeshes !== null) {
+        sceneParts.push(`${sceneMetrics.terrainMeshes.toLocaleString(undefined)} terrain`);
+      }
+      if (sceneMetrics.actorCount !== null) {
+        sceneParts.push(`${sceneMetrics.actorCount.toLocaleString(undefined)} actors`);
+      }
+      if (!sceneParts.length) {
+        sceneParts.push('—');
+      }
+      summaryParts.push(`scene ${sceneParts.join(' · ')}`);
+      const summary = summaryParts.join(' | ');
+
+      detail.metrics = { ...normalisedMetrics, summary };
+      const message = `Developer stats overlay enabled — ${summary}.`;
+
+      if (showHint) {
+        showHint('Developer stats overlay enabled.');
+      }
+      if (typeof notifyLiveDiagnostics === 'function') {
+        notifyLiveDiagnostics('hotkey', message, detail, { level: 'info' });
+      }
+      if (typeof console !== 'undefined' && typeof console.info === 'function') {
+        console.info(message, detail.metrics);
+      }
     }
 
     ensurePlayerArmsVisible() {
