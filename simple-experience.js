@@ -454,6 +454,65 @@
     }
   }
 
+  function cloneScoreBreakdown(source) {
+    if (!source || typeof source !== 'object') {
+      return {};
+    }
+    const clone = {};
+    Object.entries(source).forEach(([key, value]) => {
+      if (typeof key === 'string' && key.trim()) {
+        clone[key] = Number.isFinite(value) ? value : value;
+      }
+    });
+    return clone;
+  }
+
+  function cloneHotbarSlots(source) {
+    if (!Array.isArray(source)) {
+      return [];
+    }
+    return source.map((slot = {}) => ({
+      item: typeof slot.item === 'string' ? slot.item : slot.item ?? null,
+      quantity: Number.isFinite(slot.quantity) ? slot.quantity : 0,
+    }));
+  }
+
+  function cloneSatchelEntries(source) {
+    if (!(source instanceof Map)) {
+      return [];
+    }
+    const entries = [];
+    source.forEach((quantity, item) => {
+      const safeItem = typeof item === 'string' ? item : item ?? null;
+      const safeQuantity = Number.isFinite(quantity) ? quantity : 0;
+      if (safeItem && safeQuantity > 0) {
+        entries.push([safeItem, safeQuantity]);
+      }
+    });
+    return entries;
+  }
+
+  function createAtomicAbortError(code, message, info = {}) {
+    const error = new Error(message || 'Atomic gameplay mutation aborted.');
+    error.name = 'GameplayAtomicAbortError';
+    error.code = code || 'atomic-abort';
+    error.info = info || {};
+    return error;
+  }
+
+  function isAtomicAbortError(error) {
+    if (!error) {
+      return false;
+    }
+    if (error.name === 'GameplayAtomicAbortError') {
+      return true;
+    }
+    if (typeof error.code === 'string' && error.code.startsWith('atomic-')) {
+      return true;
+    }
+    return false;
+  }
+
   const configWarningDeduper = new Set();
 
   const DEFAULT_AMBIENT_TRACKS = Object.freeze([
@@ -2646,6 +2705,8 @@
       this.eventFailureNotices = new Set();
       this.eventBindingFailureNotices = new Set();
       this.eventBindingFailures = [];
+      this.gameplayAtomicVersion = 0;
+      this.lastGameplayInstabilityReason = null;
       this.aiAttachmentFailureAnnounced = false;
       this.boundEventDisposers = [];
       this.boundEventRecords = [];
@@ -3195,7 +3256,198 @@
         if (typeof console !== 'undefined') {
           console.debug('Failed to dispatch simple experience event', type, error);
         }
+        if (typeof this.markGameplayInstability === 'function') {
+          this.markGameplayInstability('event-dispatch-error');
+        }
       }
+    }
+
+    markGameplayInstability(reason = 'asset-state-change') {
+      const current = Number.isFinite(this.gameplayAtomicVersion) ? this.gameplayAtomicVersion : 0;
+      const next = current + 1;
+      this.gameplayAtomicVersion = next;
+      if (typeof reason === 'string' && reason.trim().length) {
+        this.lastGameplayInstabilityReason = reason.trim();
+      } else {
+        this.lastGameplayInstabilityReason = reason ?? null;
+      }
+      return next;
+    }
+
+    isAssetStateStable() {
+      if (this.criticalAssetPreloadFailed) {
+        return false;
+      }
+      if (this.assetRecoveryPromptActive) {
+        return false;
+      }
+      return true;
+    }
+
+    captureAtomicSegments(segments = {}) {
+      const snapshot = {};
+      if (segments.score) {
+        snapshot.score = {
+          total: Number.isFinite(this.score) ? this.score : 0,
+          breakdown: cloneScoreBreakdown(this.scoreBreakdown),
+          events: {
+            crafting: this.craftingScoreEvents ?? 0,
+            dimension: this.dimensionScoreEvents ?? 0,
+            portal: this.portalScoreEvents ?? 0,
+            combat: this.combatScoreEvents ?? 0,
+            loot: this.lootScoreEvents ?? 0,
+          },
+          pendingReason: this.pendingScoreSyncReason ?? null,
+        };
+      }
+      if (segments.inventory) {
+        snapshot.inventory = {
+          hotbar: cloneHotbarSlots(this.hotbar),
+          satchel: cloneSatchelEntries(this.satchel),
+          selectedHotbarIndex: Number.isInteger(this.selectedHotbarIndex) ? this.selectedHotbarIndex : 0,
+          hotbarExpanded: this.hotbarExpanded === true,
+        };
+      }
+      if (segments.dimension) {
+        snapshot.dimension = {
+          currentIndex: Number.isFinite(this.currentDimensionIndex) ? this.currentDimensionIndex : 0,
+          settings: this.dimensionSettings,
+          terrainProfile: this.dimensionTerrainProfile,
+          gravityScale: this.gravityScale,
+          portalState: this.portalState ? { ...this.portalState } : null,
+          portalActivated: this.portalActivated === true,
+          portalActivations: Number.isFinite(this.portalActivations) ? this.portalActivations : 0,
+          portalReady: this.portalReady === true,
+          victoryAchieved: this.victoryAchieved === true,
+        };
+      }
+      return snapshot;
+    }
+
+    restoreAtomicSegments(snapshot, segments = {}) {
+      if (!snapshot || typeof snapshot !== 'object') {
+        return;
+      }
+      if (segments.score && snapshot.score) {
+        this.score = Number.isFinite(snapshot.score.total) ? snapshot.score.total : this.score;
+        this.scoreBreakdown = cloneScoreBreakdown(snapshot.score.breakdown);
+        if (snapshot.score.events) {
+          this.craftingScoreEvents = snapshot.score.events.crafting ?? this.craftingScoreEvents ?? 0;
+          this.dimensionScoreEvents = snapshot.score.events.dimension ?? this.dimensionScoreEvents ?? 0;
+          this.portalScoreEvents = snapshot.score.events.portal ?? this.portalScoreEvents ?? 0;
+          this.combatScoreEvents = snapshot.score.events.combat ?? this.combatScoreEvents ?? 0;
+          this.lootScoreEvents = snapshot.score.events.loot ?? this.lootScoreEvents ?? 0;
+        }
+        this.pendingScoreSyncReason = snapshot.score.pendingReason ?? this.pendingScoreSyncReason ?? null;
+        if (typeof this.updateHud === 'function') {
+          try {
+            this.updateHud({ reason: 'atomic-rollback' });
+          } catch (error) {
+            console.debug('HUD refresh failed during atomic rollback.', error);
+          }
+        }
+      }
+      if (segments.inventory && snapshot.inventory) {
+        this.hotbar = cloneHotbarSlots(snapshot.inventory.hotbar);
+        this.satchel = new Map(snapshot.inventory.satchel || []);
+        this.selectedHotbarIndex = Number.isInteger(snapshot.inventory.selectedHotbarIndex)
+          ? snapshot.inventory.selectedHotbarIndex
+          : 0;
+        this.hotbarExpanded = snapshot.inventory.hotbarExpanded === true;
+        try {
+          this.updateInventoryUi();
+          this.refreshEquippedItem();
+        } catch (error) {
+          console.debug('Inventory refresh failed during atomic rollback.', error);
+        }
+      }
+      if (segments.dimension && snapshot.dimension) {
+        this.currentDimensionIndex = Number.isFinite(snapshot.dimension.currentIndex)
+          ? snapshot.dimension.currentIndex
+          : this.currentDimensionIndex;
+        this.dimensionSettings = snapshot.dimension.settings ?? this.dimensionSettings;
+        this.dimensionTerrainProfile = snapshot.dimension.terrainProfile ?? this.dimensionTerrainProfile;
+        this.gravityScale = snapshot.dimension.gravityScale ?? this.gravityScale;
+        this.portalState = snapshot.dimension.portalState ? { ...snapshot.dimension.portalState } : null;
+        this.portalActivated = snapshot.dimension.portalActivated === true;
+        this.portalActivations = Number.isFinite(snapshot.dimension.portalActivations)
+          ? snapshot.dimension.portalActivations
+          : this.portalActivations;
+        this.portalReady = snapshot.dimension.portalReady === true;
+        this.victoryAchieved = snapshot.dimension.victoryAchieved === true;
+        try {
+          this.applyTerrainProfileToCaps(this.dimensionTerrainProfile);
+        } catch (error) {
+          console.debug('Failed to restore terrain profile during atomic rollback.', error);
+        }
+        try {
+          this.refreshPortalState();
+          this.updateDimensionInfoPanel?.();
+          this.updateFooterSummary?.();
+        } catch (error) {
+          console.debug('Failed to refresh dimension state during atomic rollback.', error);
+        }
+      }
+    }
+
+    withGameplayAtomicSnapshot(segments, operation, options = {}) {
+      const scopeLabel =
+        typeof options.scope === 'string' && options.scope.trim().length ? options.scope.trim() : 'gameplay';
+      const enforceStability = options.failOnAssetInstability !== false;
+      if (enforceStability && !this.isAssetStateStable()) {
+        throw createAtomicAbortError('asset-instability', `Cannot mutate ${scopeLabel} while assets are unstable.`, {
+          scope: scopeLabel,
+          reason: this.lastGameplayInstabilityReason ?? null,
+        });
+      }
+      const snapshot = this.captureAtomicSegments(segments);
+      const startVersion = Number.isFinite(this.gameplayAtomicVersion) ? this.gameplayAtomicVersion : 0;
+      const handleCommit = (result) => {
+        const endVersion = Number.isFinite(this.gameplayAtomicVersion) ? this.gameplayAtomicVersion : startVersion;
+        if (enforceStability && endVersion !== startVersion) {
+          const error = createAtomicAbortError(
+            'asset-instability',
+            `Aborted ${scopeLabel} due to asset instability detected mid-flight.`,
+            {
+              scope: scopeLabel,
+              startVersion,
+              endVersion,
+              reason: this.lastGameplayInstabilityReason ?? null,
+            },
+          );
+          this.restoreAtomicSegments(snapshot, segments);
+          throw error;
+        }
+        if (typeof options.onCommit === 'function') {
+          try {
+            options.onCommit(result);
+          } catch (hookError) {
+            console.debug('Atomic commit hook failed.', hookError);
+          }
+        }
+        return result;
+      };
+      const handleFailure = (error) => {
+        this.restoreAtomicSegments(snapshot, segments);
+        if (typeof options.onRollback === 'function') {
+          try {
+            options.onRollback(error);
+          } catch (hookError) {
+            console.debug('Atomic rollback hook failed.', hookError);
+          }
+        }
+        throw error;
+      };
+      let result;
+      try {
+        result = operation();
+      } catch (error) {
+        return handleFailure(error);
+      }
+      if (result && typeof result.then === 'function') {
+        return result.then((value) => handleCommit(value), (error) => handleFailure(error));
+      }
+      return handleCommit(result);
     }
 
     start() {
@@ -16565,74 +16817,101 @@
 
     async advanceDimension() {
       if (!this.portalActivated || this.victoryAchieved) return;
-      this.portalActivations += 1;
-      if (this.currentDimensionIndex >= DIMENSION_THEME.length - 1) {
-        this.triggerVictory();
-        return;
-      }
-      const nextIndex = this.currentDimensionIndex + 1;
-      const nextSettings = DIMENSION_THEME[nextIndex] || null;
-      let pointsAwarded = 5;
-      let portalLog = '';
-      let transitionResult = null;
-      let dimensionTravelSucceeded = true;
-      const previousSettings = this.dimensionSettings;
-      const rulesSummary = this.buildDimensionRuleSummary(nextSettings);
-      if (this.portalMechanics?.enterPortal) {
-        try {
-          const result = this.portalMechanics.enterPortal(this.portalState || { active: true }, {
-            name: nextSettings?.name || `Dimension ${nextIndex + 1}`,
-            id: nextSettings?.id || `dimension-${nextIndex + 1}`,
-            physics: { gravity: nextSettings?.gravity ?? this.gravityScale, shaderProfile: nextSettings?.id ?? 'default' },
-            unlockPoints: 5,
-            description: nextSettings?.description ?? '',
-            rules: rulesSummary,
-          });
-          const resolvedResult = await Promise.resolve(result);
-          transitionResult = resolvedResult ?? null;
-          if (transitionResult?.pointsAwarded !== undefined) {
-            pointsAwarded = transitionResult.pointsAwarded;
-          }
-          if (transitionResult?.log) {
-            portalLog = transitionResult.log;
-          }
-          const teleportOutsideTrigger =
-            transitionResult?.teleportOutsideTriggers === true ||
-            transitionResult?.teleportOutsideTrigger === true ||
-            transitionResult?.teleportedOutsideTrigger === true;
-          dimensionTravelSucceeded =
-            !teleportOutsideTrigger && transitionResult?.dimensionChanged !== false;
-        } catch (error) {
-          console.warn('Portal transition mechanics failed', error);
+      const performAdvance = async () => {
+        this.portalActivations += 1;
+        if (this.currentDimensionIndex >= DIMENSION_THEME.length - 1) {
+          this.triggerVictory();
+          return null;
         }
+        const nextIndex = this.currentDimensionIndex + 1;
+        const nextSettings = DIMENSION_THEME[nextIndex] || null;
+        let pointsAwarded = 5;
+        let portalLog = '';
+        let transitionResult = null;
+        let dimensionTravelSucceeded = true;
+        const previousSettings = this.dimensionSettings;
+        const rulesSummary = this.buildDimensionRuleSummary(nextSettings);
+        if (this.portalMechanics?.enterPortal) {
+          try {
+            const result = this.portalMechanics.enterPortal(this.portalState || { active: true }, {
+              name: nextSettings?.name || `Dimension ${nextIndex + 1}`,
+              id: nextSettings?.id || `dimension-${nextIndex + 1}`,
+              physics: {
+                gravity: nextSettings?.gravity ?? this.gravityScale,
+                shaderProfile: nextSettings?.id ?? 'default',
+              },
+              unlockPoints: 5,
+              description: nextSettings?.description ?? '',
+              rules: rulesSummary,
+            });
+            const resolvedResult = await Promise.resolve(result);
+            transitionResult = resolvedResult ?? null;
+            if (transitionResult?.pointsAwarded !== undefined) {
+              pointsAwarded = transitionResult.pointsAwarded;
+            }
+            if (transitionResult?.log) {
+              portalLog = transitionResult.log;
+            }
+            const teleportOutsideTrigger =
+              transitionResult?.teleportOutsideTriggers === true ||
+              transitionResult?.teleportOutsideTrigger === true ||
+              transitionResult?.teleportedOutsideTrigger === true;
+            dimensionTravelSucceeded =
+              !teleportOutsideTrigger && transitionResult?.dimensionChanged !== false;
+          } catch (error) {
+            console.warn('Portal transition mechanics failed', error);
+          }
+        }
+        const assetSummary = await this.executeDimensionTravelSequence({
+          nextIndex,
+          previousDimension: previousSettings,
+          nextDimension: nextSettings,
+          transition: transitionResult,
+          rulesSummary,
+        });
+        if (dimensionTravelSucceeded && Number.isFinite(pointsAwarded)) {
+          this.score += pointsAwarded;
+          this.addScoreBreakdown('dimensions', pointsAwarded);
+        }
+        this.updateHud();
+        this.scheduleScoreSync('dimension-advanced');
+        this.audio.play('bubble', { volume: 0.5 });
+        if (portalLog) {
+          this.showHint(portalLog);
+        }
+        this.portalState = null;
+        const assetsVerified = assetSummary ? assetSummary.allPresent === true : null;
+        this.emitGameEvent('dimension-advanced', {
+          dimension: this.dimensionSettings?.id ?? null,
+          index: this.currentDimensionIndex,
+          summary: this.createRunSummary('dimension-advanced'),
+          assetsVerified,
+        });
+        this.publishStateSnapshot('dimension-advanced');
+        this.markGuidanceProgress('dimension');
+        return assetSummary;
+      };
+      try {
+        await this.withGameplayAtomicSnapshot(
+          { dimension: true, score: true, inventory: true },
+          performAdvance,
+          { scope: 'dimension-transition' },
+        );
+      } catch (error) {
+        if (isAtomicAbortError(error)) {
+          if (typeof console !== 'undefined' && typeof console.warn === 'function') {
+            console.warn('Dimension travel aborted due to asset instability.', error);
+          }
+          notifyLiveDiagnostics(
+            'dimension',
+            'Dimension travel aborted due to asset instability.',
+            { error: normaliseLiveDiagnosticError(error), scope: 'dimension-transition' },
+            { level: 'warning' },
+          );
+          return;
+        }
+        throw error;
       }
-      const assetSummary = await this.executeDimensionTravelSequence({
-        nextIndex,
-        previousDimension: previousSettings,
-        nextDimension: nextSettings,
-        transition: transitionResult,
-        rulesSummary,
-      });
-      if (dimensionTravelSucceeded && Number.isFinite(pointsAwarded)) {
-        this.score += pointsAwarded;
-        this.addScoreBreakdown('dimensions', pointsAwarded);
-      }
-      this.updateHud();
-      this.scheduleScoreSync('dimension-advanced');
-      this.audio.play('bubble', { volume: 0.5 });
-      if (portalLog) {
-        this.showHint(portalLog);
-      }
-      this.portalState = null;
-      const assetsVerified = assetSummary ? assetSummary.allPresent === true : null;
-      this.emitGameEvent('dimension-advanced', {
-        dimension: this.dimensionSettings?.id ?? null,
-        index: this.currentDimensionIndex,
-        summary: this.createRunSummary('dimension-advanced'),
-        assetsVerified,
-      });
-      this.publishStateSnapshot('dimension-advanced');
-      this.markGuidanceProgress('dimension');
     }
 
     async executeDimensionTravelSequence(context = {}) {
@@ -20628,67 +20907,115 @@
     }
 
     addItemToInventory(item, quantity = 1) {
-      if (!item || quantity <= 0) return false;
-      let remaining = quantity;
-      for (let i = 0; i < this.hotbar.length && remaining > 0; i += 1) {
-        const slot = this.hotbar[i];
-        if (slot.item === item && slot.quantity < MAX_STACK_SIZE) {
-          const add = Math.min(MAX_STACK_SIZE - slot.quantity, remaining);
-          slot.quantity += add;
-          remaining -= add;
+      const safeItem = typeof item === 'string' ? item : item ?? null;
+      const numericQuantity = Number.isFinite(quantity) ? Math.max(0, quantity) : 0;
+      if (!safeItem || numericQuantity <= 0) return false;
+      const mutateInventory = () => {
+        let remaining = numericQuantity;
+        if (Array.isArray(this.hotbar)) {
+          for (let i = 0; i < this.hotbar.length && remaining > 0; i += 1) {
+            const slot = this.hotbar[i];
+            if (slot.item === safeItem && slot.quantity < MAX_STACK_SIZE) {
+              const add = Math.min(MAX_STACK_SIZE - slot.quantity, remaining);
+              slot.quantity += add;
+              remaining -= add;
+            }
+          }
+          for (let i = 0; i < this.hotbar.length && remaining > 0; i += 1) {
+            const slot = this.hotbar[i];
+            if (!slot.item) {
+              const add = Math.min(MAX_STACK_SIZE, remaining);
+              slot.item = safeItem;
+              slot.quantity = add;
+              remaining -= add;
+            }
+          }
         }
-      }
-      for (let i = 0; i < this.hotbar.length && remaining > 0; i += 1) {
-        const slot = this.hotbar[i];
-        if (!slot.item) {
-          const add = Math.min(MAX_STACK_SIZE, remaining);
-          slot.item = item;
-          slot.quantity = add;
-          remaining -= add;
+        if (remaining > 0) {
+          const existing = this.satchel.get(safeItem) ?? 0;
+          this.satchel.set(safeItem, existing + remaining);
+          remaining = 0;
         }
+        if (remaining === 0) {
+          this.updateInventoryUi();
+          return true;
+        }
+        return false;
+      };
+      try {
+        return this.withGameplayAtomicSnapshot({ inventory: true }, mutateInventory, { scope: 'inventory-add' });
+      } catch (error) {
+        if (isAtomicAbortError(error)) {
+          if (typeof console !== 'undefined' && typeof console.warn === 'function') {
+            console.warn('Inventory add aborted due to asset instability.', error);
+          }
+          notifyLiveDiagnostics(
+            'inventory',
+            'Inventory add aborted due to asset instability.',
+            { error: normaliseLiveDiagnosticError(error), scope: 'inventory-add', item: safeItem },
+            { level: 'warning' },
+          );
+          return false;
+        }
+        throw error;
       }
-      if (remaining > 0) {
-        const existing = this.satchel.get(item) ?? 0;
-        this.satchel.set(item, existing + remaining);
-        remaining = 0;
-      }
-      if (remaining === 0) {
-        this.updateInventoryUi();
-        return true;
-      }
-      return false;
     }
 
     removeItemFromInventory(item, quantity = 1) {
-      if (!item || quantity <= 0) return 0;
-      let remaining = quantity;
-      for (let i = 0; i < this.hotbar.length && remaining > 0; i += 1) {
-        const slot = this.hotbar[i];
-        if (slot.item !== item) continue;
-        const take = Math.min(slot.quantity, remaining);
-        slot.quantity -= take;
-        remaining -= take;
-        if (slot.quantity <= 0) {
-          slot.item = null;
-          slot.quantity = 0;
+      const safeItem = typeof item === 'string' ? item : item ?? null;
+      const numericQuantity = Number.isFinite(quantity) ? Math.max(0, quantity) : 0;
+      if (!safeItem || numericQuantity <= 0) return 0;
+      const mutateInventory = () => {
+        let remaining = numericQuantity;
+        let removed = 0;
+        if (Array.isArray(this.hotbar)) {
+          for (let i = 0; i < this.hotbar.length && remaining > 0; i += 1) {
+            const slot = this.hotbar[i];
+            if (slot.item !== safeItem) continue;
+            const take = Math.min(slot.quantity, remaining);
+            slot.quantity -= take;
+            remaining -= take;
+            removed += take;
+            if (slot.quantity <= 0) {
+              slot.item = null;
+              slot.quantity = 0;
+            }
+          }
         }
-      }
-      if (remaining > 0) {
-        const available = this.satchel.get(item) ?? 0;
-        const take = Math.min(available, remaining);
-        if (take > 0) {
-          this.satchel.set(item, available - take);
-          remaining -= take;
+        if (remaining > 0) {
+          const available = this.satchel.get(safeItem) ?? 0;
+          const take = Math.min(available, remaining);
+          if (take > 0) {
+            this.satchel.set(safeItem, available - take);
+            remaining -= take;
+            removed += take;
+          }
+          if (this.satchel.get(safeItem) === 0) {
+            this.satchel.delete(safeItem);
+          }
         }
-        if (this.satchel.get(item) === 0) {
-          this.satchel.delete(item);
+        if (removed > 0) {
+          this.updateInventoryUi();
         }
+        return removed;
+      };
+      try {
+        return this.withGameplayAtomicSnapshot({ inventory: true }, mutateInventory, { scope: 'inventory-remove' });
+      } catch (error) {
+        if (isAtomicAbortError(error)) {
+          if (typeof console !== 'undefined' && typeof console.warn === 'function') {
+            console.warn('Inventory removal aborted due to asset instability.', error);
+          }
+          notifyLiveDiagnostics(
+            'inventory',
+            'Inventory removal aborted due to asset instability.',
+            { error: normaliseLiveDiagnosticError(error), scope: 'inventory-remove', item: safeItem },
+            { level: 'warning' },
+          );
+          return 0;
+        }
+        throw error;
       }
-      if (remaining > 0) {
-        return quantity - remaining;
-      }
-      this.updateInventoryUi();
-      return quantity;
     }
 
     useSelectedItem({ allow } = {}) {
@@ -20776,41 +21103,61 @@
       if (!snapshot) {
         return;
       }
-      let restored = false;
-      if (Array.isArray(snapshot.hotbar) && Array.isArray(this.hotbar)) {
-        const length = this.hotbar.length;
-        for (let i = 0; i < length; i += 1) {
-          const target = this.hotbar[i];
-          const source = snapshot.hotbar[i] || { item: null, quantity: 0 };
-          const item = typeof source.item === 'string' ? source.item : source.item ?? null;
-          const quantity = Number.isFinite(source.quantity) ? Math.max(0, source.quantity) : 0;
-          if (target) {
-            target.item = item;
-            target.quantity = quantity;
-          } else {
-            this.hotbar[i] = { item, quantity };
+      const performRestore = () => {
+        let restored = false;
+        if (Array.isArray(snapshot.hotbar) && Array.isArray(this.hotbar)) {
+          const length = this.hotbar.length;
+          for (let i = 0; i < length; i += 1) {
+            const target = this.hotbar[i];
+            const source = snapshot.hotbar[i] || { item: null, quantity: 0 };
+            const item = typeof source.item === 'string' ? source.item : source.item ?? null;
+            const quantity = Number.isFinite(source.quantity) ? Math.max(0, source.quantity) : 0;
+            if (target) {
+              target.item = item;
+              target.quantity = quantity;
+            } else {
+              this.hotbar[i] = { item, quantity };
+            }
           }
+          restored = true;
         }
-        restored = true;
-      }
-      if (Array.isArray(snapshot.satchel) && this.satchel instanceof Map) {
-        this.satchel.clear();
-        snapshot.satchel.forEach(([item, quantity]) => {
-          const safeItem = typeof item === 'string' ? item : null;
-          const safeQuantity = Number.isFinite(quantity) ? Math.max(0, quantity) : 0;
-          if (safeItem && safeQuantity > 0) {
-            this.satchel.set(safeItem, safeQuantity);
+        if (Array.isArray(snapshot.satchel) && this.satchel instanceof Map) {
+          this.satchel.clear();
+          snapshot.satchel.forEach(([item, quantity]) => {
+            const safeItem = typeof item === 'string' ? item : null;
+            const safeQuantity = Number.isFinite(quantity) ? Math.max(0, quantity) : 0;
+            if (safeItem && safeQuantity > 0) {
+              this.satchel.set(safeItem, safeQuantity);
+            }
+          });
+          restored = true;
+        }
+        if (Number.isInteger(snapshot.selectedHotbarIndex) && Array.isArray(this.hotbar) && this.hotbar.length) {
+          const clamped = Math.max(0, Math.min(this.hotbar.length - 1, snapshot.selectedHotbarIndex));
+          this.selectedHotbarIndex = clamped;
+          restored = true;
+        }
+        if (restored) {
+          this.updateInventoryUi();
+        }
+        return restored;
+      };
+      try {
+        return this.withGameplayAtomicSnapshot({ inventory: true }, performRestore, { scope: 'inventory-restore' });
+      } catch (error) {
+        if (isAtomicAbortError(error)) {
+          if (typeof console !== 'undefined' && typeof console.warn === 'function') {
+            console.warn('Inventory restore aborted due to asset instability.', error);
           }
-        });
-        restored = true;
-      }
-      if (Number.isInteger(snapshot.selectedHotbarIndex) && Array.isArray(this.hotbar) && this.hotbar.length) {
-        const clamped = Math.max(0, Math.min(this.hotbar.length - 1, snapshot.selectedHotbarIndex));
-        this.selectedHotbarIndex = clamped;
-        restored = true;
-      }
-      if (restored) {
-        this.updateInventoryUi();
+          notifyLiveDiagnostics(
+            'inventory',
+            'Inventory restore aborted due to asset instability.',
+            { error: normaliseLiveDiagnosticError(error), scope: 'inventory-restore' },
+            { level: 'warning' },
+          );
+          return false;
+        }
+        throw error;
       }
     }
 
@@ -21096,17 +21443,41 @@
       if (fromIndex === toIndex) return false;
       if (fromIndex < 0 || toIndex < 0) return false;
       if (fromIndex >= this.hotbar.length || toIndex >= this.hotbar.length) return false;
-      const from = this.hotbar[fromIndex];
-      const to = this.hotbar[toIndex];
-      this.hotbar[fromIndex] = to;
-      this.hotbar[toIndex] = from;
-      if (this.selectedHotbarIndex === fromIndex) {
-        this.selectedHotbarIndex = toIndex;
-      } else if (this.selectedHotbarIndex === toIndex) {
-        this.selectedHotbarIndex = fromIndex;
+      const performSwap = () => {
+        const from = this.hotbar[fromIndex];
+        const to = this.hotbar[toIndex];
+        this.hotbar[fromIndex] = to;
+        this.hotbar[toIndex] = from;
+        if (this.selectedHotbarIndex === fromIndex) {
+          this.selectedHotbarIndex = toIndex;
+        } else if (this.selectedHotbarIndex === toIndex) {
+          this.selectedHotbarIndex = fromIndex;
+        }
+        this.updateInventoryUi();
+        return true;
+      };
+      try {
+        return this.withGameplayAtomicSnapshot({ inventory: true }, performSwap, { scope: 'inventory-swap' });
+      } catch (error) {
+        if (isAtomicAbortError(error)) {
+          if (typeof console !== 'undefined' && typeof console.warn === 'function') {
+            console.warn('Inventory swap aborted due to asset instability.', error);
+          }
+          notifyLiveDiagnostics(
+            'inventory',
+            'Inventory swap aborted due to asset instability.',
+            {
+              error: normaliseLiveDiagnosticError(error),
+              scope: 'inventory-swap',
+              fromIndex,
+              toIndex,
+            },
+            { level: 'warning' },
+          );
+          return false;
+        }
+        throw error;
       }
-      this.updateInventoryUi();
-      return true;
     }
 
     handleHotbarDragStart(event) {
@@ -21944,6 +22315,9 @@
         timestamp: Date.now(),
       };
       this.emitGameEvent('asset-load-failure', detail);
+      if (typeof this.markGameplayInstability === 'function') {
+        this.markGameplayInstability('asset-failure');
+      }
       if (next >= this.assetRecoveryPromptThreshold) {
         this.assetRecoveryPendingKeys.add(normalisedKey);
         this.promptAssetRecovery();
@@ -23591,32 +23965,75 @@
     }
 
     sortInventoryByQuantity() {
-      const items = this.hotbar.filter((slot) => slot.item);
-      items.sort((a, b) => b.quantity - a.quantity);
-      const reordered = [];
-      items.forEach((slot) => {
-        reordered.push({ item: slot.item, quantity: slot.quantity });
-      });
-      while (reordered.length < this.hotbar.length) {
-        reordered.push({ item: null, quantity: 0 });
+      const performSort = () => {
+        const items = Array.isArray(this.hotbar) ? this.hotbar.filter((slot) => slot?.item) : [];
+        items.sort((a, b) => (Number(b?.quantity) || 0) - (Number(a?.quantity) || 0));
+        const reordered = [];
+        items.forEach((slot) => {
+          const itemId = typeof slot?.item === 'string' ? slot.item : slot?.item ?? null;
+          const quantity = Number.isFinite(slot?.quantity) ? slot.quantity : 0;
+          reordered.push({ item: itemId, quantity });
+        });
+        const targetLength = Array.isArray(this.hotbar) ? this.hotbar.length : HOTBAR_SLOTS;
+        while (reordered.length < targetLength) {
+          reordered.push({ item: null, quantity: 0 });
+        }
+        this.hotbar = reordered;
+        this.selectedHotbarIndex = 0;
+        return reordered;
+      };
+      try {
+        return this.withGameplayAtomicSnapshot({ inventory: true }, performSort, { scope: 'inventory-sort' });
+      } catch (error) {
+        if (isAtomicAbortError(error)) {
+          if (typeof console !== 'undefined' && typeof console.warn === 'function') {
+            console.warn('Inventory sort aborted due to asset instability.', error);
+          }
+          notifyLiveDiagnostics(
+            'inventory',
+            'Inventory sort aborted due to asset instability.',
+            { error: normaliseLiveDiagnosticError(error), scope: 'inventory-sort' },
+            { level: 'warning' },
+          );
+          return null;
+        }
+        throw error;
       }
-      this.hotbar = reordered;
-      this.selectedHotbarIndex = 0;
     }
 
     addScoreBreakdown(category, amount) {
-      if (!this.scoreBreakdown || typeof this.scoreBreakdown !== 'object') {
-        this.scoreBreakdown = {};
-      }
       const key = typeof category === 'string' && category.trim() ? category.trim() : 'misc';
       const numericAmount = Number(amount);
       if (!Number.isFinite(numericAmount) || numericAmount === 0) {
         return;
       }
-      const previous = Number.isFinite(this.scoreBreakdown[key]) ? this.scoreBreakdown[key] : 0;
-      this.scoreBreakdown[key] = previous + numericAmount;
-      if (numericAmount > 0) {
-        this.notifyScoreEvent(key, numericAmount);
+      const applyScoreMutation = () => {
+        if (!this.scoreBreakdown || typeof this.scoreBreakdown !== 'object') {
+          this.scoreBreakdown = {};
+        }
+        const previous = Number.isFinite(this.scoreBreakdown[key]) ? this.scoreBreakdown[key] : 0;
+        this.scoreBreakdown[key] = previous + numericAmount;
+        if (numericAmount > 0) {
+          this.notifyScoreEvent(key, numericAmount);
+        }
+        return this.scoreBreakdown[key];
+      };
+      try {
+        return this.withGameplayAtomicSnapshot({ score: true }, applyScoreMutation, { scope: 'score' });
+      } catch (error) {
+        if (isAtomicAbortError(error)) {
+          if (typeof console !== 'undefined' && typeof console.warn === 'function') {
+            console.warn('Score update aborted due to asset instability.', error);
+          }
+          notifyLiveDiagnostics(
+            'score',
+            'Score update aborted due to asset instability.',
+            { error: normaliseLiveDiagnosticError(error), scope: 'score', category: key },
+            { level: 'warning' },
+          );
+          return null;
+        }
+        throw error;
       }
     }
 
