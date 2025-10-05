@@ -8711,6 +8711,23 @@
         });
       }
     }
+    const releaseStartButton = ({ delayed } = {}) => {
+      if (!ui.startButton) {
+        return;
+      }
+      ui.startButton.disabled = false;
+      if (delayed) {
+        ui.startButton.removeAttribute('data-preloading');
+        ui.startButton.dataset.preloadWarning = 'delayed';
+      } else {
+        ui.startButton.removeAttribute('data-preloading');
+        if (ui.startButton.dataset.preloadWarning) {
+          delete ui.startButton.dataset.preloadWarning;
+        }
+      }
+      suppressAssetLoadingIndicatorOverlay();
+      hideBootstrapOverlay();
+    };
     if (assetPreloadPromise && typeof assetPreloadPromise.then === 'function') {
       let assetPreloadFallbackTimer = null;
       const clearAssetPreloadFallbackTimer = () => {
@@ -8725,23 +8742,6 @@
           }
           assetPreloadFallbackTimer = null;
         }
-      };
-      const releaseStartButton = ({ delayed } = {}) => {
-        if (!ui.startButton) {
-          return;
-        }
-        ui.startButton.disabled = false;
-        if (delayed) {
-          ui.startButton.removeAttribute('data-preloading');
-          ui.startButton.dataset.preloadWarning = 'delayed';
-        } else {
-          ui.startButton.removeAttribute('data-preloading');
-          if (ui.startButton.dataset.preloadWarning) {
-            delete ui.startButton.dataset.preloadWarning;
-          }
-        }
-        suppressAssetLoadingIndicatorOverlay();
-        hideBootstrapOverlay();
       };
       if (ui.startButton) {
         ui.startButton.disabled = true;
