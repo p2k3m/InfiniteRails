@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
+import { createRequire } from 'node:module';
 import { parse as parseYaml } from 'yaml';
 
 const repoRoot = path.resolve(__dirname, '..');
@@ -18,6 +19,8 @@ const sanitizedTemplateContents = templateContents
   .replace(/!GetAtt\s+/g, '')
   .replace(/!Sub\s+/g, '');
 const templateDocument = parseYaml(sanitizedTemplateContents);
+const require = createRequire(import.meta.url);
+const { listUnreachableManifestAssets } = require('../scripts/lib/manifest-coverage.js');
 
 function extractLocalScriptSources(html) {
   const results = new Set();
@@ -333,6 +336,12 @@ describe('deployment workflow asset coverage', () => {
     const missing = requiredPrefixes.filter((prefix) => !includePatterns.includes(prefix));
 
     expect(missing).toEqual([]);
+  });
+
+  it('does not include unreachable manifest assets', () => {
+    const { unreachable } = listUnreachableManifestAssets(manifestAssets, { baseDir: repoRoot });
+
+    expect(unreachable).toEqual([]);
   });
 
   it('CloudFormation bucket policy grants only the CloudFront OAI read access to asset prefixes', () => {

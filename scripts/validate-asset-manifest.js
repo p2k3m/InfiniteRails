@@ -3,6 +3,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { parse: parseYaml } = require('yaml');
+const { listUnreachableManifestAssets } = require('./lib/manifest-coverage.js');
 
 const repoRoot = path.resolve(__dirname, '..');
 const manifestPath = path.join(repoRoot, 'asset-manifest.json');
@@ -449,6 +450,9 @@ async function main() {
     const includePatterns = extractIncludePatterns(workflowContents);
 
     const uncoveredAssets = listUncoveredAssets(assets, includePatterns);
+    const { unreachable: unreachableAssets } = listUnreachableManifestAssets(assets, {
+      baseDir: repoRoot,
+    });
 
     const baseUrl = resolveBaseUrl();
     let headFailures = [];
@@ -473,6 +477,9 @@ async function main() {
       issues.push(
         `Deployment workflow does not sync the following manifest assets: ${uncoveredAssets.join(', ')}`,
       );
+    }
+    if (unreachableAssets.length > 0) {
+      issues.push(`Manifest lists assets with no runtime references: ${unreachableAssets.join(', ')}`);
     }
     if (directoryPermissionIssues.length > 0) {
       const formatted = directoryPermissionIssues
