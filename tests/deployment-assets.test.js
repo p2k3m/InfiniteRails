@@ -90,6 +90,19 @@ function listFilesRecursive(directory) {
   return files;
 }
 
+function listDirectoriesRecursive(directory, { includeSelf = false } = {}) {
+  const entries = fs.readdirSync(directory, { withFileTypes: true });
+  const directories = includeSelf ? [directory] : [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+    const entryPath = path.join(directory, entry.name);
+    directories.push(entryPath, ...listDirectoriesRecursive(entryPath));
+  }
+  return directories;
+}
+
 function toArray(value) {
   if (!value) {
     return [];
@@ -117,6 +130,38 @@ function isWorldReadableFile(filePath) {
   const hasExecute = (mode & 0o111) !== 0;
 
   return hasOwnerRead && hasGroupRead && hasOtherRead && !hasUnexpectedWrite && !hasExecute;
+}
+
+function isWorldReadableDirectory(directoryPath) {
+  let stats;
+  try {
+    stats = fs.statSync(directoryPath);
+  } catch (error) {
+    return false;
+  }
+
+  if (!stats.isDirectory()) {
+    return false;
+  }
+
+  const mode = stats.mode & 0o777;
+  const hasOwnerRead = (mode & 0o400) !== 0;
+  const hasOwnerExecute = (mode & 0o100) !== 0;
+  const hasGroupRead = (mode & 0o040) !== 0;
+  const hasGroupExecute = (mode & 0o010) !== 0;
+  const hasOtherRead = (mode & 0o004) !== 0;
+  const hasOtherExecute = (mode & 0o001) !== 0;
+  const hasUnexpectedWrite = (mode & 0o022) !== 0;
+
+  return (
+    hasOwnerRead &&
+    hasOwnerExecute &&
+    hasGroupRead &&
+    hasGroupExecute &&
+    hasOtherRead &&
+    hasOtherExecute &&
+    !hasUnexpectedWrite
+  );
 }
 
 function collectGltfAssets() {
@@ -247,6 +292,27 @@ describe('deployment workflow asset coverage', () => {
     expect(invalid).toEqual([]);
   });
 
+  it('ensures asset prefixes only contain world-readable directories', () => {
+    const prefixes = ['assets', 'textures', 'audio'];
+    const invalid = [];
+
+    for (const prefix of prefixes) {
+      const directory = path.join(repoRoot, prefix);
+      if (!fs.existsSync(directory)) {
+        continue;
+      }
+
+      const directories = listDirectoriesRecursive(directory, { includeSelf: true });
+      for (const directoryPath of directories) {
+        if (!isWorldReadableDirectory(directoryPath)) {
+          invalid.push(path.relative(repoRoot, directoryPath).split(path.sep).join('/'));
+        }
+      }
+    }
+
+    expect(invalid).toEqual([]);
+  });
+
   it('does not include duplicate entries', () => {
     expect(manifestAssets.length).toBe(manifestAssetSet.size);
   });
@@ -301,5 +367,28 @@ describe('deployment workflow asset coverage', () => {
     expectedResources.forEach((resource) => {
       expect(resources.has(resource)).toBe(true);
     });
+  });
+
+  it('CloudFormation bucket policy does not allow s3:GetObject to any other principal', () => {
+    const bucketPolicy =
+      templateDocument?.Resources?.AssetsBucketPolicy?.Properties?.PolicyDocument || null;
+
+    expect(bucketPolicy).toBeTruthy();
+
+    const statements = toArray(bucketPolicy.Statement);
+    const getObjectAllowStatements = statements.filter((statement) => {
+      if (!statement || statement.Effect !== 'Allow') {
+        return false;
+      }
+      return toArray(statement.Action).includes('s3:GetObject');
+    });
+
+    expect(getObjectAllowStatements).toHaveLength(1);
+    const [statement] = getObjectAllowStatements;
+    expect(statement.Sid).toBe('AllowCloudFrontOriginAccessIdentityRead');
+
+    const principal = statement.Principal || {};
+    expect(typeof principal.CanonicalUser).toBe('string');
+    expect(principal.CanonicalUser).toContain('AssetsCloudFrontOAI');
   });
 });

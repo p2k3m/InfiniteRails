@@ -163,12 +163,88 @@ function listFilesRecursive(directory) {
   return files;
 }
 
+function listDirectoriesRecursive(directory, { includeSelf = false } = {}) {
+  const entries = fs.readdirSync(directory, { withFileTypes: true });
+  const directories = includeSelf ? [directory] : [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+    const entryPath = path.join(directory, entry.name);
+    directories.push(entryPath, ...listDirectoriesRecursive(entryPath));
+  }
+  return directories;
+}
+
+function describeDirectoryPermissionIssues(fullPath, { includeStatErrors = false } = {}) {
+  let stats;
+  try {
+    stats = fs.statSync(fullPath);
+  } catch (error) {
+    if (includeStatErrors) {
+      return {
+        mode: '----',
+        problems: [`unable to stat directory: ${error.message || error}`],
+      };
+    }
+    return null;
+  }
+
+  if (!stats.isDirectory()) {
+    return null;
+  }
+
+  const mode = stats.mode & 0o777;
+  const problems = [];
+  if ((mode & 0o400) === 0) {
+    problems.push('owner read bit is not set');
+  }
+  if ((mode & 0o040) === 0) {
+    problems.push('group read bit is not set');
+  }
+  if ((mode & 0o004) === 0) {
+    problems.push('world read bit is not set');
+  }
+  if ((mode & 0o100) === 0) {
+    problems.push('owner execute bit is not set');
+  }
+  if ((mode & 0o010) === 0) {
+    problems.push('group execute bit is not set');
+  }
+  if ((mode & 0o001) === 0) {
+    problems.push('world execute bit is not set');
+  }
+  if ((mode & 0o022) !== 0) {
+    problems.push('unexpected write permissions detected');
+  }
+
+  if (problems.length === 0) {
+    return null;
+  }
+
+  return {
+    mode: mode.toString(8).padStart(4, '0'),
+    problems,
+  };
+}
+
 function listAssetDirectoryPermissionIssues(prefixes = ASSET_PERMISSION_PREFIXES) {
   const issues = [];
   for (const prefix of prefixes) {
     const directory = path.join(repoRoot, prefix);
     if (!fs.existsSync(directory)) {
       continue;
+    }
+
+    const directories = listDirectoriesRecursive(directory, { includeSelf: true });
+    for (const directoryPath of directories) {
+      const problem = describeDirectoryPermissionIssues(directoryPath, { includeStatErrors: true });
+      if (problem) {
+        issues.push({
+          asset: path.relative(repoRoot, directoryPath).split(path.sep).join('/'),
+          ...problem,
+        });
+      }
     }
 
     const files = listFilesRecursive(directory);
@@ -294,7 +370,7 @@ async function main() {
       const formatted = directoryPermissionIssues
         .map((issue) => `${issue.asset} (mode ${issue.mode}: ${issue.problems.join(', ')})`)
         .join('; ');
-      issues.push(`Files under assets/, textures/, or audio/ have incorrect permissions: ${formatted}`);
+      issues.push(`Paths under assets/, textures/, or audio/ have incorrect permissions: ${formatted}`);
     }
     if (baseUrl && headFailures.length > 0) {
       const formatted = headFailures
