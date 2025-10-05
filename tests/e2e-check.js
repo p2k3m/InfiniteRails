@@ -54,16 +54,33 @@ function findUnexpectedWarnings(warnings) {
 }
 
 async function maybeClickStart(page) {
+  console.info('[E2E][StartButton] Inspecting renderer state prior to automation.');
+  const rendererState = await page.evaluate(() => ({
+    bodyActive: document.body.classList.contains('game-active'),
+    stateActive: Boolean(window.__INFINITE_RAILS_STATE__?.isRunning),
+  }));
+  if (rendererState.bodyActive || rendererState.stateActive) {
+    console.info(
+      `[E2E][StartButton] Automation skipped — renderer already active (bodyActive=${rendererState.bodyActive} stateActive=${rendererState.stateActive}).`,
+    );
+    return;
+  }
+
   const startButton = page.locator('#startButton');
   if ((await startButton.count()) === 0) {
+    console.info('[E2E][StartButton] Start button not present; assuming renderer advanced naturally.');
     return;
   }
 
   const visible = await startButton.isVisible().catch(() => false);
   if (!visible) {
+    console.info('[E2E][StartButton] Start button hidden; awaiting renderer progress without automation.');
     return;
   }
 
+  console.info('[E2E][StartButton] Start button visible; continuing automation.');
+
+  console.info('[E2E][StartButton] Capturing initial button state.');
   const initialState = await page.evaluate(() => {
     const button = document.querySelector('#startButton');
     if (!button) {
@@ -87,8 +104,11 @@ async function maybeClickStart(page) {
     );
   }
 
+  console.info('[E2E][StartButton] Awaiting readiness state.');
   const waitStart = Date.now();
-  await page.waitForFunction(
+  const manualTimeoutMs = 20000;
+  let manualTimeoutId;
+  const readinessPromise = page.waitForFunction(
     () => {
       const button = document.querySelector('#startButton');
       if (!button) return { status: 'failure', reason: 'missing button' };
@@ -101,31 +121,83 @@ async function maybeClickStart(page) {
       }
       return false;
     },
+    undefined,
     { timeout: 30000 },
-  ).then(
-    (result) => {
-      if (result?.status === 'failure') {
-        throw new Error(
-          `Start button reported a failure state while waiting (${result.reason}).`,
-        );
-      }
-      if (result?.status !== 'ready') {
-        throw new Error('Start button did not become ready for automation.');
-      }
-      const waitDurationSeconds = Math.round((Date.now() - waitStart) / 10) / 100;
-      console.info(
-        `[E2E][StartButton] Waited ${waitDurationSeconds}s until disabled=${result.disabled} data-preloading=${
-          result.preloading ?? 'null'
-        }.`,
-      );
-      return result;
-    },
-    (error) => {
-      throw error;
-    },
   );
 
+  const timeoutPromise = new Promise((_, reject) => {
+    manualTimeoutId = setTimeout(() => {
+      page
+        .evaluate(() => {
+          const button = document.querySelector('#startButton');
+          const overlay = document.querySelector('#bootstrapOverlay');
+          return {
+            buttonPresent: Boolean(button),
+            buttonDisabled: button ? Boolean(button.disabled) : null,
+            buttonPreloading: button?.getAttribute('data-preloading') ?? null,
+            bodyPreloading: document.body.getAttribute('data-preloading') ?? null,
+            overlayPresent: Boolean(overlay),
+            overlayHidden: overlay ? overlay.classList.contains('hidden') : null,
+            overlayText: overlay?.textContent?.replace(/\s+/g, ' ').trim() ?? null,
+          };
+        })
+        .then((snapshot) => {
+          console.info(
+            `[E2E][StartButton] Timeout snapshot — buttonPresent=${snapshot.buttonPresent} disabled=${snapshot.buttonDisabled} data-preloading=${
+              snapshot.buttonPreloading ?? 'null'
+            } body-preloading=${snapshot.bodyPreloading ?? 'null'} overlayPresent=${snapshot.overlayPresent} overlayHidden=${
+              snapshot.overlayHidden ?? 'null'
+            } overlayText="${snapshot.overlayText ?? ''}".`,
+          );
+          reject(
+            new Error(
+              `Start button did not report readiness within ${manualTimeoutMs}ms (snapshot logged above).`,
+            ),
+          );
+        })
+        .catch((error) => {
+          reject(
+            new Error(
+              `Start button readiness wait timed out after ${manualTimeoutMs}ms and diagnostics capture failed: ${error?.message ?? error}`,
+            ),
+          );
+        });
+    }, manualTimeoutMs);
+  });
+
+  console.info(`[E2E][StartButton] Wait loop initialised; manual timeout in ${manualTimeoutMs}ms.`);
+
+  let readinessHandle;
+  try {
+    readinessHandle = await Promise.race([readinessPromise, timeoutPromise]);
+  } finally {
+    clearTimeout(manualTimeoutId);
+  }
+
+  if (!readinessHandle) {
+    throw new Error('Start button wait resolved without a readiness handle.');
+  }
+
+  const readiness = await readinessHandle.jsonValue();
+  await readinessHandle.dispose();
+
+  if (readiness?.status === 'failure') {
+    throw new Error(`Start button reported a failure state while waiting (${readiness.reason}).`);
+  }
+  if (readiness?.status !== 'ready') {
+    throw new Error('Start button did not become ready for automation.');
+  }
+
+  const waitDurationSeconds = Math.round((Date.now() - waitStart) / 10) / 100;
+  console.info(
+    `[E2E][StartButton] Readiness confirmed after ${waitDurationSeconds}s — disabled=${readiness.disabled} data-preloading=${
+      readiness.preloading ?? 'null'
+    }.`,
+  );
+
+  console.info('[E2E][StartButton] Dispatching click.');
   await startButton.click();
+  console.info('[E2E][StartButton] Click dispatched.');
 }
 
 async function ensureGameHudReady(page, { requireNight = false } = {}) {
@@ -158,12 +230,16 @@ async function ensureGameHudReady(page, { requireNight = false } = {}) {
 }
 
 async function waitForLeaderboard(page) {
-  await page.waitForFunction(() => {
-    const rows = Array.from(document.querySelectorAll('#scoreboardList tr')).filter(
-      (row) => row.textContent.trim().length > 0,
-    );
-    return rows.length > 0;
-  }, { timeout: 15000 });
+  await page.waitForFunction(
+    () => {
+      const rows = Array.from(document.querySelectorAll('#scoreboardList tr')).filter(
+        (row) => row.textContent.trim().length > 0,
+      );
+      return rows.length > 0;
+    },
+    undefined,
+    { timeout: 15000 },
+  );
 
   const { rows, summaries } = await page.evaluate(() => {
     const entries = Array.from(document.querySelectorAll('#scoreboardList tr'))
@@ -216,11 +292,19 @@ async function runAdvancedScenario(browser) {
     logCheckpoint('Advanced', 'Ensuring start button handled', { elapsedFrom: scenarioStart });
     await maybeClickStart(page);
     logCheckpoint('Advanced', 'Waiting for gameplay activation', { elapsedFrom: scenarioStart });
-    await page.waitForFunction(() => document.body.classList.contains('game-active'), {
-      timeout: 15000,
-    });
+    await page.waitForFunction(
+      () => document.body.classList.contains('game-active'),
+      undefined,
+      {
+        timeout: 15000,
+      },
+    );
     logCheckpoint('Advanced', 'Gameplay activation confirmed', { elapsedFrom: scenarioStart });
-    await page.waitForFunction(() => Boolean(window.__INFINITE_RAILS_STATE__), { timeout: 15000 });
+    await page.waitForFunction(
+      () => Boolean(window.__INFINITE_RAILS_STATE__),
+      undefined,
+      { timeout: 15000 },
+    );
     logCheckpoint('Advanced', 'Renderer state object detected', { elapsedFrom: scenarioStart });
 
     logCheckpoint('Advanced', 'Collecting renderer state snapshot', { elapsedFrom: scenarioStart });
@@ -331,11 +415,16 @@ async function runSimpleScenario(browser) {
     }
 
     logCheckpoint('Sandbox', 'Waiting for debug hooks', { elapsedFrom: scenarioStart });
-    await page.waitForFunction(() => Boolean(window.__INFINITE_RAILS_DEBUG__?.getSnapshot), {
-      timeout: 15000,
-    });
+    await page.waitForFunction(
+      () => Boolean(window.__INFINITE_RAILS_DEBUG__?.getSnapshot),
+      undefined,
+      {
+        timeout: 15000,
+      },
+    );
     await page.waitForFunction(
       () => (window.__INFINITE_RAILS_DEBUG__?.getSnapshot?.()?.voxelColumns ?? 0) >= 4096,
+      undefined,
       { timeout: 15000 },
     );
     logCheckpoint('Sandbox', 'Applying debug mutations', { elapsedFrom: scenarioStart });
@@ -346,6 +435,7 @@ async function runSimpleScenario(browser) {
     });
     await page.waitForFunction(
       () => (window.__INFINITE_RAILS_DEBUG__?.getSnapshot?.()?.zombieCount ?? 0) > 0,
+      undefined,
       { timeout: 10000 },
     );
     logCheckpoint('Sandbox', 'Collecting debug snapshot', { elapsedFrom: scenarioStart });
@@ -381,6 +471,7 @@ async function runSimpleScenario(browser) {
     });
     await page.waitForFunction(
       () => Boolean(window.__INFINITE_RAILS_DEBUG__?.getSnapshot?.()?.portalActivated),
+      undefined,
       { timeout: 8000 },
     );
     await page.evaluate(() => {
@@ -388,6 +479,7 @@ async function runSimpleScenario(browser) {
     });
     await page.waitForFunction(
       () => (window.__INFINITE_RAILS_DEBUG__?.getSnapshot?.()?.dimensionIndex ?? 0) > 0,
+      undefined,
       { timeout: 10000 },
     );
 
