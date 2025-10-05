@@ -1779,7 +1779,23 @@
   const assetLoadingIndicatorState = {
     active: new Map(),
     overlayActive: false,
+    suppressed: false,
   };
+
+  function suppressAssetLoadingIndicatorOverlay() {
+    if (assetLoadingIndicatorState.suppressed) {
+      return;
+    }
+    assetLoadingIndicatorState.suppressed = true;
+    assetLoadingIndicatorState.active.clear();
+    assetLoadingIndicatorState.overlayActive = false;
+    if (
+      typeof bootstrapOverlay !== 'undefined' &&
+      bootstrapOverlay.state?.mode === 'loading'
+    ) {
+      bootstrapOverlay.hide({ force: true });
+    }
+  }
 
   function normaliseAssetIndicatorKey(value) {
     if (typeof value === 'string' && value.trim().length) {
@@ -1804,6 +1820,13 @@
 
   function updateAssetLoadingIndicatorOverlay() {
     if (typeof bootstrapOverlay === 'undefined') {
+      return;
+    }
+    if (assetLoadingIndicatorState.suppressed) {
+      if (assetLoadingIndicatorState.overlayActive && bootstrapOverlay.state?.mode === 'loading') {
+        bootstrapOverlay.hide({ force: true });
+      }
+      assetLoadingIndicatorState.overlayActive = false;
       return;
     }
     const entries = Array.from(assetLoadingIndicatorState.active.values());
@@ -1833,6 +1856,9 @@
   }
 
   function registerAssetLoadingIndicator(detail = {}) {
+    if (assetLoadingIndicatorState.suppressed) {
+      return;
+    }
     const kind = normaliseAssetIndicatorKind(detail.kind ?? detail.assetKind);
     const key = normaliseAssetIndicatorKey(detail.key ?? detail.originalKey);
     const token = `${kind}:${key}`;
@@ -1860,6 +1886,9 @@
   }
 
   function clearAssetLoadingIndicator(kind, key) {
+    if (assetLoadingIndicatorState.suppressed) {
+      return;
+    }
     const token = buildAssetIndicatorToken(kind, key);
     if (!assetLoadingIndicatorState.active.delete(token)) {
       return;
@@ -1875,6 +1904,9 @@
   }
 
   function clearAssetLoadingIndicatorByKey(key) {
+    if (assetLoadingIndicatorState.suppressed) {
+      return;
+    }
     const normalisedKey = normaliseAssetIndicatorKey(key);
     const tokens = [];
     assetLoadingIndicatorState.active.forEach((entry, token) => {
@@ -8708,6 +8740,7 @@
             delete ui.startButton.dataset.preloadWarning;
           }
         }
+        suppressAssetLoadingIndicatorOverlay();
         hideBootstrapOverlay();
       };
       if (ui.startButton) {
