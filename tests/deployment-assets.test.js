@@ -6,10 +6,12 @@ const repoRoot = path.resolve(__dirname, '..');
 const indexHtmlPath = path.join(repoRoot, 'index.html');
 const workflowPath = path.join(repoRoot, '.github', 'workflows', 'deploy.yml');
 const manifestPath = path.join(repoRoot, 'asset-manifest.json');
+const templatePath = path.join(repoRoot, 'serverless', 'template.yaml');
 
 const indexHtml = fs.readFileSync(indexHtmlPath, 'utf8');
 const workflowContents = fs.readFileSync(workflowPath, 'utf8');
 const assetsDir = path.join(repoRoot, 'assets');
+const templateContents = fs.readFileSync(templatePath, 'utf8');
 
 function extractLocalScriptSources(html) {
   const results = new Set();
@@ -80,6 +82,28 @@ function listFilesRecursive(directory) {
     }
   }
   return files;
+}
+
+function isWorldReadableFile(filePath) {
+  let stats;
+  try {
+    stats = fs.statSync(filePath);
+  } catch (error) {
+    return false;
+  }
+
+  if (!stats.isFile()) {
+    return false;
+  }
+
+  const mode = stats.mode & 0o777;
+  const hasOwnerRead = (mode & 0o400) !== 0;
+  const hasGroupRead = (mode & 0o040) !== 0;
+  const hasOtherRead = (mode & 0o004) !== 0;
+  const hasUnexpectedWrite = (mode & 0o022) !== 0;
+  const hasExecute = (mode & 0o111) !== 0;
+
+  return hasOwnerRead && hasGroupRead && hasOtherRead && !hasUnexpectedWrite && !hasExecute;
 }
 
 function collectGltfAssets() {
@@ -183,25 +207,29 @@ describe('deployment workflow asset coverage', () => {
   it('ensures manifest assets are world-readable without extra write or execute bits', () => {
     const invalid = manifestAssets.filter((asset) => {
       const filePath = path.join(repoRoot, asset);
-      let stats;
-      try {
-        stats = fs.statSync(filePath);
-      } catch (error) {
-        return true;
-      }
-      if (!stats.isFile()) {
-        return true;
-      }
-
-      const mode = stats.mode & 0o777;
-      const hasOwnerRead = (mode & 0o400) !== 0;
-      const hasGroupRead = (mode & 0o040) !== 0;
-      const hasOtherRead = (mode & 0o004) !== 0;
-      const hasUnexpectedWrite = (mode & 0o022) !== 0;
-      const hasExecute = (mode & 0o111) !== 0;
-
-      return !hasOwnerRead || !hasGroupRead || !hasOtherRead || hasUnexpectedWrite || hasExecute;
+      return !isWorldReadableFile(filePath);
     });
+
+    expect(invalid).toEqual([]);
+  });
+
+  it('ensures asset prefixes only contain world-readable files', () => {
+    const prefixes = ['assets', 'textures', 'audio'];
+    const invalid = [];
+
+    for (const prefix of prefixes) {
+      const directory = path.join(repoRoot, prefix);
+      if (!fs.existsSync(directory)) {
+        continue;
+      }
+
+      const files = listFilesRecursive(directory);
+      for (const filePath of files) {
+        if (!isWorldReadableFile(filePath)) {
+          invalid.push(path.relative(repoRoot, filePath).split(path.sep).join('/'));
+        }
+      }
+    }
 
     expect(invalid).toEqual([]);
   });
@@ -218,5 +246,24 @@ describe('deployment workflow asset coverage', () => {
 
     expect(includePatterns.length).toBeGreaterThan(0);
     expect(missing).toEqual([]);
+  });
+
+  it('deploy workflow sync includes core static asset prefixes', () => {
+    const includePatterns = extractIncludePatterns(workflowContents);
+    const requiredPrefixes = ['assets/**', 'audio/**', 'textures/**'];
+    const missing = requiredPrefixes.filter((prefix) => !includePatterns.includes(prefix));
+
+    expect(missing).toEqual([]);
+  });
+
+  it('CloudFormation bucket policy grants the OAI read access to asset prefixes', () => {
+    expect(templateContents).toMatch(/AssetsCloudFrontOAI/);
+    expect(templateContents).toMatch(/CanonicalUser:\s*!GetAtt AssetsCloudFrontOAI\.S3CanonicalUserId/);
+    expect(templateContents).toMatch(/Action:\s*\n\s*- s3:GetObject/);
+
+    for (const prefix of ['assets', 'textures', 'audio']) {
+      const resourceSnippet = '${AssetsBucket.Arn}/' + prefix + '/*';
+      expect(templateContents).toContain(resourceSnippet);
+    }
   });
 });
