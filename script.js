@@ -2,7 +2,7 @@
   const globalScope = typeof window !== 'undefined' ? window : globalThis;
   const documentRef = globalScope.document ?? null;
 
-  const assetBaseConsistencyState = { mismatchLogged: false };
+  const assetBaseConsistencyState = { mismatchLogged: false, enforcementError: null };
 
   const DEFAULT_ASSET_VERSION_TAG = '1';
 
@@ -214,23 +214,25 @@
       return;
     }
     const configuredBase = normaliseConfiguredAssetBase(config.assetBaseUrl ?? null, baseCandidates);
-    if (
-      configuredBase &&
-      configuredBase !== expectedBase &&
-      !assetBaseConsistencyState.mismatchLogged &&
-      scope?.console &&
-      typeof scope.console.warn === 'function'
-    ) {
-      assetBaseConsistencyState.mismatchLogged = true;
-      scope.console.warn(
-        'APP_CONFIG.assetBaseUrl mismatch detected; overriding to production asset root.',
-        {
+    if (configuredBase && configuredBase !== expectedBase) {
+      if (!assetBaseConsistencyState.mismatchLogged) {
+        assetBaseConsistencyState.mismatchLogged = true;
+        const mismatchMessage =
+          'APP_CONFIG.assetBaseUrl mismatch detected between bundle metadata, asset-manifest.json, and the active deployment.';
+        const mismatchDetail = {
           configured: config.assetBaseUrl ?? null,
           normalisedConfigured: configuredBase,
           expected: expectedBase,
           production: PRODUCTION_ASSET_ROOT,
-        },
-      );
+        };
+        if (scope?.console && typeof scope.console.error === 'function') {
+          scope.console.error(mismatchMessage, mismatchDetail);
+        }
+        assetBaseConsistencyState.enforcementError = new Error(
+          `${mismatchMessage} Update APP_CONFIG.assetBaseUrl to "${expectedBase}" so runtime requests resolve correctly.`,
+        );
+      }
+      throw assetBaseConsistencyState.enforcementError;
     }
     config.assetBaseUrl = expectedBase;
   }
