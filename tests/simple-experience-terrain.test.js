@@ -63,6 +63,8 @@ beforeAll(() => {
   };
 
   Object.assign(windowStub, { THREE, THREE_GLOBAL: THREE, document: documentStub });
+  globalThis.THREE_GLOBAL = THREE;
+  globalThis.THREE = THREE;
   windowStub.WebGL2RenderingContext = globalThis.WebGL2RenderingContext;
 
   if (typeof globalThis.CustomEvent !== 'function') {

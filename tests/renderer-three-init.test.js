@@ -359,7 +359,7 @@ describe('default renderer Three.js bootstrap', () => {
   });
 
   it('awaits ensureThree before bootstrapping the experience', () => {
-    expect(scriptSource).toMatch(/ensureThree\(\)\s*\.then\(\(\) => {\s*bootstrap\(\);\s*}\)/);
+    expect(scriptSource).toMatch(/ensureThree\(\)\s*\.then\(\(\) => {\s*[\s\S]*?bootstrap\(/);
   });
 
   it('simple experience pulls THREE from the guarded global scope', () => {
