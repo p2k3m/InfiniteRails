@@ -94,6 +94,8 @@ Touch-first devices automatically fall back to the sandbox renderer unless you e
 The sandbox keeps the portal-building brief front-and-centre while the production renderer continues to mature. Flip the flags
 above whenever you want to regression-test the work-in-progress advanced build without losing the reliable sandbox.
 
+An automatic “safe mode” circuit breaker now guards the boot sequence: if the advanced renderer fails to emit its start signal within five seconds, the watchdog logs the timeout and relaunches the simplified sandbox. Overriding `APP_CONFIG.rendererStartTimeoutMs` still allows deployments to extend or reduce that window when necessary.
+
 ### Troubleshooting
 
 #### White screen or blank viewport

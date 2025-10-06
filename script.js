@@ -11220,7 +11220,7 @@
     }
   }
 
-  const DEFAULT_RENDERER_START_TIMEOUT_MS = 12000;
+  const DEFAULT_RENDERER_START_TIMEOUT_MS = 5000;
   let simpleFallbackAttempted = false;
   let rendererStartWatchdogHandle = null;
   let rendererStartWatchdogMode = null;
@@ -11566,7 +11566,7 @@
         return;
       }
       const warningMessage =
-        'Advanced renderer start timed out — switching to the simplified sandbox.';
+        'Advanced renderer start timed out — enabling safe mode (simplified sandbox).';
       if (globalScope?.console?.warn) {
         globalScope.console.warn(warningMessage);
       }
