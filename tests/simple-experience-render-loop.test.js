@@ -76,6 +76,9 @@ function ensureSimpleExperienceLoaded() {
   Object.assign(windowStub, { THREE, THREE_GLOBAL: THREE });
   windowStub.WebGL2RenderingContext = globalThis.WebGL2RenderingContext;
 
+  globalThis.THREE_GLOBAL = THREE;
+  globalThis.THREE = THREE;
+
   globalThis.window = windowStub;
   globalThis.document = windowStub.document;
   globalThis.performance = { now: () => Date.now() };

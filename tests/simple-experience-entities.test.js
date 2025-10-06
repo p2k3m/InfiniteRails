@@ -94,6 +94,9 @@ function ensureSimpleExperienceLoaded() {
   Object.assign(windowStub, { THREE, THREE_GLOBAL: THREE });
   windowStub.WebGL2RenderingContext = globalThis.WebGL2RenderingContext;
 
+  globalThis.THREE_GLOBAL = THREE;
+  globalThis.THREE = THREE;
+
   globalThis.window = windowStub;
   globalThis.document = documentStub;
   globalThis.navigator = { geolocation: { getCurrentPosition: () => {} } };
@@ -110,6 +113,10 @@ function createExperienceForTest(options = {}) {
   ensureSimpleExperienceLoaded();
   if (typeof options.beforeCreate === 'function') {
     options.beforeCreate();
+  }
+  if (typeof globalThis !== 'undefined' && typeof globalThis.window?.THREE_GLOBAL === 'object') {
+    globalThis.THREE_GLOBAL = globalThis.window.THREE_GLOBAL;
+    globalThis.THREE = globalThis.window.THREE_GLOBAL;
   }
   const canvas = createCanvasStub();
   const experience = window.SimpleExperience.create({ canvas, ui: {} });
@@ -194,8 +201,8 @@ function createExperienceForTest(options = {}) {
 describe('SimpleExperience lighting safeguards', () => {
   it('ensures primary sunlight exists when missing', () => {
     const { experience } = createExperienceForTest();
-    const root = new window.THREE.Group();
-    experience.scene = new window.THREE.Scene();
+    const root = new window.THREE_GLOBAL.Group();
+    experience.scene = new window.THREE_GLOBAL.Scene();
     experience.scene.add(root);
     experience.worldRoot = root;
     experience.sunLight = null;
@@ -205,16 +212,16 @@ describe('SimpleExperience lighting safeguards', () => {
 
     experience.ensurePrimaryLights();
 
-    expect(experience.sunLight).toBeInstanceOf(window.THREE.DirectionalLight);
+    expect(experience.sunLight).toBeInstanceOf(window.THREE_GLOBAL.DirectionalLight);
     expect(root.children.includes(experience.sunLight)).toBe(true);
-    expect(experience.ambientLight).toBeInstanceOf(window.THREE.AmbientLight);
+    expect(experience.ambientLight).toBeInstanceOf(window.THREE_GLOBAL.AmbientLight);
   });
 
   it('activates lighting fallback when portal shader creation fails', () => {
     const failure = new Error('Shader failure for test');
     const originalThreeGlobal = window.THREE_GLOBAL;
     const failingThree = {
-      ...window.THREE,
+      ...window.THREE_GLOBAL,
       ShaderMaterial: class FailingShaderMaterial {
         constructor() {
           throw failure;
@@ -234,13 +241,13 @@ describe('SimpleExperience lighting safeguards', () => {
     }
 
     expect(experience.portalShaderFallbackActive).toBe(true);
-    expect(experience.materials.portal).toBeInstanceOf(window.THREE.MeshStandardMaterial);
+    expect(experience.materials.portal).toBeInstanceOf(window.THREE_GLOBAL.MeshStandardMaterial);
     expect(experience.lightingFallbackPending).toBe(true);
     expect(experience.portalIgnitionLog[0]).toBe(PORTAL_SHADER_FALLBACK_ANNOUNCEMENT);
     expect(experience.portalStatusMessage).toBe(PORTAL_SHADER_FALLBACK_ANNOUNCEMENT);
 
-    const root = new window.THREE.Group();
-    experience.scene = new window.THREE.Scene();
+    const root = new window.THREE_GLOBAL.Group();
+    experience.scene = new window.THREE_GLOBAL.Scene();
     experience.scene.add(root);
     experience.worldRoot = root;
     experience.ensurePrimaryLights();
@@ -256,10 +263,10 @@ describe('SimpleExperience lighting safeguards', () => {
     experience.refreshPortalObstructionState = vi.fn().mockReturnValue({ blocked: false, summary: '' });
     experience.computePortalAnchorGrid = vi.fn().mockReturnValue({ x: 0, z: 0 });
     experience.getPortalAnchorWorldPosition = vi.fn(() => ({ x: 0, y: 0, z: 0 }));
-    const placeholderMesh = new window.THREE.Mesh();
+    const placeholderMesh = new window.THREE_GLOBAL.Mesh();
     placeholderMesh.userData = {};
     experience.createPortalPlaceholderMesh = vi.fn(() => placeholderMesh);
-    experience.portalGroup = new window.THREE.Group();
+    experience.portalGroup = new window.THREE_GLOBAL.Group();
     experience.hidePortalInteriorBlocks = vi.fn();
     experience.updatePortalInteriorValidity = vi.fn();
     const failingUniform = {
@@ -269,7 +276,7 @@ describe('SimpleExperience lighting safeguards', () => {
     };
     experience.materials.portal.uniforms = {
       uColorA: { value: failingUniform },
-      uColorB: { value: new window.THREE.Color('#2cb67d') },
+      uColorB: { value: new window.THREE_GLOBAL.Color('#2cb67d') },
     };
 
     const result = experience.activatePortal();
@@ -357,7 +364,7 @@ describe('movement binding diagnostics', () => {
     expect(typeof diagnostics.initialAvatarPosition.copy).toBe('function');
 
     const snapshot = diagnostics.initialAvatarPosition.clone();
-    const avatarPosition = experience.getPlayerAvatarWorldPosition(new window.THREE.Vector3());
+    const avatarPosition = experience.getPlayerAvatarWorldPosition(new window.THREE_GLOBAL.Vector3());
     expect(snapshot.distanceToSquared(avatarPosition)).toBeLessThan(1e-6);
 
     const validateSpy = vi.spyOn(experience, 'validateMovementBindings');
@@ -1090,7 +1097,7 @@ describe('simple experience entity lifecycle', () => {
 
   it('pulses chest scale and glow when the player is nearby', () => {
     const { experience } = createExperienceForTest();
-    const THREE = window.THREE;
+    const THREE = window.THREE_GLOBAL;
     const glowMaterial = new THREE.MeshStandardMaterial({
       color: 0xffcc66,
       emissive: new THREE.Color('#ffaa33'),
@@ -1296,8 +1303,8 @@ describe('hotbar equipping feedback', () => {
       },
     });
     experience.canvas = canvas;
-    experience.playerRig = new window.THREE.Group();
-    experience.camera = new window.THREE.PerspectiveCamera();
+    experience.playerRig = new window.THREE_GLOBAL.Group();
+    experience.camera = new window.THREE_GLOBAL.PerspectiveCamera();
     experience.playerRig.add(experience.camera);
 
     experience.hotbar[1] = { item: 'stone', quantity: 3 };

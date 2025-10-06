@@ -26,7 +26,9 @@ describe('simple experience model loader fallback', () => {
     };
     experience.THREE = threeStub;
     if (typeof window !== 'undefined') {
-      window.THREE = threeStub;
+      window.THREE_GLOBAL = threeStub;
+      globalThis.THREE_GLOBAL = threeStub;
+      globalThis.THREE = threeStub;
     }
 
     let payload;

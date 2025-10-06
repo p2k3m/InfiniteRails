@@ -2486,7 +2486,15 @@
       if (!options || !options.canvas) {
         throw new Error('SimpleExperience requires a target canvas element.');
       }
-      const THREE = window.THREE_GLOBAL || window.THREE;
+      const scope =
+        typeof globalThis !== 'undefined'
+          ? globalThis
+          : typeof window !== 'undefined'
+            ? window
+            : typeof self !== 'undefined'
+              ? self
+              : null;
+      const THREE = scope?.THREE_GLOBAL || null;
       if (!THREE) {
         throw new Error('Three.js is required for the simplified experience.');
       }
@@ -20251,8 +20259,8 @@
       }
       const THREE =
         this.THREE ||
-        (typeof globalThis !== 'undefined' && globalThis.THREE ? globalThis.THREE : null) ||
-        (typeof window !== 'undefined' && window.THREE ? window.THREE : null);
+        (typeof globalThis !== 'undefined' && globalThis.THREE_GLOBAL ? globalThis.THREE_GLOBAL : null) ||
+        (typeof window !== 'undefined' && window.THREE_GLOBAL ? window.THREE_GLOBAL : null);
       if (!THREE || typeof THREE.Group !== 'function') {
         return null;
       }
