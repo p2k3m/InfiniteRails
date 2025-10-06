@@ -87,6 +87,7 @@ function instantiateErrorBoundary(scope) {
       'const presentCriticalErrorOverlay = scope.presentCriticalErrorOverlay ?? (() => {});' +
       'const resolveRendererModeForFallback = scope.resolveRendererModeForFallback ?? (() => null);' +
       'const tryStartSimpleFallback = scope.tryStartSimpleFallback ?? (() => {});' +
+      'const offerMissionBriefingFallback = scope.offerMissionBriefingFallback ?? (() => {});' +
       errorBoundarySource +
       '\nreturn { handleErrorBoundary, wasErrorHandledByBoundary };'
   );
@@ -896,11 +897,13 @@ describe('renderer mode selection', () => {
     it('invokes the simple fallback when an error boundary fires in advanced mode', () => {
       const presentCriticalErrorOverlay = vi.fn();
       const tryStartSimpleFallback = vi.fn(() => true);
+      const offerMissionBriefingFallback = vi.fn();
       const scope = {
         console: { debug: vi.fn(), warn: vi.fn(), error: vi.fn() },
         presentCriticalErrorOverlay,
         resolveRendererModeForFallback: vi.fn(() => 'advanced'),
         tryStartSimpleFallback,
+        offerMissionBriefingFallback,
       };
       const { handleErrorBoundary } = instantiateErrorBoundary(scope);
       const boundaryError = new Error('Renderer exploded');
@@ -911,6 +914,7 @@ describe('renderer mode selection', () => {
       });
       expect(presentCriticalErrorOverlay).toHaveBeenCalledTimes(1);
       expect(tryStartSimpleFallback).toHaveBeenCalledTimes(1);
+      expect(offerMissionBriefingFallback).not.toHaveBeenCalled();
       const [fallbackError, fallbackContext] = tryStartSimpleFallback.mock.calls[0];
       expect(fallbackError).toBe(boundaryError);
       expect(fallbackContext).toMatchObject({
@@ -919,6 +923,41 @@ describe('renderer mode selection', () => {
         stage: 'bootstrap',
         mode: 'advanced',
         source: 'error-boundary',
+      });
+    });
+
+    it('activates mission briefing fallback when the simple fallback cannot start', () => {
+      const presentCriticalErrorOverlay = vi.fn();
+      const tryStartSimpleFallback = vi.fn(() => false);
+      const offerMissionBriefingFallback = vi.fn(() => true);
+      const scope = {
+        console: { debug: vi.fn(), warn: vi.fn(), error: vi.fn() },
+        presentCriticalErrorOverlay,
+        resolveRendererModeForFallback: vi.fn(() => 'advanced'),
+        tryStartSimpleFallback,
+        offerMissionBriefingFallback,
+      };
+      scope.__MISSION_BRIEFING_FALLBACK_ACTIVE__ = false;
+      const { handleErrorBoundary } = instantiateErrorBoundary(scope);
+      const boundaryError = new Error('Renderer exploded');
+      handleErrorBoundary(boundaryError, {
+        boundary: 'bootstrap',
+        detail: { reason: 'renderer-failure', stage: 'init' },
+        title: 'Renderer unavailable',
+      });
+      expect(tryStartSimpleFallback).toHaveBeenCalledTimes(1);
+      expect(offerMissionBriefingFallback).toHaveBeenCalledTimes(1);
+      const [missionOptions] = offerMissionBriefingFallback.mock.calls[0];
+      expect(missionOptions).toMatchObject({
+        reason: expect.stringContaining('mission-briefing'),
+        context: expect.objectContaining({
+          boundary: 'bootstrap',
+          mode: 'advanced',
+          source: 'error-boundary',
+        }),
+        error: boundaryError,
+        diagnosticMessage: expect.stringContaining('text mode'),
+        notice: expect.stringContaining('text mode'),
       });
     });
 
