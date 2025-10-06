@@ -213,4 +213,37 @@ describe('control UI sync check', () => {
     expect(experience.runControlUiSyncCheck({ reason: 'recovery' })).toBe(true);
     expect(clearSpy).toHaveBeenCalledWith('input-binding-sync');
   });
+
+  it('runs the sync check when input mode changes', () => {
+    const { experience } = createExperience();
+    const syncSpy = vi.spyOn(experience, 'runControlUiSyncCheck');
+
+    experience.isTouchPreferred = false;
+    experience.mobileControlsActive = false;
+
+    experience.handleInputModeChange({ detail: { mode: 'touch', source: 'detector' } });
+
+    expect(experience.isTouchPreferred).toBe(true);
+    expect(syncSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reason: 'input-mode-change:touch',
+        mode: 'touch',
+        source: 'detector',
+      }),
+    );
+
+    syncSpy.mockClear();
+    experience.mobileControlsActive = false;
+
+    experience.handleInputModeChange({ detail: { mode: 'pointer', source: 'detector' } });
+
+    expect(experience.isTouchPreferred).toBe(false);
+    expect(syncSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reason: 'input-mode-change:pointer',
+        mode: 'pointer',
+        source: 'detector',
+      }),
+    );
+  });
 });
