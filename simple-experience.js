@@ -18973,6 +18973,33 @@
       if (typeof document === 'undefined') {
         return true;
       }
+
+      const scope =
+        typeof window !== 'undefined'
+          ? window
+          : typeof globalThis !== 'undefined'
+            ? globalThis
+            : null;
+
+      const missingWebgl2Constructor =
+        !scope || typeof scope.WebGL2RenderingContext === 'undefined' || scope.WebGL2RenderingContext === null;
+
+      if (missingWebgl2Constructor) {
+        const message =
+          'WebGL2 support is unavailable. Enable hardware acceleration or switch to a compatible browser to explore the realms.';
+        this.emitGameEvent('initialisation-error', {
+          stage: 'webgl2-probe',
+          message,
+          errorName: 'WebGL2UnavailableError',
+          errorMessage: 'WebGL2RenderingContext constructor missing.',
+        });
+        this.presentRendererFailure(message, {
+          stage: 'webgl2-probe',
+          reason: 'webgl2-unavailable',
+        });
+        return false;
+      }
+
       try {
         const probe = document.createElement('canvas');
         const attributeCandidates = [
@@ -18983,24 +19010,25 @@
         let context = null;
         let attributesUsed = null;
         for (const attributes of attributeCandidates) {
-          context =
-            probe.getContext('webgl2', attributes) ||
-            probe.getContext('webgl', attributes) ||
-            probe.getContext('experimental-webgl', attributes);
+          context = probe.getContext('webgl2', attributes);
           if (context) {
             attributesUsed = attributes;
             break;
           }
         }
         if (!context) {
+          const message =
+            'WebGL2 support is unavailable. Enable hardware acceleration or switch to a compatible browser to explore the realms.';
           this.emitGameEvent('initialisation-error', {
-            stage: 'webgl-probe',
-            message:
-              'WebGL is unavailable. Enable hardware acceleration or switch to a compatible browser to explore the realms.',
+            stage: 'webgl2-probe',
+            message,
+            errorName: 'WebGL2ContextUnavailable',
+            errorMessage: 'Canvas getContext("webgl2") returned null.',
           });
-          this.presentRendererFailure(
-            'WebGL is unavailable. Enable hardware acceleration or switch to a compatible browser to explore the realms.',
-          );
+          this.presentRendererFailure(message, {
+            stage: 'webgl2-probe',
+            reason: 'webgl2-unavailable',
+          });
           return false;
         }
         const loseContext = typeof context.getExtension === 'function' ? context.getExtension('WEBGL_lose_context') : null;
@@ -19011,23 +19039,25 @@
                 .map(([key, value]) => `${key}=${value}`)
                 .join(', ')
             : 'default attributes';
-          console.info(`WebGL probe succeeded (${attributeSummary}).`);
+          console.info(`WebGL2 probe succeeded (${attributeSummary}).`);
         }
         return true;
       } catch (error) {
         const errorMessage =
           typeof error?.message === 'string' && error.message.trim().length
             ? error.message.trim()
-            : 'Unable to initialise WebGL.';
+            : 'Unable to initialise WebGL2.';
         this.emitGameEvent('initialisation-error', {
-          stage: 'webgl-probe',
-          message: 'Unable to initialise WebGL.',
+          stage: 'webgl2-probe',
+          message: 'Unable to initialise WebGL2.',
           errorMessage,
           errorName: typeof error?.name === 'string' && error.name.trim().length ? error.name.trim() : undefined,
           stack: typeof error?.stack === 'string' && error.stack.trim().length ? error.stack.trim() : undefined,
         });
-        this.presentRendererFailure('Unable to initialise WebGL. See console output for troubleshooting steps.', {
+        this.presentRendererFailure('Unable to initialise WebGL2. See console output for troubleshooting steps.', {
           error,
+          stage: 'webgl2-probe',
+          reason: 'webgl2-unavailable',
         });
         return false;
       }
