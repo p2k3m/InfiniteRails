@@ -4073,26 +4073,89 @@
       normalised,
     });
     if (typeof tryStartSimpleFallback === 'function') {
+      let activeMode = null;
+      let fallbackActivated = false;
+      let fallbackAttempted = false;
+      let fallbackInvocationError = null;
+      let fallbackContext = null;
+      let fallbackError = null;
       try {
-        const activeMode =
-          typeof resolveRendererModeForFallback === 'function' ? resolveRendererModeForFallback(detail) : null;
+        try {
+          activeMode =
+            typeof resolveRendererModeForFallback === 'function' ? resolveRendererModeForFallback(detail) : null;
+        } catch (resolveError) {
+          fallbackInvocationError = resolveError;
+          activeMode = null;
+        }
         if (activeMode !== 'simple') {
           const fallbackReason =
             typeof detail?.reason === 'string' && detail.reason.trim().length
               ? detail.reason.trim()
               : boundaryKey;
-          const fallbackContext = {
+          fallbackContext = {
             reason: fallbackReason,
             boundary: boundaryKey,
             stage,
             mode: activeMode || 'unknown',
             source: 'error-boundary',
           };
-          const fallbackError = error instanceof Error ? error : new Error(normalised.message);
-          tryStartSimpleFallback(fallbackError, fallbackContext);
+          fallbackError = error instanceof Error ? error : new Error(normalised.message);
+          fallbackAttempted = true;
+          try {
+            fallbackActivated = tryStartSimpleFallback(fallbackError, fallbackContext) === true;
+          } catch (invokeError) {
+            fallbackInvocationError = invokeError;
+          }
         }
       } catch (fallbackError) {
-        globalScope?.console?.debug?.('Failed to trigger simple renderer fallback after boundary error.', fallbackError);
+        fallbackInvocationError = fallbackError;
+      }
+      const missionFallbackActive = Boolean(globalScope?.__MISSION_BRIEFING_FALLBACK_ACTIVE__);
+      if (
+        fallbackAttempted &&
+        !fallbackActivated &&
+        !missionFallbackActive &&
+        typeof offerMissionBriefingFallback === 'function'
+      ) {
+        try {
+          const reasonBase =
+            typeof fallbackContext?.reason === 'string' && fallbackContext.reason.trim().length
+              ? fallbackContext.reason.trim()
+              : boundaryKey;
+          const missionReason = `${reasonBase}:mission-briefing`;
+          const missionContext =
+            fallbackContext && typeof fallbackContext === 'object'
+              ? { ...fallbackContext }
+              : { boundary: boundaryKey, stage };
+          if (typeof missionContext.source !== 'string' || !missionContext.source.trim().length) {
+            missionContext.source = 'error-boundary';
+          }
+          if (typeof missionContext.mode !== 'string' || !missionContext.mode.trim().length) {
+            missionContext.mode = activeMode || 'unknown';
+          }
+          const diagnosticMessage =
+            'Advanced renderer recovery failed — mission briefing text mode enabled automatically.';
+          const notice =
+            'Advanced renderer remains offline. Mission briefing text mode has been enabled automatically.';
+          offerMissionBriefingFallback({
+            reason: missionReason,
+            context: missionContext,
+            error: fallbackError,
+            diagnosticMessage,
+            notice,
+          });
+        } catch (missionFallbackError) {
+          globalScope?.console?.debug?.(
+            'Failed to activate mission briefing fallback after renderer failure.',
+            missionFallbackError,
+          );
+        }
+      }
+      if (fallbackInvocationError) {
+        globalScope?.console?.debug?.(
+          'Failed to trigger simple renderer fallback after boundary error.',
+          fallbackInvocationError,
+        );
       }
     }
     markErrorAsHandled(error);
@@ -12413,6 +12476,14 @@
       typeof briefing.querySelector === 'function' ? briefing.querySelector('.game-briefing__eyebrow') : null;
     const briefingTitle =
       typeof briefing.querySelector === 'function' ? briefing.querySelector('.game-briefing__title') : null;
+    const diagnosticMessage =
+      typeof options.diagnosticMessage === 'string' && options.diagnosticMessage.trim().length
+        ? options.diagnosticMessage.trim()
+        : 'Renderer offline — mission briefing mode is active.';
+    const noticeMessage =
+      typeof options.notice === 'string' && options.notice.trim().length
+        ? options.notice.trim()
+        : null;
     if (startButton) {
       if (missionBriefingFallbackStartLabel === null) {
         missionBriefingFallbackStartLabel =
@@ -12459,9 +12530,8 @@
       }
       if (fallbackNotice) {
         fallbackNotice.textContent =
-          typeof options.notice === 'string' && options.notice.trim().length
-            ? options.notice.trim()
-            : 'Renderer systems are offline. Review the mission briefing and objectives while diagnostics continue.';
+          noticeMessage ??
+          'Renderer systems are offline. Review the mission briefing and objectives while diagnostics continue.';
       }
     }
     if (stepsList && Array.isArray(options.additionalSteps) && options.additionalSteps.length) {
@@ -12536,6 +12606,7 @@
       reason: options.reason || null,
       context:
         options.context && typeof options.context === 'object' ? { ...options.context } : undefined,
+      diagnosticMessage,
       timestamp: Date.now(),
     };
     if (typeof bootstrapOverlay !== 'undefined') {
@@ -12543,7 +12614,7 @@
         if (typeof bootstrapOverlay.setDiagnostic === 'function') {
           bootstrapOverlay.setDiagnostic('renderer', {
             status: 'warning',
-            message: 'Renderer offline — mission briefing mode is active.',
+            message: diagnosticMessage,
           });
         }
         if (typeof bootstrapOverlay.setRecoveryAction === 'function') {
@@ -12560,6 +12631,7 @@
           reason: options.reason || 'mission-briefing-fallback',
           context:
             options.context && typeof options.context === 'object' ? { ...options.context } : undefined,
+          diagnosticMessage,
         },
       });
     } else {
@@ -12583,6 +12655,14 @@
     const contextDetail =
       options.context && typeof options.context === 'object' ? { ...options.context } : undefined;
     const errorDetail = options.error instanceof Error ? options.error : null;
+    const noticeMessage =
+      typeof options.notice === 'string' && options.notice.trim().length
+        ? options.notice.trim()
+        : null;
+    const diagnosticMessage =
+      typeof options.diagnosticMessage === 'string' && options.diagnosticMessage.trim().length
+        ? options.diagnosticMessage.trim()
+        : 'Renderer unavailable — mission briefing mode is available.';
     const detail = {
       fallbackMode: 'briefing',
       reason,
@@ -12612,6 +12692,8 @@
             const activated = activateMissionBriefingFallback({
               reason: `${reason}:selected`,
               context: contextDetail,
+              notice: noticeMessage,
+              diagnosticMessage,
             });
             if (activated && overlay && typeof overlay.hide === 'function') {
               try {
@@ -12634,7 +12716,7 @@
       try {
         overlay.setDiagnostic('renderer', {
           status: 'warning',
-          message: 'Renderer unavailable — mission briefing mode is available.',
+          message: diagnosticMessage,
         });
       } catch (overlayError) {
         scope.console?.debug?.('Failed to update renderer diagnostic for mission briefing fallback.', overlayError);
@@ -12644,12 +12726,17 @@
       offered = activateMissionBriefingFallback({
         reason: `${reason}:auto`,
         context: contextDetail,
+        notice: noticeMessage,
+        diagnosticMessage,
       });
     }
     if (typeof logDiagnosticsEvent === 'function') {
       logDiagnosticsEvent('startup', 'Offering mission briefing fallback.', {
         level: 'warning',
-        detail,
+        detail: {
+          ...detail,
+          diagnosticMessage,
+        },
       });
     } else {
       scope.console?.warn?.('Offering mission briefing fallback.', detail);
