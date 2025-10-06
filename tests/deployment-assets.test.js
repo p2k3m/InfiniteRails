@@ -452,6 +452,58 @@ describe('deployment workflow asset coverage', () => {
     ).toBe(true);
   });
 
+  it('CloudFront function sets MIME and CORS headers for asset responses at runtime', () => {
+    const functionResource = templateDocument?.Resources?.AssetsMimeTypeFunction || null;
+
+    expect(functionResource).toBeTruthy();
+
+    const functionCode = functionResource?.Properties?.FunctionCode;
+    expect(typeof functionCode).toBe('string');
+
+    // CloudFront functions wrap the handler in a script without exports. Evaluate the
+    // function body so we can execute the handler with representative events.
+    const handler = new Function(`${functionCode}; return handler;`)();
+
+    const scenarios = [
+      { uri: '/models/portal.gltf', expected: 'model/gltf+json' },
+      { uri: '/textures/skybox.png', expected: 'image/png' },
+      { uri: '/audio/theme.mp3', expected: 'audio/mpeg' },
+      { uri: '/scripts/runtime.js', expected: 'application/javascript' },
+    ];
+
+    scenarios.forEach(({ uri, expected }) => {
+      const result = handler({
+        request: { uri },
+        response: { headers: {} },
+      });
+
+      expect(result?.headers?.['content-type']?.value).toBe(expected);
+      expect(result?.headers?.['access-control-allow-origin']?.value).toBe('*');
+    });
+
+    const preserved = handler({
+      request: { uri: '/textures/banner.png' },
+      response: {
+        headers: {
+          'content-type': { value: 'application/octet-stream' },
+          'x-existing-header': { value: 'keep-me' },
+        },
+      },
+    });
+
+    expect(preserved.headers['content-type'].value).toBe('image/png');
+    expect(preserved.headers['x-existing-header'].value).toBe('keep-me');
+    expect(preserved.headers['access-control-allow-origin'].value).toBe('*');
+
+    const passthrough = handler({
+      request: { uri: '/docs/readme.txt' },
+      response: { headers: {} },
+    });
+
+    expect(passthrough.headers['content-type']).toBeUndefined();
+    expect(passthrough.headers['access-control-allow-origin'].value).toBe('*');
+  });
+
   it('does not include unreachable manifest assets', () => {
     const { unreachable } = listUnreachableManifestAssets(manifestAssets, { baseDir: repoRoot });
 
