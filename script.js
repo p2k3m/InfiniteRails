@@ -1090,6 +1090,8 @@
     try {
       targetDoc.addEventListener('pointerdown', pointerListener, { passive: true });
       disposers.push(() => targetDoc.removeEventListener('pointerdown', pointerListener));
+      targetDoc.addEventListener('pointermove', pointerListener, { passive: true });
+      disposers.push(() => targetDoc.removeEventListener('pointermove', pointerListener));
     } catch (error) {}
 
     const touchListener = () => scheduleInputMode('touch', { scope, source: 'touchstart' });
@@ -1122,25 +1124,46 @@
     }
 
     if (scope?.matchMedia) {
-      try {
-        const coarseMedia = scope.matchMedia('(pointer: coarse)');
-        if (coarseMedia) {
-          const coarseHandler = (event) => {
-            if (event?.matches) {
-              scheduleInputMode('touch', { scope, source: 'media:pointer-coarse' });
-            } else {
-              scheduleInputMode('pointer', { scope, source: 'media:pointer-coarse' });
-            }
-          };
-          if (typeof coarseMedia.addEventListener === 'function') {
-            coarseMedia.addEventListener('change', coarseHandler);
-            disposers.push(() => coarseMedia.removeEventListener('change', coarseHandler));
-          } else if (typeof coarseMedia.addListener === 'function') {
-            coarseMedia.addListener(coarseHandler);
-            disposers.push(() => coarseMedia.removeListener(coarseHandler));
-          }
+      const pointerQueries = ['(pointer: coarse)', '(any-pointer: coarse)', '(hover: none)', '(any-hover: none)'];
+      for (let index = 0; index < pointerQueries.length; index += 1) {
+        const query = pointerQueries[index];
+        let mediaQuery = null;
+        try {
+          mediaQuery = scope.matchMedia(query);
+        } catch (error) {
+          mediaQuery = null;
         }
-      } catch (error) {}
+        if (!mediaQuery) {
+          continue;
+        }
+        const mediaListener = (event) => {
+          let matches = null;
+          if (event && typeof event.matches === 'boolean') {
+            matches = event.matches;
+          } else if (typeof mediaQuery.matches === 'boolean') {
+            matches = mediaQuery.matches;
+          }
+          const environment = detectMobileEnvironment(scope);
+          let targetMode = environment.isMobile ? 'touch' : 'pointer';
+          if (matches === true) {
+            targetMode = 'touch';
+          } else if (matches === false) {
+            targetMode = 'pointer';
+          }
+          scheduleInputMode(targetMode, { scope, source: `media-query:${query}` });
+        };
+        if (typeof mediaQuery.addEventListener === 'function') {
+          try {
+            mediaQuery.addEventListener('change', mediaListener);
+            disposers.push(() => mediaQuery.removeEventListener('change', mediaListener));
+          } catch (error) {}
+        } else if (typeof mediaQuery.addListener === 'function') {
+          try {
+            mediaQuery.addListener(mediaListener);
+            disposers.push(() => mediaQuery.removeListener(mediaListener));
+          } catch (error) {}
+        }
+      }
     }
 
     inputModeState.detachListeners = () => {
@@ -10868,14 +10891,18 @@
 
   function hasCoarsePointer(scope) {
     if (typeof scope?.matchMedia === 'function') {
-      try {
-        const result = scope.matchMedia('(pointer: coarse)');
-        if (result && typeof result.matches === 'boolean') {
-          return result.matches;
-        }
-      } catch (error) {
-        if (globalScope.console?.debug) {
-          globalScope.console.debug('Failed to evaluate coarse pointer media query.', error);
+      const queries = ['(pointer: coarse)', '(any-pointer: coarse)'];
+      for (let index = 0; index < queries.length; index += 1) {
+        const query = queries[index];
+        try {
+          const result = scope.matchMedia(query);
+          if (result && typeof result.matches === 'boolean' && result.matches) {
+            return true;
+          }
+        } catch (error) {
+          if (globalScope.console?.debug) {
+            globalScope.console.debug('Failed to evaluate coarse pointer media query.', { query, error });
+          }
         }
       }
     }
@@ -10892,13 +10919,42 @@
     const maxTouchPoints = typeof navigatorRef?.maxTouchPoints === 'number' ? navigatorRef.maxTouchPoints : 0;
     const coarsePointer = hasCoarsePointer(scope);
     const touchCapable = maxTouchPoints > 1;
+    const userAgentDataMobile =
+      typeof navigatorRef?.userAgentData?.mobile === 'boolean' ? navigatorRef.userAgentData.mobile : null;
+    let hoverNone = false;
+    let anyHoverNone = false;
+    if (typeof scope?.matchMedia === 'function') {
+      try {
+        const result = scope.matchMedia('(hover: none)');
+        if (result && typeof result.matches === 'boolean') {
+          hoverNone = result.matches;
+        }
+      } catch (error) {
+        if (globalScope.console?.debug) {
+          globalScope.console.debug('Failed to evaluate hover media query.', error);
+        }
+      }
+      try {
+        const result = scope.matchMedia('(any-hover: none)');
+        if (result && typeof result.matches === 'boolean') {
+          anyHoverNone = result.matches;
+        }
+      } catch (error) {
+        if (globalScope.console?.debug) {
+          globalScope.console.debug('Failed to evaluate any-hover media query.', error);
+        }
+      }
+    }
     const mobileRegex = /Mobi|Android|iPhone|iPad|iPod|Windows Phone|webOS|BlackBerry/i;
     const userAgentMobile = mobileRegex.test(userAgent);
+    const lacksHover = hoverNone || anyHoverNone;
     return {
       coarsePointer,
       touchCapable,
       userAgentMobile,
-      isMobile: Boolean(coarsePointer || touchCapable || userAgentMobile),
+      userAgentDataMobile,
+      hoverNone: lacksHover,
+      isMobile: Boolean(coarsePointer || touchCapable || userAgentMobile || userAgentDataMobile || lacksHover),
     };
   }
 
