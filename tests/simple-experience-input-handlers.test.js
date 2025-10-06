@@ -132,4 +132,20 @@ describe('simple experience input handlers', () => {
     expect(mozRequestPointerLock.mock.calls[1].length).toBe(0);
     expect(fallbackSpy).not.toHaveBeenCalled();
   });
+
+  it('attempts to recover pointer lock when Escape is pressed', () => {
+    const { experience } = createInputTestExperience();
+    experience.pointerLocked = false;
+    experience.pointerLockFallbackActive = false;
+    experience.getPointerLockElement = vi.fn(() => null);
+    vi.spyOn(experience, 'toggleCraftingModal').mockImplementation(() => {});
+    vi.spyOn(experience, 'toggleInventoryModal').mockImplementation(() => {});
+    vi.spyOn(experience, 'toggleGuideModal').mockImplementation(() => {});
+    const recoverySpy = vi.spyOn(experience, 'attemptPointerLockRecovery').mockReturnValue(false);
+    const event = { code: 'Escape', preventDefault: vi.fn(), repeat: false };
+
+    experience.handleKeyDown(event);
+
+    expect(recoverySpy).toHaveBeenCalledWith('keyboard-escape');
+  });
 });

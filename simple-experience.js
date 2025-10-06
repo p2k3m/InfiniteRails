@@ -388,6 +388,10 @@
     'Click the viewport to capture your mouse, then use your movement keys to move and left-click to mine.';
   const POINTER_LOCK_FALLBACK_MESSAGE =
     'Pointer lock is blocked by your browser or an extension. Click and drag to look around, or allow mouse capture to re-enable full look controls.';
+  const POINTER_LOCK_RELEASED_HINT_MESSAGE =
+    'Mouse capture paused — click or press Esc inside the viewport to resume.';
+  const POINTER_LOCK_BLOCKED_OVERLAY_MESSAGE =
+    'Browser refused mouse capture. Click the viewport or press Esc to retry, then allow pointer lock.';
   const POINTER_LOCK_MAX_RETRIES = 2;
   const POINTER_LOCK_RETRY_DELAY_MS = 200;
   const POINTER_LOCK_RETRY_HINT_MESSAGE = 'Browser blocked mouse capture — retrying…';
@@ -2822,6 +2826,7 @@
       this.pointerLockWarningShown = false;
       this.pointerLockFallbackNoticeShown = false;
       this.pointerLockFallbackMessageActive = false;
+      this.pointerLockBlockedOverlayActive = false;
       this.pointerLockRetryTimer = null;
       this.pointerLockRetryAttempts = 0;
       this.pointerLockBlockWarningIssued = false;
@@ -5953,6 +5958,7 @@
       const reasonDetail = typeof reason === 'string' && reason ? ` (${reason})` : '';
       const fallbackMessage =
         typeof options?.message === 'string' && options.message.trim() ? options.message.trim() : null;
+      this.hidePointerLockBlockedOverlay();
       this.cancelPointerLockRetry();
       this.pointerLockRetryAttempts = 0;
       this.pointerLockBlockWarningIssued = false;
@@ -18581,6 +18587,54 @@
       this.schedulePointerHintAutoHide(8);
     }
 
+    showPointerLockBlockedOverlay(message) {
+      const text =
+        typeof message === 'string' && message.trim().length
+          ? message.trim()
+          : POINTER_LOCK_BLOCKED_OVERLAY_MESSAGE;
+      if (this.pointerLockFallbackMessageActive) {
+        return;
+      }
+      if (this.playerHintEl) {
+        this.playerHintEl.textContent = text;
+        this.playerHintEl.setAttribute('data-variant', 'warning');
+        this.playerHintEl.classList.add('visible');
+      }
+      this.pointerLockBlockedOverlayActive = true;
+      this.lastHintMessage = text;
+      this.updatePointerHintForInputMode(text);
+    }
+
+    hidePointerLockBlockedOverlay() {
+      if (!this.pointerLockBlockedOverlayActive) {
+        return;
+      }
+      this.pointerLockBlockedOverlayActive = false;
+      if (!this.playerHintEl || this.pointerLockFallbackMessageActive) {
+        return;
+      }
+      this.playerHintEl.classList.remove('visible');
+      this.playerHintEl.removeAttribute('data-variant');
+      this.playerHintEl.textContent = '';
+      this.lastHintMessage = '';
+    }
+
+    attemptPointerLockRecovery(reason = 'interaction') {
+      if (this.pointerLockFallbackActive) {
+        return false;
+      }
+      if (!this.canvas) {
+        return false;
+      }
+      if (this.pointerLocked || this.getPointerLockElement() === this.canvas) {
+        return false;
+      }
+      this.hidePointerLockBlockedOverlay();
+      this.handleCanvasPointerLockRequest();
+      this.emitGameEvent('pointer-lock-recovery', { reason });
+      return true;
+    }
+
     applyKeyBinding(action, keys) {
       if (typeof action !== 'string' || !Array.isArray(keys)) {
         return false;
@@ -18731,6 +18785,9 @@
         add(target, 'click', this.onCanvasPointerLock, 'engaging pointer lock');
         add(target, 'contextmenu', this.preventContextMenu, 'preventing context menu');
       });
+      if (this.pointerHintEl) {
+        add(this.pointerHintEl, 'click', this.onCanvasPointerLock, 'retrying pointer lock from hint');
+      }
       add(this.hotbarEl, 'click', this.onHotbarClick, 'selecting hotbar slots');
       add(this.craftLauncherButton, 'click', this.onOpenCrafting, 'opening crafting');
       add(this.closeCraftingButton, 'click', this.onCloseCrafting, 'closing crafting');
@@ -18804,6 +18861,7 @@
       this.teardownMobileControls();
       this.cancelPointerLockRetry();
       this.pointerLockRetryAttempts = 0;
+      this.hidePointerLockBlockedOverlay();
       this.eventsBound = false;
     }
 
@@ -18858,10 +18916,12 @@
           this.playerHintEl.removeAttribute('data-variant');
         }
         this.pointerLockFallbackMessageActive = false;
+        this.pointerLockBlockedOverlayActive = false;
         this.endPointerFallbackDrag();
         this.markInteraction();
         this.cancelPointerHintAutoHide();
         this.hidePointerHint(true);
+        this.hidePointerLockBlockedOverlay();
         this.setHudInteractionState(true, { timeoutMs: 0 });
         return;
       }
@@ -18870,7 +18930,8 @@
         this.updatePointerHintForInputMode(this.getPointerLockFallbackMessage());
         this.schedulePointerHintAutoHide(8);
       } else {
-        this.showDesktopPointerTutorialHint();
+        this.updatePointerHintForInputMode(POINTER_LOCK_RELEASED_HINT_MESSAGE);
+        this.schedulePointerHintAutoHide(8);
       }
       this.refreshHudInteractionState();
     }
@@ -18910,6 +18971,9 @@
             'Pointer lock could not be acquired after multiple attempts. The browser or an extension may be blocking mouse capture. Falling back to drag-to-look controls.',
           );
         }
+      }
+      if (!this.pointerLockFallbackActive) {
+        this.showPointerLockBlockedOverlay();
       }
       this.enablePointerLockFallback('error', error, { message: POINTER_LOCK_FALLBACK_MESSAGE });
     }
@@ -18954,6 +19018,7 @@
       if (!this.canvas) {
         return;
       }
+      this.hidePointerLockBlockedOverlay();
       this.markInteraction();
       this.cancelPointerLockRetry();
       this.pointerLockRetryAttempts = 0;
@@ -19131,15 +19196,20 @@
         this.toggleDeveloperLogOverlay('keyboard');
         event.preventDefault();
       }
-      if (this.isKeyForAction(code, 'closeMenus')) {
+      const closeMenusKey = this.isKeyForAction(code, 'closeMenus');
+      if (closeMenusKey) {
         this.toggleCraftingModal(false);
         this.toggleInventoryModal(false);
         this.toggleGuideModal(false, { returnFocus: false });
+        this.attemptPointerLockRecovery('keyboard-escape');
       }
       const hotbarSlot = this.getHotbarSlotFromKey(code);
       if (hotbarSlot !== null) {
         this.selectHotbarSlot(hotbarSlot, true);
         event.preventDefault();
+      }
+      if (code === 'Escape' && !closeMenusKey && !this.pointerLockFallbackActive) {
+        this.attemptPointerLockRecovery('keyboard-escape');
       }
     }
 
@@ -23642,6 +23712,7 @@
       this.lastHintMessage = message;
       this.pointerLockFallbackMessageActive = false;
       this.pointerLockFallbackNoticeShown = false;
+      this.pointerLockBlockedOverlayActive = false;
       this.updateFooterSummary();
     }
 
