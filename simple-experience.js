@@ -3010,6 +3010,7 @@
       this.cameraShakeDuration = 0;
       this.cameraShakeTime = 0;
       this.cameraShakeIntensity = 0;
+      this.cameraFallbackAnchor = null;
       this.cameraPerspective = 'first';
       this.firstPersonCameraOffset = new THREE.Vector3(0, 0.08, 0.04);
       this.thirdPersonCameraOffset = new THREE.Vector3(0, 0.8, 3.4);
@@ -7312,6 +7313,17 @@
         }
       }
 
+      if (this.cameraFallbackAnchor) {
+        if (this.cameraFallbackAnchor.parent && typeof this.cameraFallbackAnchor.parent.remove === 'function') {
+          try {
+            this.cameraFallbackAnchor.parent.remove(this.cameraFallbackAnchor);
+          } catch (error) {
+            console.debug('Unable to detach camera fallback anchor during reset.', error);
+          }
+        }
+        this.cameraFallbackAnchor = null;
+      }
+
       if (this.playerAvatar) {
         if (this.playerRig && typeof this.playerRig.remove === 'function') {
           this.playerRig.remove(this.playerAvatar);
@@ -7471,18 +7483,167 @@
       this.cameraBaseOffset.copy(this.camera.position);
     }
 
+    normaliseCameraAnchor(candidate) {
+      if (!candidate || typeof candidate.add !== 'function') {
+        return null;
+      }
+      if (candidate === this.playerRig) {
+        return candidate;
+      }
+      if (candidate === this.cameraFallbackAnchor) {
+        return candidate.parent ? candidate : null;
+      }
+      if (candidate.isObject3D !== true) {
+        return null;
+      }
+      if (candidate.parent) {
+        return candidate;
+      }
+      if (candidate === this.playerHeadAttachment && candidate !== this.playerAvatar) {
+        const avatar = this.playerAvatar;
+        if (avatar && typeof avatar.add === 'function') {
+          try {
+            avatar.add(candidate);
+          } catch (error) {
+            console.debug('Unable to reattach player head attachment for camera anchor.', error);
+          }
+          if (candidate.parent === avatar) {
+            return candidate;
+          }
+        }
+      }
+      if (candidate === this.playerAvatar) {
+        const rig = this.playerRig;
+        if (rig && typeof rig.add === 'function') {
+          try {
+            rig.add(candidate);
+          } catch (error) {
+            console.debug('Unable to reattach player avatar for camera anchor.', error);
+          }
+          if (candidate.parent === rig) {
+            return candidate;
+          }
+        }
+      }
+      if (candidate === this.cameraBoom) {
+        const rig = this.playerRig;
+        if (rig && typeof rig.add === 'function') {
+          try {
+            rig.add(candidate);
+          } catch (error) {
+            console.debug('Unable to reattach camera boom to player rig.', error);
+          }
+          if (candidate.parent === rig) {
+            return candidate;
+          }
+        }
+      }
+      return null;
+    }
+
+    ensureCameraFallbackAnchor() {
+      const THREE = this.THREE;
+      if (!THREE || typeof THREE.Object3D !== 'function') {
+        return this.playerRig || this.cameraBoom || null;
+      }
+      if (!this.cameraFallbackAnchor || this.cameraFallbackAnchor.isObject3D !== true) {
+        try {
+          this.cameraFallbackAnchor = new THREE.Object3D();
+          this.cameraFallbackAnchor.name = 'PlayerCameraFallbackAnchor';
+        } catch (error) {
+          console.debug('Unable to provision camera fallback anchor.', error);
+          return this.playerRig || this.cameraBoom || null;
+        }
+      }
+      const anchor = this.cameraFallbackAnchor;
+      let parent = null;
+      if (this.playerRig && typeof this.playerRig.add === 'function') {
+        parent = this.playerRig;
+      } else if (this.cameraBoom && typeof this.cameraBoom.add === 'function') {
+        parent = this.cameraBoom;
+      } else if (this.scene && typeof this.scene.add === 'function') {
+        parent = this.scene;
+      }
+      if (parent) {
+        if (anchor.parent && anchor.parent !== parent && typeof anchor.parent.remove === 'function') {
+          try {
+            anchor.parent.remove(anchor);
+          } catch (error) {
+            console.debug('Unable to detach fallback camera anchor.', error);
+          }
+        }
+        if (anchor.parent !== parent) {
+          try {
+            parent.add(anchor);
+          } catch (error) {
+            console.debug('Unable to attach fallback camera anchor.', error);
+          }
+        }
+      }
+      if (anchor.position && typeof anchor.position.set === 'function') {
+        if (parent === this.playerRig || parent === this.cameraBoom) {
+          anchor.position.set(0, 0, 0);
+        } else {
+          const fallbackPosition = this.getMovementAnchorPosition();
+          if (fallbackPosition && typeof fallbackPosition.x === 'number') {
+            if (typeof anchor.position.copy === 'function' && fallbackPosition.isVector3 === true) {
+              anchor.position.copy(fallbackPosition);
+            } else {
+              anchor.position.set(
+                Number.isFinite(fallbackPosition.x) ? fallbackPosition.x : 0,
+                Number.isFinite(fallbackPosition.y) ? fallbackPosition.y : 0,
+                Number.isFinite(fallbackPosition.z) ? fallbackPosition.z : 0,
+              );
+            }
+          } else {
+            anchor.position.set(0, 0, 0);
+          }
+        }
+      }
+      return anchor;
+    }
+
+    resolveCameraAnchor(mode = this.cameraPerspective) {
+      const perspective = mode === 'third' ? 'third' : 'first';
+      if (perspective === 'first') {
+        const headAnchor = this.normaliseCameraAnchor(this.playerHeadAttachment);
+        if (headAnchor) {
+          return headAnchor;
+        }
+        if (this.playerHeadAttachment && this.playerHeadAttachment !== this.playerAvatar) {
+          this.playerHeadAttachment = null;
+        }
+        const avatarAnchor = this.normaliseCameraAnchor(this.playerAvatar);
+        if (avatarAnchor) {
+          this.playerHeadAttachment = avatarAnchor;
+          return avatarAnchor;
+        }
+        if (this.playerHeadAttachment === this.playerAvatar) {
+          this.playerHeadAttachment = null;
+        }
+      }
+      const boomAnchor = this.normaliseCameraAnchor(this.cameraBoom);
+      if (boomAnchor) {
+        return boomAnchor;
+      }
+      const rigAnchor = this.normaliseCameraAnchor(this.playerRig);
+      if (rigAnchor) {
+        return rigAnchor;
+      }
+      const fallback = this.ensureCameraFallbackAnchor();
+      if (!fallback && this.playerRig) {
+        return this.playerRig;
+      }
+      return fallback;
+    }
+
     applyCameraPerspective(mode) {
       const perspective = mode === 'third' ? 'third' : 'first';
       this.cameraPerspective = perspective;
       if (!this.camera) {
         return;
       }
-      const desiredParent =
-        perspective === 'first'
-          ? (this.playerHeadAttachment && this.playerHeadAttachment.isObject3D
-              ? this.playerHeadAttachment
-              : this.cameraBoom || this.playerRig || this.scene)
-          : this.cameraBoom || this.playerRig || this.scene;
+      const desiredParent = this.resolveCameraAnchor(perspective);
       if (desiredParent && this.camera.parent !== desiredParent && typeof desiredParent.add === 'function') {
         try {
           this.camera.parent?.remove?.(this.camera);
