@@ -405,6 +405,7 @@ describe('renderer mode selection', () => {
       },
       console: { warn: () => {}, error: () => {} },
     };
+    windowStub.document = global.document;
     const { shouldStartSimpleMode } = instantiateShouldStartSimpleMode(windowStub);
     expect(shouldStartSimpleMode()).toBe(true);
     expect(windowStub.APP_CONFIG.preferAdvanced).toBe(false);
@@ -416,20 +417,22 @@ describe('renderer mode selection', () => {
       {
         key: 'webgl-unavailable-simple-mode',
         message:
-          'WebGL is unavailable on this device, so the mission briefing view is shown instead of the full 3D renderer.',
+          'WebGL2 support is unavailable on this device, so the mission briefing view is shown instead of the full 3D renderer.',
       },
     ]);
     expect(windowStub.__INFINITE_RAILS_RENDERER_MODE__).toBe('simple');
     expect(showError).toHaveBeenCalledTimes(1);
     expect(showError).toHaveBeenCalledWith(
       expect.objectContaining({
-        title: 'WebGL output blocked',
-        message: expect.stringContaining('WebGL output is blocked, so Infinite Rails is launching the simplified renderer.'),
+        title: 'WebGL2 support unavailable',
+        message: expect.stringContaining(
+          'WebGL2 support is unavailable, so Infinite Rails is launching the simplified renderer.',
+        ),
       }),
     );
     expect(setDiagnostic).toHaveBeenCalledWith('renderer', {
       status: 'warning',
-      message: 'WebGL blocked — launching simplified renderer.',
+      message: 'WebGL2 support unavailable — launching simplified renderer.',
     });
     expect(setRecoveryAction).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -471,7 +474,7 @@ describe('renderer mode selection', () => {
       'Update your graphics drivers, then restart your browser.',
     ]);
     expect(overlay.__webglFallback?.detail).toMatchObject({
-      reason: 'webgl-unavailable',
+      reason: 'webgl2-unavailable',
       fallbackMode: 'simple',
     });
   });
@@ -511,6 +514,7 @@ describe('renderer mode selection', () => {
         reason: 'bootstrap',
       },
     };
+    windowStub.document = global.document;
     const { runWebglPreflightCheck, shouldStartSimpleMode } = instantiateShouldStartSimpleMode(windowStub);
     const skipAdvanced = runWebglPreflightCheck();
     expect(skipAdvanced).toBe(true);
@@ -524,14 +528,14 @@ describe('renderer mode selection', () => {
       {
         key: 'webgl-unavailable-simple-mode',
         message:
-          'WebGL is unavailable on this device, so the mission briefing view is shown instead of the full 3D renderer.',
+          'WebGL2 support is unavailable on this device, so the mission briefing view is shown instead of the full 3D renderer.',
       },
     ]);
     expect(windowStub.__INFINITE_RAILS_RENDERER_MODE__).toBe('simple');
     expect(showError).toHaveBeenCalledTimes(1);
     expect(setDiagnostic).toHaveBeenCalledWith('renderer', {
       status: 'warning',
-      message: 'WebGL blocked — launching simplified renderer.',
+      message: 'WebGL2 support unavailable — launching simplified renderer.',
     });
     expect(setRecoveryAction).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -539,7 +543,7 @@ describe('renderer mode selection', () => {
         action: 'retry-webgl',
       }),
     );
-    expect(windowStub.__INFINITE_RAILS_STATE__.reason).toBe('webgl-unavailable');
+    expect(windowStub.__INFINITE_RAILS_STATE__.reason).toBe('webgl2-unavailable');
     expect(windowStub.__INFINITE_RAILS_STATE__.rendererMode).toBe('simple');
     expect(shouldStartSimpleMode()).toBe(true);
     expect(showError).toHaveBeenCalledTimes(1);
@@ -605,6 +609,7 @@ describe('renderer mode selection', () => {
         supportsAdvancedMobile: true,
       },
       SimpleExperience: { create: () => ({}) },
+      WebGL2RenderingContext: function WebGL2RenderingContext() {},
     };
     const { shouldStartSimpleMode } = instantiateShouldStartSimpleMode(windowStub);
     expect(shouldStartSimpleMode()).toBe(false);
