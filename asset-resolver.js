@@ -369,11 +369,13 @@
 
     if (!Number.isFinite(analysis.expiresAt)) {
       context.reason = analysis.failure ?? 'unknown-expiry-evaluation-failure';
+      context.severity = 'indeterminate';
       logAssetIssue(
         'Signed asset URL detected but expiry could not be determined. Rotate APP_CONFIG.assetBaseUrl proactively to avoid runtime 403s.',
         null,
         context,
       );
+      dispatchSignedUrlAlert(context);
       return;
     }
 
