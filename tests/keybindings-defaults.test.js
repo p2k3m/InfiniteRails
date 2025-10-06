@@ -293,6 +293,39 @@ describe('declarative control map configuration', () => {
     const defaults = window.SimpleExperience.controlMap.defaults();
     expect(defaults).toEqual(declarativeMap);
   });
+
+  it('notifies subscribers when the control map changes', () => {
+    const source = fs.readFileSync(path.join(repoRoot, 'controls.config.js'), 'utf8');
+    const scope = {
+      APP_CONFIG: {},
+      dispatchEvent: () => {},
+      CustomEvent: class CustomEvent {
+        constructor(type, init = {}) {
+          this.type = type;
+          this.detail = init.detail;
+        }
+      },
+      console: { debug: () => {} },
+    };
+    const sandbox = { window: scope, globalThis: scope, CustomEvent: scope.CustomEvent };
+    vm.runInNewContext(source, sandbox, { filename: 'controls.config.js' });
+
+    const notifications = [];
+    const unsubscribe = scope.InfiniteRailsControls.subscribe((map) => {
+      notifications.push(map);
+    });
+
+    expect(notifications).toHaveLength(1);
+    expect(notifications[0].jump).toEqual(['Space']);
+
+    scope.InfiniteRailsControls.apply({ jump: ['KeyJ'] });
+    expect(notifications).toHaveLength(2);
+    expect(notifications[1].jump).toEqual(['KeyJ']);
+
+    unsubscribe();
+    scope.InfiniteRailsControls.apply({ jump: ['Space'] });
+    expect(notifications).toHaveLength(2);
+  });
 });
 
 describe('simple experience key remapping', () => {
