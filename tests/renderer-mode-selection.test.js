@@ -331,6 +331,7 @@ afterEach(() => {
     global.document = originalDocument;
   }
   delete global.bootstrapOverlay;
+  delete global.logDiagnosticsEvent;
 });
 
 describe('renderer mode selection', () => {
@@ -748,6 +749,10 @@ describe('renderer mode selection', () => {
 
     it('automatically switches to simple mode when the advanced start watchdog fires', () => {
       const showLoading = vi.fn();
+      const setDiagnostic = vi.fn();
+      const showError = vi.fn();
+      const logDiagnostics = vi.fn();
+      global.logDiagnosticsEvent = logDiagnostics;
       const replaceState = vi.fn((state, title, url) => {
         const parsed = new URL(url);
         scope.location.href = parsed.toString();
@@ -784,8 +789,8 @@ describe('renderer mode selection', () => {
         },
         bootstrapOverlay: {
           showLoading,
-          showError: vi.fn(),
-          setDiagnostic: vi.fn(),
+          showError,
+          setDiagnostic,
           setRecoveryAction: vi.fn(),
           state: { mode: 'loading' },
         },
@@ -800,9 +805,35 @@ describe('renderer mode selection', () => {
       expect(typeof timeoutHandler).toBe('function');
       expect(timeoutDelay).toBeGreaterThan(0);
       timeoutHandler();
-      expect(scope.console.warn).toHaveBeenCalledWith(
-        expect.stringContaining('Advanced renderer start timed out'),
+      const warnCalls = scope.console.warn.mock.calls;
+      expect(warnCalls.some(([message]) => message.includes('enabling safe mode'))).toBe(true);
+      const watchdogWarn = warnCalls.find(([message]) => message.includes('enabling safe mode'));
+      expect(watchdogWarn?.[1]).toEqual(
+        expect.objectContaining({
+          detail: expect.objectContaining({ reason: 'renderer-timeout', mode: 'advanced' }),
+        }),
       );
+      expect(warnCalls.some(([message]) => message.includes('Switching to simplified renderer'))).toBe(true);
+      expect(showLoading).toHaveBeenCalledWith(
+        expect.objectContaining({ message: expect.stringContaining('safe mode') }),
+      );
+      expect(setDiagnostic).toHaveBeenCalledWith(
+        'renderer',
+        expect.objectContaining({
+          status: 'warning',
+          message: expect.stringContaining('timed out'),
+        }),
+      );
+      const logCalls = logDiagnostics.mock.calls.filter(([scopeName]) => scopeName === 'startup');
+      expect(logCalls.length).toBeGreaterThanOrEqual(2);
+      expect(
+        logCalls.some(([, message, options]) =>
+          message.includes('Advanced renderer start timed out') &&
+          options?.detail?.reason === 'renderer-timeout' &&
+          typeof options?.detail?.timeoutMs === 'number',
+        ),
+      ).toBe(true);
+      expect(logCalls.some(([, message]) => message.includes('simplified safe mode'))).toBe(true);
       expect(scope.APP_CONFIG.forceSimpleMode).toBe(true);
       expect(scope.APP_CONFIG.enableAdvancedExperience).toBe(false);
       expect(scope.APP_CONFIG.preferAdvanced).toBe(false);

@@ -11567,17 +11567,52 @@
       }
       const warningMessage =
         'Advanced renderer start timed out — enabling safe mode (simplified sandbox).';
+      const triggeredAt = Date.now();
+      const fallbackDetail = {
+        reason: 'renderer-timeout',
+        mode: 'advanced',
+        source: 'watchdog',
+        stage: 'startup.watchdog',
+        timeoutMs: timeout,
+        timestamp: triggeredAt,
+      };
       if (globalScope?.console?.warn) {
-        globalScope.console.warn(warningMessage);
+        globalScope.console.warn(warningMessage, { detail: fallbackDetail });
+      }
+      if (typeof logDiagnosticsEvent === 'function') {
+        try {
+          logDiagnosticsEvent('startup', warningMessage, {
+            level: 'warning',
+            detail: fallbackDetail,
+            timestamp: triggeredAt,
+          });
+        } catch (loggingError) {
+          globalScope?.console?.debug?.(
+            'Renderer watchdog diagnostics logging failed.',
+            loggingError,
+          );
+        }
+      }
+      const overlay = typeof bootstrapOverlay !== 'undefined' ? bootstrapOverlay : null;
+      if (overlay && typeof overlay.setDiagnostic === 'function') {
+        try {
+          overlay.setDiagnostic('renderer', {
+            status: 'warning',
+            message: 'Advanced renderer timed out. Launching simplified safe mode.',
+            detail: fallbackDetail,
+          });
+        } catch (overlayError) {
+          globalScope?.console?.debug?.(
+            'Failed to update renderer diagnostic after start timeout.',
+            overlayError,
+          );
+        }
       }
       if (typeof tryStartSimpleFallback === 'function') {
         const timeoutError = new Error('Advanced renderer start timed out.');
         try {
           tryStartSimpleFallback(timeoutError, {
-            reason: 'renderer-timeout',
-            mode: 'advanced',
-            source: 'watchdog',
-            stage: 'startup.watchdog',
+            ...fallbackDetail,
           });
         } catch (fallbackError) {
           if (globalScope?.console?.debug) {
@@ -11610,22 +11645,29 @@
     simpleFallbackAttempted = true;
     const config = scope.APP_CONFIG || (scope.APP_CONFIG = {});
     applySimpleFallbackConfig(config);
+    const fallbackReason =
+      typeof context?.reason === 'string' && context.reason.trim().length
+        ? context.reason.trim()
+        : '';
     if (typeof queueBootstrapFallbackNotice === 'function') {
       const noticeReason =
-        typeof context?.reason === 'string' && context.reason.trim().length
-          ? `forced-simple-mode:${context.reason.trim()}`
-          : 'forced-simple-mode';
-      queueBootstrapFallbackNotice(
-        noticeReason,
-        'Falling back to the simple renderer after a bootstrap failure.',
-      );
+        fallbackReason.length > 0 ? `forced-simple-mode:${fallbackReason}` : 'forced-simple-mode';
+      const noticeMessage =
+        fallbackReason === 'renderer-timeout'
+          ? 'Advanced renderer timed out — launching simplified safe mode.'
+          : 'Falling back to the simple renderer after a bootstrap failure.';
+      queueBootstrapFallbackNotice(noticeReason, noticeMessage);
     }
     if (typeof logDiagnosticsEvent === 'function') {
       const detail = context && typeof context === 'object' ? { ...context } : undefined;
       if (detail && error instanceof Error && typeof detail.errorMessage !== 'string') {
         detail.errorMessage = error.message;
       }
-      logDiagnosticsEvent('startup', 'Falling back to the simple renderer after a bootstrap failure.', {
+      const logMessage =
+        fallbackReason === 'renderer-timeout'
+          ? 'Advanced renderer start timed out — switched to simplified safe mode.'
+          : 'Falling back to the simple renderer after a bootstrap failure.';
+      logDiagnosticsEvent('startup', logMessage, {
         level: 'warning',
         detail,
       });
@@ -11688,8 +11730,16 @@
       return false;
     }
     if (typeof bootstrapOverlay !== 'undefined') {
+      const fallbackReason =
+        typeof context?.reason === 'string' && context.reason.trim().length
+          ? context.reason.trim()
+          : '';
+      const loadingMessage =
+        fallbackReason === 'renderer-timeout'
+          ? 'Advanced renderer timed out. Booting simplified safe mode…'
+          : 'Attempting simplified renderer fallback…';
       bootstrapOverlay.showLoading({
-        message: 'Attempting simplified renderer fallback…',
+        message: loadingMessage,
       });
     }
     const scope =
@@ -11701,6 +11751,11 @@
     scope.__LAST_FALLBACK_CONTEXT__ = { error: error?.message ?? null, context };
     if (context?.reason === 'ensureThree-failure' && scope.console?.warn) {
       scope.console.warn('Three.js failed to load. Switching to simplified renderer.', {
+        error,
+        context,
+      });
+    } else if (context?.reason === 'renderer-timeout' && scope.console?.warn) {
+      scope.console.warn('Advanced renderer start timed out. Switching to simplified renderer.', {
         error,
         context,
       });
