@@ -698,7 +698,14 @@ describe('renderer mode selection', () => {
       const result = tryStartSimpleFallback(null, { reason: 'renderer-failure', mode: 'advanced' });
       expect(result).toBe(true);
       expect(showLoading).toHaveBeenCalledWith(
-        expect.objectContaining({ message: expect.stringContaining('simplified renderer fallback') }),
+        expect.objectContaining({ message: expect.stringContaining('sandbox mode') }),
+      );
+      expect(scope.bootstrapOverlay.setDiagnostic).toHaveBeenCalledWith(
+        'renderer',
+        expect.objectContaining({
+          status: 'warning',
+          message: expect.stringContaining('sandbox'),
+        }),
       );
       expect(replaceState).toHaveBeenCalledTimes(1);
       const parsed = new URL(scope.location.href);
