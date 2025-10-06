@@ -113,6 +113,33 @@ describe('signed asset URL monitoring', () => {
     expect(event.detail.expiresAtEpochMs).toBe(1_700_000_000_000);
   });
 
+  it('alerts when signed asset expiry cannot be determined', async () => {
+    global.APP_CONFIG.assetBaseUrl =
+      'https://cdn.example.com/assets/?X-Amz-Expires=900&Signature=missing-start-time';
+
+    const resolver = await loadResolver();
+    resolver.resolveAssetUrl('textures/portal-core.png');
+
+    expect(global.console.error).toHaveBeenCalledWith(
+      expect.stringContaining('Signed asset URL detected but expiry could not be determined'),
+      expect.objectContaining({
+        assetBaseUrl: expect.stringContaining('missing-start-time'),
+        reason: 'missing-signed-start-time',
+        severity: 'indeterminate',
+      }),
+    );
+
+    expect(documentDispatch).toHaveBeenCalledTimes(1);
+    const event = documentDispatch.mock.calls[0][0];
+    expect(event.type).toBe('infinite-rails:signed-url-expiry');
+    expect(event.detail.severity).toBe('indeterminate');
+    expect(event.detail.reason).toBe('missing-signed-start-time');
+    expect(event.detail.assetBaseUrl).toBe(
+      'https://cdn.example.com/assets/?X-Amz-Expires=900&Signature=missing-start-time',
+    );
+    expect(event.detail.expiresAtEpochMs).toBeNull();
+  });
+
   it('warns when signed asset base URLs approach expiry', async () => {
     const now = Date.now();
     const thirtyMinutesFromNowSeconds = Math.floor((now + 30 * 60 * 1000) / 1000);
