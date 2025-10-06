@@ -123,6 +123,27 @@
     }
   }
 
+  const controlMapListeners = new Set();
+
+  function notifyControlMapListeners(map) {
+    if (!controlMapListeners.size) {
+      return;
+    }
+    const snapshot = cloneControlMap(map);
+    controlMapListeners.forEach((listener) => {
+      if (typeof listener !== 'function') {
+        return;
+      }
+      try {
+        listener(snapshot);
+      } catch (error) {
+        if (typeof console !== 'undefined' && console.debug) {
+          console.debug('Control map listener failed.', error);
+        }
+      }
+    });
+  }
+
   const existing =
     normaliseControlMap(scope[CONTROL_MAP_GLOBAL_KEY]) ||
     normaliseControlMap(scope.APP_CONFIG && scope.APP_CONFIG.controlMap) ||
@@ -135,6 +156,7 @@
     appConfig.controlMap = initialMap;
   }
 
+  notifyControlMapListeners(initialMap);
   dispatchControlMapEvent(CONTROL_MAP_READY_EVENT, initialMap);
 
   function applyControlMap(update, options = {}) {
@@ -151,6 +173,7 @@
     if (appConfig) {
       appConfig.controlMap = base;
     }
+    notifyControlMapListeners(base);
     if (notify) {
       dispatchControlMapEvent(CONTROL_MAP_CHANGED_EVENT, base);
     }
@@ -162,6 +185,22 @@
     apply: (map, options) => applyControlMap(map, options),
     reset: (options = {}) => applyControlMap(createDefaultControlMap(), { ...options, merge: false }),
     defaults: () => cloneControlMap(createDefaultControlMap()),
+    subscribe: (listener) => {
+      if (typeof listener !== 'function') {
+        return () => {};
+      }
+      controlMapListeners.add(listener);
+      try {
+        listener(cloneControlMap(scope[CONTROL_MAP_GLOBAL_KEY] || initialMap));
+      } catch (error) {
+        if (typeof console !== 'undefined' && console.debug) {
+          console.debug('Control map listener failed during subscription.', error);
+        }
+      }
+      return () => {
+        controlMapListeners.delete(listener);
+      };
+    },
   };
 
   if (!scope.InfiniteRailsControls || typeof scope.InfiniteRailsControls !== 'object') {
