@@ -413,6 +413,7 @@
   const SCORE_SYNC_QUEUE_LIMIT = 25;
   const FIRST_RUN_TUTORIAL_STORAGE_KEY = 'infinite-rails-first-run-tutorial';
   const MOVEMENT_ACTIONS = ['moveForward', 'moveBackward', 'moveLeft', 'moveRight'];
+  const MOVEMENT_AUTOTEST_DISPLACEMENT_THRESHOLD_SQ = 0.0025;
   const LEGACY_KEYBOARD_CODE_MAP = Object.freeze({
     ArrowUp: 'ArrowUp',
     ArrowDown: 'ArrowDown',
@@ -522,6 +523,89 @@
       item: typeof slot.item === 'string' ? slot.item : slot.item ?? null,
       quantity: Number.isFinite(slot.quantity) ? slot.quantity : 0,
     }));
+  }
+
+  function cloneVector3Like(source, THREE) {
+    if (!source) {
+      return null;
+    }
+    if (typeof source.clone === 'function') {
+      try {
+        return source.clone();
+      } catch (error) {
+        // Fall back to manual cloning when clone fails.
+      }
+    }
+    if (THREE && typeof THREE.Vector3 === 'function') {
+      const vector = new THREE.Vector3();
+      vector.set(
+        Number.isFinite(source.x) ? source.x : 0,
+        Number.isFinite(source.y) ? source.y : 0,
+        Number.isFinite(source.z) ? source.z : 0,
+      );
+      return vector;
+    }
+    return {
+      x: Number.isFinite(source.x) ? source.x : 0,
+      y: Number.isFinite(source.y) ? source.y : 0,
+      z: Number.isFinite(source.z) ? source.z : 0,
+    };
+  }
+
+  function assignVector3Like(target, source, THREE) {
+    if (!target || !source) {
+      return;
+    }
+    if (typeof target.copy === 'function' && (source.isVector3 === true || typeof source.copy === 'function')) {
+      try {
+        target.copy(source);
+        return;
+      } catch (error) {
+        // Fall back when copy fails.
+      }
+    }
+    if (typeof target.set === 'function') {
+      target.set(
+        Number.isFinite(source.x) ? source.x : target.x ?? 0,
+        Number.isFinite(source.y) ? source.y : target.y ?? 0,
+        Number.isFinite(source.z) ? source.z : target.z ?? 0,
+      );
+      return;
+    }
+    if (THREE && typeof THREE.Vector3 === 'function' && target.isVector3 === true) {
+      target.set(
+        Number.isFinite(source.x) ? source.x : target.x ?? 0,
+        Number.isFinite(source.y) ? source.y : target.y ?? 0,
+        Number.isFinite(source.z) ? source.z : target.z ?? 0,
+      );
+      return;
+    }
+    target.x = Number.isFinite(source.x) ? source.x : 0;
+    target.y = Number.isFinite(source.y) ? source.y : 0;
+    target.z = Number.isFinite(source.z) ? source.z : 0;
+  }
+
+  function measureVector3DistanceSq(a, b) {
+    if (!a || !b) {
+      return null;
+    }
+    if (typeof a.distanceToSquared === 'function') {
+      try {
+        return a.distanceToSquared(b);
+      } catch (error) {
+        // Fall back to manual distance calculation.
+      }
+    }
+    const ax = Number.isFinite(a.x) ? a.x : 0;
+    const ay = Number.isFinite(a.y) ? a.y : 0;
+    const az = Number.isFinite(a.z) ? a.z : 0;
+    const bx = Number.isFinite(b.x) ? b.x : 0;
+    const by = Number.isFinite(b.y) ? b.y : 0;
+    const bz = Number.isFinite(b.z) ? b.z : 0;
+    const dx = ax - bx;
+    const dy = ay - by;
+    const dz = az - bz;
+    return dx * dx + dy * dy + dz * dz;
   }
 
   function cloneSatchelEntries(source) {
@@ -3003,6 +3087,32 @@
         key: null,
         source: null,
       };
+      this.movementAutotestState = {
+        active: false,
+        handle: null,
+        reason: null,
+        actions: [],
+        actionIndex: 0,
+        actionActive: false,
+        framesElapsed: 0,
+        framesPerAction: 0,
+        anchorBaseline: null,
+        avatarBaseline: null,
+        moved: false,
+        maxDisplacementSq: 0,
+        maxAvatarDisplacementSq: 0,
+        originalKeys: null,
+        originalVelocity: null,
+        originalVerticalVelocity: 0,
+        originalYaw: 0,
+        originalPitch: 0,
+        originalIsGrounded: true,
+        originalRigPosition: null,
+        originalRigRotationY: null,
+        originalCameraPosition: null,
+        originalCameraQuaternion: null,
+        originalCameraBaseOffset: null,
+      };
       this.cameraBaseOffset = new THREE.Vector3();
       this.cameraShakeOffset = new THREE.Vector3();
       this.cameraShakeRotation = new THREE.Euler();
@@ -3580,6 +3690,7 @@
         this.loadScoreboard();
         this.exposeDebugInterface();
         this.renderFrame(performance.now());
+        this.scheduleMovementAutotest({ reason: 'boot', sessionId });
         this.emitGameEvent('started', { summary: this.createRunSummary('start') });
         this.publishStateSnapshot('started');
         this.logEngineBootDiagnostics({ status: 'success', phase: 'start' });
@@ -7260,6 +7371,7 @@
       this.setHudInteractionState(false);
       this.cancelQueuedModelPreload();
       this.cancelAllAssetDelayWarnings();
+      this.cancelMovementAutotest();
       this.cancelNavigationMeshMaintenance();
       if (this.animationFrame !== null) {
         cancelAnimationFrame(this.animationFrame);
@@ -19412,6 +19524,384 @@
       }
     }
 
+    scheduleMovementAutotest(options = {}) {
+      const state = this.movementAutotestState || (this.movementAutotestState = {});
+      const scope =
+        (typeof window !== 'undefined' && window) || (typeof globalThis !== 'undefined' && globalThis) || null;
+      if (!scope || typeof scope.setTimeout !== 'function') {
+        return;
+      }
+      const delay = Number.isFinite(options.delayMs) ? Math.max(0, Math.floor(options.delayMs)) : 900;
+      const reason =
+        typeof options.reason === 'string' && options.reason.trim().length ? options.reason.trim() : 'boot';
+      const sessionId =
+        typeof options.sessionId === 'number' && Number.isFinite(options.sessionId)
+          ? options.sessionId
+          : this.activeSessionId;
+      if (state.handle && typeof scope.clearTimeout === 'function') {
+        scope.clearTimeout(state.handle);
+        state.handle = null;
+      }
+      state.handle = scope.setTimeout(() => {
+        state.handle = null;
+        if (!this.started || this.rendererUnavailable || this.activeSessionId !== sessionId) {
+          return;
+        }
+        this.beginMovementAutotest({ reason });
+      }, delay);
+    }
+
+    beginMovementAutotest(options = {}) {
+      if (!this.started || this.rendererUnavailable) {
+        return;
+      }
+      const state = this.movementAutotestState || (this.movementAutotestState = {});
+      if (state.active) {
+        return;
+      }
+      const reason =
+        typeof options.reason === 'string' && options.reason.trim().length ? options.reason.trim() : 'boot';
+      const hasInput = this.keys && typeof this.keys.size === 'number' && this.keys.size > 0;
+      if (hasInput) {
+        if (typeof notifyLiveDiagnostics === 'function') {
+          notifyLiveDiagnostics(
+            'movement',
+            'Movement autotest skipped — player input detected during startup.',
+            { reason },
+            { level: 'info' },
+          );
+        }
+        return;
+      }
+      const actions = MOVEMENT_ACTIONS.map((action) => {
+        const binding = this.keyBindings?.[action];
+        if (Array.isArray(binding) && binding.length) {
+          const code = binding[0];
+          if (code) {
+            return { action, code };
+          }
+        }
+        return null;
+      }).filter(Boolean);
+      if (!actions.length) {
+        if (typeof notifyLiveDiagnostics === 'function') {
+          notifyLiveDiagnostics(
+            'movement',
+            'Movement autotest skipped — WASD bindings unavailable.',
+            { reason },
+            { level: 'warning' },
+          );
+        }
+        return;
+      }
+      state.active = true;
+      state.reason = reason;
+      state.actions = actions;
+      state.actionIndex = 0;
+      state.actionActive = false;
+      state.framesElapsed = 0;
+      state.framesPerAction =
+        Number.isFinite(options.framesPerAction) && options.framesPerAction > 0
+          ? Math.max(1, Math.floor(options.framesPerAction))
+          : 12;
+      state.anchorBaseline = null;
+      state.avatarBaseline = null;
+      state.moved = false;
+      state.maxDisplacementSq = 0;
+      state.maxAvatarDisplacementSq = 0;
+      state.originalKeys = new Set();
+      if (this.keys && typeof this.keys.forEach === 'function') {
+        this.keys.forEach((code) => {
+          if (code) {
+            state.originalKeys.add(code);
+          }
+        });
+        if (typeof this.keys.clear === 'function') {
+          this.keys.clear();
+        }
+      }
+      state.originalVelocity = this.velocity && typeof this.velocity.clone === 'function' ? this.velocity.clone() : null;
+      if (this.velocity && typeof this.velocity.set === 'function') {
+        this.velocity.set(0, 0, 0);
+      }
+      state.originalVerticalVelocity = Number.isFinite(this.verticalVelocity) ? this.verticalVelocity : 0;
+      this.verticalVelocity = 0;
+      state.originalYaw = Number.isFinite(this.yaw) ? this.yaw : 0;
+      state.originalPitch = Number.isFinite(this.pitch) ? this.pitch : 0;
+      state.originalIsGrounded = typeof this.isGrounded === 'boolean' ? this.isGrounded : true;
+      this.isGrounded = true;
+      state.originalRigPosition = cloneVector3Like(this.playerRig?.position, this.THREE);
+      state.originalRigRotationY =
+        this.playerRig && this.playerRig.rotation && Number.isFinite(this.playerRig.rotation.y)
+          ? this.playerRig.rotation.y
+          : null;
+      state.originalCameraPosition = cloneVector3Like(this.camera?.position, this.THREE);
+      state.originalCameraQuaternion =
+        this.camera?.quaternion && typeof this.camera.quaternion.clone === 'function'
+          ? this.camera.quaternion.clone()
+          : null;
+      state.originalCameraBaseOffset = cloneVector3Like(this.cameraBaseOffset, this.THREE);
+    }
+
+    prepareMovementAutotestStep(delta) {
+      if (!delta || delta <= 0) {
+        // Ensure the autotest advances even when the delta is zero.
+      }
+      const state = this.movementAutotestState;
+      if (!state || !state.active) {
+        return;
+      }
+      if (!Array.isArray(state.actions) || !state.actions.length) {
+        this.finishMovementAutotest(false, { reason: state.reason, silent: true });
+        return;
+      }
+      if (state.actionIndex >= state.actions.length) {
+        return;
+      }
+      const current = state.actions[state.actionIndex];
+      if (!current || !current.code) {
+        state.actionIndex += 1;
+        state.actionActive = false;
+        state.framesElapsed = 0;
+        this.prepareMovementAutotestStep(delta);
+        return;
+      }
+      if (!state.actionActive) {
+        state.actionActive = true;
+        state.framesElapsed = 0;
+        state.anchorBaseline = cloneVector3Like(this.getMovementAnchorPosition(), this.THREE);
+        state.avatarBaseline = cloneVector3Like(
+          this.getPlayerAvatarWorldPosition(this.movementBindingDiagnostics?.avatarProbe || null),
+          this.THREE,
+        );
+        if (this.keys && typeof this.keys.clear === 'function') {
+          this.keys.clear();
+        }
+        if (this.keys && typeof this.keys.add === 'function') {
+          this.keys.add(current.code);
+        }
+        this.queueMovementBindingValidation(current.action, { source: 'autotest' });
+      } else if (this.keys && typeof this.keys.has === 'function' && !this.keys.has(current.code)) {
+        this.keys.add(current.code);
+      }
+    }
+
+    completeMovementAutotestStep(delta) {
+      const state = this.movementAutotestState;
+      if (!state || !state.active) {
+        return;
+      }
+      if (!Array.isArray(state.actions) || !state.actions.length) {
+        this.finishMovementAutotest(false, { reason: state.reason, silent: true });
+        return;
+      }
+      if (state.actionIndex >= state.actions.length) {
+        return;
+      }
+      const current = state.actions[state.actionIndex];
+      if (!current || !state.actionActive) {
+        return;
+      }
+      const anchor = this.getMovementAnchorPosition();
+      if (anchor && state.anchorBaseline) {
+        const displacementSq = measureVector3DistanceSq(anchor, state.anchorBaseline);
+        if (Number.isFinite(displacementSq)) {
+          state.maxDisplacementSq = Math.max(state.maxDisplacementSq || 0, displacementSq);
+          if (displacementSq > MOVEMENT_AUTOTEST_DISPLACEMENT_THRESHOLD_SQ) {
+            state.moved = true;
+          }
+        }
+      }
+      const avatarAnchor = this.getPlayerAvatarWorldPosition(this.movementBindingDiagnostics?.avatarProbe || null);
+      if (avatarAnchor && state.avatarBaseline) {
+        const avatarDisplacementSq = measureVector3DistanceSq(avatarAnchor, state.avatarBaseline);
+        if (Number.isFinite(avatarDisplacementSq)) {
+          state.maxAvatarDisplacementSq = Math.max(state.maxAvatarDisplacementSq || 0, avatarDisplacementSq);
+          if (avatarDisplacementSq > MOVEMENT_AUTOTEST_DISPLACEMENT_THRESHOLD_SQ) {
+            state.moved = true;
+          }
+        }
+      }
+      state.framesElapsed += 1;
+      const framesPerAction = state.framesPerAction > 0 ? state.framesPerAction : 1;
+      if (state.framesElapsed >= framesPerAction) {
+        if (this.keys && typeof this.keys.delete === 'function' && current.code) {
+          this.keys.delete(current.code);
+        }
+        state.actionIndex += 1;
+        state.actionActive = false;
+        state.framesElapsed = 0;
+        state.anchorBaseline = null;
+        state.avatarBaseline = null;
+        if (state.actionIndex >= state.actions.length) {
+          this.finishMovementAutotest(state.moved, {
+            reason: state.reason,
+            maxDisplacementSq: state.maxDisplacementSq,
+            maxAvatarDisplacementSq: state.maxAvatarDisplacementSq,
+          });
+        }
+      }
+    }
+
+    finishMovementAutotest(succeeded, detail = {}) {
+      const state = this.movementAutotestState || (this.movementAutotestState = {});
+      const scope =
+        (typeof window !== 'undefined' && window) || (typeof globalThis !== 'undefined' && globalThis) || null;
+      if (state.handle && scope?.clearTimeout) {
+        scope.clearTimeout(state.handle);
+        state.handle = null;
+      }
+      const silent = detail && detail.silent === true;
+      const reason =
+        typeof detail?.reason === 'string' && detail.reason.trim().length
+          ? detail.reason.trim()
+          : state.reason || 'boot';
+      const maxDisplacementSq = Number.isFinite(detail?.maxDisplacementSq)
+        ? detail.maxDisplacementSq
+        : state.maxDisplacementSq;
+      const maxAvatarDisplacementSq = Number.isFinite(detail?.maxAvatarDisplacementSq)
+        ? detail.maxAvatarDisplacementSq
+        : state.maxAvatarDisplacementSq;
+
+      if (this.keys && typeof this.keys.clear === 'function') {
+        this.keys.clear();
+        if (state.originalKeys && typeof state.originalKeys.forEach === 'function') {
+          state.originalKeys.forEach((code) => {
+            if (code) {
+              this.keys.add(code);
+            }
+          });
+        }
+      }
+      state.originalKeys = null;
+
+      if (state.originalVelocity && this.velocity && typeof this.velocity.copy === 'function') {
+        this.velocity.copy(state.originalVelocity);
+      }
+      state.originalVelocity = null;
+
+      if (Number.isFinite(state.originalVerticalVelocity)) {
+        this.verticalVelocity = state.originalVerticalVelocity;
+      }
+      state.originalVerticalVelocity = 0;
+
+      if (typeof state.originalIsGrounded === 'boolean') {
+        this.isGrounded = state.originalIsGrounded;
+      }
+      state.originalIsGrounded = true;
+
+      if (state.originalRigPosition && this.playerRig?.position) {
+        assignVector3Like(this.playerRig.position, state.originalRigPosition, this.THREE);
+      }
+      state.originalRigPosition = null;
+
+      if (Number.isFinite(state.originalRigRotationY) && this.playerRig?.rotation) {
+        this.playerRig.rotation.y = state.originalRigRotationY;
+      }
+      state.originalRigRotationY = null;
+
+      if (state.originalCameraPosition && this.camera?.position) {
+        assignVector3Like(this.camera.position, state.originalCameraPosition, this.THREE);
+      }
+      state.originalCameraPosition = null;
+
+      if (state.originalCameraQuaternion && this.camera?.quaternion && typeof this.camera.quaternion.copy === 'function') {
+        this.camera.quaternion.copy(state.originalCameraQuaternion);
+      }
+      state.originalCameraQuaternion = null;
+
+      if (state.originalCameraBaseOffset && this.cameraBaseOffset && typeof this.cameraBaseOffset.copy === 'function') {
+        this.cameraBaseOffset.copy(state.originalCameraBaseOffset);
+      }
+      state.originalCameraBaseOffset = null;
+
+      if (Number.isFinite(state.originalYaw)) {
+        this.yaw = state.originalYaw;
+      }
+      state.originalYaw = 0;
+
+      if (Number.isFinite(state.originalPitch)) {
+        this.pitch = state.originalPitch;
+      }
+      state.originalPitch = 0;
+
+      if (typeof this.refreshCameraBaseOffset === 'function') {
+        this.refreshCameraBaseOffset();
+      }
+
+      const shouldReport = !succeeded && !silent;
+      if (shouldReport) {
+        const diagnosticDetail = {
+          reason,
+          displacementSq: Number.isFinite(maxDisplacementSq)
+            ? Number.parseFloat(maxDisplacementSq.toFixed(6))
+            : null,
+          avatarDisplacementSq: Number.isFinite(maxAvatarDisplacementSq)
+            ? Number.parseFloat(maxAvatarDisplacementSq.toFixed(6))
+            : null,
+        };
+        if (typeof notifyLiveDiagnostics === 'function') {
+          notifyLiveDiagnostics(
+            'movement',
+            'Movement autotest failed — simulated WASD input did not move the player.',
+            diagnosticDetail,
+            { level: 'error' },
+          );
+        }
+        if (typeof console !== 'undefined') {
+          const logger =
+            typeof console.error === 'function'
+              ? console.error.bind(console)
+              : typeof console.warn === 'function'
+                ? console.warn.bind(console)
+                : typeof console.log === 'function'
+                  ? console.log.bind(console)
+                  : null;
+          if (logger) {
+            logger(
+              'Movement autotest failed — simulated WASD input did not move the player. Check keyboard bindings and physics constraints.',
+              diagnosticDetail,
+            );
+          }
+        }
+      }
+
+      state.active = false;
+      state.reason = null;
+      state.actions = [];
+      state.actionIndex = 0;
+      state.actionActive = false;
+      state.framesElapsed = 0;
+      state.framesPerAction = 0;
+      state.anchorBaseline = null;
+      state.avatarBaseline = null;
+      state.moved = false;
+      state.maxDisplacementSq = 0;
+      state.maxAvatarDisplacementSq = 0;
+    }
+
+    cancelMovementAutotest(options = {}) {
+      const state = this.movementAutotestState;
+      if (!state) {
+        return;
+      }
+      const scope =
+        (typeof window !== 'undefined' && window) || (typeof globalThis !== 'undefined' && globalThis) || null;
+      if (state.handle && scope?.clearTimeout) {
+        scope.clearTimeout(state.handle);
+        state.handle = null;
+      }
+      if (state.active) {
+        const reason =
+          typeof options.reason === 'string' && options.reason.trim().length
+            ? options.reason.trim()
+            : state.reason || 'boot';
+        this.finishMovementAutotest(false, { reason, silent: true });
+      } else {
+        state.reason = null;
+      }
+    }
+
     handleResize() {
       if (!this.renderer || !this.camera) return;
       const width = this.canvas.clientWidth || window.innerWidth || 1;
@@ -19578,7 +20068,9 @@
       }
       this.elapsed += delta;
       this.updateDayNightCycle();
+      this.prepareMovementAutotestStep(delta);
       this.updateMovement(delta);
+      this.completeMovementAutotestStep(delta);
       this.updateCameraShake(delta);
       this.updateTerrainCulling(delta);
       this.updateZombies(delta);
