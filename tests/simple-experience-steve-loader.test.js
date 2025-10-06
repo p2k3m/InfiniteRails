@@ -89,7 +89,6 @@ describe('simple experience steve model loading', () => {
 
   it('falls back to placeholder when idle/walk animation clips are missing', async () => {
     const { experience } = createExperience();
-    const { THREE } = experience;
     const originalCloneModelScene = experience.cloneModelScene;
     const originalApplyCameraPerspective = experience.applyCameraPerspective;
     const originalEnsurePlayerArmsVisible = experience.ensurePlayerArmsVisible;
@@ -153,7 +152,6 @@ describe('simple experience steve model loading', () => {
 
   it('initialises player rig with idle base state and preloaded walk clip', async () => {
     const { experience } = createExperience();
-    const { THREE } = experience;
     const originalCloneModelScene = experience.cloneModelScene;
     const originalApplyCameraPerspective = experience.applyCameraPerspective;
     const originalEnsurePlayerArmsVisible = experience.ensurePlayerArmsVisible;
@@ -214,6 +212,122 @@ describe('simple experience steve model loading', () => {
       experience.applyCameraPerspective = originalApplyCameraPerspective;
       experience.ensurePlayerArmsVisible = originalEnsurePlayerArmsVisible;
     }
+  });
+
+  it('restarts locomotion clips when the animation watchdog detects stalled actions', () => {
+    const { experience } = createExperience();
+    const rig = {
+      key: 'steve',
+      mixer: { update: vi.fn() },
+      actions: {
+        idle: {
+          enabled: true,
+          isRunning: vi.fn().mockReturnValue(false),
+          getEffectiveWeight: vi.fn().mockReturnValue(0),
+          time: 0,
+        },
+        walk: {
+          enabled: true,
+          isRunning: vi.fn().mockReturnValue(false),
+          getEffectiveWeight: vi.fn().mockReturnValue(0),
+          time: 0,
+        },
+      },
+      baseState: 'idle',
+      state: 'idle',
+    };
+    experience.playerAnimationRig = rig;
+    const primeSpy = vi.spyOn(experience, 'primePlayerLocomotionAnimations').mockReturnValue(true);
+    const setStateSpy = vi.spyOn(experience, 'setAnimationRigState').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const timestamps = [0, 1400, 2800];
+    experience.getHighResTimestamp = vi.fn(() => timestamps.shift() ?? 3600);
+    experience.playerAnimationWatchdog = { restartAttempts: 0, forcedPose: false, cooldownUntil: 0 };
+
+    experience.updatePlayerAnimation(0.016);
+
+    expect(primeSpy).toHaveBeenCalledWith(rig);
+    expect(experience.playerAnimationWatchdog.restartAttempts).toBe(1);
+    expect(warnSpy).toHaveBeenCalledWith(
+      'Animation mixer watchdog detected stalled locomotion clips — attempting restart.',
+      expect.objectContaining({ attempt: 1, idleHealthy: false, walkHealthy: false }),
+    );
+
+    primeSpy.mockRestore();
+    setStateSpy.mockRestore();
+    warnSpy.mockRestore();
+  });
+
+  it('forces a fallback pose when locomotion clips cannot be restarted', () => {
+    const { experience } = createExperience();
+    const { THREE } = experience;
+    const avatar = new THREE.Group();
+    const hips = new THREE.Object3D();
+    const leftArm = new THREE.Object3D();
+    leftArm.name = 'LeftArm';
+    const rightArm = new THREE.Object3D();
+    rightArm.name = 'RightArm';
+    hips.add(leftArm);
+    hips.add(rightArm);
+    avatar.add(hips);
+    avatar.userData = {};
+    experience.playerAvatar = avatar;
+    experience.handGroup = null;
+    experience.ensurePlayerArmsVisible = vi.fn();
+    const createHandsSpy = vi
+      .spyOn(experience, 'createFirstPersonHands')
+      .mockImplementation(() => {
+        const fallback = new THREE.Group();
+        experience.handGroup = fallback;
+        return null;
+      });
+
+    const rig = {
+      key: 'steve',
+      mixer: { update: vi.fn() },
+      actions: {
+        idle: {
+          enabled: true,
+          isRunning: vi.fn().mockReturnValue(false),
+          getEffectiveWeight: vi.fn().mockReturnValue(0),
+          time: 0,
+        },
+        walk: {
+          enabled: true,
+          isRunning: vi.fn().mockReturnValue(false),
+          getEffectiveWeight: vi.fn().mockReturnValue(0),
+          time: 0,
+        },
+      },
+      baseState: 'idle',
+      state: 'idle',
+    };
+    experience.playerAnimationRig = rig;
+    const primeSpy = vi.spyOn(experience, 'primePlayerLocomotionAnimations').mockReturnValue(false);
+    const setStateSpy = vi.spyOn(experience, 'setAnimationRigState').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const poseSpy = vi.spyOn(experience, 'applyPlayerForcedPose');
+    const timestamps = [0, 900, 1800, 2700, 3600];
+    experience.getHighResTimestamp = vi.fn(() => timestamps.shift() ?? 4500);
+    experience.playerAnimationWatchdog = { restartAttempts: 0, forcedPose: false, cooldownUntil: 0 };
+
+    experience.updatePlayerAnimation(0.016);
+    experience.updatePlayerAnimation(0.016);
+    experience.updatePlayerAnimation(0.016);
+
+    expect(primeSpy).toHaveBeenCalledTimes(3);
+    expect(poseSpy).toHaveBeenCalledWith('animation-watchdog');
+    expect(experience.playerAnimationWatchdog.forcedPose).toBe(true);
+    expect(experience.playerAvatar.userData.forcedPose).toBe('animation-watchdog');
+    expect(leftArm.rotation.x).not.toBeCloseTo(0);
+    expect(rightArm.rotation.x).not.toBeCloseTo(0);
+    expect(createHandsSpy).toHaveBeenCalled();
+
+    primeSpy.mockRestore();
+    setStateSpy.mockRestore();
+    warnSpy.mockRestore();
+    poseSpy.mockRestore();
+    createHandsSpy.mockRestore();
   });
 });
 

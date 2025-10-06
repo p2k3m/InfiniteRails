@@ -2640,6 +2640,11 @@
       this.playerMixer = null;
       this.playerIdleAction = null;
       this.playerAnimationRig = null;
+      this.playerAnimationWatchdog = {
+        restartAttempts: 0,
+        forcedPose: false,
+        cooldownUntil: 0,
+      };
       this.playerAvatarLoaded = false;
       this.handSwingStrength = 0;
       this.handSwingTimer = 0;
@@ -2690,6 +2695,8 @@
       this.handOverlayLabelEl = this.ui.handOverlayLabelEl || null;
       this.playerHintEl = this.ui.playerHintEl || null;
       this.pointerHintEl = this.ui.pointerHintEl || null;
+
+      this.resetPlayerAnimationWatchdog();
       this.footerEl = this.ui.footerEl || null;
       this.footerScoreEl = this.ui.footerScoreEl || null;
       this.footerDimensionEl = this.ui.footerDimensionEl || null;
@@ -13025,6 +13032,7 @@
         this.playerAnimationRig = null;
         this.playerMixer = null;
         this.playerIdleAction = null;
+        this.resetPlayerAnimationWatchdog();
         return null;
       }
       const defaultState = options.defaultState || 'idle';
@@ -13036,6 +13044,7 @@
         });
         this.playerMixer = this.playerAnimationRig.mixer || null;
         this.playerIdleAction = this.playerAnimationRig.actions?.idle || null;
+        this.resetPlayerAnimationWatchdog();
         return this.playerAnimationRig;
       }
       if (this.playerAnimationRig) {
@@ -13052,6 +13061,7 @@
       this.playerAnimationRig = rig || null;
       this.playerMixer = rig?.mixer || null;
       this.playerIdleAction = rig?.actions?.idle || null;
+      this.resetPlayerAnimationWatchdog();
       if (rig) {
         this.setAnimationRigState(rig, defaultState, {
           fade: 0,
@@ -13100,6 +13110,160 @@
         });
       }
       return primed;
+    }
+
+    resetPlayerAnimationWatchdog() {
+      const now = typeof this.getHighResTimestamp === 'function'
+        ? this.getHighResTimestamp()
+        : Date.now();
+      this.playerAnimationWatchdog = {
+        restartAttempts: 0,
+        forcedPose: false,
+        cooldownUntil: now + 1000,
+      };
+    }
+
+    isAnimationActionActive(action) {
+      if (!action) {
+        return false;
+      }
+      if (action.enabled !== true) {
+        return false;
+      }
+      if (typeof action.isRunning === 'function') {
+        try {
+          if (action.isRunning()) {
+            return true;
+          }
+        } catch (error) {
+          if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+            console.debug('Animation action status inspection failed.', error);
+          }
+        }
+      }
+      const weight = typeof action.getEffectiveWeight === 'function'
+        ? action.getEffectiveWeight()
+        : Number.isFinite(action.weight)
+          ? action.weight
+          : 0;
+      if (Number.isFinite(weight) && Math.abs(weight) > 0.0001) {
+        return true;
+      }
+      if (typeof action.paused === 'boolean' && action.paused) {
+        return false;
+      }
+      if (typeof action.time === 'number' && action.time > 0.001) {
+        return true;
+      }
+      return false;
+    }
+
+    applyPlayerForcedPose(reason = 'animation-watchdog') {
+      const avatar = this.playerAvatar;
+      const THREE = this.THREE;
+      if (!avatar || !THREE) {
+        return false;
+      }
+      const poseName = typeof reason === 'string' && reason.trim().length ? reason.trim() : 'animation-watchdog';
+      const poseMap = {
+        LeftArm: { rotation: new THREE.Euler(-0.42, 0.34, 0.18) },
+        RightArm: { rotation: new THREE.Euler(-0.42, -0.34, -0.18) },
+        LeftLeg: { rotation: new THREE.Euler(0.24, 0.08, 0.04) },
+        RightLeg: { rotation: new THREE.Euler(-0.24, -0.08, -0.04) },
+        Head: { rotation: new THREE.Euler(0.12, 0, 0) },
+      };
+      let applied = false;
+      if (typeof avatar.traverse === 'function') {
+        avatar.traverse((child) => {
+          const targetPose = poseMap[child?.name];
+          if (!targetPose) {
+            return;
+          }
+          if (targetPose.rotation instanceof THREE.Euler) {
+            child.rotation.copy(targetPose.rotation);
+            applied = true;
+          }
+          if (targetPose.position instanceof THREE.Vector3) {
+            child.position.copy(targetPose.position);
+            applied = true;
+          }
+        });
+      }
+      if (!this.handGroup || !Array.isArray(this.handGroup.children) || this.handGroup.children.length === 0) {
+        if (typeof this.createFirstPersonHands === 'function') {
+          try {
+            this.createFirstPersonHands();
+            applied = true;
+          } catch (error) {
+            if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+              console.debug('Forced pose hand fallback failed.', error);
+            }
+          }
+        }
+      } else {
+        this.ensurePlayerArmsVisible();
+      }
+      if (applied) {
+        avatar.userData = {
+          ...(avatar.userData || {}),
+          forcedPose: poseName,
+        };
+      }
+      return applied;
+    }
+
+    evaluatePlayerAnimationRigWatchdog(rig) {
+      if (!rig || !rig.actions) {
+        return;
+      }
+      if (!this.playerAnimationWatchdog) {
+        this.resetPlayerAnimationWatchdog();
+      }
+      const state = this.playerAnimationWatchdog;
+      const now = typeof this.getHighResTimestamp === 'function'
+        ? this.getHighResTimestamp()
+        : Date.now();
+      const idleHealthy = this.isAnimationActionActive(rig.actions.idle);
+      const walkHealthy = this.isAnimationActionActive(rig.actions.walk);
+      if (idleHealthy && walkHealthy) {
+        if (state.forcedPose && this.playerAvatar?.userData) {
+          delete this.playerAvatar.userData.forcedPose;
+        }
+        state.restartAttempts = 0;
+        state.forcedPose = false;
+        state.cooldownUntil = now + 1500;
+        return;
+      }
+      if (now < state.cooldownUntil) {
+        return;
+      }
+      state.restartAttempts += 1;
+      state.cooldownUntil = now + 800;
+      if (typeof console !== 'undefined' && typeof console.warn === 'function') {
+        console.warn('Animation mixer watchdog detected stalled locomotion clips — attempting restart.', {
+          idleHealthy,
+          walkHealthy,
+          attempt: state.restartAttempts,
+        });
+      }
+      const restartSucceeded = this.primePlayerLocomotionAnimations(rig);
+      if (!restartSucceeded && rig.baseState) {
+        this.setAnimationRigState(rig, rig.baseState, {
+          fade: 0,
+          forceDuringPulse: true,
+          force: true,
+        });
+      }
+      if (state.restartAttempts >= 3 && !state.forcedPose) {
+        const forced = this.applyPlayerForcedPose('animation-watchdog');
+        if (forced) {
+          state.forcedPose = true;
+          state.cooldownUntil = now + 3000;
+          if (typeof console !== 'undefined' && typeof console.warn === 'function') {
+            console.warn('Animation mixer watchdog applied forced idle pose for player avatar.');
+          }
+        }
+      }
     }
 
     setAnimationRigState(rig, state, options = {}) {
@@ -13263,6 +13427,9 @@
             console.debug('Unable to dispose animation mixer cleanly.', error);
           }
         }
+      }
+      if (rig === this.playerAnimationRig) {
+        this.resetPlayerAnimationWatchdog();
       }
     }
 
@@ -19857,6 +20024,7 @@
     updatePlayerAnimation(delta) {
       if (this.playerAnimationRig) {
         this.updateAnimationRig(this.playerAnimationRig, delta);
+        this.evaluatePlayerAnimationRigWatchdog(this.playerAnimationRig);
         return;
       }
       if (this.playerMixer) {
