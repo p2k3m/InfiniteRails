@@ -20103,7 +20103,10 @@
       const position = this.playerRig ? this.playerRig.position : this.camera.position;
       position.add(this.velocity);
 
-      const groundHeight = this.sampleGroundHeight(position.x, position.z);
+      let groundHeight = this.sampleGroundHeight(position.x, position.z);
+      if (this.spawnSafetyBlockAtPlayerFeetIfNeeded(position.x, position.z)) {
+        groundHeight = this.sampleGroundHeight(position.x, position.z);
+      }
       if ((this.isActionActive('jump') || this.touchJumpRequested) && this.isGrounded) {
         const jumpBoost = 4.6 + (1.5 - Math.min(1.5, this.gravityScale));
         this.verticalVelocity = jumpBoost;
@@ -20288,6 +20291,69 @@
       const gridZ = Math.round(z / BLOCK_SIZE + WORLD_SIZE / 2);
       const height = this.heightMap[gridX]?.[gridZ] ?? 0;
       return height * BLOCK_SIZE;
+    }
+
+    spawnSafetyBlockAtPlayerFeetIfNeeded(x, z) {
+      const THREE = this.THREE;
+      if (!THREE || !this.blockGeometry || !this.materials) {
+        return false;
+      }
+      if (!Number.isFinite(x) || !Number.isFinite(z)) {
+        return false;
+      }
+      const halfWorld = WORLD_SIZE / 2;
+      const gridX = Math.round(x / BLOCK_SIZE + halfWorld);
+      const gridZ = Math.round(z / BLOCK_SIZE + halfWorld);
+      if (gridX < 0 || gridX >= WORLD_SIZE || gridZ < 0 || gridZ >= WORLD_SIZE) {
+        return false;
+      }
+      if (!this.columns || typeof this.columns.get !== 'function') {
+        return false;
+      }
+      const columnKey = `${gridX}|${gridZ}`;
+      const existingColumn = this.columns.get(columnKey);
+      if (Array.isArray(existingColumn) && existingColumn.length > 0) {
+        return false;
+      }
+      const column = Array.isArray(existingColumn) ? existingColumn : [];
+      const chunkKey = this.getTerrainChunkKey(gridX, gridZ);
+      const chunk = this.ensureTerrainChunk(chunkKey);
+      if (!chunk) {
+        return false;
+      }
+      const material = this.materials.stone || this.materials.dirt || this.materials.grass;
+      if (!material) {
+        return false;
+      }
+      const worldX = (gridX - halfWorld) * BLOCK_SIZE;
+      const worldZ = (gridZ - halfWorld) * BLOCK_SIZE;
+      const mesh = new THREE.Mesh(this.blockGeometry, material);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      mesh.position.set(worldX, BLOCK_SIZE / 2, worldZ);
+      mesh.matrixAutoUpdate = false;
+      mesh.updateMatrix();
+      mesh.visible = true;
+      mesh.userData = {
+        columnKey,
+        level: 0,
+        gx: gridX,
+        gz: gridZ,
+        blockType: 'stone',
+        chunkKey,
+        safetyBlock: true,
+      };
+      chunk.add(mesh);
+      column.push(mesh);
+      this.columns.set(columnKey, column);
+      if (Array.isArray(this.heightMap?.[gridX])) {
+        this.heightMap[gridX][gridZ] = column.length;
+      }
+      this.markTerrainChunkDirty(chunkKey);
+      if (typeof this.updatePortalFrameStateForColumn === 'function') {
+        this.updatePortalFrameStateForColumn(gridX, gridZ);
+      }
+      return true;
     }
 
     updateDayNightCycle() {
