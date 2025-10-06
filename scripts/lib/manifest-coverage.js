@@ -35,6 +35,10 @@ const DEFAULT_ALWAYS_REACHABLE_ASSETS = new Set([
   'scoreboard-utils.js',
   'assets/audio-samples.json',
   'assets/offline-assets.js',
+  'assets/arm.gltf',
+  'assets/iron_golem.gltf',
+  'assets/zombie.gltf',
+  'vendor/howler-stub.js',
 ]);
 
 function toPosixPath(value) {

@@ -5,9 +5,9 @@
     "index.html?v=b6a3642fd510",
     "styles.css?v=be5159d149bd",
     "controls.config.js?v=435adbf8575b",
-    "script.js?v=02d128b0375f",
+    "script.js?v=de8df2ffe694",
     "test-driver.js?v=0074c367d97c",
-    "simple-experience.js?v=9f8c29bd169b",
+    "simple-experience.js?v=613ed82b7d41",
     "asset-resolver.js?v=388f0ca33542",
     "audio-aliases.js?v=8db3f846ecb9",
     "audio-captions.js?v=101e375dcd9e",
@@ -21,11 +21,11 @@
     "assets/infinite-dimension-logo.svg?v=291c330e95ff",
     "assets/manu-logo.svg?v=c61dc5bc939a",
     "assets/steve.gltf?v=9935456e2321",
-    "assets/arm.gltf?v=7041a5260093",
-    "assets/iron_golem.gltf?v=595de218f334",
-    "assets/zombie.gltf?v=6738b2fe9c9d",
+    "assets/arm.gltf?v=f66dc9be906d",
+    "assets/iron_golem.gltf?v=69a93ff7df34",
+    "assets/zombie.gltf?v=7b92d3aaee8c",
     "vendor/three.min.js?v=030c75d4e909",
     "vendor/GLTFLoader.js?v=0e92b0589a2a",
-    "vendor/howler-stub.js?v=d207ea2751f9"
+    "vendor/howler-stub.js?v=bcf1ff344bc2"
   ]
 }
