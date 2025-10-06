@@ -5,6 +5,12 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
 
+const DefaultWebGL2RenderingContextStub = function WebGL2RenderingContextStub() {};
+
+if (typeof globalThis.WebGL2RenderingContext !== 'function') {
+  globalThis.WebGL2RenderingContext = DefaultWebGL2RenderingContextStub;
+}
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, '..');
@@ -12,13 +18,16 @@ const PORTAL_SHADER_FALLBACK_ANNOUNCEMENT = 'Portal shader offline — emissive 
 
 function createCanvasStub() {
   const loseContextStub = { loseContext: () => {} };
-  const webglContext = {
-    getExtension: (name) => {
-      if (name === 'WEBGL_lose_context') {
-        return loseContextStub;
-      }
-      return null;
-    },
+  const webglContextPrototype =
+    typeof globalThis.WebGL2RenderingContext === 'function'
+      ? globalThis.WebGL2RenderingContext.prototype
+      : Object.prototype;
+  const webglContext = Object.create(webglContextPrototype);
+  webglContext.getExtension = (name) => {
+    if (name === 'WEBGL_lose_context') {
+      return loseContextStub;
+    }
+    return null;
   };
   const context2d = {
     fillStyle: '#000000',
@@ -83,6 +92,7 @@ function ensureSimpleExperienceLoaded() {
   };
 
   Object.assign(windowStub, { THREE, THREE_GLOBAL: THREE });
+  windowStub.WebGL2RenderingContext = globalThis.WebGL2RenderingContext;
 
   globalThis.window = windowStub;
   globalThis.document = documentStub;

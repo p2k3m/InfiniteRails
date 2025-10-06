@@ -5,6 +5,12 @@ import { fileURLToPath } from 'node:url';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
 
+const DefaultWebGL2RenderingContextStub = function WebGL2RenderingContextStub() {};
+
+if (typeof globalThis.WebGL2RenderingContext !== 'function') {
+  globalThis.WebGL2RenderingContext = DefaultWebGL2RenderingContextStub;
+}
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, '..');
@@ -14,9 +20,12 @@ function createCanvasStub() {
     fillStyle: '#000000',
     fillRect: () => {},
   };
-  const webglContext = {
-    getExtension: () => ({ loseContext: () => {} }),
-  };
+  const webglContextPrototype =
+    typeof globalThis.WebGL2RenderingContext === 'function'
+      ? globalThis.WebGL2RenderingContext.prototype
+      : Object.prototype;
+  const webglContext = Object.create(webglContextPrototype);
+  webglContext.getExtension = () => ({ loseContext: () => {} });
   return {
     width: 256,
     height: 256,
@@ -54,6 +63,7 @@ beforeAll(() => {
   };
 
   Object.assign(windowStub, { THREE, THREE_GLOBAL: THREE, document: documentStub });
+  windowStub.WebGL2RenderingContext = globalThis.WebGL2RenderingContext;
 
   if (typeof globalThis.CustomEvent !== 'function') {
     globalThis.CustomEvent = class CustomEventMock {

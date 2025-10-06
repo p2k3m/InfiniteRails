@@ -18988,6 +18988,26 @@
           { powerPreference: 'high-performance' },
           {},
         ];
+        const constructor =
+          scope && typeof scope.WebGL2RenderingContext === 'function' ? scope.WebGL2RenderingContext : null;
+        if (!constructor) {
+          const error = new Error('WebGL2RenderingContext constructor missing.');
+          error.name = 'WebGL2UnavailableError';
+          const message =
+            'WebGL2 support is required to explore the realms. Enable hardware acceleration or switch to a compatible browser and reload the page.';
+          this.emitGameEvent('initialisation-error', {
+            stage: 'webgl2-probe',
+            message,
+            errorName: error.name,
+            errorMessage: error.message,
+          });
+          this.presentRendererFailure(message, {
+            stage: 'webgl2-probe',
+            reason: 'webgl2-unavailable',
+            error,
+          });
+          return false;
+        }
         let context = null;
         let attributesUsed = null;
         for (const attributes of attributeCandidates) {
@@ -18998,34 +19018,38 @@
           }
         }
         if (!context) {
+          const error = new Error('Canvas getContext("webgl2") returned null.');
+          error.name = 'WebGL2ContextUnavailable';
           const message =
             'WebGL2 support is unavailable. Enable hardware acceleration or switch to a compatible browser to explore the realms.';
-          const missingConstructor =
-            !scope || typeof scope.WebGL2RenderingContext === 'undefined' || scope.WebGL2RenderingContext === null;
-
-          if (missingConstructor) {
-            const fallbackContext =
-              probe.getContext('webgl', { powerPreference: 'high-performance' }) ||
-              probe.getContext('experimental-webgl');
-            if (fallbackContext) {
-              if (typeof console !== 'undefined' && typeof console.warn === 'function') {
-                console.warn(
-                  'WebGL2 constructor missing — falling back to WebGL1 context. Visual fidelity may be reduced in this environment.',
-                );
-              }
-              return true;
-            }
-          }
-
           this.emitGameEvent('initialisation-error', {
             stage: 'webgl2-probe',
             message,
-            errorName: 'WebGL2ContextUnavailable',
-            errorMessage: 'Canvas getContext("webgl2") returned null.',
+            errorName: error.name,
+            errorMessage: error.message,
           });
           this.presentRendererFailure(message, {
             stage: 'webgl2-probe',
             reason: 'webgl2-unavailable',
+            error,
+          });
+          return false;
+        }
+        if (!(context instanceof constructor)) {
+          const error = new Error('Canvas getContext("webgl2") returned a context without WebGL2 capabilities.');
+          error.name = 'WebGL2ContextUnavailable';
+          const message =
+            'WebGL2 support is unavailable. Enable hardware acceleration or switch to a compatible browser to explore the realms.';
+          this.emitGameEvent('initialisation-error', {
+            stage: 'webgl2-probe',
+            message,
+            errorName: error.name,
+            errorMessage: error.message,
+          });
+          this.presentRendererFailure(message, {
+            stage: 'webgl2-probe',
+            reason: 'webgl2-unavailable',
+            error,
           });
           return false;
         }

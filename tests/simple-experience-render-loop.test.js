@@ -5,6 +5,12 @@ import { fileURLToPath } from 'node:url';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
 
+const DefaultWebGL2RenderingContextStub = function WebGL2RenderingContextStub() {};
+
+if (typeof globalThis.WebGL2RenderingContext !== 'function') {
+  globalThis.WebGL2RenderingContext = DefaultWebGL2RenderingContextStub;
+}
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, '..');
@@ -19,9 +25,12 @@ function createCanvasStub() {
     arc: () => {},
     fill: () => {},
   };
-  const webglContext = {
-    getExtension: () => ({ loseContext: () => {} }),
-  };
+  const webglContextPrototype =
+    typeof globalThis.WebGL2RenderingContext === 'function'
+      ? globalThis.WebGL2RenderingContext.prototype
+      : Object.prototype;
+  const webglContext = Object.create(webglContextPrototype);
+  webglContext.getExtension = () => ({ loseContext: () => {} });
   return {
     width: 512,
     height: 512,
@@ -65,6 +74,7 @@ function ensureSimpleExperienceLoaded() {
   };
 
   Object.assign(windowStub, { THREE, THREE_GLOBAL: THREE });
+  windowStub.WebGL2RenderingContext = globalThis.WebGL2RenderingContext;
 
   globalThis.window = windowStub;
   globalThis.document = windowStub.document;
@@ -214,6 +224,71 @@ describe('simple experience render loop resilience', () => {
         expect.stringContaining('WebGL output appears blocked'),
         expect.objectContaining({ stage: 'blank-frame' }),
       );
+    });
+  });
+
+  describe('runtime WebGL2 detection', () => {
+    it('disables the renderer when the WebGL2 constructor is missing', () => {
+      const experience = createExperience();
+      const failureSpy = vi.spyOn(experience, 'presentRendererFailure');
+      const eventSpy = vi.spyOn(experience, 'emitGameEvent');
+      const originalWindowCtor = window.WebGL2RenderingContext;
+      const originalGlobalCtor = globalThis.WebGL2RenderingContext;
+
+      try {
+        delete window.WebGL2RenderingContext;
+        delete globalThis.WebGL2RenderingContext;
+
+        const supported = experience.verifyWebglSupport();
+
+        expect(supported).toBe(false);
+        expect(failureSpy).toHaveBeenCalledWith(
+          expect.stringContaining('WebGL2 support is required'),
+          expect.objectContaining({
+            stage: 'webgl2-probe',
+            reason: 'webgl2-unavailable',
+            error: expect.objectContaining({ name: 'WebGL2UnavailableError' }),
+          }),
+        );
+        expect(eventSpy).toHaveBeenCalledWith(
+          'initialisation-error',
+          expect.objectContaining({ errorName: 'WebGL2UnavailableError' }),
+        );
+      } finally {
+        window.WebGL2RenderingContext = originalWindowCtor;
+        globalThis.WebGL2RenderingContext = originalGlobalCtor;
+      }
+    });
+
+    it('reports a renderer failure when a WebGL2 context cannot be created', () => {
+      const experience = createExperience();
+      const failureSpy = vi.spyOn(experience, 'presentRendererFailure');
+      const eventSpy = vi.spyOn(experience, 'emitGameEvent');
+      const originalCreateElement = document.createElement;
+
+      try {
+        document.createElement = vi.fn(() => ({
+          getContext: () => null,
+        }));
+
+        const supported = experience.verifyWebglSupport();
+
+        expect(supported).toBe(false);
+        expect(failureSpy).toHaveBeenCalledWith(
+          expect.stringContaining('WebGL2 support is unavailable'),
+          expect.objectContaining({
+            stage: 'webgl2-probe',
+            reason: 'webgl2-unavailable',
+            error: expect.objectContaining({ name: 'WebGL2ContextUnavailable' }),
+          }),
+        );
+        expect(eventSpy).toHaveBeenCalledWith(
+          'initialisation-error',
+          expect.objectContaining({ errorName: 'WebGL2ContextUnavailable' }),
+        );
+      } finally {
+        document.createElement = originalCreateElement;
+      }
     });
   });
 });
