@@ -33,6 +33,32 @@ function extractDefaultBindings({ source, hotbarConstantName, hotbarCount }) {
   return factory(hotbarCount);
 }
 
+function loadDeclarativeControlMap() {
+  const source = fs.readFileSync(path.join(repoRoot, 'controls.config.js'), 'utf8');
+  const scope = {
+    APP_CONFIG: {},
+    dispatchEvent: () => {},
+  };
+  const CustomEventStub = class CustomEvent {
+    constructor(type, init = {}) {
+      this.type = type;
+      this.detail = init.detail;
+    }
+  };
+  scope.CustomEvent = CustomEventStub;
+  const sandbox = {
+    window: scope,
+    globalThis: scope,
+    CustomEvent: CustomEventStub,
+  };
+  vm.runInNewContext(source, sandbox, { filename: 'controls.config.js' });
+  const map = scope.__INFINITE_RAILS_CONTROL_MAP__;
+  if (!map) {
+    throw new Error('Declarative control map was not initialised.');
+  }
+  return map;
+}
+
 function createCanvasStub() {
   const loseContextStub = { loseContext: () => {} };
   const webglContextPrototype =
@@ -197,11 +223,17 @@ describe('key binding defaults', () => {
     expect(defaults.moveRight).toEqual(['KeyD', 'ArrowRight']);
     expect(defaults.jump).toEqual(['Space']);
     expect(defaults.interact).toEqual(['KeyF']);
+    expect(defaults.resetPosition).toEqual(['KeyT']);
     expect(defaults.placeBlock).toEqual(['KeyQ']);
+    expect(defaults.toggleCameraPerspective).toEqual(['KeyV']);
     expect(defaults.toggleCrafting).toEqual(['KeyE']);
+    expect(defaults.toggleInventory).toEqual(['KeyI']);
     expect(defaults.openGuide).toEqual(['F1']);
+    expect(defaults.toggleTutorial).toEqual(['Slash', 'F4']);
+    expect(defaults.toggleDeveloperOverlay).toEqual(['Backquote', 'F8']);
     expect(defaults.openSettings).toEqual(['F2']);
     expect(defaults.openLeaderboard).toEqual(['F3']);
+    expect(defaults.closeMenus).toEqual(['Escape']);
     expect(defaults.buildPortal).toEqual(['KeyR']);
   });
 
@@ -218,12 +250,48 @@ describe('key binding defaults', () => {
     expect(defaults.moveRight).toEqual(['KeyD', 'ArrowRight']);
     expect(defaults.jump).toEqual(['Space']);
     expect(defaults.interact).toEqual(['KeyF']);
+    expect(defaults.resetPosition).toEqual(['KeyT']);
     expect(defaults.placeBlock).toEqual(['KeyQ']);
+    expect(defaults.toggleCameraPerspective).toEqual(['KeyV']);
     expect(defaults.toggleCrafting).toEqual(['KeyE']);
+    expect(defaults.toggleInventory).toEqual(['KeyI']);
     expect(defaults.openGuide).toEqual(['F1']);
+    expect(defaults.toggleTutorial).toEqual(['Slash', 'F4']);
+    expect(defaults.toggleDeveloperOverlay).toEqual(['Backquote', 'F8']);
     expect(defaults.openSettings).toEqual(['F2']);
     expect(defaults.openLeaderboard).toEqual(['F3']);
+    expect(defaults.closeMenus).toEqual(['Escape']);
     expect(defaults.buildPortal).toEqual(['KeyR']);
+  });
+});
+
+describe('declarative control map configuration', () => {
+  it('exposes the default control map via configuration script', () => {
+    const map = loadDeclarativeControlMap();
+    expect(map.moveForward).toEqual(['KeyW', 'ArrowUp']);
+    expect(map.moveBackward).toEqual(['KeyS', 'ArrowDown']);
+    expect(map.moveLeft).toEqual(['KeyA', 'ArrowLeft']);
+    expect(map.moveRight).toEqual(['KeyD', 'ArrowRight']);
+    expect(map.jump).toEqual(['Space']);
+    expect(map.interact).toEqual(['KeyF']);
+    expect(map.buildPortal).toEqual(['KeyR']);
+    expect(map.resetPosition).toEqual(['KeyT']);
+    expect(map.placeBlock).toEqual(['KeyQ']);
+    expect(map.toggleCameraPerspective).toEqual(['KeyV']);
+    expect(map.toggleCrafting).toEqual(['KeyE']);
+    expect(map.toggleInventory).toEqual(['KeyI']);
+    expect(map.openGuide).toEqual(['F1']);
+    expect(map.toggleTutorial).toEqual(['Slash', 'F4']);
+    expect(map.toggleDeveloperOverlay).toEqual(['Backquote', 'F8']);
+    expect(map.openSettings).toEqual(['F2']);
+    expect(map.openLeaderboard).toEqual(['F3']);
+    expect(map.closeMenus).toEqual(['Escape']);
+  });
+
+  it('keeps runtime defaults aligned with the declarative map', () => {
+    const declarativeMap = loadDeclarativeControlMap();
+    const defaults = window.SimpleExperience.controlMap.defaults();
+    expect(defaults).toEqual(declarativeMap);
   });
 });
 

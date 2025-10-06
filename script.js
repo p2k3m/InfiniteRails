@@ -9190,12 +9190,18 @@
         moveRight: ['KeyD', 'ArrowRight'],
         jump: ['Space'],
         interact: ['KeyF'],
+        buildPortal: ['KeyR'],
+        resetPosition: ['KeyT'],
         placeBlock: ['KeyQ'],
+        toggleCameraPerspective: ['KeyV'],
         toggleCrafting: ['KeyE'],
+        toggleInventory: ['KeyI'],
         openGuide: ['F1'],
+        toggleTutorial: ['Slash', 'F4'],
+        toggleDeveloperOverlay: ['Backquote', 'F8'],
         openSettings: ['F2'],
         openLeaderboard: ['F3'],
-        buildPortal: ['KeyR'],
+        closeMenus: ['Escape'],
       };
       for (let index = 1; index <= HOTBAR_SLOT_COUNT; index += 1) {
         const digit = index % 10;
@@ -9307,12 +9313,18 @@
       moveRight: ['KeyD', 'ArrowRight'],
       jump: ['Space'],
       interact: ['KeyF'],
+      buildPortal: ['KeyR'],
+      resetPosition: ['KeyT'],
       placeBlock: ['KeyQ'],
+      toggleCameraPerspective: ['KeyV'],
       toggleCrafting: ['KeyE'],
+      toggleInventory: ['KeyI'],
       openGuide: ['F1'],
+      toggleTutorial: ['Slash', 'F4'],
+      toggleDeveloperOverlay: ['Backquote', 'F8'],
       openSettings: ['F2'],
       openLeaderboard: ['F3'],
-      buildPortal: ['KeyR'],
+      closeMenus: ['Escape'],
     };
     for (let index = 1; index <= HOTBAR_SLOT_COUNT; index += 1) {
       const digit = index % 10;
