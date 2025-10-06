@@ -246,6 +246,100 @@ describe('simple experience terrain generation', () => {
     }
   });
 
+  it('resolves alternate CDN texture base URLs when configured', () => {
+    window.APP_CONFIG = {
+      textureBaseUrl: 'https://primary.example.com/textures',
+      textureAlternateBaseUrls: [
+        'https://alt-one.example.com/assets/',
+        'https://alt-two.example.com/cdn',
+      ],
+    };
+
+    const canvas = {
+      width: 512,
+      height: 512,
+      clientWidth: 512,
+      clientHeight: 512,
+      getContext: () => null,
+    };
+
+    const experience = window.SimpleExperience.create({ canvas, ui: {} });
+    const sources = experience.getExternalTextureSources('grass');
+
+    expect(sources).toContain('https://primary.example.com/textures/grass.png');
+    expect(sources).toContain('https://alt-one.example.com/assets/grass.png');
+    expect(sources).toContain('https://alt-two.example.com/cdn/grass.png');
+    window.APP_CONFIG = {};
+  });
+
+  it('hot-reloads textures from alternate CDN endpoints via refreshTexturePack', async () => {
+    window.APP_CONFIG = {
+      textureBaseUrl: 'https://primary.example.com/textures',
+    };
+
+    const canvas = {
+      width: 512,
+      height: 512,
+      clientWidth: 512,
+      clientHeight: 512,
+      getContext: () => null,
+    };
+
+    const loadSpy = vi
+      .spyOn(THREE.TextureLoader.prototype, 'load')
+      .mockImplementation((url, onLoad, onProgress, onError) => {
+        const texture = new THREE.Texture();
+        setTimeout(() => {
+          if (url.includes('primary.example.com')) {
+            onError?.(new Error('Primary CDN unavailable'));
+          } else {
+            texture.userData = { url };
+            onLoad?.(texture);
+          }
+        }, 0);
+        return texture;
+      });
+
+    try {
+      const experience = window.SimpleExperience.create({ canvas, ui: {} });
+      const defaultTexture = experience.materials.grass.map;
+
+      const initialPromise = experience.loadExternalVoxelTexture('grass');
+      await initialPromise;
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(experience.textureFallbackMissingKeys.has('grass')).toBe(true);
+      expect(experience.materials.grass.map).toBe(defaultTexture);
+
+      window.APP_CONFIG.textureAlternateBaseUrls = ['https://alt.example.com/cdn'];
+
+      const refreshSummary = await experience.refreshTexturePack({ source: 'test', keys: ['grass'] });
+      expect(Array.isArray(refreshSummary.results)).toBe(true);
+      expect(refreshSummary.succeeded).toContain('grass');
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      const refreshedTexture = experience.materials.grass.map;
+      expect(refreshedTexture).not.toBe(defaultTexture);
+      expect(experience.textureFallbackMissingKeys.has('grass')).toBe(false);
+
+      expect(loadSpy).toHaveBeenCalledWith(
+        expect.stringContaining('https://primary.example.com/textures/grass.png'),
+        expect.any(Function),
+        expect.anything(),
+        expect.any(Function),
+      );
+      expect(loadSpy).toHaveBeenCalledWith(
+        expect.stringContaining('https://alt.example.com/cdn/grass.png'),
+        expect.any(Function),
+        expect.anything(),
+        expect.any(Function),
+      );
+    } finally {
+      loadSpy.mockRestore();
+      window.APP_CONFIG = {};
+    }
+  });
+
   it('notifies the player after repeated texture pack failures', async () => {
     window.APP_CONFIG = {
       textures: {
