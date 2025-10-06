@@ -1501,6 +1501,8 @@
     golem: resolveAssetUrl('assets/iron_golem.gltf?v=69a93ff7df34'),
   };
 
+  const CRITICAL_MODEL_FALLBACK_KEYS = new Set(['steve', 'zombie', 'golem']);
+
   const MODEL_URL_LOOKUP = (() => {
     const entries = Object.entries(MODEL_URLS)
       .map(([key, url]) => [typeof url === 'string' ? url : null, key])
@@ -11673,20 +11675,27 @@
             ? { fallbackMessage: this.buildModelLoaderFallbackMessage(key) }
             : undefined;
           this.handleAssetLoadFailure(key, error, fallbackOptions);
+          const normalisedKey = typeof key === 'string' ? key.trim().toLowerCase() : '';
+          let fallbackScene = null;
           if (loaderUnavailable) {
             this.recordAssetFailure('script:gltfloader', {
               fallbackMessage:
                 'Model loader script unavailable — placeholder visuals active until assets recover.',
               error,
             });
-            const fallbackScene = this.createModelFallbackMesh(key, { reason: 'loader-unavailable' });
-            if (fallbackScene) {
-              const fallbackPayload = { scene: fallbackScene, animations: [] };
-              this.loadedModels.set(key, fallbackPayload);
-              return fallbackPayload;
-            }
+            fallbackScene = this.createModelFallbackMesh(key, { reason: 'loader-unavailable' });
+          }
+          if (!fallbackScene && CRITICAL_MODEL_FALLBACK_KEYS.has(normalisedKey)) {
+            fallbackScene = this.createModelFallbackMesh(key, {
+              reason: loaderUnavailable ? 'loader-unavailable' : 'failed',
+            });
           }
           this.modelPromises.delete(key);
+          if (fallbackScene) {
+            const fallbackPayload = { scene: fallbackScene, animations: [] };
+            this.loadedModels.set(key, fallbackPayload);
+            return fallbackPayload;
+          }
           throw error;
         });
       this.modelPromises.set(key, promise);
@@ -12649,107 +12658,126 @@
       };
       switch (normalisedKey) {
         case 'steve': {
-          const placeholder = this.buildAvatarPlaceholderMesh(reasonLabel);
-          if (placeholder) {
-            placeholder.name = 'PlayerAvatarFallback';
+          const mesh = buildPrimitiveFallback('box', {
+            width: 0.6,
+            height: 1.8,
+            depth: 0.4,
+            color: '#2563eb',
+            emissive: '#1e3a8a',
+            emissiveIntensity: 0.24,
+            roughness: 0.7,
+            metalness: 0.18,
+            name: 'SteveFallbackBox',
+          });
+          const placeholder = withPrimitiveFallback(mesh, 'steve', {
+            shape: 'box',
+            width: 0.6,
+            height: 1.8,
+            depth: 0.4,
+            color: '#2563eb',
+            name: 'StevePrimitiveFallback',
+            emissive: '#1e3a8a',
+            emissiveIntensity: 0.24,
+            roughness: 0.7,
+            metalness: 0.18,
+          });
+          if (placeholder && showErrorOverlay) {
+            this.attachModelFallbackErrorOverlay(placeholder, {
+              key: 'steve',
+              reason: reasonLabel,
+              label: 'Steve',
+              detail: 'Missing GLTF',
+              width: 1.7,
+              height: 0.6,
+              offsetY: 1.35,
+              backgroundColor: 'rgba(37, 99, 235, 0.92)',
+              borderColor: 'rgba(191, 219, 254, 0.65)',
+              textColor: '#eff6ff',
+              detailColor: '#bfdbfe',
+              name: 'SteveMissingOverlay',
+            });
           }
-          return withPrimitiveFallback(
-            placeholder,
-            'steve',
-            {
-              shape: 'box',
-              width: 0.6,
-              height: 1.8,
-              depth: 0.4,
-              color: this.getAvatarPlaceholderColor(reasonLabel),
-              name: 'PlayerAvatarPrimitiveFallback',
-              emissive: '#1e3a8a',
-            },
-          );
+          return placeholder;
         }
         case 'zombie': {
-          const material = new THREE.MeshStandardMaterial({
-            color: '#47a34b',
-            roughness: 0.68,
-            metalness: 0.18,
+          const mesh = buildPrimitiveFallback('box', {
+            width: 0.9,
+            height: 1.8,
+            depth: 0.9,
+            color: '#22c55e',
             emissive: '#14532d',
-            emissiveIntensity: 0.22,
+            emissiveIntensity: 0.26,
+            roughness: 0.66,
+            metalness: 0.2,
+            name: 'ZombieFallbackBox',
           });
-          const geometry = new THREE.BoxGeometry(0.9, 1.8, 0.9);
-          const mesh = new THREE.Mesh(geometry, material);
-          mesh.name = 'ZombieFallback';
-          mesh.castShadow = true;
-          mesh.receiveShadow = true;
-          const placeholder = withPrimitiveFallback(
-            mesh,
-            'zombie',
-            {
-              shape: 'box',
-              width: 0.9,
-              height: 1.8,
-              depth: 0.9,
-              color: '#47a34b',
-              name: 'ZombiePrimitiveFallback',
-              emissive: '#14532d',
-              emissiveIntensity: 0.22,
-              roughness: 0.68,
-              metalness: 0.18,
-            },
-          );
+          const placeholder = withPrimitiveFallback(mesh, 'zombie', {
+            shape: 'box',
+            width: 0.9,
+            height: 1.8,
+            depth: 0.9,
+            color: '#22c55e',
+            name: 'ZombiePrimitiveFallback',
+            emissive: '#14532d',
+            emissiveIntensity: 0.26,
+            roughness: 0.66,
+            metalness: 0.2,
+          });
           if (placeholder && showErrorOverlay) {
             this.attachModelFallbackErrorOverlay(placeholder, {
               key: 'zombie',
               reason: reasonLabel,
-              label: 'MODEL ERROR',
-              detail: 'Zombie rig unavailable',
+              label: 'Zombie',
+              detail: 'Missing GLTF',
               width: 1.65,
               height: 0.6,
               offsetY: 1.45,
-              backgroundColor: 'rgba(220, 38, 38, 0.92)',
-              borderColor: 'rgba(248, 250, 252, 0.45)',
-              textColor: '#f8fafc',
-              detailColor: '#fecaca',
+              backgroundColor: 'rgba(21, 128, 61, 0.92)',
+              borderColor: 'rgba(220, 252, 231, 0.6)',
+              textColor: '#ecfdf5',
+              detailColor: '#bbf7d0',
               name: 'ZombieErrorOverlay',
             });
           }
           return placeholder;
         }
         case 'golem': {
-          const actor = this.createGolemActor();
-          if (actor) {
-            actor.traverse((child) => {
-              if (child.isMesh && child.material?.emissive) {
-                child.material.emissiveIntensity = Math.max(child.material.emissiveIntensity || 0.18, 0.25);
-              }
-            });
-            actor.name = 'GolemFallback';
-          }
-          const placeholder = withPrimitiveFallback(
-            actor,
-            'golem',
-            {
-              shape: 'box',
-              width: 1.4,
-              height: 2.6,
-              depth: 0.9,
-              color: '#9ca3af',
-              name: 'GolemPrimitiveFallback',
-              emissive: '#1f2937',
-            },
-          );
+          const mesh = buildPrimitiveFallback('box', {
+            width: 1.4,
+            height: 2.6,
+            depth: 0.9,
+            color: '#facc15',
+            emissive: '#854d0e',
+            emissiveIntensity: 0.24,
+            roughness: 0.64,
+            metalness: 0.22,
+            name: 'GolemFallbackBox',
+          });
+          const placeholder = withPrimitiveFallback(mesh, 'golem', {
+            shape: 'box',
+            width: 1.4,
+            height: 2.6,
+            depth: 0.9,
+            color: '#facc15',
+            name: 'GolemPrimitiveFallback',
+            emissive: '#854d0e',
+            emissiveIntensity: 0.24,
+            roughness: 0.64,
+            metalness: 0.22,
+          });
           if (placeholder && showErrorOverlay) {
             this.attachModelFallbackErrorOverlay(placeholder, {
               key: 'golem',
               reason: reasonLabel,
-              label: 'MODEL ERROR',
-              detail: 'Golem rig unavailable',
+              label: 'Golem',
+              detail: 'Missing GLTF',
               width: 1.9,
               height: 0.65,
               offsetY: 1.85,
-              backgroundColor: 'rgba(234, 88, 12, 0.9)',
-              borderColor: 'rgba(254, 243, 199, 0.4)',
-              textColor: '#fffbeb',
-              detailColor: '#fed7aa',
+              backgroundColor: 'rgba(234, 179, 8, 0.92)',
+              borderColor: 'rgba(254, 243, 199, 0.6)',
+              textColor: '#1f2937',
+              detailColor: '#78350f',
               name: 'GolemErrorOverlay',
             });
           }
