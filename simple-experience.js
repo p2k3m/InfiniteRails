@@ -59,6 +59,53 @@
     return `rgb(${color.r}, ${color.g}, ${color.b})`;
   }
 
+  function notifyBootStatus(phase, detail = {}) {
+    const scope =
+      (typeof globalThis !== 'undefined' && globalThis) ||
+      (typeof window !== 'undefined' && window) ||
+      (typeof self !== 'undefined' && self) ||
+      null;
+    if (!scope) {
+      return;
+    }
+    try {
+      if (typeof scope.__INFINITE_RAILS_UPDATE_BOOT_STATUS__ === 'function') {
+        scope.__INFINITE_RAILS_UPDATE_BOOT_STATUS__(phase, detail);
+        return;
+      }
+      const controller = scope.__infiniteRailsBootStatus;
+      if (controller && typeof controller.update === 'function') {
+        controller.update(phase, detail);
+        return;
+      }
+      const api = scope.InfiniteRails?.bootStatus;
+      if (api && typeof api.update === 'function') {
+        api.update(phase, detail);
+      }
+    } catch (error) {
+      if (typeof console !== 'undefined' && console.debug) {
+        console.debug('Boot status update dispatch failed.', error);
+      }
+    }
+  }
+
+  function markBootStatus(phase, status, message, extra) {
+    if (!phase) {
+      return;
+    }
+    const detail = {};
+    if (extra && typeof extra === 'object') {
+      Object.assign(detail, extra);
+    }
+    if (status) {
+      detail.status = status;
+    }
+    if (typeof message === 'string' && message.trim().length) {
+      detail.message = message.trim();
+    }
+    notifyBootStatus(phase, detail);
+  }
+
   function normalisePositiveInteger(value, minimum) {
     if (value === null || value === undefined) {
       return null;
@@ -12017,6 +12064,24 @@
       }
       const textureKeys = this.collectCriticalTextureKeys();
       const modelEntries = this.collectCriticalModelEntries();
+      const textureTotal = Array.isArray(textureKeys) ? textureKeys.length : 0;
+      const modelTotal = Array.isArray(modelEntries) ? modelEntries.length : 0;
+      let texturesLoaded = 0;
+      let modelsLoaded = 0;
+      if (textureTotal > 0) {
+        markBootStatus('assets', 'active', `Loading ${textureTotal} texture${textureTotal === 1 ? '' : 's'}…`, {
+          progress: { current: 0, total: textureTotal },
+        });
+      } else {
+        markBootStatus('assets', 'ok', 'No critical textures required.');
+      }
+      if (modelTotal > 0) {
+        markBootStatus('gltf', 'active', `Loading ${modelTotal} model${modelTotal === 1 ? '' : 's'}…`, {
+          progress: { current: 0, total: modelTotal },
+        });
+      } else {
+        markBootStatus('gltf', 'ok', 'No critical models required.');
+      }
       const tasks = [];
       textureKeys.forEach((key) => {
         tasks.push(
@@ -12039,21 +12104,40 @@
               }
               return texture;
             })
+            .then((texture) => {
+              texturesLoaded += 1;
+              markBootStatus('assets', 'active', `Loaded texture "${key}".`, {
+                progress: { current: texturesLoaded, total: textureTotal },
+              });
+              return texture;
+            })
             .catch((error) => {
+              markBootStatus('assets', 'error', `Texture "${key}" failed to load.`);
               throw error instanceof Error ? error : new Error(`Texture "${key}" failed to load.`);
             }),
         );
       });
       modelEntries.forEach(({ key, url }) => {
         tasks.push(
-          this.loadModel(key, url).catch((error) => {
-            throw error instanceof Error ? error : new Error(`Model "${key}" failed to load.`);
-          }),
+          this.loadModel(key, url)
+            .then((payload) => {
+              modelsLoaded += 1;
+              markBootStatus('gltf', 'active', `Loaded model "${key}".`, {
+                progress: { current: modelsLoaded, total: modelTotal },
+              });
+              return payload;
+            })
+            .catch((error) => {
+              markBootStatus('gltf', 'error', `Model "${key}" failed to load.`);
+              throw error instanceof Error ? error : new Error(`Model "${key}" failed to load.`);
+            }),
         );
       });
       if (!tasks.length) {
         this.criticalAssetPreloadFailed = false;
         this.criticalAssetPreloadComplete = true;
+        markBootStatus('assets', 'ok', 'Critical textures ready.');
+        markBootStatus('gltf', 'ok', 'Critical models ready.');
         this.criticalAssetPreloadPromise = Promise.resolve(true);
         return this.criticalAssetPreloadPromise;
       }
@@ -12069,6 +12153,16 @@
         }
         this.criticalAssetPreloadFailed = false;
         this.criticalAssetPreloadComplete = true;
+        if (textureTotal > 0) {
+          markBootStatus('assets', 'ok', 'Critical textures ready.', {
+            progress: { current: texturesLoaded, total: textureTotal },
+          });
+        }
+        if (modelTotal > 0) {
+          markBootStatus('gltf', 'ok', 'Critical models ready.', {
+            progress: { current: modelsLoaded, total: modelTotal },
+          });
+        }
         return true;
       });
       return this.criticalAssetPreloadPromise;

@@ -2,6 +2,98 @@
   const globalScope = typeof window !== 'undefined' ? window : globalThis;
   const documentRef = globalScope.document ?? null;
 
+  const BOOT_STATUS_DEFAULT_MESSAGES = {
+    script: 'Initialising bootstrap script…',
+    assets: 'Preparing asset pipelines…',
+    ui: 'Preparing interface layout…',
+    gltf: 'Waiting for model preload…',
+    controls: 'Preparing control bindings…',
+  };
+
+  function resolveBootStatusController() {
+    const scope = globalScope || (typeof window !== 'undefined' ? window : globalThis);
+    if (!scope) {
+      return null;
+    }
+    const primary = scope.__infiniteRailsBootStatus;
+    if (primary && typeof primary.update === 'function') {
+      return primary;
+    }
+    const legacy = scope.__INFINITE_RAILS_BOOT_STATUS__;
+    if (legacy && typeof legacy.update === 'function' && legacy.update !== updateBootStatus) {
+      return legacy;
+    }
+    const api = scope.InfiniteRails?.bootStatus;
+    if (api && typeof api.update === 'function' && api.update !== updateBootStatus) {
+      return api;
+    }
+    return null;
+  }
+
+  function updateBootStatus(phase, detail = {}) {
+    if (!phase) {
+      return;
+    }
+    const controller = resolveBootStatusController();
+    if (!controller || typeof controller.update !== 'function') {
+      return;
+    }
+    try {
+      controller.update(phase, detail);
+    } catch (error) {
+      if (globalScope?.console?.debug) {
+        globalScope.console.debug('Failed to update boot status HUD.', error);
+      }
+    }
+  }
+
+  function setBootPhaseStatus(phase, status, message, extra = {}) {
+    if (!phase) {
+      return;
+    }
+    const detail = { ...extra };
+    if (status) {
+      detail.status = status;
+    }
+    if (typeof message === 'string' && message.trim().length) {
+      detail.message = message.trim();
+    }
+    updateBootStatus(phase, detail);
+  }
+
+  function markBootPhaseActive(phase, message, extra) {
+    setBootPhaseStatus(phase, 'active', message ?? BOOT_STATUS_DEFAULT_MESSAGES[phase], extra);
+  }
+
+  function markBootPhaseOk(phase, message, extra) {
+    setBootPhaseStatus(phase, 'ok', message ?? BOOT_STATUS_DEFAULT_MESSAGES[phase], extra);
+  }
+
+  function markBootPhaseWarning(phase, message, extra) {
+    setBootPhaseStatus(phase, 'warning', message ?? BOOT_STATUS_DEFAULT_MESSAGES[phase], extra);
+  }
+
+  function markBootPhaseError(phase, message, extra) {
+    setBootPhaseStatus(phase, 'error', message ?? BOOT_STATUS_DEFAULT_MESSAGES[phase], extra);
+  }
+
+  function initialiseBootStatusDefaults() {
+    Object.keys(BOOT_STATUS_DEFAULT_MESSAGES).forEach((phase) => {
+      updateBootStatus(phase, { status: 'pending', message: BOOT_STATUS_DEFAULT_MESSAGES[phase] });
+    });
+    markBootPhaseActive('script', BOOT_STATUS_DEFAULT_MESSAGES.script);
+  }
+
+  initialiseBootStatusDefaults();
+
+  if (globalScope) {
+    try {
+      globalScope.__INFINITE_RAILS_UPDATE_BOOT_STATUS__ = updateBootStatus;
+    } catch (bootStatusExposeError) {
+      globalScope?.console?.debug?.('Failed to expose boot status bridge.', bootStatusExposeError);
+    }
+  }
+
   const assetBaseConsistencyState = { mismatchLogged: false, enforcementError: null };
 
   const DEFAULT_ASSET_VERSION_TAG = '1';
@@ -934,6 +1026,14 @@
 
   globalScope.InfiniteRails = globalScope.InfiniteRails || {};
   globalScope.InfiniteRails.bootDiagnostics = globalScope.InfiniteRails.bootDiagnostics || {};
+  const bootStatusApi = globalScope.InfiniteRails.bootStatus || {};
+  bootStatusApi.update = (phase, detail) => updateBootStatus(phase, detail);
+  bootStatusApi.set = (phase, status, message, extra) => setBootPhaseStatus(phase, status, message, extra);
+  bootStatusApi.markActive = (phase, message, extra) => markBootPhaseActive(phase, message, extra);
+  bootStatusApi.markOk = (phase, message, extra) => markBootPhaseOk(phase, message, extra);
+  bootStatusApi.markWarning = (phase, message, extra) => markBootPhaseWarning(phase, message, extra);
+  bootStatusApi.markError = (phase, message, extra) => markBootPhaseError(phase, message, extra);
+  globalScope.InfiniteRails.bootStatus = bootStatusApi;
 
   let activeExperienceInstance = null;
 
@@ -11403,15 +11503,23 @@
       });
       return null;
     }
-    ensureHudDefaults(doc);
-    const ui = collectSimpleExperienceUi(doc);
-    ensureHudStateBinding(ui);
-    bindDebugModeControls(ui);
-    bindDeveloperStatsControls(ui);
-    bindBootDiagnosticsUi(ui);
-    bindLiveDiagnosticsControls(ui);
-    bindExperienceEventLog(ui);
-    bindExperienceEventOverlays(ui);
+    markBootPhaseActive('ui', 'Binding renderer UI…');
+    let ui;
+    try {
+      ensureHudDefaults(doc);
+      ui = collectSimpleExperienceUi(doc);
+      ensureHudStateBinding(ui);
+      bindDebugModeControls(ui);
+      bindDeveloperStatsControls(ui);
+      bindBootDiagnosticsUi(ui);
+      bindLiveDiagnosticsControls(ui);
+      bindExperienceEventLog(ui);
+      bindExperienceEventOverlays(ui);
+      markBootPhaseOk('ui', 'HUD interfaces ready.');
+    } catch (uiBootstrapError) {
+      markBootPhaseError('ui', 'Failed to prepare HUD interfaces.');
+      throw uiBootstrapError;
+    }
     let experience;
     try {
       experience = globalScope.SimpleExperience.create({
@@ -11422,6 +11530,7 @@
         identityStorageKey,
       });
     } catch (error) {
+      markBootPhaseError('ui', 'Simplified renderer initialisation failed.');
       if (globalScope.console?.error) {
         globalScope.console.error('Failed to initialise simplified renderer.', error);
       }
@@ -11459,39 +11568,72 @@
     }
     if (experience && typeof experience.verifyCriticalAssetAvailability === 'function') {
       try {
+        markBootPhaseActive('assets', 'Verifying critical asset availability…');
         assetAvailabilityPromise = experience.verifyCriticalAssetAvailability();
+        if (assetAvailabilityPromise && typeof assetAvailabilityPromise.then === 'function') {
+          assetAvailabilityPromise
+            .then(() => {
+              markBootPhaseActive('assets', 'Critical assets verified.');
+            })
+            .catch((availabilityError) => {
+              markBootPhaseWarning('assets', 'Asset availability check failed. Review diagnostics.');
+              if (globalScope.console?.debug) {
+                globalScope.console.debug('Critical asset availability check rejected.', availabilityError);
+              }
+            });
+        }
       } catch (error) {
         if (globalScope.console?.debug) {
           globalScope.console.debug('Failed to initiate critical asset availability check.', error);
         }
+        markBootPhaseWarning('assets', 'Critical asset availability check could not start.');
         assetAvailabilityPromise = null;
       }
     }
     if (shouldEnforceStrictAssets && typeof startManifestAssetAvailabilityCheck === 'function') {
       try {
+        markBootPhaseActive('assets', 'Checking manifest asset availability…');
         manifestAssetCheckPromise = startManifestAssetAvailabilityCheck();
+        if (manifestAssetCheckPromise && typeof manifestAssetCheckPromise.then === 'function') {
+          manifestAssetCheckPromise.catch((manifestError) => {
+            markBootPhaseWarning('assets', 'Manifest asset availability check failed.');
+            if (globalScope.console?.debug) {
+              globalScope.console.debug('Manifest asset availability check rejected.', manifestError);
+            }
+          });
+        }
       } catch (error) {
         manifestAssetCheckPromise = null;
+        markBootPhaseWarning('assets', 'Manifest asset availability check could not start.');
         if (globalScope.console?.debug) {
           globalScope.console.debug('Failed to initiate manifest asset availability check.', error);
         }
       }
     } else if (!shouldEnforceStrictAssets) {
       markManifestAssetCheckSkipped('offline-mode');
+      markBootPhaseWarning('assets', 'Asset verification skipped in offline mode.');
     }
     if (shouldPreloadCriticalAssets && experience && typeof experience.preloadRequiredAssets === 'function') {
       try {
+        markBootPhaseActive('assets', 'Preloading critical assets…');
+        markBootPhaseActive('gltf', 'Preloading critical models…');
         assetPreloadPromise = experience.preloadRequiredAssets();
       } catch (error) {
         assetPreloadPromise = Promise.reject(error);
+        markBootPhaseError('assets', 'Critical asset preload failed.');
+        markBootPhaseError('gltf', 'Critical models failed to load.');
         if (globalScope.console?.error) {
           globalScope.console.error('Critical asset preload failure detected.', error);
         }
       }
-    } else if (!shouldPreloadCriticalAssets && globalScope.console?.info) {
-      globalScope.console.info(
-        'Critical asset preload skipped in offline mode; the experience will stream assets on demand.',
-      );
+    } else if (!shouldPreloadCriticalAssets) {
+      markBootPhaseOk('assets', 'Assets will stream on demand.');
+      markBootPhaseOk('gltf', 'Models will stream on demand.');
+      if (globalScope.console?.info) {
+        globalScope.console.info(
+          'Critical asset preload skipped in offline mode; the experience will stream assets on demand.',
+        );
+      }
     }
     if (developerStatsState.enabled) {
       developerStatsState.lastUpdateAt = 0;
@@ -11551,6 +11693,7 @@
             status: 'warning',
             message: 'Asset availability check failed — review diagnostics.',
           });
+          markBootPhaseWarning('assets', 'Asset availability check failed — review diagnostics.');
           return;
         }
         if (Array.isArray(summary.missing) && summary.missing.length > 0) {
@@ -11560,6 +11703,14 @@
             status: 'warning',
             message: `Availability check missing ${summary.missing.length} asset${summary.missing.length === 1 ? '' : 's'} (${preview}${suffix}).`,
           });
+          markBootPhaseWarning(
+            'assets',
+            `Availability check missing ${summary.missing.length} asset${summary.missing.length === 1 ? '' : 's'} (${preview}${suffix}).`,
+          );
+          return;
+        }
+        if (!summary.missing || summary.missing.length === 0) {
+          markBootPhaseActive('assets', 'Critical assets verified.');
         }
       };
       const updateManifestOverlay = (summary) => {
@@ -11576,6 +11727,7 @@
             status: 'warning',
             message: 'Manifest asset availability check failed — review diagnostics.',
           });
+          markBootPhaseWarning('assets', 'Manifest asset availability check failed — review diagnostics.');
           return;
         }
         if (summary.status === 'missing' && Array.isArray(summary.missing) && summary.missing.length > 0) {
@@ -11590,6 +11742,14 @@
             status: 'warning',
             message: `Manifest check missing ${summary.missing.length} asset${summary.missing.length === 1 ? '' : 's'} (${previewLabel}${suffix}).`,
           });
+          markBootPhaseWarning(
+            'assets',
+            `Manifest check missing ${summary.missing.length} asset${summary.missing.length === 1 ? '' : 's'} (${previewLabel}${suffix}).`,
+          );
+          return;
+        }
+        if (!summary.missing || summary.missing.length === 0) {
+          markBootPhaseActive('assets', 'Manifest assets verified.');
         }
       };
       if (assetAvailabilityPromise && typeof assetAvailabilityPromise.then === 'function') {
@@ -11605,6 +11765,7 @@
               status: 'warning',
               message: 'Asset availability check failed — review diagnostics.',
             });
+            markBootPhaseWarning('assets', 'Asset availability check failed — review diagnostics.');
             if (globalScope.console?.debug) {
               globalScope.console.debug('Asset availability overlay update failed.', error);
             }
@@ -11621,6 +11782,7 @@
                 status: 'warning',
                 message: 'Manifest asset availability check failed — review diagnostics.',
               });
+              markBootPhaseWarning('assets', 'Manifest asset availability check failed — review diagnostics.');
             }
             if (globalScope.console?.debug) {
               globalScope.console.debug('Manifest asset availability overlay update failed.', error);
@@ -11630,17 +11792,20 @@
     }
     const releaseStartButton = ({ delayed } = {}) => {
       if (!ui.startButton) {
+        markBootPhaseWarning('controls', 'Start control unavailable. Use Enter/Space to begin.');
         return;
       }
       ui.startButton.disabled = false;
       if (delayed) {
         ui.startButton.removeAttribute('data-preloading');
         ui.startButton.dataset.preloadWarning = 'delayed';
+        markBootPhaseWarning('controls', 'Controls ready. Assets are still streaming — visuals may pop in.');
       } else {
         ui.startButton.removeAttribute('data-preloading');
         if (ui.startButton.dataset.preloadWarning) {
           delete ui.startButton.dataset.preloadWarning;
         }
+        markBootPhaseOk('controls', 'Controls ready. Press Start to enter the world.');
       }
       suppressAssetLoadingIndicatorOverlay();
       hideBootstrapOverlay();
@@ -11688,6 +11853,7 @@
                 message: 'Assets still loading. Starting now may show placeholder visuals.',
               });
             }
+            markBootPhaseWarning('assets', 'Assets still loading. Starting now may show placeholder visuals.');
           }
         }, 7000);
       };
@@ -11696,6 +11862,8 @@
         .then(() => {
           clearAssetPreloadFallbackTimer();
           releaseStartButton({ delayed: false });
+          markBootPhaseOk('assets', 'Critical assets ready.');
+          markBootPhaseOk('gltf', 'Critical models ready.');
           if (overlayController?.setDiagnostic) {
             overlayController.setDiagnostic('assets', {
               status: 'ok',
@@ -11709,6 +11877,8 @@
           if (globalScope.console?.error) {
             globalScope.console.error('Critical asset preload failed.', error);
           }
+          markBootPhaseError('assets', 'Critical asset preload failed.');
+          markBootPhaseError('gltf', 'Critical models failed to load.');
           const errorMessage =
             typeof error?.message === 'string' && error.message.trim().length
               ? error.message.trim()
@@ -11879,6 +12049,9 @@
               stack: errorStack,
             },
           });
+          markBootPhaseError('assets', 'Critical assets failed to preload. Reload to try again.');
+          markBootPhaseError('gltf', 'Critical models unavailable — cannot continue.');
+          markBootPhaseError('controls', 'Controls disabled until assets load.');
           if (overlayController?.setDiagnostic) {
             overlayController.setDiagnostic('assets', {
               status: 'error',
@@ -11901,6 +12074,9 @@
       logDiagnosticsEvent('startup', 'Renderer initialised; awaiting player input.', {
         level: 'success',
       });
+    }
+    if (ui.startButton) {
+      markBootPhaseActive('controls', 'Binding control listeners…');
     }
     if (ui.startButton && !ui.startButton.dataset.simpleExperienceBound) {
       ui.startButton.addEventListener('click', (event) => {
@@ -11943,6 +12119,9 @@
         });
       });
       ui.startButton.dataset.simpleExperienceBound = 'true';
+    }
+    if (!ui.startButton) {
+      markBootPhaseWarning('controls', 'Start control unavailable. Use Enter/Space to begin.');
     }
     if (ui.startButton) {
       const isAutomationContext = (() => {
@@ -13105,6 +13284,8 @@
   globalScope.bootstrap = bootstrap;
 
   synchroniseBootstrapWithExistingState();
+
+  markBootPhaseOk('script', 'Bootstrap script ready.');
 
   const skipAdvancedBootstrap = runWebglPreflightCheck();
 

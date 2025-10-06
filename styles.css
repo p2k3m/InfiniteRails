@@ -4446,6 +4446,98 @@ body.sidebar-open .player-hint {
   color: var(--text-secondary);
 }
 
+.bootstrap-status {
+  width: 100%;
+  border-radius: 12px;
+  padding: 0.9rem 1rem;
+  background: rgba(7, 20, 32, 0.62);
+  border: 1px solid var(--overlay-border);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+  display: grid;
+  gap: 0.65rem;
+  text-align: left;
+}
+
+.bootstrap-status__title {
+  margin: 0;
+  font-size: 0.9rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(230, 247, 255, 0.82);
+}
+
+.bootstrap-status__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.45rem;
+}
+
+.bootstrap-status__item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 110px) 1fr;
+  gap: 0.55rem;
+  align-items: center;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.bootstrap-status__indicator {
+  width: 0.65rem;
+  height: 0.65rem;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.28);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.18);
+}
+
+.bootstrap-status__label {
+  font-weight: 600;
+  color: rgba(235, 248, 255, 0.85);
+}
+
+.bootstrap-status__message {
+  margin: 0;
+  color: var(--text-secondary);
+  line-height: 1.35;
+}
+
+.bootstrap-status__item[data-status='active'] .bootstrap-status__indicator {
+  background: #7bdcff;
+  box-shadow: 0 0 6px rgba(123, 220, 255, 0.58);
+}
+
+.bootstrap-status__item[data-status='ok'] .bootstrap-status__indicator {
+  background: #6df0be;
+  box-shadow: 0 0 6px rgba(109, 240, 190, 0.5);
+}
+
+.bootstrap-status__item[data-status='warning'] .bootstrap-status__indicator {
+  background: #ffd872;
+  box-shadow: 0 0 6px rgba(255, 216, 114, 0.45);
+}
+
+.bootstrap-status__item[data-status='error'] .bootstrap-status__indicator {
+  background: #ff7b7b;
+  box-shadow: 0 0 6px rgba(255, 123, 123, 0.45);
+}
+
+.bootstrap-status__item[data-status='active'] .bootstrap-status__message {
+  color: rgba(204, 240, 255, 0.92);
+}
+
+.bootstrap-status__item[data-status='ok'] .bootstrap-status__message {
+  color: rgba(207, 255, 223, 0.92);
+}
+
+.bootstrap-status__item[data-status='warning'] .bootstrap-status__message {
+  color: rgba(255, 236, 185, 0.92);
+}
+
+.bootstrap-status__item[data-status='error'] .bootstrap-status__message {
+  color: rgba(255, 204, 204, 0.92);
+}
+
 .compose-overlay__diagnostics {
   width: 100%;
 }
