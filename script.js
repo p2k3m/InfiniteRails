@@ -904,10 +904,13 @@
     }
     try {
       globalScope.__INFINITE_RAILS_INPUT_MODE__ = mode;
+      const mobileControlsActive = mode === 'touch';
+      globalScope.__INFINITE_RAILS_MOBILE_CONTROLS_ACTIVE__ = mobileControlsActive;
     } catch (error) {}
     try {
       globalScope.InfiniteRails = globalScope.InfiniteRails || {};
       globalScope.InfiniteRails.inputMode = mode;
+      globalScope.InfiniteRails.mobileControlsActive = mode === 'touch';
       if (typeof globalScope.InfiniteRails.getInputMode !== 'function') {
         globalScope.InfiniteRails.getInputMode = () => inputModeState.mode;
       }
@@ -927,9 +930,53 @@
       const event = new CustomEvent('infinite-rails:input-mode-change', {
         bubbles: false,
         cancelable: false,
-        detail: { mode, source: detail.source || null },
+        detail: { mode, source: detail.source || null, touchActive: mode === 'touch' },
       });
       doc.dispatchEvent(event);
+    } catch (error) {}
+  }
+
+  function toggleBooleanAttribute(element, attribute, enabled) {
+    if (!element || !attribute) {
+      return;
+    }
+    if (typeof element.toggleAttribute === 'function') {
+      try {
+        element.toggleAttribute(attribute, Boolean(enabled));
+        return;
+      } catch (error) {}
+    }
+    if (enabled) {
+      if (typeof element.setAttribute === 'function') {
+        try {
+          element.setAttribute(attribute, '');
+        } catch (error) {}
+      }
+    } else if (typeof element.removeAttribute === 'function') {
+      try {
+        element.removeAttribute(attribute);
+      } catch (error) {}
+    }
+  }
+
+  function setElementHidden(element, hidden) {
+    if (!element) {
+      return;
+    }
+    toggleBooleanAttribute(element, 'hidden', hidden);
+    if ('hidden' in element) {
+      try {
+        element.hidden = Boolean(hidden);
+      } catch (error) {}
+    }
+  }
+
+  function setAriaHidden(element, hidden) {
+    if (!element || typeof element.setAttribute !== 'function') {
+      return;
+    }
+    try {
+      element.setAttribute('aria-hidden', hidden ? 'true' : 'false');
     } catch (error) {}
   }
 
@@ -983,6 +1030,14 @@
           body.classList.toggle('input-pointer', nextMode !== 'touch');
         } catch (error) {}
       }
+      if (body.dataset) {
+        try {
+          body.dataset.inputMode = nextMode;
+        } catch (error) {}
+        try {
+          body.dataset.controlScheme = nextMode === 'touch' ? 'touch' : 'pointer';
+        } catch (error) {}
+      }
     }
 
     let mobileControls = null;
@@ -996,9 +1051,14 @@
       try {
         mobileControls.setAttribute('data-active', active ? 'true' : 'false');
       } catch (error) {}
-      try {
-        mobileControls.hidden = !active;
-      } catch (error) {}
+      setElementHidden(mobileControls, !active);
+      setAriaHidden(mobileControls, !active);
+      toggleBooleanAttribute(mobileControls, 'inert', !active);
+      if (mobileControls.dataset) {
+        try {
+          mobileControls.dataset.mode = nextMode;
+        } catch (error) {}
+      }
     }
 
     if (changed) {
