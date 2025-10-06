@@ -9474,6 +9474,7 @@
     intro,
     troubleshootingSteps,
     detail = null,
+    supportHint = 'Need more help? Visit chrome://gpu to verify WebGL availability.',
   }) {
     const doc = typeof document !== 'undefined' ? document : documentRef;
     if (!doc || typeof doc.createElement !== 'function') {
@@ -9634,12 +9635,16 @@
 
     actionRow.appendChild(retryButton);
 
-    const supportHint = doc.createElement('span');
-    supportHint.textContent = 'Need more help? Visit chrome://gpu to verify WebGL availability.';
-    supportHint.style.fontSize = '0.85rem';
-    supportHint.style.lineHeight = '1.4';
-    supportHint.style.color = '#cbd5f5';
-    actionRow.appendChild(supportHint);
+    const supportHintEl = doc.createElement('span');
+    const supportHintMessage =
+      typeof supportHint === 'string' && supportHint
+        ? supportHint
+        : 'Need more help? Visit chrome://gpu to verify WebGL availability.';
+    supportHintEl.textContent = supportHintMessage;
+    supportHintEl.style.fontSize = '0.85rem';
+    supportHintEl.style.lineHeight = '1.4';
+    supportHintEl.style.color = '#cbd5f5';
+    actionRow.appendChild(supportHintEl);
 
     overlay.appendChild(panel);
     body.appendChild(overlay);
@@ -9680,7 +9685,8 @@
       'Disable extensions that block WebGL or force software rendering.',
       'Update your graphics drivers, then restart your browser.',
     ];
-    const overlayIntro = 'WebGL output is blocked, so Infinite Rails is launching the simplified renderer.';
+    const messages = resolveWebglFallbackMessages(detail);
+    const overlayIntro = messages.overlayIntro;
     const overlayMessage = [
       overlayIntro,
       'To restore the full 3D experience, try:',
@@ -9690,7 +9696,7 @@
     if (overlayController && typeof overlayController.showError === 'function') {
       try {
         overlayController.showError({
-          title: 'WebGL output blocked',
+          title: messages.title,
           message: overlayMessage,
         });
         overlayRendered = true;
@@ -9701,7 +9707,7 @@
     if (overlayController && typeof overlayController.setDiagnostic === 'function') {
       overlayController.setDiagnostic('renderer', {
         status: 'warning',
-        message: 'WebGL blocked — launching simplified renderer.',
+        message: messages.diagnosticMessage,
       });
     }
     if (overlayController && typeof overlayController.setRecoveryAction === 'function') {
@@ -9727,7 +9733,7 @@
         },
       });
     }
-    const diagnosticDetail = { reason: 'webgl-unavailable', fallbackMode: 'simple' };
+    const diagnosticDetail = { reason: messages.stateReason, fallbackMode: 'simple' };
     if (detail && typeof detail === 'object') {
       Object.keys(detail).forEach((key) => {
         const value = detail[key];
@@ -9739,19 +9745,20 @@
     }
     if (!overlayRendered) {
       renderStandaloneWebglFallbackOverlay({
-        title: 'WebGL output blocked',
+        title: messages.title,
         intro: overlayIntro,
         troubleshootingSteps,
         detail: diagnosticDetail,
+        supportHint: messages.supportHint,
       });
     }
     if (typeof logDiagnosticsEvent === 'function') {
-      logDiagnosticsEvent('renderer', 'WebGL unavailable at bootstrap. Falling back to simplified renderer.', {
+      logDiagnosticsEvent('renderer', messages.logMessage, {
         level: 'error',
         detail: diagnosticDetail,
       });
     } else if (globalScope?.console?.warn) {
-      globalScope.console.warn('WebGL unavailable at bootstrap. Falling back to simplified renderer.', diagnosticDetail);
+      globalScope.console.warn(messages.logMessage, diagnosticDetail);
     }
   }
 
@@ -9768,7 +9775,56 @@
     if (message) {
       detail.errorMessage = message;
     }
+    const reason = typeof error.reason === 'string' ? error.reason.trim() : '';
+    if (reason) {
+      detail.reason = reason;
+    }
+    const supportSummary =
+      typeof error.supportSummary === 'string' ? error.supportSummary.trim() : '';
+    if (supportSummary) {
+      detail.supportSummary = supportSummary;
+    }
     return Object.keys(detail).length ? detail : null;
+  }
+
+  function resolveWebglFallbackMessages(detail) {
+    const detailObject = detail && typeof detail === 'object' ? detail : null;
+    const reason =
+      typeof detailObject?.reason === 'string' && detailObject.reason
+        ? detailObject.reason
+        : '';
+    const errorName =
+      typeof detailObject?.errorName === 'string' && detailObject.errorName
+        ? detailObject.errorName
+        : '';
+    const webgl2Unavailable =
+      reason === 'webgl2-unavailable' || errorName === 'WebGL2UnavailableError';
+    if (webgl2Unavailable) {
+      return {
+        title: 'WebGL2 support unavailable',
+        overlayIntro:
+          'WebGL2 support is unavailable, so Infinite Rails is launching the simplified renderer.',
+        noticeMessage:
+          'WebGL2 support is unavailable on this device, so the mission briefing view is shown instead of the full 3D renderer.',
+        diagnosticMessage: 'WebGL2 support unavailable — launching simplified renderer.',
+        supportHint: 'Need more help? Visit chrome://gpu to verify WebGL2 availability.',
+        stateReason: 'webgl2-unavailable',
+        logMessage:
+          'WebGL2 support unavailable at bootstrap. Falling back to simplified renderer.',
+      };
+    }
+    return {
+      title: 'WebGL output blocked',
+      overlayIntro:
+        'WebGL output is blocked, so Infinite Rails is launching the simplified renderer.',
+      noticeMessage:
+        'WebGL is unavailable on this device, so the mission briefing view is shown instead of the full 3D renderer.',
+      diagnosticMessage: 'WebGL blocked — launching simplified renderer.',
+      supportHint: 'Need more help? Visit chrome://gpu to verify WebGL availability.',
+      stateReason: reason || 'webgl-unavailable',
+      logMessage:
+        'WebGL unavailable at bootstrap. Falling back to simplified renderer.',
+    };
   }
 
   function ensureRendererFallbackIndicator() {
@@ -9786,7 +9842,7 @@
     }
   }
 
-  function updateRendererStateForWebglFallback() {
+  function updateRendererStateForWebglFallback(reason = 'webgl-unavailable') {
     const state = globalScope?.__INFINITE_RAILS_STATE__;
     if (!state || typeof state !== 'object') {
       ensureRendererFallbackIndicator();
@@ -9794,7 +9850,7 @@
     }
     try {
       state.rendererMode = 'simple';
-      state.reason = 'webgl-unavailable';
+      state.reason = typeof reason === 'string' && reason ? reason : 'webgl-unavailable';
       state.updatedAt = Date.now();
     } catch (error) {
       globalScope?.console?.debug?.('Failed to update renderer state for WebGL fallback.', error);
@@ -9807,55 +9863,84 @@
       config && config.__webglFallbackDetail && typeof config.__webglFallbackDetail === 'object'
         ? config.__webglFallbackDetail
         : null;
-    let fallbackDetail = existingDetail || normaliseWebglFallbackDetail(probeError);
+    const derivedDetail = normaliseWebglFallbackDetail(probeError);
+    let fallbackDetail =
+      existingDetail && typeof existingDetail === 'object'
+        ? { ...existingDetail }
+        : derivedDetail && typeof derivedDetail === 'object'
+          ? { ...derivedDetail }
+          : {};
+    if (!fallbackDetail.reason) {
+      fallbackDetail.reason = derivedDetail?.reason || 'webgl-unavailable';
+    }
+    const messages = resolveWebglFallbackMessages(fallbackDetail);
+    fallbackDetail.reason = messages.stateReason;
     if (config) {
       config.webglSupport = false;
       if (!config.__webglFallbackApplied) {
         config.__webglFallbackApplied = true;
-        if (fallbackDetail) {
-          config.__webglFallbackDetail = fallbackDetail;
-        }
         config.preferAdvanced = false;
         config.enableAdvancedExperience = false;
         config.forceAdvanced = false;
         config.defaultMode = 'simple';
         queueBootstrapFallbackNotice(
           'webgl-unavailable-simple-mode',
-          'WebGL is unavailable on this device, so the mission briefing view is shown instead of the full 3D renderer.',
+          messages.noticeMessage,
         );
-      } else if (!existingDetail && fallbackDetail) {
+      }
+      if (fallbackDetail && Object.keys(fallbackDetail).length > 0) {
         config.__webglFallbackDetail = fallbackDetail;
       }
     }
     presentWebglBlockedOverlay({ detail: fallbackDetail });
-    updateRendererStateForWebglFallback();
+    updateRendererStateForWebglFallback(messages.stateReason);
     return fallbackDetail;
   }
 
   function probeWebglSupport(doc) {
+    const scopeCandidate =
+      (doc && typeof doc.defaultView === 'object' && doc.defaultView) ||
+      (typeof globalScope !== 'undefined'
+        ? globalScope
+        : typeof window !== 'undefined'
+          ? window
+          : globalThis);
     if (!doc || typeof doc.createElement !== 'function') {
       const probeError = new Error('Document unavailable for WebGL probe.');
       probeError.name = 'WebGLProbeUnavailable';
       return { supported: false, error: probeError };
     }
+    if (!scopeCandidate || typeof scopeCandidate.WebGL2RenderingContext === 'undefined') {
+      const error = new Error('WebGL2 support is required but not available in this environment.');
+      error.name = 'WebGL2UnavailableError';
+      error.reason = 'webgl2-unavailable';
+      error.supportSummary = 'WebGL2RenderingContext constructor missing.';
+      return { supported: false, error };
+    }
     try {
       const canvas = doc.createElement('canvas');
       const getContext = typeof canvas?.getContext === 'function' ? canvas.getContext.bind(canvas) : null;
       if (!getContext) {
-        const error = new Error('Canvas does not provide a WebGL-capable context.');
-        error.name = 'WebGLContextUnavailable';
+        const error = new Error('Canvas does not provide a WebGL2-capable context.');
+        error.name = 'WebGL2ContextUnavailable';
+        error.reason = 'webgl2-unavailable';
+        error.supportSummary = 'Canvas does not expose getContext for WebGL2.';
         return { supported: false, error };
       }
-      const context =
-        getContext('webgl2') || getContext('webgl') || getContext('experimental-webgl') || null;
+      const context = getContext('webgl2');
       if (!context) {
-        const error = new Error('WebGL context request returned null.');
-        error.name = 'WebGLUnavailableError';
+        const error = new Error('WebGL2 context request returned null.');
+        error.name = 'WebGL2ContextUnavailable';
+        error.reason = 'webgl2-unavailable';
+        error.supportSummary = 'Canvas getContext("webgl2") returned null.';
         return { supported: false, error };
       }
       return { supported: true, error: null };
     } catch (error) {
       const probeError = error instanceof Error ? error : new Error('WebGL probe failed.');
+      if (!probeError.reason) {
+        probeError.reason = 'webgl2-unavailable';
+      }
       return { supported: false, error: probeError };
     }
   }
