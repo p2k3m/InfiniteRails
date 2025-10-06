@@ -121,6 +121,9 @@ function ensureTestEnvironment() {
   Object.assign(windowStub, { THREE, THREE_GLOBAL: THREE });
   windowStub.WebGL2RenderingContext = globalThis.WebGL2RenderingContext;
 
+  globalThis.THREE_GLOBAL = THREE;
+  globalThis.THREE = THREE;
+
   globalThis.window = windowStub;
   globalThis.document = documentStub;
   globalThis.navigator = { geolocation: { getCurrentPosition: () => {} }, maxTouchPoints: 0 };

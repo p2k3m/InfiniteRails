@@ -86,6 +86,8 @@ let originalNavigator;
 let originalPerformance;
 let originalRequestAnimationFrame;
 let originalCancelAnimationFrame;
+let originalThreeGlobal;
+let originalThree;
 
 function ensureSimpleExperienceLoaded() {
   if (simpleExperienceLoaded) {
@@ -132,7 +134,11 @@ function ensureSimpleExperienceLoaded() {
   originalPerformance = globalThis.performance;
   originalRequestAnimationFrame = globalThis.requestAnimationFrame;
   originalCancelAnimationFrame = globalThis.cancelAnimationFrame;
+  originalThreeGlobal = globalThis.THREE_GLOBAL;
+  originalThree = globalThis.THREE;
 
+  globalThis.THREE_GLOBAL = THREE;
+  globalThis.THREE = THREE;
   globalThis.window = windowStub;
   globalThis.document = documentStub;
   globalThis.navigator = { geolocation: { getCurrentPosition: () => {} } };
@@ -152,6 +158,8 @@ function restoreGlobals() {
   globalThis.performance = originalPerformance;
   globalThis.requestAnimationFrame = originalRequestAnimationFrame;
   globalThis.cancelAnimationFrame = originalCancelAnimationFrame;
+  globalThis.THREE_GLOBAL = originalThreeGlobal;
+  globalThis.THREE = originalThree;
 }
 
 function createSimpleExperienceInstance() {

@@ -49,9 +49,11 @@ describe('simple experience steve model loading', () => {
     };
 
     experience.THREE = threeStub;
-    const originalWindowThree = typeof window !== 'undefined' ? window.THREE : null;
+    const originalThreeGlobal = typeof window !== 'undefined' ? window.THREE_GLOBAL : null;
     if (typeof window !== 'undefined') {
-      window.THREE = threeStub;
+      window.THREE_GLOBAL = threeStub;
+      globalThis.THREE_GLOBAL = threeStub;
+      globalThis.THREE = threeStub;
     }
 
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -77,8 +79,10 @@ describe('simple experience steve model loading', () => {
     } finally {
       warnSpy.mockRestore();
       experience.THREE = originalThree;
-      if (typeof window !== 'undefined' && originalWindowThree) {
-        window.THREE = originalWindowThree;
+      if (typeof window !== 'undefined') {
+        window.THREE_GLOBAL = originalThreeGlobal;
+        globalThis.THREE_GLOBAL = originalThreeGlobal;
+        globalThis.THREE = originalThreeGlobal;
       }
     }
   });

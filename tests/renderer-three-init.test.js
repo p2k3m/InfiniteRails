@@ -227,8 +227,8 @@ describe('default renderer Three.js bootstrap', () => {
     expect(scriptSource).not.toContain("'https://cdn.jsdelivr.net/npm/three");
   });
 
-  it('resolves immediately when a global THREE instance already exists', async () => {
-    const scope = { THREE: { marker: 'existing' } };
+  it('rejects when only a legacy THREE global is present', async () => {
+    const scope = { THREE: { marker: 'legacy' }, console: { warn: vi.fn() } };
     global.window = scope;
 
     const documentStub = {
@@ -237,15 +237,22 @@ describe('default renderer Three.js bootstrap', () => {
     };
 
     const loadScript = vi.fn();
+    const reportThreeLoadFailure = vi.fn();
     const { ensureThree, resetLoader } = instantiateEnsureThree({
       loadScript,
       scriptUrl: 'vendor/three.min.js?v=030c75d4e909&assetVersion=1',
       documentStub,
+      reportThreeLoadFailure,
     });
 
-    const result = await ensureThree();
-    expect(result).toBe(scope.THREE);
-    expect(scope.THREE_GLOBAL).toBe(scope.THREE);
+    await expect(ensureThree()).rejects.toThrow(
+      'Legacy Three.js global detected; refusing unsupported context.'
+    );
+    expect(reportThreeLoadFailure).toHaveBeenCalledWith(
+      expect.objectContaining({ code: 'legacy-three-global' }),
+      expect.objectContaining({ reason: 'legacy-three-global' })
+    );
+    expect(scope.THREE_GLOBAL).toBeUndefined();
     expect(loadScript).not.toHaveBeenCalled();
     resetLoader();
   });
@@ -294,7 +301,8 @@ describe('default renderer Three.js bootstrap', () => {
     };
 
     const loadScript = vi.fn(() => {
-      scope.THREE = { marker: 'loaded' };
+      scope.THREE_GLOBAL = { marker: 'loaded' };
+      scope.THREE = scope.THREE_GLOBAL;
       return Promise.resolve({});
     });
 
@@ -354,8 +362,10 @@ describe('default renderer Three.js bootstrap', () => {
     expect(scriptSource).toMatch(/ensureThree\(\)\s*\.then\(\(\) => {\s*bootstrap\(\);\s*}\)/);
   });
 
-  it('simple experience pulls THREE from the global scope', () => {
-    expect(simpleExperienceSource).toContain('const THREE = window.THREE_GLOBAL || window.THREE;');
+  it('simple experience pulls THREE from the guarded global scope', () => {
+    expect(simpleExperienceSource).toMatch(/const THREE = scope\?\.THREE_GLOBAL \|\| null;/);
+    expect(simpleExperienceSource).toContain("const scope =\n        typeof globalThis !== 'undefined'");
+    expect(simpleExperienceSource).not.toContain('window.THREE_GLOBAL || window.THREE');
   });
 });
 

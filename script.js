@@ -8415,8 +8415,22 @@
           ? window
           : globalThis;
     function resolveThreeFromScope() {
-      const hasThree = scope && scope.THREE && typeof scope.THREE === 'object';
-      const hasThreeGlobal = scope && scope.THREE_GLOBAL && typeof scope.THREE_GLOBAL === 'object';
+      const hasThree = scope && typeof scope.THREE === 'object';
+      const hasThreeGlobal = scope && typeof scope.THREE_GLOBAL === 'object';
+      if (hasThree && !hasThreeGlobal) {
+        const legacyError = new Error('Legacy Three.js global detected; refusing unsupported context.');
+        legacyError.code = 'legacy-three-global';
+        try {
+          if (typeof reportThreeLoadFailure === 'function') {
+            reportThreeLoadFailure(legacyError, { reason: 'legacy-three-global' });
+          }
+        } catch (reportError) {
+          if (scope?.console?.warn) {
+            scope.console.warn('Failed to report legacy Three.js global usage.', reportError);
+          }
+        }
+        throw legacyError;
+      }
       if (hasThree && hasThreeGlobal && scope.THREE !== scope.THREE_GLOBAL) {
         const duplicateError = new Error('Multiple Three.js contexts detected; refusing to bootstrap duplicate instance.');
         duplicateError.code = 'duplicate-three-global';
@@ -8432,12 +8446,10 @@
         scope.THREE = scope.THREE_GLOBAL;
         throw duplicateError;
       }
-      if (hasThree) {
-        scope.THREE_GLOBAL = scope.THREE;
-        return scope.THREE;
-      }
       if (hasThreeGlobal) {
-        scope.THREE = scope.THREE_GLOBAL;
+        if (!hasThree || scope.THREE !== scope.THREE_GLOBAL) {
+          scope.THREE = scope.THREE_GLOBAL;
+        }
         return scope.THREE_GLOBAL;
       }
       return null;
@@ -8503,7 +8515,11 @@
           throw exposureError;
         })
         .catch((error) => {
-          if (error?.code === 'duplicate-three-global' || error?.message === 'Three.js script loaded without exposing THREE.') {
+          if (
+            error?.code === 'duplicate-three-global' ||
+            error?.code === 'legacy-three-global' ||
+            error?.message === 'Three.js script loaded without exposing THREE.'
+          ) {
             throw error;
           }
           const failureError = new Error(`Unable to load Three.js from ${THREE_SCRIPT_URL}.`);
