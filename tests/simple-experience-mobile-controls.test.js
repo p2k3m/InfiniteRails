@@ -271,4 +271,46 @@ describe('control UI sync check', () => {
       }),
     );
   });
+
+  it('records context metadata and compares HUD bindings with settings', () => {
+    const { experience } = createExperience();
+    const windowStub = getWindowStub();
+    const recordSpy = vi.spyOn(experience, 'recordMajorIssue');
+    const originalSettingsGet = windowStub.InfiniteRailsControls.get;
+
+    try {
+      const settingsSnapshot = experience.getKeyBindings();
+      settingsSnapshot.jump = ['KeyZ'];
+      windowStub.InfiniteRailsControls.get = vi.fn(() => settingsSnapshot);
+
+      experience.keyBindings = experience.getKeyBindings();
+      experience.keyBindings.jump = ['KeyX'];
+
+      const context = {
+        reason: 'sync-drift',
+        mode: 'touch',
+        source: 'test-suite',
+        preferenceChanged: true,
+      };
+
+      expect(experience.runControlUiSyncCheck(context)).toBe(false);
+      expect(recordSpy).toHaveBeenCalledWith(
+        'Input bindings desynchronised — HUD or settings showing stale controls.',
+        expect.objectContaining({
+          reason: 'sync-drift',
+          context: expect.objectContaining({ mode: 'touch', source: 'test-suite', preferenceChanged: true }),
+          mismatches: expect.arrayContaining([
+            expect.objectContaining({ source: 'controls', target: 'hud' }),
+            expect.objectContaining({ source: 'controls', target: 'settings' }),
+            expect.objectContaining({ source: 'hud', target: 'settings' }),
+          ]),
+        }),
+      );
+
+      const [, detail] = recordSpy.mock.calls.at(-1);
+      expect(detail.context.reason).toBeUndefined();
+    } finally {
+      windowStub.InfiniteRailsControls.get = originalSettingsGet;
+    }
+  });
 });
