@@ -2608,6 +2608,10 @@
       this.railsGroup = null;
       this.portalGroup = null;
       this.zombieGroup = null;
+      this.safeSpawnBoxGroup = null;
+      this.safeSpawnBoxFallbackMaterial = null;
+      this.safeSpawnBoxReason = null;
+      this.totalWorldFailureActive = false;
       this.portalMechanics = PORTAL_MECHANICS;
       this.playerRig = null;
       this.playerPhysicsBody = null;
@@ -14014,6 +14018,142 @@
       }
     }
 
+    ensureSafeSpawnBox(reason = 'world-failure') {
+      const THREE = this.THREE;
+      if (!THREE || typeof THREE.Group !== 'function' || !this.blockGeometry) {
+        return null;
+      }
+      const root = this.worldRoot instanceof THREE.Group ? this.worldRoot : this.scene;
+      if (!root || typeof root.add !== 'function') {
+        return null;
+      }
+      if (
+        this.totalWorldFailureActive &&
+        this.safeSpawnBoxGroup instanceof THREE.Group &&
+        Array.isArray(this.safeSpawnBoxGroup.children) &&
+        this.safeSpawnBoxGroup.children.length > 0 &&
+        this.safeSpawnBoxReason === reason
+      ) {
+        if (this.safeSpawnBoxGroup.parent !== root) {
+          try {
+            root.add(this.safeSpawnBoxGroup);
+          } catch (error) {
+            console.debug('Failed to reattach safe spawn box to world root.', error);
+          }
+        }
+        return this.safeSpawnBoxGroup;
+      }
+      let group = this.safeSpawnBoxGroup;
+      if (!(group instanceof THREE.Group)) {
+        group = new THREE.Group();
+        group.name = 'SafeSpawnBox';
+        this.safeSpawnBoxGroup = group;
+      }
+      if (group.parent && group.parent !== root && typeof group.parent.remove === 'function') {
+        try {
+          group.parent.remove(group);
+        } catch (error) {
+          console.debug('Failed to detach safe spawn box from previous parent.', error);
+        }
+      }
+      if (group.parent !== root) {
+        try {
+          root.add(group);
+        } catch (error) {
+          console.debug('Failed to attach safe spawn box to world root.', error);
+          return null;
+        }
+      }
+      const existingChildren = Array.isArray(group.children) ? [...group.children] : [];
+      existingChildren.forEach((child) => {
+        group.remove(child);
+        disposeObject3D(child);
+      });
+      let material = this.materials?.stone || null;
+      if (!material) {
+        if (!this.safeSpawnBoxFallbackMaterial) {
+          this.safeSpawnBoxFallbackMaterial = new THREE.MeshLambertMaterial({
+            color: new THREE.Color('#bdbdbd'),
+          });
+        }
+        material = this.safeSpawnBoxFallbackMaterial;
+      }
+      const highlightMaterial = this.materials?.grass || material;
+      for (let y = 0; y < 3; y += 1) {
+        for (let x = -1; x <= 1; x += 1) {
+          for (let z = -1; z <= 1; z += 1) {
+            const isFloor = y === 0;
+            const isCeiling = y === 2;
+            const isWall = Math.abs(x) === 1 || Math.abs(z) === 1;
+            if (!isFloor && !isCeiling && !isWall) {
+              continue;
+            }
+            if (isCeiling && x === 0 && z === 0) {
+              continue;
+            }
+            const isOrientationMarker = z === -1 && y === 1 && x === 0;
+            const blockMaterial = isOrientationMarker ? highlightMaterial : material;
+            const mesh = new THREE.Mesh(this.blockGeometry, blockMaterial);
+            mesh.castShadow = false;
+            mesh.receiveShadow = true;
+            mesh.position.set(x * BLOCK_SIZE, y * BLOCK_SIZE + BLOCK_SIZE / 2, z * BLOCK_SIZE);
+            mesh.userData = { safeSpawnBox: true };
+            mesh.matrixAutoUpdate = false;
+            mesh.updateMatrix();
+            group.add(mesh);
+          }
+        }
+      }
+      group.visible = true;
+      group.userData = {
+        reason,
+        floorHeight: BLOCK_SIZE / 2,
+      };
+      const firstActivation = !this.totalWorldFailureActive;
+      this.totalWorldFailureActive = true;
+      this.safeSpawnBoxReason = reason;
+      if (firstActivation) {
+        if (typeof console !== 'undefined' && typeof console.error === 'function') {
+          console.error('Total world failure detected — emergency safe spawn box activated.', { reason });
+        }
+        if (typeof notifyLiveDiagnostics === 'function') {
+          notifyLiveDiagnostics(
+            'scene',
+            'Total world failure detected — emergency safe spawn box activated.',
+            { reason },
+            { level: 'error' },
+          );
+        }
+        this.recordMajorIssue('Total world failure detected — safe spawn box active.', {
+          scope: 'world',
+          code: 'safe-spawn-box',
+          reason,
+        });
+      }
+      return group;
+    }
+
+    clearSafeSpawnBox() {
+      const group = this.safeSpawnBoxGroup;
+      if (group) {
+        const children = Array.isArray(group.children) ? [...group.children] : [];
+        children.forEach((child) => {
+          group.remove(child);
+          disposeObject3D(child);
+        });
+        if (group.parent && typeof group.parent.remove === 'function') {
+          try {
+            group.parent.remove(group);
+          } catch (error) {
+            console.debug('Failed to detach safe spawn box from world root.', error);
+          }
+        }
+      }
+      this.safeSpawnBoxGroup = null;
+      this.safeSpawnBoxReason = null;
+      this.totalWorldFailureActive = false;
+    }
+
     registerStreamedHeightmap(payload) {
       if (!payload) {
         return false;
@@ -14740,6 +14880,12 @@
       const anchorWorldZ = (this.portalAnchorGrid.z - WORLD_SIZE / 2) * BLOCK_SIZE;
       if (this.portalAnchor?.set) {
         this.portalAnchor.set(anchorWorldX, 0, anchorWorldZ);
+      }
+      const populatedColumns = this.columns instanceof Map ? this.columns.size : 0;
+      if (populatedColumns > 0) {
+        this.clearSafeSpawnBox();
+      } else {
+        this.ensureSafeSpawnBox('no-terrain-columns');
       }
     }
 
@@ -17658,6 +17804,7 @@
       const spawnColumn = `${Math.floor(WORLD_SIZE / 2)}|${Math.floor(WORLD_SIZE / 2)}`;
       const column = this.columns.get(spawnColumn);
       if (column && column.length) {
+        this.clearSafeSpawnBox();
         const top = column[column.length - 1];
         const spawnY = top.position.y + PLAYER_EYE_HEIGHT;
         const spawnZ = top.position.z;
@@ -17667,10 +17814,15 @@
           this.camera.position.set(top.position.x, spawnY, spawnZ);
         }
       } else {
+        const safeBox = this.ensureSafeSpawnBox('missing-spawn-column');
+        const floorHeight = Number.isFinite(safeBox?.userData?.floorHeight)
+          ? safeBox.userData.floorHeight
+          : BLOCK_SIZE;
+        const spawnY = floorHeight + PLAYER_EYE_HEIGHT;
         if (this.playerRig) {
-          this.playerRig.position.set(0, PLAYER_EYE_HEIGHT + 1, 0);
+          this.playerRig.position.set(0, spawnY, 0);
         } else if (this.camera) {
-          this.camera.position.set(0, PLAYER_EYE_HEIGHT + 1, 0);
+          this.camera.position.set(0, spawnY, 0);
         }
       }
     }
