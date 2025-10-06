@@ -407,6 +407,79 @@ describe('movement binding diagnostics', () => {
   });
 });
 
+describe('scene population validator', () => {
+  it('asserts and overlays when required scene nodes are missing after the initial population', () => {
+    const { experience } = createExperienceForTest();
+    experience.setupScene();
+    experience.worldRoot = experience.scene;
+    experience.scene.add(experience.terrainGroup);
+    const chunk = new window.THREE_GLOBAL.Group();
+    experience.terrainChunkGroups = [chunk];
+    experience.terrainGroup.add(chunk);
+    experience.positionPlayer = vi.fn();
+    experience.spawnDimensionChests = vi.fn();
+    experience.populateInitialMobs = vi.fn();
+
+    const overlay = {
+      showError: vi.fn(),
+      setDiagnostic: vi.fn(),
+      logEvent: vi.fn(),
+    };
+    const originalOverlay = window.bootstrapOverlay;
+    const originalNotify = globalThis.notifyLiveDiagnostics;
+    const notifySpy = vi.fn();
+    window.bootstrapOverlay = overlay;
+    globalThis.notifyLiveDiagnostics = notifySpy;
+
+    const summary = {
+      steve: { present: false, placeholder: false, nodeName: null, attached: false },
+      ground: { present: true, attached: true, terrainGroupChildren: 1 },
+      blocks: { present: false, attached: false, meshCount: 0, sampleChunk: null },
+      mobs: {
+        present: false,
+        zombieCount: 0,
+        golemCount: 0,
+        total: 0,
+        groups: { zombieAttached: false, golemAttached: false },
+      },
+      missing: ['steve', 'block', 'mob'],
+      allPresent: false,
+    };
+
+    experience.summariseRequiredSceneNodes = vi.fn().mockReturnValue(summary);
+
+    const assertSpy = vi.spyOn(console, 'assert').mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      experience.populateSceneAfterTerrain({ reason: 'start' });
+
+      expect(assertSpy).toHaveBeenCalledWith(
+        false,
+        expect.stringContaining('Scene graph validation failed — required nodes missing after scene population.'),
+        expect.objectContaining({ missing: summary.missing, reason: 'start' }),
+      );
+      expect(overlay.showError).toHaveBeenCalledWith(
+        expect.objectContaining({ title: 'Scene validation failed' }),
+      );
+      expect(overlay.setDiagnostic).toHaveBeenCalledWith(
+        'scene',
+        expect.objectContaining({ status: 'error' }),
+      );
+      expect(overlay.logEvent).toHaveBeenCalledWith(
+        'scene',
+        expect.stringContaining('Scene validation failed'),
+        expect.objectContaining({ level: 'error' }),
+      );
+    } finally {
+      assertSpy.mockRestore();
+      errorSpy.mockRestore();
+      window.bootstrapOverlay = originalOverlay;
+      globalThis.notifyLiveDiagnostics = originalNotify;
+    }
+  });
+});
+
 describe('simple experience entity lifecycle', () => {
   it('positions Steve and spawns treasure chests when the scene loads', async () => {
     const { experience, spawnTop } = createExperienceForTest();

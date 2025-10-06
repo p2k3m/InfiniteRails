@@ -3291,6 +3291,8 @@
       this.lastTerrainBuildSummary = null;
       this.lastScenePopulationSummary = null;
       this.lastScenePopulationSummaryContext = null;
+      this.sceneValidationOverlayActive = false;
+      this.sceneValidationOverlayLastDetail = null;
     }
 
     emitGameEvent(type, detail = {}) {
@@ -3725,6 +3727,133 @@
       return summary;
     }
 
+    presentSceneValidationOverlay(summary, context = {}) {
+      if (!summary || summary.allPresent) {
+        this.sceneValidationOverlayActive = false;
+        this.sceneValidationOverlayLastDetail = null;
+        return false;
+      }
+      const reasonRaw = typeof context.reason === 'string' ? context.reason.trim() : '';
+      const reason = reasonRaw.length ? reasonRaw : 'scene-population';
+      const missingKeys = Array.isArray(summary.missing)
+        ? summary.missing.filter((key) => typeof key === 'string' && key.trim().length)
+        : [];
+      if (!missingKeys.length) {
+        return false;
+      }
+      const friendlyNameMap = {
+        steve: 'player avatar',
+        ground: 'terrain ground',
+        block: 'terrain blocks',
+        mob: 'mob actors',
+      };
+      const friendlyMissing = missingKeys.map((key) => friendlyNameMap[key] || key);
+      const missingLabel = friendlyMissing.join(', ');
+      const message = friendlyMissing.length === 1
+        ? `Scene validation failed — ${friendlyMissing[0]} missing.`
+        : `Scene validation failed — required nodes missing: ${missingLabel}.`;
+      const detailSnapshot = {
+        reason,
+        missing: missingKeys.slice(),
+        summary: {
+          steve: summary.steve ?? null,
+          ground: summary.ground ?? null,
+          blocks: summary.blocks ?? null,
+          mobs: summary.mobs ?? null,
+        },
+      };
+      const scope =
+        (typeof window !== 'undefined' && window) ||
+        (typeof globalThis !== 'undefined' && globalThis) ||
+        (typeof self !== 'undefined' && self) ||
+        null;
+      let overlayShown = false;
+      const overlayApi =
+        scope?.bootstrapOverlay ||
+        scope?.InfiniteRails?.bootstrapOverlay ||
+        scope?.__INFINITE_RAILS_BOOTSTRAP_OVERLAY__ ||
+        null;
+      if (overlayApi && typeof overlayApi.showError === 'function') {
+        try {
+          overlayApi.showError({
+            title: 'Scene validation failed',
+            message: `${message} Reload the page after checking asset bootstrap.`,
+          });
+          if (typeof overlayApi.setDiagnostic === 'function') {
+            overlayApi.setDiagnostic('scene', {
+              status: 'error',
+              message,
+              detail: detailSnapshot,
+            });
+          }
+          if (typeof overlayApi.logEvent === 'function') {
+            overlayApi.logEvent('scene', message, {
+              level: 'error',
+              detail: detailSnapshot,
+            });
+          }
+          overlayShown = true;
+        } catch (error) {
+          if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+            console.debug('Scene validation overlay API unavailable; using DOM fallback.', error);
+          }
+        }
+      }
+      if (!overlayShown) {
+        const doc =
+          this.canvas?.ownerDocument ||
+          scope?.document ||
+          (typeof document !== 'undefined' ? document : null);
+        if (doc && typeof doc.getElementById === 'function') {
+          const overlay = doc.getElementById('globalOverlay');
+          if (overlay) {
+            if (typeof overlay.removeAttribute === 'function') {
+              overlay.removeAttribute('hidden');
+            }
+            if (typeof overlay.setAttribute === 'function') {
+              overlay.setAttribute('data-mode', 'error');
+              overlay.setAttribute('data-fallback-active', 'true');
+              overlay.setAttribute('data-scene-validation', 'true');
+            }
+            overlay.hidden = false;
+            try {
+              setInertState(overlay, false);
+              activateOverlayIsolation(overlay);
+            } catch (error) {
+              if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+                console.debug('Failed to update inert state for scene validation overlay.', error);
+              }
+            }
+            const titleEl = doc.getElementById('globalOverlayTitle');
+            if (titleEl) {
+              titleEl.textContent = 'Scene validation failed';
+            }
+            const messageEl = doc.getElementById('globalOverlayMessage');
+            if (messageEl) {
+              messageEl.textContent = `${message} Reload the page after checking asset bootstrap.`;
+            }
+            const rendererDiagnostic =
+              typeof doc.querySelector === 'function'
+                ? doc.querySelector('[data-diagnostic="scene"]')
+                : null;
+            if (rendererDiagnostic && typeof rendererDiagnostic.setAttribute === 'function') {
+              rendererDiagnostic.setAttribute('data-status', 'error');
+            }
+            overlayShown = true;
+          }
+        }
+      }
+      if (overlayShown) {
+        this.sceneValidationOverlayActive = true;
+        this.sceneValidationOverlayLastDetail = {
+          reason,
+          missingKey: missingKeys.join('|'),
+          timestamp: Date.now(),
+        };
+      }
+      return overlayShown;
+    }
+
     reportMissingSceneObjects(summary, context = {}) {
       if (!summary || summary.allPresent) {
         return;
@@ -3744,6 +3873,43 @@
       const missingKeys = Array.isArray(summary.missing) ? summary.missing : [];
       if (!missingKeys.length) {
         return;
+      }
+      if (typeof this.presentSceneValidationOverlay === 'function') {
+        try {
+          this.presentSceneValidationOverlay(summary, { reason, errors });
+        } catch (error) {
+          if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+            console.debug('Scene validation overlay presentation failed.', error);
+          }
+        }
+      }
+      if (typeof console !== 'undefined' && typeof console.error === 'function') {
+        console.error('Scene graph validation failed — required nodes missing.', {
+          reason,
+          missing: missingKeys,
+        });
+      }
+      if (typeof notifyLiveDiagnostics === 'function') {
+        try {
+          const diagnosticDetail = {
+            reason,
+            missing: missingKeys.slice(),
+            errors: errors.map((entry) => ({
+              asset: entry?.asset,
+              error: normaliseLiveDiagnosticError(entry?.error),
+            })),
+          };
+          notifyLiveDiagnostics(
+            'scene',
+            'Scene graph validation failed — required nodes missing.',
+            diagnosticDetail,
+            { level: 'error' },
+          );
+        } catch (error) {
+          if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+            console.debug('Scene validation diagnostic notification failed.', error);
+          }
+        }
       }
       const summaryKeyMap = { steve: 'steve', ground: 'ground', block: 'blocks', mob: 'mobs' };
       const assetNameMap = {
@@ -14620,6 +14786,16 @@
       if (typeof this.summariseRequiredSceneNodes === 'function') {
         const summary = this.summariseRequiredSceneNodes();
         this.lastScenePopulationSummary = summary || null;
+        if (summary && typeof console !== 'undefined' && typeof console.assert === 'function') {
+          console.assert(
+            summary.allPresent,
+            'Scene graph validation failed — required nodes missing after scene population.',
+            {
+              missing: Array.isArray(summary.missing) ? summary.missing.slice() : [],
+              reason,
+            },
+          );
+        }
         if (summary && !summary.allPresent) {
           populationContext.reportedMissing = true;
           this.reportMissingSceneObjects(summary, { reason, errors: populationErrors });
