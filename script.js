@@ -4608,6 +4608,251 @@
   globalScope.InfiniteRails = globalScope.InfiniteRails || {};
   globalScope.InfiniteRails.modules = moduleLoaderApi;
 
+  const RENDERER_MODULE_IDS = Object.freeze({
+    simple: 'renderer:simple',
+    sandbox: 'renderer:simple',
+    advanced: 'renderer:advanced',
+  });
+  const RENDERER_MODULE_SET = new Set([
+    RENDERER_MODULE_IDS.simple,
+    RENDERER_MODULE_IDS.advanced,
+  ]);
+  const RENDERER_PLUGIN_IDS = Object.freeze([...MODULE_PLUGIN_DEPENDENCIES]);
+  const RENDERER_PLUGIN_SET = new Set(RENDERER_PLUGIN_IDS);
+
+  function normaliseRendererModeInput(value) {
+    if (typeof value === 'string') {
+      const trimmed = value.trim().toLowerCase();
+      if (trimmed === 'simple' || trimmed === 'sandbox') {
+        return 'simple';
+      }
+      if (trimmed === 'advanced' || trimmed === 'default') {
+        return 'advanced';
+      }
+    }
+    return null;
+  }
+
+  function resolveRendererModuleId(mode) {
+    const normalised = normaliseRendererModeInput(mode);
+    if (!normalised) {
+      throw new Error(`Unknown renderer mode: ${mode}`);
+    }
+    return RENDERER_MODULE_IDS[normalised];
+  }
+
+  function withRendererModuleBoundary(mode, operation, runner, options = {}) {
+    if (typeof runner !== 'function') {
+      return Promise.resolve(null);
+    }
+    let moduleId;
+    let normalisedMode = null;
+    try {
+      moduleId = resolveRendererModuleId(mode);
+      normalisedMode = normaliseRendererModeInput(mode);
+    } catch (error) {
+      return Promise.reject(error);
+    }
+    const reason =
+      typeof options.reason === 'string' && options.reason.trim().length
+        ? options.reason.trim()
+        : 'renderer-module-operation';
+    const detail = {
+      reason,
+      operation,
+      moduleId,
+      mode: normalisedMode,
+      ...(options.detail && typeof options.detail === 'object' ? options.detail : {}),
+    };
+    const stage = `modules.renderers.${normalisedMode ?? 'unknown'}.${operation}`;
+    return invokeWithErrorBoundary(() => runner(moduleId, detail), {
+      boundary: options.boundary ?? 'modules',
+      stage,
+      detail,
+      rethrow: options.rethrow ?? true,
+    });
+  }
+
+  function ensureRendererModule(mode, options = {}) {
+    return withRendererModuleBoundary(
+      mode,
+      'ensure',
+      (moduleId) =>
+        dynamicModuleLoader.ensure(moduleId, {
+          ...options,
+          mode: normaliseRendererModeInput(mode) ?? options.mode,
+        }),
+      options,
+    );
+  }
+
+  function reloadRendererModule(mode, options = {}) {
+    return withRendererModuleBoundary(
+      mode,
+      'reload',
+      (moduleId) =>
+        dynamicModuleLoader.reload(moduleId, {
+          ...options,
+          mode: normaliseRendererModeInput(mode) ?? options.mode,
+        }),
+      options,
+    );
+  }
+
+  function unloadRendererModule(mode, options = {}) {
+    return withRendererModuleBoundary(
+      mode,
+      'unload',
+      (moduleId) =>
+        dynamicModuleLoader.unload(moduleId, {
+          ...options,
+          mode: normaliseRendererModeInput(mode) ?? options.mode,
+        }),
+      { ...options, rethrow: options.rethrow ?? false },
+    );
+  }
+
+  function ensureRendererPlugins(options = {}) {
+    const reason =
+      typeof options.reason === 'string' && options.reason.trim().length
+        ? options.reason.trim()
+        : 'renderer-plugin-operation';
+    const detail = {
+      reason,
+      mode: normaliseRendererModeInput(options.mode) ?? null,
+      operation: 'ensure-plugins',
+    };
+    return invokeWithErrorBoundary(
+      async () => {
+        for (const pluginId of RENDERER_PLUGIN_IDS) {
+          await dynamicModuleLoader.ensure(pluginId, {
+            ...options,
+            parent: options.parent ?? 'renderers',
+            mode: detail.mode,
+          });
+        }
+        return true;
+      },
+      {
+        boundary: 'modules',
+        stage: `modules.renderers.${detail.mode ?? 'shared'}.plugins.ensure`,
+        detail,
+      },
+    );
+  }
+
+  function reloadRendererPlugins(options = {}) {
+    const reason =
+      typeof options.reason === 'string' && options.reason.trim().length
+        ? options.reason.trim()
+        : 'renderer-plugin-reload';
+    const detail = {
+      reason,
+      mode: normaliseRendererModeInput(options.mode) ?? null,
+      operation: 'reload-plugins',
+    };
+    return invokeWithErrorBoundary(
+      async () => {
+        for (const pluginId of RENDERER_PLUGIN_IDS) {
+          await dynamicModuleLoader.reload(pluginId, {
+            ...options,
+            parent: options.parent ?? 'renderers',
+            mode: detail.mode,
+          });
+        }
+        return true;
+      },
+      {
+        boundary: 'modules',
+        stage: `modules.renderers.${detail.mode ?? 'shared'}.plugins.reload`,
+        detail,
+      },
+    );
+  }
+
+  function getRendererModuleState(mode, options = {}) {
+    if (typeof mode === 'undefined') {
+      return listRendererRelatedModuleStates({ includePlugins: options.includePlugins !== false });
+    }
+    try {
+      const moduleId = resolveRendererModuleId(mode);
+      return dynamicModuleLoader.getState(moduleId);
+    } catch (error) {
+      globalScope?.console?.debug?.('Failed to resolve renderer module state.', error);
+      return null;
+    }
+  }
+
+  function listRendererRelatedModuleStates({ includePlugins = true } = {}) {
+    const snapshot = dynamicModuleLoader.getState();
+    if (!Array.isArray(snapshot)) {
+      return [];
+    }
+    return snapshot.filter((entry) => {
+      if (!entry || typeof entry !== 'object') {
+        return false;
+      }
+      if (RENDERER_MODULE_SET.has(entry.id)) {
+        return true;
+      }
+      if (includePlugins && RENDERER_PLUGIN_SET.has(entry.id)) {
+        return true;
+      }
+      return false;
+    });
+  }
+
+  function addRendererModuleChangeListener(listener, options = {}) {
+    if (typeof listener !== 'function') {
+      return () => {};
+    }
+    const includePlugins = options.includePlugins === true;
+    const targets = new Set(RENDERER_MODULE_SET);
+    if (includePlugins) {
+      RENDERER_PLUGIN_SET.forEach((id) => targets.add(id));
+    }
+    const handler = (id, state) => {
+      if (!targets.has(id)) {
+        return;
+      }
+      try {
+        listener(id, state);
+      } catch (error) {
+        globalScope?.console?.debug?.('Renderer module listener threw an error.', error);
+      }
+    };
+    dynamicModuleLoader.onChange(handler);
+    return () => {
+      dynamicModuleLoader.offChange(handler);
+    };
+  }
+
+  const renderersApi = globalScope.InfiniteRails.renderers || {};
+  renderersApi.moduleIds = Object.freeze({
+    simple: RENDERER_MODULE_IDS.simple,
+    sandbox: RENDERER_MODULE_IDS.simple,
+    advanced: RENDERER_MODULE_IDS.advanced,
+  });
+  renderersApi.pluginIds = RENDERER_PLUGIN_IDS;
+  renderersApi.ensure = ensureRendererModule;
+  renderersApi.reload = reloadRendererModule;
+  renderersApi.unload = unloadRendererModule;
+  renderersApi.ensurePlugins = ensureRendererPlugins;
+  renderersApi.reloadPlugins = reloadRendererPlugins;
+  renderersApi.getState = getRendererModuleState;
+  renderersApi.listStates = listRendererRelatedModuleStates;
+  renderersApi.onChange = (listener, options = {}) => addRendererModuleChangeListener(listener, options);
+  renderersApi.offChange = (unsubscribe) => {
+    if (typeof unsubscribe === 'function') {
+      try {
+        unsubscribe();
+      } catch (error) {
+        globalScope?.console?.debug?.('Renderer module unsubscribe handler failed.', error);
+      }
+    }
+  };
+  globalScope.InfiniteRails.renderers = renderersApi;
+
   function formatAssetLogLabel(detail) {
     const kind = typeof detail?.kind === 'string' && detail.kind.trim().length ? detail.kind.trim() : 'asset';
     const key = typeof detail?.key === 'string' && detail.key.trim().length ? detail.key.trim() : null;
@@ -11022,6 +11267,105 @@
     globalScope.InfiniteRails.rendererMode = mode;
   }
 
+  function getActiveRendererMode() {
+    const direct = normaliseRendererModeInput(globalScope?.InfiniteRails?.rendererMode);
+    if (direct) {
+      return direct;
+    }
+    const stored = normaliseRendererModeInput(globalScope?.__INFINITE_RAILS_RENDERER_MODE__);
+    if (stored) {
+      return stored;
+    }
+    const configured = normaliseRendererModeInput(globalScope?.APP_CONFIG?.defaultMode);
+    if (configured) {
+      return configured;
+    }
+    return null;
+  }
+
+  async function teardownActiveExperience(options = {}) {
+    const instance = activeExperienceInstance;
+    if (!instance) {
+      return { instance: null, stopped: false, destroyed: false };
+    }
+    const mode = normaliseRendererModeInput(options.mode) ?? getActiveRendererMode();
+    const reason =
+      typeof options.reason === 'string' && options.reason.trim().length
+        ? options.reason.trim()
+        : 'renderer-teardown';
+    const stageBase = `modules.renderers.${mode ?? 'unknown'}.teardown`;
+    const teardownDetail = {
+      reason,
+      mode,
+    };
+
+    async function runTeardownStep(label, fn) {
+      if (typeof fn !== 'function') {
+        return false;
+      }
+      await invokeWithErrorBoundary(
+        () => fn.call(instance),
+        {
+          boundary: 'modules',
+          stage: `${stageBase}.${label}`,
+          detail: { ...teardownDetail, step: label },
+          rethrow: false,
+        },
+      );
+      return true;
+    }
+
+    const result = { instance, stopped: false, destroyed: false };
+    if (await runTeardownStep('stop', instance.stop)) {
+      result.stopped = true;
+    }
+    let cleanupApplied = false;
+    const cleanupOrder = ['destroy', 'dispose', 'teardown', 'shutdown'];
+    for (const methodName of cleanupOrder) {
+      const method = instance[methodName];
+      if (await runTeardownStep(methodName, method)) {
+        cleanupApplied = true;
+      }
+    }
+    result.destroyed = cleanupApplied;
+    activeExperienceInstance = null;
+    globalScope.__INFINITE_RAILS_ACTIVE_EXPERIENCE__ = null;
+    return result;
+  }
+
+  async function reloadActiveRenderer(options = {}) {
+    const requestedMode = normaliseRendererModeInput(options.mode);
+    let mode = requestedMode;
+    if (!mode) {
+      mode = getActiveRendererMode();
+    }
+    if (!mode) {
+      mode = shouldStartSimpleMode() ? 'simple' : 'advanced';
+    }
+    const reason =
+      typeof options.reason === 'string' && options.reason.trim().length
+        ? options.reason.trim()
+        : 'renderer-reload';
+    const pluginOptions = { ...options, mode, reason: `${reason}:plugins` };
+    if (options.reloadPlugins === true) {
+      await reloadRendererPlugins(pluginOptions);
+    } else if (options.ensurePlugins !== false) {
+      await ensureRendererPlugins(pluginOptions);
+    }
+    await teardownActiveExperience({ ...options, mode, reason: `${reason}:teardown` });
+    await reloadRendererModule(mode, { ...options, mode, reason });
+    if (options.restart === false) {
+      return null;
+    }
+    return ensureSimpleExperience(mode);
+  }
+
+  if (typeof renderersApi !== 'undefined' && renderersApi) {
+    renderersApi.getActiveMode = getActiveRendererMode;
+    renderersApi.reloadActive = (options = {}) => reloadActiveRenderer(options);
+    renderersApi.teardown = (options = {}) => teardownActiveExperience(options);
+  }
+
   function ensureSimpleExperience(mode) {
     if (activeExperienceInstance) {
       activeExperienceInstance.apiBaseUrl = identityState.apiBaseUrl;
@@ -12431,13 +12775,13 @@
         }
         if (startSimple) {
           try {
-            await dynamicModuleLoader.ensure('renderer:simple', { mode: 'simple', reason: 'bootstrap' });
+            await ensureRendererModule('simple', { mode: 'simple', reason: 'bootstrap' });
           } catch (error) {
             scope.console?.debug?.('Failed to load simple renderer module during bootstrap.', error);
           }
         } else {
           try {
-            await dynamicModuleLoader.ensure('renderer:advanced', { mode: 'advanced', reason: 'bootstrap' });
+            await ensureRendererModule('advanced', { mode: 'advanced', reason: 'bootstrap' });
           } catch (error) {
             scope.console?.debug?.('Failed to prepare advanced renderer module during bootstrap.', error);
           }
