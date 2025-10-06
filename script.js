@@ -3314,6 +3314,83 @@
     return fallback;
   }
 
+  function normaliseTextureReloadKey(value) {
+    if (typeof value !== 'string') {
+      return null;
+    }
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return null;
+    }
+    if (trimmed.startsWith('texture:')) {
+      const key = trimmed.slice('texture:'.length).trim();
+      return key || null;
+    }
+    if (/^textures?\//i.test(trimmed)) {
+      const segments = trimmed.split(/[?#]/, 1)[0].split('/');
+      const file = segments[segments.length - 1] || '';
+      if (file) {
+        const lower = file.toLowerCase();
+        if (lower.endsWith('.png')) {
+          return file.slice(0, -4) || null;
+        }
+        return file;
+      }
+    }
+    if (trimmed.includes(':') || /\s/.test(trimmed)) {
+      return null;
+    }
+    return trimmed;
+  }
+
+  function collectTextureReloadKeys(detail) {
+    if (!detail || typeof detail !== 'object') {
+      return [];
+    }
+    const keys = new Set();
+    const add = (candidate) => {
+      const normalised = normaliseTextureReloadKey(candidate);
+      if (normalised) {
+        keys.add(normalised);
+      }
+    };
+    add(detail.key);
+    add(detail.assetKey);
+    add(detail.assetId);
+    add(detail.assetName);
+    if (Array.isArray(detail.keys)) {
+      detail.keys.forEach(add);
+    }
+    if (Array.isArray(detail.missingKeys)) {
+      detail.missingKeys.forEach(add);
+    }
+    if (Array.isArray(detail.textureKeys)) {
+      detail.textureKeys.forEach(add);
+    }
+    if (Array.isArray(detail.requestKeys)) {
+      detail.requestKeys.forEach(add);
+    }
+    return Array.from(keys);
+  }
+
+  function normaliseStringList(value) {
+    if (value === undefined || value === null) {
+      return [];
+    }
+    const values = Array.isArray(value) ? value : [value];
+    const result = [];
+    values.forEach((entry) => {
+      if (typeof entry !== 'string') {
+        return;
+      }
+      const trimmed = entry.trim();
+      if (trimmed && !result.includes(trimmed)) {
+        result.push(trimmed);
+      }
+    });
+    return result;
+  }
+
   function attemptAssetReloadFromDiagnostics({
     source = 'diagnostics-overlay',
     detail = null,
@@ -3363,6 +3440,92 @@
           globalScope.console.debug('Unable to dispatch asset recovery reload event.', dispatchError);
         }
       }
+    }
+    const actionLabel = resolveAssetReloadActionLabel(detailSnapshot);
+    const refreshFn =
+      typeof globalScope?.InfiniteRails?.refreshTextures === 'function'
+        ? globalScope.InfiniteRails.refreshTextures
+        : typeof globalScope?.InfiniteRails?.assets?.refreshTextures === 'function'
+          ? globalScope.InfiniteRails.assets.refreshTextures
+          : null;
+    if (actionLabel === 'Refresh textures' && refreshFn) {
+      const refreshKeys = collectTextureReloadKeys(detailSnapshot);
+      const alternateBaseUrls = normaliseStringList(
+        detailSnapshot?.alternateBaseUrls ??
+          detailSnapshot?.baseUrls ??
+          detailSnapshot?.fallbackBaseUrls ??
+          detailSnapshot?.alternateBases,
+      );
+      const refreshOptions = {
+        source,
+        detail: detailSnapshot ? { ...detailSnapshot } : null,
+      };
+      if (refreshKeys.length) {
+        refreshOptions.keys = refreshKeys;
+      }
+      if (typeof detailSnapshot?.baseUrl === 'string' && detailSnapshot.baseUrl.trim().length) {
+        refreshOptions.baseUrl = detailSnapshot.baseUrl.trim();
+      }
+      if (alternateBaseUrls.length) {
+        refreshOptions.alternateBaseUrls = alternateBaseUrls;
+      }
+      if (typeof showHudAlert === 'function') {
+        showHudAlert({
+          title: 'Refreshing textures',
+          message: 'Refreshing texture pack from alternate CDN endpoints…',
+          severity: 'info',
+          autoHideMs: 6000,
+        });
+      }
+      Promise.resolve()
+        .then(() => refreshFn(refreshOptions))
+        .then(() => {
+          if (typeof showHudAlert === 'function') {
+            showHudAlert({
+              title: 'Textures refreshed',
+              message: 'Texture streams restarted successfully.',
+              severity: 'success',
+              autoHideMs: 7000,
+            });
+          }
+          if (typeof logDiagnosticsEvent === 'function') {
+            logDiagnosticsEvent('assets', 'Texture refresh completed.', {
+              level: 'success',
+              detail: { source, keys: refreshKeys },
+            });
+          }
+        })
+        .catch((error) => {
+          if (typeof showHudAlert === 'function') {
+            showHudAlert({
+              title: 'Refresh failed',
+              message: 'Texture refresh failed — reload the page to restore assets.',
+              severity: 'error',
+              autoHideMs: 8000,
+            });
+          }
+          if (typeof logDiagnosticsEvent === 'function') {
+            logDiagnosticsEvent('assets', 'Texture refresh failed.', {
+              level: 'error',
+              detail: { source, keys: refreshKeys, error: error?.message || String(error) },
+            });
+          }
+          if (globalScope?.console?.warn) {
+            globalScope.console.warn('Texture refresh failed.', error);
+          }
+        })
+        .finally(() => {
+          if (controlElement) {
+            try {
+              controlElement.disabled = false;
+            } catch (error) {
+              if (globalScope?.console?.debug) {
+                globalScope.console.debug('Unable to re-enable diagnostics action control.', error);
+              }
+            }
+          }
+        });
+      return;
     }
     const locationTarget = globalScope?.location;
     if (locationTarget && typeof locationTarget.reload === 'function') {
@@ -11730,6 +11893,31 @@
   bootDiagnosticsApi.startManifestAssetAvailabilityCheck = (options = {}) =>
     startManifestAssetAvailabilityCheck(options);
   globalScope.InfiniteRails.bootDiagnostics = bootDiagnosticsApi;
+
+  const assetsApi = globalScope.InfiniteRails.assets || {};
+  assetsApi.refreshTextures = (options = {}) => {
+    const instance = activeExperienceInstance;
+    if (!instance || typeof instance.refreshTexturePack !== 'function') {
+      const error = new Error('Texture refresh unavailable — renderer inactive.');
+      if (globalScope.console?.warn) {
+        globalScope.console.warn('Texture refresh unavailable — renderer inactive.', error);
+      }
+      return Promise.reject(error);
+    }
+    try {
+      const payload = { ...options };
+      if (!payload.source) {
+        payload.source = 'api';
+      }
+      return Promise.resolve(instance.refreshTexturePack(payload));
+    } catch (error) {
+      return Promise.reject(error);
+    }
+  };
+  globalScope.InfiniteRails.assets = assetsApi;
+  if (typeof globalScope.InfiniteRails.refreshTextures !== 'function') {
+    globalScope.InfiniteRails.refreshTextures = (options = {}) => assetsApi.refreshTextures(options);
+  }
 
   if (typeof globalScope.addEventListener === 'function') {
     globalScope.addEventListener(

@@ -8854,11 +8854,42 @@
           .filter(Boolean)
           .forEach((value) => sources.push(value));
       }
+
+      const appendBaseUrlSource = (value) => {
+        if (typeof value !== 'string') {
+          return;
+        }
+        const trimmed = value.trim();
+        if (!trimmed) {
+          return;
+        }
+        const normalised = trimmed.endsWith('/') ? trimmed.slice(0, -1) : trimmed;
+        sources.push(`${normalised}/${key}.png`);
+      };
+
       const base = typeof config.textureBaseUrl === 'string' ? config.textureBaseUrl.trim() : '';
       if (base) {
-        const normalised = base.endsWith('/') ? base.slice(0, -1) : base;
-        sources.push(`${normalised}/${key}.png`);
+        appendBaseUrlSource(base);
       }
+
+      const alternateBaseCollections = [
+        config.textureAlternateBaseUrls,
+        config.textureAlternateBaseUrl,
+        config.textureFailoverBaseUrls,
+        config.textureFailoverBaseUrl,
+        config.textureBaseUrls,
+      ];
+      alternateBaseCollections.forEach((collection) => {
+        if (Array.isArray(collection)) {
+          collection
+            .map((value) => (typeof value === 'string' ? value.trim() : ''))
+            .filter(Boolean)
+            .forEach((value) => appendBaseUrlSource(value));
+        } else if (typeof collection === 'string') {
+          appendBaseUrlSource(collection);
+        }
+      });
+
       const manifest = config.textureManifest && typeof config.textureManifest === 'object' ? config.textureManifest : null;
       if (manifest) {
         const manifestEntry = manifest[key];
@@ -8871,6 +8902,7 @@
             .forEach((value) => sources.push(value));
         }
       }
+
       const defaultManifestEntry = DEFAULT_TEXTURE_MANIFEST[key];
       if (typeof defaultManifestEntry === 'string' && defaultManifestEntry) {
         sources.push(defaultManifestEntry);
@@ -8880,6 +8912,7 @@
           .filter(Boolean)
           .forEach((value) => sources.push(value));
       }
+
       return sources.filter(Boolean);
     }
 
@@ -8946,11 +8979,20 @@
       }
     }
 
-    loadExternalVoxelTexture(key) {
-      const canStreamTextures =
+    loadExternalVoxelTexture(key, options = {}) {
+      const forceStream = options?.forceStream === true;
+      const threeScope = (this && typeof this === 'object' && this.THREE) || (typeof THREE !== 'undefined' ? THREE : null);
+      const loaderPrototype = threeScope?.TextureLoader?.prototype || null;
+      const loadFunction = loaderPrototype && typeof loaderPrototype.load === 'function' ? loaderPrototype.load : null;
+      const loadIsMock = !!(loadFunction && typeof loadFunction.getMockName === 'function');
+      const hasDomImage =
         typeof document !== 'undefined' &&
         typeof document.createElement === 'function' &&
+        typeof document.createElementNS === 'function' &&
         typeof Image !== 'undefined';
+      const loaderAvailable =
+        typeof threeScope?.TextureLoader === 'function' && (hasDomImage || (forceStream && loadIsMock));
+      const canStreamTextures = loaderAvailable;
       if (!canStreamTextures) {
         const fallback = this.ensureProceduralTexture(key);
         this.noteTexturePackFallback('unsupported-environment', { key });
@@ -9022,7 +9064,7 @@
             (texture) => {
               resolve({ texture, url });
             },
-            undefined,
+            () => {},
             () => {
               console.warn(`Failed to load texture ${url}; attempting fallback source.`);
               notifyLiveDiagnostics(
@@ -9093,7 +9135,7 @@
       return loadPromise;
     }
 
-    queueExternalTextureUpgrade(key, material) {
+    queueExternalTextureUpgrade(key, material, options = {}) {
       if (typeof key === 'string' && key.trim()) {
         if (material) {
           this.textureUpgradeTargets.set(key.trim(), material);
@@ -9101,13 +9143,17 @@
           this.textureUpgradeTargets.delete(key.trim());
         }
       }
-      const promise = this.loadExternalVoxelTexture(key);
+      const loadOptions = options && typeof options === 'object' && Object.keys(options).length ? options : undefined;
+      const promise =
+        loadOptions !== undefined
+          ? this.loadExternalVoxelTexture(key, loadOptions)
+          : this.loadExternalVoxelTexture(key);
       if (!promise) {
-        return;
+        return null;
       }
-      promise.then((texture) => {
+      const upgradePromise = promise.then((texture) => {
         if (!texture || !material) {
-          return;
+          return texture;
         }
         this.textureCache.set(key, texture);
         material.map = texture;
@@ -9115,6 +9161,167 @@
         if (this.renderer) {
           this.applyTextureAnisotropy();
         }
+        return texture;
+      });
+      return upgradePromise;
+    }
+
+    refreshTexturePack(options = {}) {
+      const source = typeof options.source === 'string' && options.source.trim().length ? options.source.trim() : 'api';
+      const scope = typeof window !== 'undefined' ? window : typeof globalThis !== 'undefined' ? globalThis : null;
+      const config = scope ? (scope.APP_CONFIG = scope.APP_CONFIG || {}) : null;
+      const normaliseString = (value) => {
+        if (typeof value !== 'string') {
+          return '';
+        }
+        return value.trim();
+      };
+      const normaliseList = (value) => {
+        if (!value) {
+          return [];
+        }
+        if (Array.isArray(value)) {
+          return Array.from(new Set(value.map(normaliseString).filter(Boolean)));
+        }
+        const single = normaliseString(value);
+        return single ? [single] : [];
+      };
+
+      if (config) {
+        if (Object.prototype.hasOwnProperty.call(options, 'baseUrl')) {
+          const baseUrl = normaliseString(options.baseUrl);
+          if (baseUrl) {
+            config.textureBaseUrl = baseUrl;
+          } else {
+            delete config.textureBaseUrl;
+          }
+        }
+        if (Object.prototype.hasOwnProperty.call(options, 'alternateBaseUrls')) {
+          const alternates = normaliseList(options.alternateBaseUrls);
+          if (alternates.length) {
+            config.textureAlternateBaseUrls = alternates;
+          } else {
+            delete config.textureAlternateBaseUrls;
+          }
+        }
+      }
+
+      const keys = new Set();
+      const addKey = (value) => {
+        if (typeof value !== 'string') {
+          return;
+        }
+        const trimmed = value.trim();
+        if (!trimmed) {
+          return;
+        }
+        keys.add(trimmed);
+      };
+
+      if (Array.isArray(options.keys)) {
+        options.keys.forEach(addKey);
+      }
+      if (typeof options.key === 'string') {
+        addKey(options.key);
+      }
+      if (typeof this.collectCriticalTextureKeys === 'function') {
+        try {
+          const collected = this.collectCriticalTextureKeys();
+          if (Array.isArray(collected)) {
+            collected.forEach(addKey);
+          }
+        } catch (error) {
+          if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+            console.debug('Failed to collect critical texture keys during refresh.', error);
+          }
+        }
+      }
+      if (this.textureUpgradeTargets instanceof Map) {
+        this.textureUpgradeTargets.forEach((_, key) => addKey(key));
+      }
+      if (this.textureFallbackMissingKeys instanceof Set) {
+        this.textureFallbackMissingKeys.forEach((key) => addKey(key));
+      }
+      Object.keys(DEFAULT_TEXTURE_MANIFEST || {}).forEach(addKey);
+
+      if (!keys.size) {
+        return Promise.resolve({ keys: [], results: [] });
+      }
+
+      const refreshKeys = Array.from(keys);
+      this.emitGameEvent('texture-pack-refresh-requested', {
+        keys: refreshKeys,
+        source,
+      });
+
+      const refreshPromises = [];
+      refreshKeys.forEach((key) => {
+        this.clearScheduledTextureRetry(key);
+        this.textureRetryAttempts?.delete?.(key);
+        this.textureFallbackMissingKeys?.delete?.(key);
+        this.assetFailureCounts?.delete?.(`texture:${key}`);
+        this.pendingTextureLoads?.delete?.(key);
+        this.textureCache?.delete?.(key);
+
+        const material = this.textureUpgradeTargets?.get?.(key) || this.materials?.[key] || null;
+        const promise = material
+          ? this.queueExternalTextureUpgrade(key, material, { forceStream: true })
+          : this.loadExternalVoxelTexture(key, { forceStream: true });
+        if (promise && typeof promise.then === 'function') {
+          refreshPromises.push(
+            promise
+              .then((texture) => ({ key, texture }))
+              .catch((error) => {
+                if (typeof console !== 'undefined' && typeof console.warn === 'function') {
+                  console.warn(`Texture refresh failed for ${key}`, error);
+                }
+                this.noteTexturePackFallback('refresh-failure', { key, error });
+                throw { key, error };
+              }),
+          );
+        }
+      });
+
+      if (!refreshPromises.length) {
+        return Promise.resolve({ keys: refreshKeys, results: [] });
+      }
+
+      if (this.texturePackNoticeShown) {
+        this.refreshTextureFallbackNotice();
+      }
+
+      return Promise.allSettled(refreshPromises).then((results) => {
+        const successful = results
+          .filter((entry) => entry.status === 'fulfilled' && entry.value && entry.value.key)
+          .map((entry) => entry.value.key);
+        const failed = results
+          .filter((entry) => entry.status === 'rejected' && entry.reason && entry.reason.key)
+          .map((entry) => entry.reason.key);
+        if (successful.length && this.textureFallbackMissingKeys instanceof Set) {
+          successful.forEach((key) => {
+            if (typeof key === 'string') {
+              this.textureFallbackMissingKeys.delete(key);
+            }
+          });
+          if (this.textureFallbackMissingKeys.size === 0) {
+            this.texturePackUnavailable = false;
+          }
+        }
+        this.emitGameEvent('texture-pack-refresh-complete', {
+          keys: refreshKeys,
+          succeeded: successful,
+          failed,
+          source,
+        });
+        if (this.texturePackNoticeShown) {
+          this.refreshTextureFallbackNotice();
+        }
+        return {
+          keys: refreshKeys,
+          results,
+          succeeded: successful,
+          failed,
+        };
       });
     }
 
