@@ -122,6 +122,22 @@ describe('simple experience mobile controls', () => {
     });
   });
 
+  it('runs the control/UI sync check on mobile control activation and deactivation', () => {
+    const { experience, mobileControls } = createMobileControlsHarness();
+    const syncSpy = vi.spyOn(experience, 'runControlUiSyncCheck');
+
+    experience.initializeMobileControls();
+
+    expect(syncSpy).toHaveBeenCalledWith(expect.objectContaining({ reason: 'touch-controls-activated' }));
+
+    syncSpy.mockClear();
+    experience.isTouchPreferred = false;
+    experience.initializeMobileControls();
+
+    expect(syncSpy).toHaveBeenCalledWith(expect.objectContaining({ reason: 'touch-controls-deactivated' }));
+    expect(mobileControls.dataset.active).toBe('false');
+  });
+
   it('binds pointer handlers to the topmost visible canvas layer', () => {
     const { experience, canvas } = createExperience();
     const documentStub = getDocumentStub();
@@ -166,5 +182,35 @@ describe('simple experience mobile controls', () => {
 
     documentStub.querySelectorAll = originalQuerySelectorAll;
     windowStub.getComputedStyle = originalGetComputedStyle;
+  });
+});
+
+describe('control UI sync check', () => {
+  it('detects mismatches between control map and HUD/settings', () => {
+    const { experience } = createExperience();
+    const recordSpy = vi.spyOn(experience, 'recordMajorIssue');
+    const clearSpy = vi.spyOn(experience, 'clearMajorIssues');
+
+    expect(experience.runControlUiSyncCheck({ reason: 'baseline' })).toBe(true);
+    expect(recordSpy).not.toHaveBeenCalled();
+
+    experience.keyBindings = experience.getKeyBindings();
+    experience.keyBindings.interact = ['KeyX'];
+
+    expect(experience.runControlUiSyncCheck({ reason: 'drift' })).toBe(false);
+    expect(recordSpy).toHaveBeenCalledWith(
+      'Input bindings desynchronised — HUD or settings showing stale controls.',
+      expect.objectContaining({
+        scope: 'input-binding-sync',
+        code: 'control-ui-sync',
+        reason: 'drift',
+      }),
+    );
+
+    recordSpy.mockClear();
+    experience.keyBindings = experience.buildKeyBindings({ includeStored: true });
+
+    expect(experience.runControlUiSyncCheck({ reason: 'recovery' })).toBe(true);
+    expect(clearSpy).toHaveBeenCalledWith('input-binding-sync');
   });
 });
