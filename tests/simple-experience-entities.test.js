@@ -1026,6 +1026,130 @@ describe('simple experience entity lifecycle', () => {
     expect(experience.scheduleScoreSync).not.toHaveBeenCalledWith('portal-primed');
   });
 
+  it('rebinds entity chunk anchors after a world reload', () => {
+    const { experience } = createExperienceForTest();
+    const { THREE } = experience;
+
+    const chestMesh = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.5, 0.5), new THREE.MeshBasicMaterial());
+    chestMesh.position.set(0.5, 1, -0.5);
+    experience.chestGroup = new THREE.Group();
+    experience.chestGroup.add(chestMesh);
+    experience.chests = [
+      {
+        id: 'test-chest',
+        mesh: chestMesh,
+        lidPivot: null,
+        lid: null,
+        highlightMaterials: [],
+        baseY: chestMesh.position.y,
+        baseScale: { x: 1, y: 1, z: 1 },
+        opened: false,
+        openProgress: 0,
+        loot: { items: [], score: 0, message: '' },
+        pulseOffset: 0,
+        glowLevel: 0.25,
+        hintShown: false,
+        chunkKey: null,
+      },
+    ];
+
+    const zombieMesh = new THREE.Mesh(new THREE.BoxGeometry(0.9, 1.8, 0.9), new THREE.MeshBasicMaterial());
+    zombieMesh.position.set(1.2, 2, 1.6);
+    experience.zombieGroup = new THREE.Group();
+    experience.zombieGroup.add(zombieMesh);
+    experience.zombies = [
+      {
+        id: 'z-1',
+        mesh: zombieMesh,
+        collisionRadius: 0.6,
+        speed: 2.4,
+        lastAttack: 0,
+        placeholder: true,
+        animation: null,
+        navChunkKey: null,
+        spawnedAt: 0,
+      },
+    ];
+
+    const golemMesh = new THREE.Mesh(new THREE.BoxGeometry(1.2, 2.7, 1.2), new THREE.MeshBasicMaterial());
+    golemMesh.position.set(-1.4, 2, -1.1);
+    experience.golemGroup = new THREE.Group();
+    experience.golemGroup.add(golemMesh);
+    experience.golems = [
+      {
+        id: 'g-1',
+        mesh: golemMesh,
+        collisionRadius: 0.8,
+        cooldown: 0,
+        speed: 3,
+        placeholder: true,
+        animation: null,
+        chunkKey: null,
+      },
+    ];
+
+    const playerPosition = new THREE.Vector3(0, 2, 0);
+    const playerPositionSpy = vi
+      .spyOn(experience, 'getPlayerWorldPosition')
+      .mockReturnValue(playerPosition.clone());
+    const navmeshSpy = vi
+      .spyOn(experience, 'ensureNavigationMeshForActorChunk')
+      .mockReturnValue({ walkableCellCount: 1 });
+
+    const summary = experience.rebindEntityChunkAnchors({ reason: 'world-reload' });
+
+    const expectedPlayerChunk = experience.getChunkKeyForWorldPosition(playerPosition.x, playerPosition.z);
+
+    expect(summary.reason).toBe('world-reload');
+    expect(summary.player.chunkKey).toBe(expectedPlayerChunk);
+    expect(summary.player.rebound).toBe(true);
+    expect(experience.playerChunkKey).toBe(expectedPlayerChunk);
+
+    expect(summary.chests.total).toBe(1);
+    expect(summary.chests.rebound).toBe(1);
+    expect(experience.chests[0].chunkKey).toBeTruthy();
+    expect(experience.chests[0].mesh.userData.chunkKey).toBe(experience.chests[0].chunkKey);
+
+    expect(summary.zombies.total).toBe(1);
+    expect(summary.zombies.rebound).toBe(1);
+    expect(experience.zombies[0].navChunkKey).toBeTruthy();
+    expect(experience.zombies[0].mesh.userData.chunkKey).toBe(experience.zombies[0].navChunkKey);
+
+    expect(summary.golems.total).toBe(1);
+    expect(summary.golems.rebound).toBe(1);
+    expect(experience.golems[0].chunkKey).toBeTruthy();
+    expect(experience.golems[0].mesh.userData.chunkKey).toBe(experience.golems[0].chunkKey);
+
+    expect(navmeshSpy).toHaveBeenCalledTimes(2);
+    expect(navmeshSpy.mock.calls).toEqual(
+      expect.arrayContaining([
+        [
+          'zombie',
+          experience.zombies[0].navChunkKey,
+          expect.objectContaining({
+            reason: 'world-reload-rebind',
+            stage: 'chunk-rebind',
+            zombieId: experience.zombies[0].id,
+          }),
+        ],
+        [
+          'golem',
+          experience.golems[0].chunkKey,
+          expect.objectContaining({
+            reason: 'world-reload-rebind',
+            stage: 'chunk-rebind',
+            golemId: experience.golems[0].id,
+          }),
+        ],
+      ]),
+    );
+
+    expect(summary.errors).toHaveLength(0);
+
+    navmeshSpy.mockRestore();
+    playerPositionSpy.mockRestore();
+  });
+
   it('highlights misaligned portal frames and prompts the player', async () => {
     const { experience } = createExperienceForTest();
     experience.start();
