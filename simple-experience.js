@@ -21359,6 +21359,16 @@
           this.setAnimationRigState(zombie.animation, baseState);
           this.updateAnimationRig(zombie.animation, delta);
         }
+        this.updateMobLocomotionWatchdog('zombie', zombie, {
+          stage: 'chase',
+          timeout: 5,
+          minDistance: 0.35,
+          failsafeRadius: 6,
+          failsafeRadiusVariance: 4,
+          heightOffset: 0.9,
+          chunkKey: zombie.navChunkKey ?? currentChunkKey ?? null,
+          isActive: distance > ZOMBIE_CONTACT_RANGE * 1.1,
+        });
       }
       const playerBounds = this.getPlayerPhysicsBounds();
       this.resolveMobCollectionCollisions(this.zombies, {
@@ -21480,6 +21490,11 @@
         animation: null,
         navChunkKey: spawnChunkKey ?? null,
         spawnedAt: this.elapsed,
+        locomotionWatchdog: {
+          x: mesh.position.x ?? 0,
+          z: mesh.position.z ?? 0,
+          lastProgress: Number.isFinite(this.elapsed) ? this.elapsed : 0,
+        },
       };
       if (!zombie.navChunkKey) {
         zombie.navChunkKey = this.getChunkKeyForWorldPosition(mesh.position.x, mesh.position.z);
@@ -21573,6 +21588,174 @@
         return safeFallback;
       }
       return radius;
+    }
+
+    updateMobLocomotionWatchdog(actorType, mob, options = {}) {
+      if (!mob || !mob.mesh || !mob.mesh.position) {
+        return false;
+      }
+      const timeout = Number.isFinite(options.timeout) ? Math.max(0, options.timeout) : 5;
+      if (timeout <= 0) {
+        return false;
+      }
+      const now = Number.isFinite(this.elapsed) ? this.elapsed : 0;
+      const position = mob.mesh.position;
+      const tracker = mob.locomotionWatchdog || null;
+      const minDistance = Number.isFinite(options.minDistance) ? Math.max(0, options.minDistance) : 0.35;
+      const isActive = options.isActive !== undefined ? Boolean(options.isActive) : true;
+      if (!tracker) {
+        mob.locomotionWatchdog = {
+          x: Number.isFinite(position.x) ? position.x : 0,
+          z: Number.isFinite(position.z) ? position.z : 0,
+          lastProgress: now,
+        };
+        return false;
+      }
+      if (!isActive) {
+        tracker.x = Number.isFinite(position.x) ? position.x : tracker.x ?? 0;
+        tracker.z = Number.isFinite(position.z) ? position.z : tracker.z ?? 0;
+        tracker.lastProgress = now;
+        return false;
+      }
+      const dx = Number.isFinite(position.x) ? position.x - (tracker.x ?? 0) : 0;
+      const dz = Number.isFinite(position.z) ? position.z - (tracker.z ?? 0) : 0;
+      const distanceSq = dx * dx + dz * dz;
+      const minDistanceSq = minDistance * minDistance;
+      if (distanceSq >= minDistanceSq) {
+        tracker.x = Number.isFinite(position.x) ? position.x : tracker.x ?? 0;
+        tracker.z = Number.isFinite(position.z) ? position.z : tracker.z ?? 0;
+        tracker.lastProgress = now;
+        return false;
+      }
+      const lastProgress = Number.isFinite(tracker.lastProgress) ? tracker.lastProgress : now;
+      if (now - lastProgress < timeout) {
+        return false;
+      }
+      this.handleMobLocomotionTimeout(actorType, mob, {
+        ...options,
+        tracker,
+        timeout,
+      });
+      return true;
+    }
+
+    handleMobLocomotionTimeout(actorType, mob, options = {}) {
+      if (!mob || !mob.mesh || !mob.mesh.position) {
+        return;
+      }
+      const position = mob.mesh.position;
+      const stage = typeof options.stage === 'string' && options.stage.length ? options.stage : 'locomotion';
+      const timeout = Number.isFinite(options.timeout) ? options.timeout : 5;
+      const chunkKey =
+        typeof options.chunkKey === 'string' && options.chunkKey.length
+          ? options.chunkKey
+          : mob.navChunkKey ?? null;
+      const from = {
+        x: Number.isFinite(position.x) ? position.x : null,
+        y: Number.isFinite(position.y) ? position.y : null,
+        z: Number.isFinite(position.z) ? position.z : null,
+      };
+      if (typeof console !== 'undefined' && typeof console.warn === 'function') {
+        console.warn('Mob pathfinding watchdog triggered — applying failsafe teleport.', {
+          actorType,
+          mobId: mob?.id ?? null,
+          stage,
+          timeout,
+          chunkKey,
+          position: from,
+        });
+      }
+      this.warnAiMovementFailure(actorType, {
+        stage,
+        reason: 'stuck-timeout',
+        chunkKey,
+        mobId: mob?.id ?? null,
+        timeout,
+        x: from.x,
+        y: from.y,
+        z: from.z,
+        throttleMs: 0,
+      });
+      this.teleportMobToFailsafe(actorType, mob, {
+        ...options,
+        stage,
+      });
+    }
+
+    teleportMobToFailsafe(actorType, mob, options = {}) {
+      if (!mob || !mob.mesh || !mob.mesh.position) {
+        return false;
+      }
+      const THREE = this.THREE;
+      const now = Number.isFinite(options.now)
+        ? options.now
+        : Number.isFinite(this.elapsed)
+          ? this.elapsed
+          : 0;
+      const position = mob.mesh.position;
+      const heightOffset = Number.isFinite(options.heightOffset) ? options.heightOffset : 1;
+      const baseRadius = Number.isFinite(options.failsafeRadius) ? Math.max(0, options.failsafeRadius) : 6;
+      const variance = Number.isFinite(options.failsafeRadiusVariance)
+        ? Math.max(0, options.failsafeRadiusVariance)
+        : baseRadius * 0.5;
+      const cooldown = Number.isFinite(options.cooldownAfterTeleport)
+        ? Math.max(0, options.cooldownAfterTeleport)
+        : 1.5;
+      let anchor = null;
+      if (THREE && typeof THREE.Vector3 === 'function') {
+        if (!this.tmpVector5 || typeof this.tmpVector5.set !== 'function') {
+          this.tmpVector5 = new THREE.Vector3();
+        }
+        anchor = this.getPlayerWorldPosition(this.tmpVector5);
+      } else {
+        anchor = this.getPlayerWorldPosition(null);
+      }
+      const anchorX = Number.isFinite(anchor?.x) ? anchor.x : 0;
+      const anchorZ = Number.isFinite(anchor?.z) ? anchor.z : 0;
+      const angle = Math.random() * Math.PI * 2;
+      const distance = baseRadius + (variance ? Math.random() * variance : 0);
+      const targetX = anchorX + Math.cos(angle) * distance;
+      const targetZ = anchorZ + Math.sin(angle) * distance;
+      let ground = this.sampleGroundHeight(targetX, targetZ);
+      if (!Number.isFinite(ground)) {
+        ground = Number.isFinite(position.y) ? position.y : 0;
+      }
+      if (typeof position.set === 'function') {
+        position.set(targetX, ground + heightOffset, targetZ);
+      } else {
+        position.x = targetX;
+        position.y = ground + heightOffset;
+        position.z = targetZ;
+      }
+      if (mob.mesh.rotation && typeof mob.mesh.rotation === 'object' && 'y' in mob.mesh.rotation) {
+        mob.mesh.rotation.y = Math.atan2(anchorX - targetX, anchorZ - targetZ);
+      }
+      if (mob.mesh && typeof mob.mesh === 'object' && 'matrixWorldNeedsUpdate' in mob.mesh) {
+        mob.mesh.matrixWorldNeedsUpdate = true;
+      }
+      const tracker = mob.locomotionWatchdog || null;
+      if (tracker) {
+        tracker.x = targetX;
+        tracker.z = targetZ;
+        tracker.lastProgress = now + cooldown;
+      } else {
+        mob.locomotionWatchdog = {
+          x: targetX,
+          z: targetZ,
+          lastProgress: now + cooldown,
+        };
+      }
+      const chunkKey = this.getChunkKeyForWorldPosition(targetX, targetZ);
+      if (mob.mesh && typeof mob.mesh === 'object') {
+        mob.mesh.userData = { ...(mob.mesh.userData || {}), chunkKey: chunkKey ?? null };
+      }
+      mob.navChunkKey = chunkKey ?? mob.navChunkKey ?? null;
+      this.ensureNavigationMeshForActorPosition(actorType, targetX, targetZ, {
+        reason: 'failsafe-teleport',
+        stage: options.stage || 'failsafe',
+        mobId: mob?.id ?? null,
+      });
+      return true;
     }
 
     resolveMobPlayerCollision(mob, playerBounds, options = {}) {
@@ -22140,6 +22323,11 @@
         speed: 3.1,
         placeholder: true,
         animation: null,
+        locomotionWatchdog: {
+          x: actor.position.x ?? 0,
+          z: actor.position.z ?? 0,
+          lastProgress: Number.isFinite(this.elapsed) ? this.elapsed : 0,
+        },
       };
       this.golems.push(golem);
       const golemChunkKey = this.getChunkKeyForWorldPosition(actor.position.x, actor.position.z);
@@ -22257,9 +22445,31 @@
             this.setAnimationRigState(golem.animation, baseState);
             this.updateAnimationRig(golem.animation, delta);
           }
-        } else if (golem.animation) {
-          this.setAnimationRigState(golem.animation, 'idle');
-          this.updateAnimationRig(golem.animation, delta);
+          this.updateMobLocomotionWatchdog('golem', golem, {
+            stage: target ? 'intercept' : 'escort',
+            timeout: 5,
+            minDistance: 0.4,
+            failsafeRadius: 4.5,
+            failsafeRadiusVariance: 2.5,
+            heightOffset: 1.1,
+            chunkKey: golemChunkKey ?? null,
+            isActive: distance > (target ? GOLEM_CONTACT_RANGE * 1.2 : 1.2),
+          });
+        } else {
+          if (golem.animation) {
+            this.setAnimationRigState(golem.animation, 'idle');
+            this.updateAnimationRig(golem.animation, delta);
+          }
+          this.updateMobLocomotionWatchdog('golem', golem, {
+            stage: 'standby',
+            timeout: 5,
+            minDistance: 0.4,
+            failsafeRadius: 4.5,
+            failsafeRadiusVariance: 2.5,
+            heightOffset: 1.1,
+            chunkKey: golemChunkKey ?? null,
+            isActive: false,
+          });
         }
       }
       const playerBounds = this.getPlayerPhysicsBounds();
