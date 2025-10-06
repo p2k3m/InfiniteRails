@@ -138,12 +138,12 @@ Capturing console logs and the exact build SHA alongside these steps will accele
 | Desktop | `WASD` / arrow keys to move, `Space` to jump, `F` interact/use, `Q` place blocks, `R` ignite portal, `E` crafting, `I` inventory, `T` reset position, `V` toggle view, `F1` guide, `F2` settings, `F3` leaderboard, `1–0` hotbar slots |
 | Mobile | Swipe to move between rails, tap/hold to mine or place, tap the action buttons for crafting and portals |
 
-Desktop key bindings now live in a centralised map with sensible defaults (WASD and the arrow keys for movement). Players can remap every control from the in-game **Settings → Key bindings** panel, or you can provide overrides via configuration or at runtime:
+Desktop key bindings now live in the declarative `controls.config.js` file. Edit that config to change the defaults that ship with your build—every action is listed in one place with the same WASD/arrow conventions. Players can still remap controls from the in-game **Settings → Key bindings** panel, and you can override or update the map via configuration or at runtime:
 
 ```html
 <script>
   window.APP_CONFIG = {
-    keyBindings: {
+    controlMap: {
       moveForward: ['KeyI', 'ArrowUp'],
       interact: ['KeyE'],
       hotbar1: ['Digit1', 'Numpad1'],
@@ -161,7 +161,20 @@ experience.setKeyBindings({ moveForward: ['KeyI'], moveBackward: ['KeyK'] });
 experience.resetKeyBindings();
 ```
 
-The advanced renderer exposes the same helpers on `window.InfiniteRails` once `script.js` boots. Call them at runtime to tweak bindings without reloading:
+At runtime you can also swap the declarative map without reloading. The bootstrapper exposes a shared API on `window.InfiniteRailsControls` (mirrored on `window.SimpleExperience.controlMap`) so hotkey changes propagate immediately to both renderers:
+
+```js
+// Merge in an alternate map and refresh active experiences
+window.InfiniteRailsControls.apply({
+  moveForward: ['ArrowUp'],
+  moveBackward: ['ArrowDown'],
+});
+
+// Reset to the defaults from controls.config.js
+window.InfiniteRailsControls.reset();
+```
+
+The advanced renderer exposes the existing instance helpers on `window.InfiniteRails` once `script.js` boots. Use either the per-instance methods or the global control-map API to tweak bindings without reloading:
 
 ```js
 window.InfiniteRails.setKeyBinding('interact', ['KeyG']);

@@ -141,6 +141,7 @@ jobs:
             --include "test-driver.js" \
             --include "script.js" \
             --include "simple-experience.js" \
+            --include "controls.config.js" \
             --include "portal-mechanics.js" \
             --include "scoreboard-utils.js" \
             --include "assets/**" \

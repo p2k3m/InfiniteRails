@@ -245,6 +245,24 @@ describe('simple experience key remapping', () => {
       experience.destroy();
     }
   });
+
+  it('applies declarative control map updates at runtime', () => {
+    const { experience } = createSimpleExperienceInstance();
+    expect(experience.getKeyBindings().jump).toEqual(['Space']);
+
+    const applied = window.SimpleExperience.controlMap.apply({ jump: ['KeyJ'] });
+    expect(applied).not.toBeNull();
+    expect(window.SimpleExperience.controlMap.get().jump).toEqual(['KeyJ']);
+    expect(experience.getKeyBindings().jump).toEqual(['KeyJ']);
+
+    window.SimpleExperience.controlMap.reset();
+    expect(window.SimpleExperience.controlMap.get().jump).toEqual(['Space']);
+    expect(experience.getKeyBindings().jump).toEqual(['Space']);
+
+    if (typeof experience.destroy === 'function') {
+      experience.destroy();
+    }
+  });
 });
 
 afterAll(() => {
