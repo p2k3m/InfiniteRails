@@ -6397,6 +6397,40 @@ body[data-debug-mode='verbose'] .event-log__debug {
   gap: 2rem;
 }
 
+.footer .controls__group {
+  display: block;
+}
+
+.footer .controls__group--mobile {
+  display: none;
+}
+
+@media (pointer: coarse) {
+  .footer .controls__group--desktop {
+    display: none;
+  }
+
+  .footer .controls__group--mobile {
+    display: block;
+  }
+}
+
+body.input-touch .footer .controls__group--desktop {
+  display: none;
+}
+
+body.input-touch .footer .controls__group--mobile {
+  display: block;
+}
+
+body.input-pointer .footer .controls__group--mobile {
+  display: none;
+}
+
+body.input-pointer .footer .controls__group--desktop {
+  display: block;
+}
+
 button {
   background: rgba(73, 242, 255, 0.1);
   border: 1px solid rgba(73, 242, 255, 0.3);
@@ -8756,6 +8790,16 @@ body.game-active .crosshair {
 .pointer-hint.is-visible {
   opacity: 1;
   transform: translate(-50%, 0);
+}
+
+body.input-touch .pointer-hint {
+  display: none !important;
+}
+
+@media (pointer: coarse) {
+  .pointer-hint {
+    display: none;
+  }
 }
 
 body:not(.game-active) .pointer-hint {

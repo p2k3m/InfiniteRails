@@ -874,6 +874,287 @@
 
   setupResponsiveUi(globalScope, documentRef);
 
+  const inputModeState = {
+    mode: null,
+    source: null,
+    doc: documentRef || (typeof document !== 'undefined' ? document : null),
+    detachListeners: null,
+    scheduledHandle: null,
+    scheduledCancel: null,
+    domReadyListenerAttached: false,
+  };
+
+  function normaliseInputMode(value) {
+    const raw = typeof value === 'string' ? value.trim().toLowerCase() : '';
+    if (!raw) {
+      return 'pointer';
+    }
+    if (raw === 'touch' || raw === 'mobile' || raw === 'coarse') {
+      return 'touch';
+    }
+    if (raw === 'pen' || raw === 'stylus') {
+      return 'pointer';
+    }
+    return 'pointer';
+  }
+
+  function updateGlobalInputMode(mode) {
+    if (!globalScope) {
+      return;
+    }
+    try {
+      globalScope.__INFINITE_RAILS_INPUT_MODE__ = mode;
+    } catch (error) {}
+    try {
+      globalScope.InfiniteRails = globalScope.InfiniteRails || {};
+      globalScope.InfiniteRails.inputMode = mode;
+      if (typeof globalScope.InfiniteRails.getInputMode !== 'function') {
+        globalScope.InfiniteRails.getInputMode = () => inputModeState.mode;
+      }
+      if (typeof globalScope.InfiniteRails.setInputMode !== 'function') {
+        globalScope.InfiniteRails.setInputMode = (value, detail = {}) => {
+          scheduleInputMode(value, { ...detail, source: detail.source || 'api' });
+        };
+      }
+    } catch (error) {}
+  }
+
+  function dispatchInputModeChange(doc, mode, detail = {}) {
+    if (!doc || typeof doc.dispatchEvent !== 'function' || typeof CustomEvent !== 'function') {
+      return;
+    }
+    try {
+      const event = new CustomEvent('infinite-rails:input-mode-change', {
+        bubbles: false,
+        cancelable: false,
+        detail: { mode, source: detail.source || null },
+      });
+      doc.dispatchEvent(event);
+    } catch (error) {}
+  }
+
+  function applyInputMode(mode, detail = {}) {
+    const nextMode = normaliseInputMode(mode);
+    const force = Boolean(detail.force);
+    const previous = inputModeState.mode;
+    const changed = force || previous !== nextMode;
+    inputModeState.mode = nextMode;
+    inputModeState.source = detail.source || null;
+
+    const doc = detail.doc || inputModeState.doc || documentRef || globalScope?.document || null;
+    inputModeState.doc = doc;
+    updateGlobalInputMode(nextMode);
+
+    if (!doc) {
+      return changed;
+    }
+
+    const readyState = typeof doc.readyState === 'string' ? doc.readyState : '';
+    const root = doc.documentElement || null;
+    const body = doc.body || null;
+
+    if (!body && !/loaded|complete|interactive/i.test(readyState)) {
+      if (!inputModeState.domReadyListenerAttached && typeof doc.addEventListener === 'function') {
+        const domReadyHandler = () => {
+          inputModeState.domReadyListenerAttached = false;
+          applyInputMode(nextMode, { ...detail, doc, force: true });
+        };
+        try {
+          doc.addEventListener('DOMContentLoaded', domReadyHandler, { once: true });
+          inputModeState.domReadyListenerAttached = true;
+        } catch (error) {}
+      }
+      return changed;
+    }
+
+    if (root?.setAttribute) {
+      try {
+        root.setAttribute('data-input-mode', nextMode);
+      } catch (error) {}
+    }
+
+    if (body) {
+      try {
+        body.setAttribute('data-input-mode', nextMode);
+      } catch (error) {}
+      if (body.classList) {
+        try {
+          body.classList.toggle('input-touch', nextMode === 'touch');
+          body.classList.toggle('input-pointer', nextMode !== 'touch');
+        } catch (error) {}
+      }
+    }
+
+    let mobileControls = null;
+    if (typeof doc.getElementById === 'function') {
+      try {
+        mobileControls = doc.getElementById('mobileControls');
+      } catch (error) {}
+    }
+    if (mobileControls) {
+      const active = nextMode === 'touch';
+      try {
+        mobileControls.setAttribute('data-active', active ? 'true' : 'false');
+      } catch (error) {}
+      try {
+        mobileControls.hidden = !active;
+      } catch (error) {}
+    }
+
+    if (changed) {
+      dispatchInputModeChange(doc, nextMode, detail);
+    }
+
+    return changed;
+  }
+
+  function clearScheduledInputMode() {
+    if (typeof inputModeState.scheduledCancel === 'function') {
+      try {
+        inputModeState.scheduledCancel();
+      } catch (error) {}
+    }
+    inputModeState.scheduledCancel = null;
+    inputModeState.scheduledHandle = null;
+  }
+
+  function scheduleInputMode(mode, detail = {}) {
+    const nextMode = normaliseInputMode(mode);
+    if (!nextMode) {
+      return;
+    }
+    if (!detail.force && inputModeState.mode === nextMode && !detail.reset) {
+      return;
+    }
+    clearScheduledInputMode();
+    const scope = detail.scope || globalScope || (typeof window !== 'undefined' ? window : globalThis);
+    const run = () => {
+      clearScheduledInputMode();
+      applyInputMode(nextMode, detail);
+    };
+    if (scope?.requestAnimationFrame) {
+      const handle = scope.requestAnimationFrame(run);
+      inputModeState.scheduledHandle = handle;
+      inputModeState.scheduledCancel = () => scope.cancelAnimationFrame?.(handle);
+      return;
+    }
+    if (scope?.setTimeout) {
+      const handle = scope.setTimeout(run, 0);
+      inputModeState.scheduledHandle = handle;
+      inputModeState.scheduledCancel = () => scope.clearTimeout?.(handle);
+      return;
+    }
+    run();
+  }
+
+  function teardownInputModeDetection() {
+    clearScheduledInputMode();
+    if (typeof inputModeState.detachListeners === 'function') {
+      try {
+        inputModeState.detachListeners();
+      } catch (error) {}
+    }
+    inputModeState.detachListeners = null;
+  }
+
+  function setupInputModeDetection(scope, doc) {
+    teardownInputModeDetection();
+    const targetDoc = doc || documentRef || scope?.document || null;
+    inputModeState.doc = targetDoc;
+
+    const initialEnvironment = detectMobileEnvironment(scope);
+    const initialMode = initialEnvironment.isMobile ? 'touch' : 'pointer';
+    applyInputMode(initialMode, { doc: targetDoc, source: 'environment', force: true });
+
+    const disposers = [];
+    if (!targetDoc || typeof targetDoc.addEventListener !== 'function') {
+      inputModeState.detachListeners = () => {};
+      return;
+    }
+
+    const pointerListener = (event) => {
+      if (!event) {
+        return;
+      }
+      const pointerTypeRaw = typeof event.pointerType === 'string' ? event.pointerType.toLowerCase() : '';
+      if (!pointerTypeRaw) {
+        return;
+      }
+      if (pointerTypeRaw === 'touch') {
+        scheduleInputMode('touch', { scope, source: 'pointer-event:touch' });
+      } else if (pointerTypeRaw === 'mouse' || pointerTypeRaw === 'pen') {
+        scheduleInputMode('pointer', { scope, source: `pointer-event:${pointerTypeRaw}` });
+      }
+    };
+
+    try {
+      targetDoc.addEventListener('pointerdown', pointerListener, { passive: true });
+      disposers.push(() => targetDoc.removeEventListener('pointerdown', pointerListener));
+    } catch (error) {}
+
+    const touchListener = () => scheduleInputMode('touch', { scope, source: 'touchstart' });
+    const mouseListener = () => scheduleInputMode('pointer', { scope, source: 'mousedown' });
+
+    try {
+      targetDoc.addEventListener('touchstart', touchListener, { passive: true });
+      disposers.push(() => targetDoc.removeEventListener('touchstart', touchListener));
+    } catch (error) {}
+
+    try {
+      targetDoc.addEventListener('mousedown', mouseListener, { passive: true });
+      disposers.push(() => targetDoc.removeEventListener('mousedown', mouseListener));
+    } catch (error) {}
+
+    if (scope?.addEventListener) {
+      const keyListener = (event) => {
+        if (!event) {
+          return;
+        }
+        if (event.metaKey || event.altKey || event.ctrlKey) {
+          return;
+        }
+        scheduleInputMode('pointer', { scope, source: 'keyboard' });
+      };
+      try {
+        scope.addEventListener('keydown', keyListener, { passive: true });
+        disposers.push(() => scope.removeEventListener('keydown', keyListener));
+      } catch (error) {}
+    }
+
+    if (scope?.matchMedia) {
+      try {
+        const coarseMedia = scope.matchMedia('(pointer: coarse)');
+        if (coarseMedia) {
+          const coarseHandler = (event) => {
+            if (event?.matches) {
+              scheduleInputMode('touch', { scope, source: 'media:pointer-coarse' });
+            } else {
+              scheduleInputMode('pointer', { scope, source: 'media:pointer-coarse' });
+            }
+          };
+          if (typeof coarseMedia.addEventListener === 'function') {
+            coarseMedia.addEventListener('change', coarseHandler);
+            disposers.push(() => coarseMedia.removeEventListener('change', coarseHandler));
+          } else if (typeof coarseMedia.addListener === 'function') {
+            coarseMedia.addListener(coarseHandler);
+            disposers.push(() => coarseMedia.removeListener(coarseHandler));
+          }
+        }
+      } catch (error) {}
+    }
+
+    inputModeState.detachListeners = () => {
+      while (disposers.length) {
+        const dispose = disposers.pop();
+        try {
+          dispose?.();
+        } catch (error) {}
+      }
+    };
+  }
+
+  setupInputModeDetection(globalScope, documentRef);
+
   if (!globalScope.__INFINITE_RAILS_STATE__) {
     globalScope.__INFINITE_RAILS_STATE__ = {
       isRunning: false,
