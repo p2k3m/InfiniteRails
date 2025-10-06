@@ -7062,6 +7062,7 @@
     return Array.from(new Set(urls));
   })();
   const HOTBAR_SLOT_COUNT = 10;
+  const CONTROL_MAP_GLOBAL_KEY = '__INFINITE_RAILS_CONTROL_MAP__';
 
   const eventLogState = {
     element: null,
@@ -8900,7 +8901,125 @@
   }
 
   const DEFAULT_KEY_BINDINGS = (() => {
-    const bindings = {
+    const createFallbackMap = () => {
+      const map = {
+        moveForward: ['KeyW', 'ArrowUp'],
+        moveBackward: ['KeyS', 'ArrowDown'],
+        moveLeft: ['KeyA', 'ArrowLeft'],
+        moveRight: ['KeyD', 'ArrowRight'],
+        jump: ['Space'],
+        interact: ['KeyF'],
+        placeBlock: ['KeyQ'],
+        toggleCrafting: ['KeyE'],
+        openGuide: ['F1'],
+        openSettings: ['F2'],
+        openLeaderboard: ['F3'],
+        buildPortal: ['KeyR'],
+      };
+      for (let index = 1; index <= HOTBAR_SLOT_COUNT; index += 1) {
+        const digit = index % 10;
+        map[`hotbar${index}`] = [`Digit${digit}`, `Numpad${digit}`];
+      }
+      return map;
+    };
+
+    const cloneMap = (map) => {
+      const clone = {};
+      Object.entries(map || {}).forEach(([action, keys]) => {
+        if (!Array.isArray(keys)) {
+          return;
+        }
+        clone[action] = [...keys];
+      });
+      return clone;
+    };
+
+    const scope =
+      typeof globalScope !== 'undefined' && globalScope
+        ? globalScope
+        : typeof window !== 'undefined'
+          ? window
+          : typeof globalThis !== 'undefined'
+            ? globalThis
+            : null;
+    const controlApi = scope && scope.InfiniteRailsControls;
+    if (controlApi && typeof controlApi.get === 'function') {
+      try {
+        const resolved = controlApi.get();
+        if (resolved) {
+          return cloneMap(resolved);
+        }
+      } catch (error) {
+        // fall back when control API retrieval fails
+      }
+    }
+
+    const ambientResolver =
+      typeof readDeclarativeControlMap === 'function' && typeof normaliseKeyBindingMap === 'function'
+        ? (target) => readDeclarativeControlMap(target)
+        : null;
+
+    let source = null;
+    if (ambientResolver && scope) {
+      try {
+        source = ambientResolver(scope);
+      } catch (error) {
+        source = null;
+      }
+    }
+    if (!source) {
+      source = createFallbackMap();
+      if (scope && !controlApi) {
+        try {
+          scope[CONTROL_MAP_GLOBAL_KEY] = source;
+        } catch (error) {
+          // ignore assignment failures when scope is sealed
+        }
+      }
+    }
+    return cloneMap(source);
+  })();
+
+  function normaliseKeyBindingValue(value) {
+    if (typeof value === 'string') {
+      const trimmed = value.trim();
+      return trimmed ? [trimmed] : [];
+    }
+    if (Array.isArray(value)) {
+      const seen = new Set();
+      const result = [];
+      value.forEach((entry) => {
+        if (typeof entry !== 'string') {
+          return;
+        }
+        const trimmed = entry.trim();
+        if (!trimmed || seen.has(trimmed)) {
+          return;
+        }
+        seen.add(trimmed);
+        result.push(trimmed);
+      });
+      return result;
+    }
+    return [];
+  }
+
+  function normaliseKeyBindingMap(source) {
+    if (!source || typeof source !== 'object') {
+      return null;
+    }
+    const result = {};
+    Object.entries(source).forEach(([action, value]) => {
+      const keys = normaliseKeyBindingValue(value);
+      if (keys.length) {
+        result[action] = keys;
+      }
+    });
+    return Object.keys(result).length ? result : null;
+  }
+
+  function createBuiltinControlMap() {
+    const map = {
       moveForward: ['KeyW', 'ArrowUp'],
       moveBackward: ['KeyS', 'ArrowDown'],
       moveLeft: ['KeyA', 'ArrowLeft'],
@@ -8916,10 +9035,29 @@
     };
     for (let index = 1; index <= HOTBAR_SLOT_COUNT; index += 1) {
       const digit = index % 10;
-      bindings[`hotbar${index}`] = [`Digit${digit}`, `Numpad${digit}`];
+      map[`hotbar${index}`] = [`Digit${digit}`, `Numpad${digit}`];
     }
-    return bindings;
-  })();
+    return map;
+  }
+
+  function readDeclarativeControlMap(scope) {
+    if (!scope) {
+      return null;
+    }
+    const ambient = normaliseKeyBindingMap(scope[CONTROL_MAP_GLOBAL_KEY]);
+    if (ambient) {
+      return ambient;
+    }
+    const config = scope.APP_CONFIG && typeof scope.APP_CONFIG === 'object' ? scope.APP_CONFIG : null;
+    if (!config) {
+      return null;
+    }
+    const declarative = normaliseKeyBindingMap(config.controlMap);
+    if (declarative) {
+      return declarative;
+    }
+    return normaliseKeyBindingMap(config.keyBindings);
+  }
 
   function queueBootstrapFallbackNotice(key, message) {
     if (!globalScope) {

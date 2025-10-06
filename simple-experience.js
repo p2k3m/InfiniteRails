@@ -410,6 +410,15 @@
   const ZOMBIE_MAX_PER_DIMENSION = 4;
   const GOLEM_COLLISION_RADIUS = 0.95;
   const HOTBAR_SLOTS = 10;
+  const CONTROL_MAP_GLOBAL_KEY = '__INFINITE_RAILS_CONTROL_MAP__';
+  const CONTROL_MAP_READY_EVENT = 'infinite-rails:control-map-ready';
+  const CONTROL_MAP_CHANGED_EVENT = 'infinite-rails:control-map-changed';
+  const controlMapState = {
+    scope: typeof window !== 'undefined' ? window : typeof globalThis !== 'undefined' ? globalThis : null,
+    current: null,
+    readyAnnounced: false,
+    listeners: typeof Set === 'function' ? new Set() : [],
+  };
   const KEY_BINDINGS_STORAGE_KEY = 'infinite-rails-keybindings';
   const SCOREBOARD_STORAGE_KEY = 'infinite-dimension-scoreboard';
   const SCOREBOARD_CACHE_MAX_AGE_MS = 1000 * 60 * 60 * 24 * 7;
@@ -437,37 +446,58 @@
     Tab: 'Tab',
   });
   const DEFAULT_KEY_BINDINGS = (() => {
-    const map = {
-      moveForward: ['KeyW', 'ArrowUp'],
-      moveBackward: ['KeyS', 'ArrowDown'],
-      moveLeft: ['KeyA', 'ArrowLeft'],
-      moveRight: ['KeyD', 'ArrowRight'],
-      jump: ['Space'],
-      interact: ['KeyF'],
-      buildPortal: ['KeyR'],
-      resetPosition: ['KeyT'],
-      placeBlock: ['KeyQ'],
-      toggleCameraPerspective: ['KeyV'],
-      toggleCrafting: ['KeyE'],
-      toggleInventory: ['KeyI'],
-      openGuide: ['F1'],
-      toggleTutorial: ['Slash', 'F4'],
-      toggleDeveloperOverlay: ['Backquote', 'F8'],
-      openSettings: ['F2'],
-      openLeaderboard: ['F3'],
-      closeMenus: ['Escape'],
+    const createFallbackMap = () => {
+      const map = {
+        moveForward: ['KeyW', 'ArrowUp'],
+        moveBackward: ['KeyS', 'ArrowDown'],
+        moveLeft: ['KeyA', 'ArrowLeft'],
+        moveRight: ['KeyD', 'ArrowRight'],
+        jump: ['Space'],
+        interact: ['KeyF'],
+        buildPortal: ['KeyR'],
+        resetPosition: ['KeyT'],
+        placeBlock: ['KeyQ'],
+        toggleCameraPerspective: ['KeyV'],
+        toggleCrafting: ['KeyE'],
+        toggleInventory: ['KeyI'],
+        openGuide: ['F1'],
+        toggleTutorial: ['Slash', 'F4'],
+        toggleDeveloperOverlay: ['Backquote', 'F8'],
+        openSettings: ['F2'],
+        openLeaderboard: ['F3'],
+        closeMenus: ['Escape'],
+      };
+      for (let slot = 1; slot <= HOTBAR_SLOTS; slot += 1) {
+        const digit = slot % 10;
+        const action = `hotbar${slot}`;
+        map[action] = [`Digit${digit}`, `Numpad${digit}`];
+      }
+      return map;
     };
-    for (let slot = 1; slot <= HOTBAR_SLOTS; slot += 1) {
-      const digit = slot % 10;
-      const action = `hotbar${slot}`;
-      const primary = digit === 0 ? 'Digit0' : `Digit${digit}`;
-      const secondary = digit === 0 ? 'Numpad0' : `Numpad${digit}`;
-      map[action] = [primary, secondary];
+
+    const freezeLocalMap = (map) => {
+      const frozen = {};
+      Object.entries(map || {}).forEach(([action, keys]) => {
+        if (!Array.isArray(keys)) {
+          return;
+        }
+        frozen[action] = Object.freeze([...keys]);
+      });
+      return Object.freeze(frozen);
+    };
+
+    if (typeof ensureControlMapState === 'function' && typeof freezeKeyBindingMap === 'function') {
+      try {
+        const map = ensureControlMapState();
+        if (map) {
+          return freezeKeyBindingMap(map);
+        }
+      } catch (error) {
+        // fall back to embedded defaults when state resolution fails
+      }
     }
-    Object.keys(map).forEach((action) => {
-      map[action] = Object.freeze([...map[action]]);
-    });
-    return Object.freeze(map);
+
+    return freezeLocalMap(createFallbackMap());
   })();
 
   function normaliseLiveDiagnosticError(error) {
@@ -1232,6 +1262,197 @@
       });
     });
     return merged;
+  }
+
+  function createBuiltinControlMap() {
+    const map = {
+      moveForward: ['KeyW', 'ArrowUp'],
+      moveBackward: ['KeyS', 'ArrowDown'],
+      moveLeft: ['KeyA', 'ArrowLeft'],
+      moveRight: ['KeyD', 'ArrowRight'],
+      jump: ['Space'],
+      interact: ['KeyF'],
+      buildPortal: ['KeyR'],
+      resetPosition: ['KeyT'],
+      placeBlock: ['KeyQ'],
+      toggleCameraPerspective: ['KeyV'],
+      toggleCrafting: ['KeyE'],
+      toggleInventory: ['KeyI'],
+      openGuide: ['F1'],
+      toggleTutorial: ['Slash', 'F4'],
+      toggleDeveloperOverlay: ['Backquote', 'F8'],
+      openSettings: ['F2'],
+      openLeaderboard: ['F3'],
+      closeMenus: ['Escape'],
+    };
+    for (let slot = 1; slot <= HOTBAR_SLOTS; slot += 1) {
+      const digit = slot % 10;
+      const action = `hotbar${slot}`;
+      const primary = digit === 0 ? 'Digit0' : `Digit${digit}`;
+      const secondary = digit === 0 ? 'Numpad0' : `Numpad${digit}`;
+      map[action] = [primary, secondary];
+    }
+    return map;
+  }
+
+  function freezeKeyBindingMap(map = {}) {
+    const frozen = {};
+    Object.entries(map).forEach(([action, keys]) => {
+      if (!Array.isArray(keys)) {
+        return;
+      }
+      frozen[action] = Object.freeze([...keys]);
+    });
+    return Object.freeze(frozen);
+  }
+
+  function ensureAppConfig(scope) {
+    if (!scope) {
+      return null;
+    }
+    const existing = scope.APP_CONFIG;
+    if (existing && typeof existing === 'object') {
+      return existing;
+    }
+    if (scope.APP_CONFIG === undefined) {
+      try {
+        scope.APP_CONFIG = {};
+        return scope.APP_CONFIG;
+      } catch (error) {
+        return null;
+      }
+    }
+    return null;
+  }
+
+  function readDeclarativeControlMap(scope) {
+    if (!scope) {
+      return null;
+    }
+    const ambient = normaliseKeyBindingMap(scope[CONTROL_MAP_GLOBAL_KEY]);
+    if (ambient) {
+      return ambient;
+    }
+    const config = scope.APP_CONFIG && typeof scope.APP_CONFIG === 'object' ? scope.APP_CONFIG : null;
+    if (!config) {
+      return null;
+    }
+    const declarative = normaliseKeyBindingMap(config.controlMap);
+    if (declarative) {
+      return declarative;
+    }
+    return normaliseKeyBindingMap(config.keyBindings);
+  }
+
+  function syncControlMapToScope(map) {
+    const scope = controlMapState.scope;
+    if (!scope) {
+      return;
+    }
+    try {
+      scope[CONTROL_MAP_GLOBAL_KEY] = map;
+    } catch (error) {
+      try {
+        scope[CONTROL_MAP_GLOBAL_KEY] = cloneKeyBindingMap(map);
+      } catch (assignError) {
+        // ignore assignment failures when the scope is locked down
+      }
+    }
+    const config = ensureAppConfig(scope);
+    if (config && config.controlMap !== map) {
+      config.controlMap = map;
+    }
+  }
+
+  function dispatchControlMapEvent(type, map, options = {}) {
+    const scope = controlMapState.scope;
+    if (!scope || typeof scope.dispatchEvent !== 'function') {
+      return;
+    }
+    const EventCtor =
+      typeof scope.CustomEvent === 'function'
+        ? scope.CustomEvent
+        : typeof CustomEvent === 'function'
+          ? CustomEvent
+          : null;
+    if (!EventCtor) {
+      return;
+    }
+    try {
+      const detail = { map: cloneKeyBindingMap(map) };
+      if (options && options.internal === true) {
+        detail.__internal = true;
+      }
+      scope.dispatchEvent(new EventCtor(type, { detail }));
+    } catch (error) {
+      // ignore dispatch failures in non-DOM environments
+    }
+  }
+
+  function notifyControlMapListeners(map) {
+    if (!controlMapState.listeners || typeof controlMapState.listeners.forEach !== 'function') {
+      return;
+    }
+    const snapshot = cloneKeyBindingMap(map);
+    controlMapState.listeners.forEach((listener) => {
+      if (typeof listener !== 'function') {
+        return;
+      }
+      try {
+        listener(snapshot);
+      } catch (error) {
+        if (typeof console !== 'undefined' && console.debug) {
+          console.debug('Control map listener failed.', error);
+        }
+      }
+    });
+  }
+
+  function ensureControlMapState() {
+    if (controlMapState.current) {
+      return controlMapState.current;
+    }
+    const ambient = readDeclarativeControlMap(controlMapState.scope);
+    const base = ambient || createBuiltinControlMap();
+    controlMapState.current = cloneKeyBindingMap(base);
+    syncControlMapToScope(controlMapState.current);
+    if (!controlMapState.readyAnnounced) {
+      dispatchControlMapEvent(CONTROL_MAP_READY_EVENT, controlMapState.current, { internal: true });
+      controlMapState.readyAnnounced = true;
+    }
+    notifyControlMapListeners(controlMapState.current);
+    return controlMapState.current;
+  }
+
+  function getControlMapScope() {
+    return controlMapState.scope;
+  }
+
+  function getDeclarativeControlMap() {
+    const map = ensureControlMapState();
+    return cloneKeyBindingMap(map);
+  }
+
+  function applyDeclarativeControlMap(map, options = {}) {
+    const { merge = true, notify = true } = options ?? {};
+    const normalised = normaliseKeyBindingMap(map);
+    if (!normalised) {
+      return null;
+    }
+    const base = merge ? ensureControlMapState() : {};
+    const next = merge ? mergeKeyBindingMaps(base, normalised) : cloneKeyBindingMap(normalised);
+    controlMapState.current = next;
+    syncControlMapToScope(controlMapState.current);
+    notifyControlMapListeners(controlMapState.current);
+    if (notify) {
+      dispatchControlMapEvent(CONTROL_MAP_CHANGED_EVENT, controlMapState.current, { internal: true });
+    }
+    return controlMapState.current;
+  }
+
+  function resetDeclarativeControlMap(options = {}) {
+    const { notify = true } = options ?? {};
+    return applyDeclarativeControlMap(createBuiltinControlMap(), { merge: false, notify });
   }
 
   function normalizeKeyboardEventCode(event) {
@@ -2871,6 +3092,7 @@
       this.aiAttachmentFailureAnnounced = false;
       this.boundEventDisposers = [];
       this.boundEventRecords = [];
+      this.registerDeclarativeControlMapListeners();
       this.onOpenCraftingSearchClick = () => this.toggleCraftingSearch(true);
       this.onCloseCraftingSearchClick = () => this.toggleCraftingSearch(false);
       this.lastHintMessage = '';
@@ -3061,7 +3283,7 @@
       };
       this.bindAssetRecoveryControls();
       this.materials = this.createMaterials();
-      this.defaultKeyBindings = cloneKeyBindingMap(DEFAULT_KEY_BINDINGS);
+      this.defaultKeyBindings = getDeclarativeControlMap();
       this.configKeyBindingOverrides = normaliseKeyBindingMap(window.APP_CONFIG?.keyBindings) || null;
       this.optionKeyBindingOverrides = normaliseKeyBindingMap(options.keyBindings) || null;
       this.baseKeyBindings = mergeKeyBindingMaps(
@@ -18616,6 +18838,83 @@
       return cloneKeyBindingMap(this.keyBindings);
     }
 
+    registerDeclarativeControlMapListeners() {
+      const scope = getControlMapScope();
+      const subscription = (mapPayload) => {
+        const nextMap = normaliseKeyBindingMap(mapPayload) || getDeclarativeControlMap();
+        if (!nextMap) {
+          return;
+        }
+        this.handleDeclarativeControlMapUpdate(nextMap, { includeStored: true });
+      };
+      if (!controlMapState.listeners || typeof controlMapState.listeners.add !== 'function') {
+        if (typeof Set === 'function') {
+          const initial = Array.isArray(controlMapState.listeners)
+            ? controlMapState.listeners
+            : [];
+          controlMapState.listeners = new Set(initial);
+        } else {
+          controlMapState.listeners = Array.isArray(controlMapState.listeners)
+            ? controlMapState.listeners
+            : [];
+        }
+      }
+
+      if (controlMapState.listeners && typeof controlMapState.listeners.add === 'function') {
+        controlMapState.listeners.add(subscription);
+        this.boundEventDisposers.push(() => controlMapState.listeners.delete(subscription));
+      } else if (Array.isArray(controlMapState.listeners)) {
+        controlMapState.listeners.push(subscription);
+        this.boundEventDisposers.push(() => {
+          const index = controlMapState.listeners.indexOf(subscription);
+          if (index !== -1) {
+            controlMapState.listeners.splice(index, 1);
+          }
+        });
+      }
+
+      if (!scope || typeof scope.addEventListener !== 'function') {
+        return;
+      }
+
+      const eventHandler = (event) => {
+        if (event?.detail?.__internal) {
+          return;
+        }
+        const payload = event?.detail?.map;
+        if (payload) {
+          notifyControlMapListeners(payload);
+        } else {
+          notifyControlMapListeners(getDeclarativeControlMap());
+        }
+      };
+      scope.addEventListener(CONTROL_MAP_READY_EVENT, eventHandler);
+      scope.addEventListener(CONTROL_MAP_CHANGED_EVENT, eventHandler);
+      this.boundEventDisposers.push(() => scope.removeEventListener(CONTROL_MAP_READY_EVENT, eventHandler));
+      this.boundEventDisposers.push(() => scope.removeEventListener(CONTROL_MAP_CHANGED_EVENT, eventHandler));
+    }
+
+    handleDeclarativeControlMapUpdate(map, options = {}) {
+      const { includeStored = true } = options ?? {};
+      const normalised = normaliseKeyBindingMap(map);
+      if (!normalised) {
+        return false;
+      }
+      const changed = !this.areKeyBindingMapsEqual(this.defaultKeyBindings, normalised);
+      this.defaultKeyBindings = cloneKeyBindingMap(normalised);
+      this.baseKeyBindings = mergeKeyBindingMaps(
+        this.defaultKeyBindings,
+        this.configKeyBindingOverrides,
+        this.optionKeyBindingOverrides,
+      );
+      this.keyBindings = includeStored
+        ? this.buildKeyBindings({ includeStored: true })
+        : cloneKeyBindingMap(this.baseKeyBindings);
+      this.ensureMovementBindingsConfigured();
+      this.refreshFirstRunTutorialContent();
+      return changed;
+    }
+
     getKeyBindings() {
       return cloneKeyBindingMap(this.keyBindings);
     }
@@ -18816,6 +19115,24 @@
       }
       for (let index = 0; index < a.length; index += 1) {
         if (a[index] !== b[index]) {
+          return false;
+        }
+      }
+      return true;
+    }
+
+    areKeyBindingMapsEqual(a = {}, b = {}) {
+      const aKeys = Object.keys(a || {});
+      const bKeys = Object.keys(b || {});
+      if (aKeys.length !== bKeys.length) {
+        return false;
+      }
+      for (let index = 0; index < aKeys.length; index += 1) {
+        const key = aKeys[index];
+        if (!Object.prototype.hasOwnProperty.call(b, key)) {
+          return false;
+        }
+        if (!this.areKeyListsEqual(a[key] ?? [], b[key] ?? [])) {
           return false;
         }
       }
@@ -27573,6 +27890,19 @@
     return new SimpleExperience(options);
   }
 
+  const controlMapApi = {
+    get: () => getDeclarativeControlMap(),
+    apply: (map, options) => {
+      const result = applyDeclarativeControlMap(map, options);
+      return result ? cloneKeyBindingMap(result) : null;
+    },
+    reset: (options) => {
+      const result = resetDeclarativeControlMap(options);
+      return result ? cloneKeyBindingMap(result) : null;
+    },
+    defaults: () => cloneKeyBindingMap(createBuiltinControlMap()),
+  };
+
   window.SimpleExperience = {
     create: createSimpleExperience,
     dimensionManifest: DIMENSION_ASSET_MANIFEST,
@@ -27580,7 +27910,14 @@
     dimensionLootTables: DIMENSION_LOOT_TABLES,
     terrainProfiles: DIMENSION_TERRAIN_PROFILES,
     defaultTerrainProfile: DEFAULT_TERRAIN_PROFILE,
+    controlMap: controlMapApi,
   };
+
+  if (!window.InfiniteRailsControls || typeof window.InfiniteRailsControls !== 'object') {
+    window.InfiniteRailsControls = { ...controlMapApi };
+  } else {
+    Object.assign(window.InfiniteRailsControls, controlMapApi);
+  }
 
   if (typeof module !== 'undefined' && module.exports) {
     const exported = window.SimpleExperience;
