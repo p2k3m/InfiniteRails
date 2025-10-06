@@ -14637,6 +14637,46 @@
           heightmapResult,
         };
       };
+      const buildSafeDebugTerrain = ({ reason, issues, error, previousSource } = {}) => {
+        resetTerrainState();
+        const issueList = Array.isArray(issues) ? issues.filter(Boolean) : [];
+        const fallbackReasonRaw = typeof reason === 'string' && reason.trim().length ? reason.trim() : 'terrain-safe-fallback';
+        const fallbackReason = issueList.length
+          ? `${fallbackReasonRaw}:${issueList.join(',')}`
+          : fallbackReasonRaw;
+        const averageBudgetHeight = Math.floor(voxelBudget / Math.max(1, totalColumns));
+        const safeColumnHeight = Math.max(
+          minColumnHeight,
+          Math.min(maxColumnHeight, Number.isFinite(averageBudgetHeight) ? averageBudgetHeight : minColumnHeight),
+        );
+        const safeMatrix = createHeightmapMatrix(WORLD_SIZE, safeColumnHeight);
+        const voxelsUsed = safeColumnHeight * totalColumns;
+        const safeMeta = {
+          fallback: true,
+          reason: fallbackReason,
+          voxelCount: voxelsUsed,
+          remainingVoxels: Math.max(0, voxelBudget - voxelsUsed),
+          cappedColumns: 0,
+        };
+        this.heightmapStreamFailureCount = (this.heightmapStreamFailureCount || 0) + 1;
+        this.heightmapStreamLastError = fallbackReason;
+        this.heightmapStreamState = 'safe-fallback';
+        if (typeof console !== 'undefined' && typeof console.error === 'function') {
+          console.error('Terrain generation failed. Loaded safe fallback world.', {
+            reason: fallbackReason,
+            issues: issueList,
+            previousSource: previousSource ?? null,
+            error,
+          });
+        }
+        return applyHeightmapToTerrain({
+          matrix: safeMatrix,
+          meta: safeMeta,
+          source: 'safe-fallback',
+          fallbackReason,
+          fallbackFromStream: true,
+        });
+      };
       const executeTerrainBuild = (preferSeeded = false, forcedFallbackReason = null) => {
         resetTerrainState();
         const heightmapResult = this.resolveHeightmapMatrix({
@@ -14650,14 +14690,49 @@
         });
         return applyHeightmapToTerrain(heightmapResult);
       };
-      let { summary, heightmapResult } = executeTerrainBuild(false, null);
-      if (!summary?.integrity?.valid && heightmapResult?.source === 'streamed') {
-        if (typeof console !== 'undefined') {
-          console.error('Streamed heightmap failed validation. Regenerating terrain with seeded fallback.', {
-            issues: summary.integrity?.issues || ['unknown'],
-          });
+      let summary = null;
+      let heightmapResult = null;
+      let buildError = null;
+      try {
+        ({ summary, heightmapResult } = executeTerrainBuild(false, null));
+      } catch (error) {
+        buildError = error;
+      }
+      if (!summary && buildError) {
+        ({ summary, heightmapResult } = buildSafeDebugTerrain({
+          reason: 'terrain-build-error',
+          issues: ['terrain-build-exception'],
+          error: buildError,
+        }));
+      } else {
+        if (!summary?.integrity?.valid && heightmapResult?.source === 'streamed') {
+          if (typeof console !== 'undefined') {
+            console.error('Streamed heightmap failed validation. Regenerating terrain with seeded fallback.', {
+              issues: summary.integrity?.issues || ['unknown'],
+            });
+          }
+          let seededError = null;
+          try {
+            ({ summary, heightmapResult } = executeTerrainBuild(true, 'terrain-integrity-invalid'));
+          } catch (error) {
+            seededError = error;
+          }
+          if (!summary || seededError) {
+            ({ summary, heightmapResult } = buildSafeDebugTerrain({
+              reason: 'terrain-fallback-error',
+              issues: summary?.integrity?.issues || ['terrain-integrity-invalid'],
+              error: seededError,
+              previousSource: heightmapResult?.source ?? 'seeded-generated',
+            }));
+          }
         }
-        ({ summary, heightmapResult } = executeTerrainBuild(true, 'terrain-integrity-invalid'));
+        if (!summary?.integrity?.valid) {
+          ({ summary, heightmapResult } = buildSafeDebugTerrain({
+            reason: 'terrain-integrity-invalid',
+            issues: summary?.integrity?.issues || [],
+            previousSource: heightmapResult?.source ?? null,
+          }));
+        }
       }
       this.lastTerrainBuildSummary = summary;
       this.portalAnchorGrid = this.computePortalAnchorGrid();

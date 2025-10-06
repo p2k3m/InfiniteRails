@@ -728,6 +728,42 @@ describe('simple experience terrain generation', () => {
     expect(summary.voxelCount).toBe(summary.terrainMeshCount);
   });
 
+  it('spawns a safe grass world when terrain build throws during mesh generation', () => {
+    const canvas = {
+      width: 512,
+      height: 512,
+      clientWidth: 512,
+      clientHeight: 512,
+      getContext: () => null,
+    };
+
+    const experience = window.SimpleExperience.create({ canvas, ui: {} });
+    experience.scene = new THREE.Scene();
+    experience.terrainGroup = new THREE.Group();
+    experience.terrainChunkGroups = [];
+    experience.terrainChunkMap = new Map();
+    experience.dirtyTerrainChunks = new Set();
+
+    const originalEnsureTerrainChunk = experience.ensureTerrainChunk.bind(experience);
+    experience.ensureTerrainChunk = (chunkKey) => {
+      experience.ensureTerrainChunk = originalEnsureTerrainChunk;
+      throw new Error(`failed chunk ${chunkKey}`);
+    };
+
+    experience.buildTerrain();
+
+    const summary = experience.lastTerrainBuildSummary;
+    expect(summary).toBeTruthy();
+    expect(summary.heightmapSource).toBe('safe-fallback');
+    expect(summary.fallbackReason).toMatch(/terrain-build-error/);
+    expect(summary.voxelCount).toBeGreaterThan(0);
+    expect(summary.voxelCount).toBe(summary.terrainMeshCount);
+    expect(summary.chunkCount).toBe(summary.expectedChunkCount);
+    expect(summary.integrity?.valid).toBe(true);
+    expect(summary.integrity?.issues ?? []).toHaveLength(0);
+    expect(experience.heightMap.length).toBe(64);
+  });
+
   it('rebuilds navigation meshes after terrain edits even when the render loop is idle', () => {
     const canvas = {
       width: 512,
