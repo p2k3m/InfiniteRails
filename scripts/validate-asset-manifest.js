@@ -707,7 +707,9 @@ async function main() {
           }
         })
         .join('; ');
-      issues.push(`Manifest asset hashes are outdated: ${formatted}`);
+      issues.push(
+        `Manifest asset hashes are outdated: ${formatted}. Run \`npm run sync:asset-digests\` to refresh the digests.`,
+      );
     }
     if (headValidationBase && headFailures.length > 0) {
       const formatted = headFailures
@@ -762,4 +764,6 @@ module.exports = {
   listUncoveredAssets,
   resolveBaseUrl,
   listFailedHeadRequests,
+  computeAssetDigest,
+  parseManifestAsset,
 };
