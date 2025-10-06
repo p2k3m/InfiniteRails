@@ -4028,6 +4028,586 @@
     }
   }
 
+  function createDynamicModuleLoader() {
+    const modules = new Map();
+    const listeners = new Set();
+
+    function normaliseId(value) {
+      if (typeof value === 'string' && value.trim()) {
+        return value.trim();
+      }
+      if (value && typeof value.toString === 'function') {
+        const coerced = value.toString().trim();
+        if (coerced) {
+          return coerced;
+        }
+      }
+      throw new Error('Module identifier is required.');
+    }
+
+    function cloneModuleState(state, descriptor) {
+      if (!state) {
+        return null;
+      }
+      return {
+        id: state.id,
+        label: descriptor?.label ?? state.id,
+        type: descriptor?.type ?? 'module',
+        status: state.status,
+        error: state.error ? { name: state.error.name, message: state.error.message } : null,
+        lastLoadedAt: state.lastLoadedAt ?? null,
+        reloadCount: state.reloadCount ?? 0,
+        pending: Boolean(state.promise),
+      };
+    }
+
+    function notifyChange(id) {
+      const entry = modules.get(id);
+      if (!entry) {
+        return;
+      }
+      const snapshot = cloneModuleState(entry.state, entry.descriptor);
+      listeners.forEach((listener) => {
+        try {
+          listener(id, snapshot);
+        } catch (error) {
+          globalScope?.console?.debug?.('Module loader listener threw an error.', error);
+        }
+      });
+    }
+
+    function resolveGlobalExport(path) {
+      if (!path) {
+        return null;
+      }
+      const segments = String(path)
+        .split('.')
+        .map((segment) => segment.trim())
+        .filter(Boolean);
+      if (!segments.length) {
+        return null;
+      }
+      let cursor = globalScope;
+      for (const segment of segments) {
+        if (!cursor || typeof cursor !== 'object') {
+          return null;
+        }
+        cursor = cursor[segment];
+      }
+      return cursor ?? null;
+    }
+
+    function normaliseScripts(input) {
+      if (!input) {
+        return [];
+      }
+      const values = Array.isArray(input) ? input : [input];
+      return values
+        .map((entry) => {
+          if (!entry) {
+            return null;
+          }
+          if (typeof entry === 'string') {
+            return { path: entry };
+          }
+          if (typeof entry === 'object') {
+            const descriptor = { ...entry };
+            descriptor.path = typeof descriptor.path === 'string' ? descriptor.path.trim() : '';
+            descriptor.attributes = descriptor.attributes && typeof descriptor.attributes === 'object' ? descriptor.attributes : {};
+            descriptor.preloadedSelector =
+              typeof descriptor.preloadedSelector === 'string' && descriptor.preloadedSelector.trim().length
+                ? descriptor.preloadedSelector.trim()
+                : null;
+            return descriptor.path ? descriptor : null;
+          }
+          return null;
+        })
+        .filter(Boolean);
+    }
+
+    function prepareScriptAttributes(moduleId, attributes = {}) {
+      const prepared = { 'data-module-id': moduleId };
+      Object.entries(attributes).forEach(([key, value]) => {
+        if (!key) {
+          return;
+        }
+        if (value === null || typeof value === 'undefined') {
+          prepared[key] = '';
+        } else if (typeof value === 'string') {
+          prepared[key] = value;
+        } else {
+          prepared[key] = String(value);
+        }
+      });
+      return prepared;
+    }
+
+    async function loadScriptWithCandidates(moduleId, scriptDescriptor) {
+      const candidates = createAssetUrlCandidates(scriptDescriptor.path, {
+        preloadedSelector: scriptDescriptor.preloadedSelector,
+      });
+      if (!Array.isArray(candidates) || candidates.length === 0) {
+        const missingError = new Error(`Unable to resolve asset URL candidates for module script: ${scriptDescriptor.path}`);
+        missingError.code = 'module-script-missing';
+        throw missingError;
+      }
+      let lastError = null;
+      for (const candidate of candidates) {
+        try {
+          const attrs = prepareScriptAttributes(moduleId, scriptDescriptor.attributes);
+          const element = await loadScript(candidate, attrs);
+          return { element, url: candidate, source: scriptDescriptor.path };
+        } catch (error) {
+          lastError = error;
+        }
+      }
+      const failure = new Error(`Failed to load module script: ${scriptDescriptor.path}`);
+      failure.code = 'module-script-load-failure';
+      failure.cause = lastError;
+      throw failure;
+    }
+
+    function registerModule(descriptor) {
+      const id = normaliseId(descriptor?.id);
+      if (modules.has(id)) {
+        throw new Error(`Module already registered: ${id}`);
+      }
+      const entry = {
+        descriptor: {
+          id,
+          type: descriptor?.type ?? 'module',
+          label: descriptor?.label ?? id,
+          dependencies: Array.isArray(descriptor?.dependencies) ? descriptor.dependencies.map(normaliseId) : [],
+          scripts: normaliseScripts(descriptor?.scripts),
+          global: descriptor?.global ?? null,
+          load: typeof descriptor?.load === 'function' ? descriptor.load : null,
+          initialise: typeof descriptor?.initialise === 'function' ? descriptor.initialise : null,
+          teardown: typeof descriptor?.teardown === 'function' ? descriptor.teardown : null,
+          boundary: descriptor?.boundary ?? 'runtime',
+          stage: descriptor?.stage ?? `${id}.load`,
+          required: descriptor?.required !== false,
+          onError: typeof descriptor?.onError === 'function' ? descriptor.onError : null,
+        },
+        state: {
+          id,
+          status: 'idle',
+          instance: null,
+          scriptHandles: [],
+          error: null,
+          promise: null,
+          lastLoadedAt: null,
+          reloadCount: 0,
+        },
+      };
+      modules.set(id, entry);
+      notifyChange(id);
+      return id;
+    }
+
+    function getModuleEntry(id) {
+      const normalised = normaliseId(id);
+      const entry = modules.get(normalised);
+      if (!entry) {
+        throw new Error(`Unknown module: ${normalised}`);
+      }
+      return entry;
+    }
+
+    async function ensureDependencies(entry, options) {
+      const deps = entry.descriptor.dependencies || [];
+      for (const depId of deps) {
+        await ensureModule(depId, { ...options, parent: entry.descriptor.id });
+      }
+    }
+
+    async function loadModule(id, options = {}) {
+      const entry = getModuleEntry(id);
+      if (entry.state.status === 'loaded' && options.force !== true) {
+        return entry.state.instance;
+      }
+      if (entry.state.promise) {
+        return entry.state.promise;
+      }
+      const loadPromise = (async () => {
+        entry.state.status = 'loading';
+        entry.state.error = null;
+        notifyChange(id);
+        await ensureDependencies(entry, options);
+        const scriptHandles = [];
+        let lastAttempt = null;
+        try {
+          for (const scriptDescriptor of entry.descriptor.scripts) {
+            lastAttempt = await loadScriptWithCandidates(id, scriptDescriptor);
+            scriptHandles.push(lastAttempt);
+          }
+          entry.state.scriptHandles = scriptHandles;
+          let instance = null;
+          if (entry.descriptor.load) {
+            instance = await entry.descriptor.load({
+              globalScope,
+              descriptor: entry.descriptor,
+              options,
+            });
+          } else if (entry.descriptor.initialise) {
+            instance = await entry.descriptor.initialise({
+              globalScope,
+              descriptor: entry.descriptor,
+              options,
+            });
+          } else if (entry.descriptor.global) {
+            instance = resolveGlobalExport(entry.descriptor.global);
+            if (!instance && entry.descriptor.required) {
+              throw new Error(`Module global "${entry.descriptor.global}" unavailable after load.`);
+            }
+          }
+          entry.state.instance = instance ?? null;
+          entry.state.status = 'loaded';
+          entry.state.error = null;
+          entry.state.lastLoadedAt = Date.now();
+          entry.state.reloadCount += 1;
+          notifyChange(id);
+          if (typeof logDiagnosticsEvent === 'function') {
+            try {
+              logDiagnosticsEvent('modules', `Module loaded: ${entry.descriptor.label}`, {
+                level: 'info',
+                detail: {
+                  id,
+                  type: entry.descriptor.type,
+                  script: lastAttempt?.source ?? null,
+                  url: lastAttempt?.url ?? null,
+                },
+              });
+            } catch (logError) {
+              globalScope?.console?.debug?.('Failed to log module load event.', logError);
+            }
+          }
+          return entry.state.instance;
+        } catch (error) {
+          entry.state.status = 'error';
+          entry.state.instance = null;
+          entry.state.error = error;
+          notifyChange(id);
+          const detail = {
+            reason: 'module-load-failure',
+            moduleId: id,
+            moduleType: entry.descriptor.type,
+            label: entry.descriptor.label,
+            script: lastAttempt?.source ?? null,
+            url: lastAttempt?.url ?? null,
+            parent: options.parent ?? null,
+          };
+          if (entry.descriptor.onError) {
+            try {
+              entry.descriptor.onError(error, detail);
+            } catch (hookError) {
+              globalScope?.console?.debug?.('Module onError handler failed.', hookError);
+            }
+          }
+          handleErrorBoundary(error, {
+            boundary: entry.descriptor.boundary ?? 'runtime',
+            stage: entry.descriptor.stage ?? `${id}.load`,
+            detail,
+            rethrow: false,
+          });
+          if (typeof logDiagnosticsEvent === 'function') {
+            try {
+              logDiagnosticsEvent('modules', `Module failed to load: ${entry.descriptor.label}`, {
+                level: 'error',
+                detail,
+              });
+            } catch (logError) {
+              globalScope?.console?.debug?.('Failed to log module load failure.', logError);
+            }
+          }
+          throw error;
+        } finally {
+          entry.state.promise = null;
+        }
+      })();
+      entry.state.promise = loadPromise;
+      return loadPromise;
+    }
+
+    function ensureModule(id, options = {}) {
+      const entry = getModuleEntry(id);
+      if (entry.state.status === 'loaded' && options.force !== true) {
+        return Promise.resolve(entry.state.instance);
+      }
+      return loadModule(id, options);
+    }
+
+    async function unloadModule(id, options = {}) {
+      const entry = getModuleEntry(id);
+      if (entry.state.promise) {
+        try {
+          await entry.state.promise;
+        } catch (error) {
+          // Ignore load rejection during unload; state will already be marked as error.
+        }
+      }
+      if (entry.state.scriptHandles && entry.state.scriptHandles.length) {
+        entry.state.scriptHandles.forEach((handle) => {
+          if (!handle || !handle.element) {
+            return;
+          }
+          try {
+            if (typeof handle.element.remove === 'function') {
+              handle.element.remove();
+            } else if (handle.element.parentNode && typeof handle.element.parentNode.removeChild === 'function') {
+              handle.element.parentNode.removeChild(handle.element);
+            }
+          } catch (removeError) {
+            globalScope?.console?.debug?.('Failed to remove module script element.', removeError);
+          }
+        });
+      }
+      entry.state.scriptHandles = [];
+      if (entry.descriptor.teardown) {
+        try {
+          await entry.descriptor.teardown({
+            globalScope,
+            descriptor: entry.descriptor,
+            options,
+          });
+        } catch (error) {
+          globalScope?.console?.debug?.('Module teardown threw an error.', error);
+        }
+      }
+      entry.state.instance = null;
+      entry.state.status = 'idle';
+      entry.state.error = null;
+      notifyChange(id);
+    }
+
+    async function reloadModule(id, options = {}) {
+      await unloadModule(id, options);
+      return loadModule(id, { ...options, force: true });
+    }
+
+    function getModuleState(id) {
+      if (typeof id === 'undefined') {
+        const snapshots = [];
+        modules.forEach((entry) => {
+          snapshots.push(cloneModuleState(entry.state, entry.descriptor));
+        });
+        return snapshots;
+      }
+      const entry = getModuleEntry(id);
+      return cloneModuleState(entry.state, entry.descriptor);
+    }
+
+    function hasModule(id) {
+      try {
+        const normalised = normaliseId(id);
+        return modules.has(normalised);
+      } catch (error) {
+        return false;
+      }
+    }
+
+    function onChange(listener) {
+      if (typeof listener !== 'function') {
+        return () => {};
+      }
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    }
+
+    function offChange(listener) {
+      listeners.delete(listener);
+    }
+
+    return {
+      register: registerModule,
+      load: loadModule,
+      ensure: ensureModule,
+      unload: unloadModule,
+      reload: reloadModule,
+      getState: getModuleState,
+      has: hasModule,
+      onChange,
+      offChange,
+    };
+  }
+
+  const dynamicModuleLoader = createDynamicModuleLoader();
+
+  const MODULE_PLUGIN_DEPENDENCIES = Object.freeze([
+    'plugin:asset-resolver',
+    'plugin:audio-aliases',
+    'plugin:audio-captions',
+    'plugin:combat-utils',
+    'plugin:crafting',
+    'plugin:portal-mechanics',
+    'plugin:scoreboard-utils',
+  ]);
+
+  dynamicModuleLoader.register({
+    id: 'plugin:asset-resolver',
+    type: 'plugin',
+    label: 'Asset resolver',
+    scripts: [{ path: 'asset-resolver.js', attributes: { 'data-module': 'asset-resolver' } }],
+    global: 'InfiniteRailsAssetResolver',
+    boundary: 'bootstrap',
+    stage: 'modules.asset-resolver.load',
+    teardown: () => {
+      try {
+        delete globalScope.InfiniteRailsAssetResolver;
+      } catch (error) {
+        globalScope?.console?.debug?.('Failed to tear down asset resolver module.', error);
+      }
+    },
+  });
+
+  dynamicModuleLoader.register({
+    id: 'plugin:audio-aliases',
+    type: 'plugin',
+    label: 'Audio aliases',
+    scripts: [{ path: 'audio-aliases.js', attributes: { 'data-module': 'audio-aliases' } }],
+    global: 'INFINITE_RAILS_AUDIO_ALIASES',
+    boundary: 'bootstrap',
+    stage: 'modules.audio-aliases.load',
+    teardown: () => {
+      try {
+        delete globalScope.INFINITE_RAILS_AUDIO_ALIASES;
+      } catch (error) {
+        globalScope?.console?.debug?.('Failed to tear down audio alias module.', error);
+      }
+    },
+  });
+
+  dynamicModuleLoader.register({
+    id: 'plugin:audio-captions',
+    type: 'plugin',
+    label: 'Audio captions',
+    scripts: [{ path: 'audio-captions.js', attributes: { 'data-module': 'audio-captions' } }],
+    global: 'INFINITE_RAILS_AUDIO_CAPTIONS',
+    boundary: 'bootstrap',
+    stage: 'modules.audio-captions.load',
+    teardown: () => {
+      try {
+        delete globalScope.INFINITE_RAILS_AUDIO_CAPTIONS;
+      } catch (error) {
+        globalScope?.console?.debug?.('Failed to tear down audio captions module.', error);
+      }
+    },
+  });
+
+  dynamicModuleLoader.register({
+    id: 'plugin:combat-utils',
+    type: 'plugin',
+    label: 'Combat utilities',
+    scripts: [{ path: 'combat-utils.js', attributes: { 'data-module': 'combat-utils' } }],
+    global: 'CombatUtils',
+    boundary: 'bootstrap',
+    stage: 'modules.combat-utils.load',
+    teardown: () => {
+      try {
+        delete globalScope.CombatUtils;
+      } catch (error) {
+        globalScope?.console?.debug?.('Failed to tear down combat utilities module.', error);
+      }
+    },
+  });
+
+  dynamicModuleLoader.register({
+    id: 'plugin:crafting',
+    type: 'plugin',
+    label: 'Crafting utilities',
+    scripts: [{ path: 'crafting.js', attributes: { 'data-module': 'crafting' } }],
+    global: 'Crafting',
+    boundary: 'bootstrap',
+    stage: 'modules.crafting.load',
+    teardown: () => {
+      try {
+        delete globalScope.Crafting;
+      } catch (error) {
+        globalScope?.console?.debug?.('Failed to tear down crafting module.', error);
+      }
+    },
+  });
+
+  dynamicModuleLoader.register({
+    id: 'plugin:portal-mechanics',
+    type: 'plugin',
+    label: 'Portal mechanics',
+    scripts: [{ path: 'portal-mechanics.js', attributes: { 'data-module': 'portal-mechanics' } }],
+    global: 'PortalMechanics',
+    boundary: 'bootstrap',
+    stage: 'modules.portal-mechanics.load',
+    teardown: () => {
+      try {
+        delete globalScope.PortalMechanics;
+      } catch (error) {
+        globalScope?.console?.debug?.('Failed to tear down portal mechanics module.', error);
+      }
+    },
+  });
+
+  dynamicModuleLoader.register({
+    id: 'plugin:scoreboard-utils',
+    type: 'plugin',
+    label: 'Scoreboard utilities',
+    scripts: [{ path: 'scoreboard-utils.js', attributes: { 'data-module': 'scoreboard-utils' } }],
+    global: 'ScoreboardUtils',
+    boundary: 'bootstrap',
+    stage: 'modules.scoreboard-utils.load',
+    teardown: () => {
+      try {
+        delete globalScope.ScoreboardUtils;
+      } catch (error) {
+        globalScope?.console?.debug?.('Failed to tear down scoreboard utilities module.', error);
+      }
+    },
+  });
+
+  dynamicModuleLoader.register({
+    id: 'renderer:simple',
+    type: 'renderer',
+    label: 'Sandbox renderer',
+    dependencies: MODULE_PLUGIN_DEPENDENCIES,
+    scripts: [{ path: 'simple-experience.js', attributes: { 'data-module': 'simple-experience' } }],
+    global: 'SimpleExperience',
+    boundary: 'simple-experience',
+    stage: 'modules.simple-experience.load',
+    teardown: () => {
+      try {
+        delete globalScope.SimpleExperience;
+      } catch (error) {
+        globalScope?.console?.debug?.('Failed to tear down simple experience module.', error);
+      }
+    },
+  });
+
+  dynamicModuleLoader.register({
+    id: 'renderer:advanced',
+    type: 'renderer',
+    label: 'Advanced renderer',
+    dependencies: MODULE_PLUGIN_DEPENDENCIES,
+    load: async () => ({ controller: globalScope.InfiniteRails ?? null }),
+    boundary: 'bootstrap',
+    stage: 'modules.advanced.load',
+    required: false,
+  });
+
+  const moduleLoaderApi = {
+    register: dynamicModuleLoader.register,
+    load: dynamicModuleLoader.load,
+    ensure: dynamicModuleLoader.ensure,
+    unload: dynamicModuleLoader.unload,
+    reload: dynamicModuleLoader.reload,
+    getState: dynamicModuleLoader.getState,
+    has: dynamicModuleLoader.has,
+    onChange: dynamicModuleLoader.onChange,
+    offChange: dynamicModuleLoader.offChange,
+  };
+
+  globalScope.__INFINITE_RAILS_MODULE_LOADER__ = moduleLoaderApi;
+  globalScope.InfiniteRails = globalScope.InfiniteRails || {};
+  globalScope.InfiniteRails.modules = moduleLoaderApi;
+
   function formatAssetLogLabel(detail) {
     const kind = typeof detail?.kind === 'string' && detail.kind.trim().length ? detail.kind.trim() : 'asset';
     const key = typeof detail?.key === 'string' && detail.key.trim().length ? detail.key.trim() : null;
@@ -11692,11 +12272,7 @@
     if (navigationTriggered) {
       return true;
     }
-    try {
-      if (typeof scope.bootstrap === 'function') {
-        scope.bootstrap();
-      }
-    } catch (bootstrapError) {
+    const handleBootstrapFailure = (bootstrapError) => {
       if (scope.console?.error) {
         scope.console.error('Simple fallback bootstrap failed.', bootstrapError);
       }
@@ -11736,6 +12312,18 @@
         error: bootstrapError,
       });
       return false;
+    };
+    try {
+      if (typeof scope.bootstrap === 'function') {
+        const bootstrapResult = scope.bootstrap();
+        if (bootstrapResult && typeof bootstrapResult.then === 'function') {
+          bootstrapResult.catch((bootstrapError) => {
+            handleBootstrapFailure(bootstrapError);
+          });
+        }
+      }
+    } catch (bootstrapError) {
+      return handleBootstrapFailure(bootstrapError);
     }
     return true;
   }
@@ -11815,9 +12403,9 @@
     return internalCreateScoreboardUtilsFallback();
   }
 
-  function bootstrap() {
+  async function bootstrap() {
     return invokeWithErrorBoundary(
-      () => {
+      async () => {
         const scope =
           typeof globalScope !== 'undefined'
             ? globalScope
@@ -11839,6 +12427,19 @@
             if (scope.console?.debug) {
               scope.console.debug('Failed to initiate manifest asset availability check during bootstrap.', error);
             }
+          }
+        }
+        if (startSimple) {
+          try {
+            await dynamicModuleLoader.ensure('renderer:simple', { mode: 'simple', reason: 'bootstrap' });
+          } catch (error) {
+            scope.console?.debug?.('Failed to load simple renderer module during bootstrap.', error);
+          }
+        } else {
+          try {
+            await dynamicModuleLoader.ensure('renderer:advanced', { mode: 'advanced', reason: 'bootstrap' });
+          } catch (error) {
+            scope.console?.debug?.('Failed to prepare advanced renderer module during bootstrap.', error);
           }
         }
         if (scope.SimpleExperience?.create) {
@@ -12163,12 +12764,20 @@
 
   const skipAdvancedBootstrap = runWebglPreflightCheck();
 
+  function handleBootstrapResult(result) {
+    if (result && typeof result.then === 'function') {
+      result.catch((error) => {
+        globalScope?.console?.debug?.('Bootstrap promise rejected.', error);
+      });
+    }
+  }
+
   if (skipAdvancedBootstrap) {
-    bootstrap();
+    handleBootstrapResult(bootstrap());
   } else {
     ensureThree()
       .then(() => {
-        bootstrap();
+        handleBootstrapResult(bootstrap());
       })
       .catch((error) => {
         reportThreeLoadFailure(error, { reason: 'ensureThree-rejection' });
