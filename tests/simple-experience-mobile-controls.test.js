@@ -246,4 +246,29 @@ describe('control UI sync check', () => {
       }),
     );
   });
+
+  it('runs the sync check when pointer preference toggles', () => {
+    const { experience } = createExperience();
+    const syncSpy = vi.spyOn(experience, 'runControlUiSyncCheck');
+    experience.isTouchPreferred = false;
+    experience.mobileControlsActive = false;
+    experience.initializeMobileControls = vi.fn(() => {
+      experience.mobileControlsActive = experience.isTouchPreferred;
+    });
+
+    experience.handlePointerPreferenceChange({ matches: true });
+
+    expect(experience.initializeMobileControls).toHaveBeenCalled();
+    expect(syncSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reason: 'pointer-preference-change:touch',
+        mode: 'touch',
+        source: 'pointer-preference',
+        preferenceChanged: true,
+        mobileControlsChanged: true,
+        touchPreferred: true,
+        mobileControlsActive: true,
+      }),
+    );
+  });
 });
