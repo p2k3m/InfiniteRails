@@ -2708,6 +2708,7 @@
       this.playerPhysicsRadius = 0.6;
       this.playerPhysicsHeight = PLAYER_EYE_HEIGHT + 0.4;
       this.playerPhysicsCenterOffset = -PLAYER_EYE_HEIGHT * 0.5;
+      this.playerChunkKey = null;
       this.cameraBoom = null;
       this.handGroup = null;
       this.handMaterials = [];
@@ -2783,6 +2784,8 @@
       this.handOverlayLabelEl = this.ui.handOverlayLabelEl || null;
       this.playerHintEl = this.ui.playerHintEl || null;
       this.pointerHintEl = this.ui.pointerHintEl || null;
+
+      this.lastEntityChunkRebindSummary = null;
 
       this.resetPlayerAnimationWatchdog();
       this.footerEl = this.ui.footerEl || null;
@@ -15478,6 +15481,12 @@
         this.populateInitialMobs(mobOptions);
       });
 
+      invokeStep('entity-chunk-rebind', () => {
+        if (NAVMESH_RELOAD_REASONS.has(buildReason)) {
+          this.rebindEntityChunkAnchors({ reason: buildReason });
+        }
+      });
+
       if (typeof this.summariseRequiredSceneNodes === 'function') {
         const summary = this.summariseRequiredSceneNodes();
         this.lastScenePopulationSummary = summary || null;
@@ -16638,6 +16647,10 @@
         const mesh = this.createChestMesh(theme);
         mesh.position.set(x, ground + 0.35, z);
         mesh.name = `LootChest-${theme?.id || 'dimension'}-${i}`;
+        const chestChunkKey = this.getChunkKeyForWorldPosition(mesh.position.x, mesh.position.z);
+        if (mesh && typeof mesh === 'object') {
+          mesh.userData = { ...(mesh.userData || {}), chunkKey: chestChunkKey };
+        }
         chestGroup.add(mesh);
         const loot = this.getChestLootForDimension(dimensionId, lootCursorStart + i);
         const chest = {
@@ -16658,6 +16671,7 @@
           pulseOffset: randAngle * Math.PI * 2,
           glowLevel: 0.25,
           hintShown: false,
+          chunkKey: chestChunkKey,
         };
         this.chests.push(chest);
       }
@@ -16675,6 +16689,132 @@
       }
       this.chests = [];
       this.activeChestId = null;
+    }
+
+    rebindEntityChunkAnchors(options = {}) {
+      const reasonRaw = typeof options.reason === 'string' ? options.reason.trim() : '';
+      const reason = reasonRaw.length ? reasonRaw : 'entity-chunk-rebind';
+      const timestamp = Date.now();
+      const summary = {
+        reason,
+        timestamp,
+        player: { chunkKey: null, rebound: false },
+        chests: { total: 0, rebound: 0 },
+        zombies: { total: 0, rebound: 0 },
+        golems: { total: 0, rebound: 0 },
+        errors: [],
+      };
+
+      const addError = (kind, detail = {}) => {
+        summary.errors.push({ kind, ...detail });
+      };
+
+      const assignChunkToMesh = (mesh, chunkKey) => {
+        if (!mesh || typeof mesh !== 'object') {
+          return;
+        }
+        mesh.userData = { ...(mesh.userData || {}), chunkKey };
+      };
+
+      try {
+        const playerPosition = this.getPlayerWorldPosition(this.tmpVector3);
+        if (playerPosition && Number.isFinite(playerPosition.x) && Number.isFinite(playerPosition.z)) {
+          const chunkKey = this.getChunkKeyForWorldPosition(playerPosition.x, playerPosition.z);
+          this.playerChunkKey = chunkKey;
+          summary.player = { chunkKey, rebound: Boolean(chunkKey) };
+          if (this.playerPhysicsBody && typeof this.playerPhysicsBody === 'object') {
+            this.playerPhysicsBody.userData = {
+              ...(this.playerPhysicsBody.userData || {}),
+              chunkKey,
+            };
+          }
+          if (!chunkKey) {
+            addError('player', { reason: 'chunk-missing' });
+          }
+        } else {
+          this.playerChunkKey = null;
+          summary.player = { chunkKey: null, rebound: false };
+          addError('player', { reason: 'position-invalid' });
+        }
+      } catch (error) {
+        this.playerChunkKey = null;
+        summary.player = { chunkKey: null, rebound: false };
+        addError('player', { reason: 'position-error', error });
+      }
+
+      const chests = Array.isArray(this.chests) ? this.chests : [];
+      summary.chests.total = chests.length;
+      chests.forEach((chest, index) => {
+        const mesh = chest?.mesh || null;
+        if (!mesh || !mesh.position) {
+          chest.chunkKey = null;
+          addError('chest', { reason: 'mesh-missing', index });
+          return;
+        }
+        const chunkKey = this.getChunkKeyForWorldPosition(mesh.position.x, mesh.position.z);
+        chest.chunkKey = chunkKey;
+        assignChunkToMesh(mesh, chunkKey);
+        if (chunkKey) {
+          summary.chests.rebound += 1;
+        } else {
+          addError('chest', { reason: 'chunk-missing', index, chestId: chest?.id ?? null });
+        }
+      });
+
+      const zombies = Array.isArray(this.zombies) ? this.zombies : [];
+      summary.zombies.total = zombies.length;
+      zombies.forEach((zombie, index) => {
+        const mesh = zombie?.mesh || null;
+        if (!mesh || !mesh.position) {
+          zombie.navChunkKey = null;
+          addError('zombie', { reason: 'mesh-missing', index, zombieId: zombie?.id ?? null });
+          return;
+        }
+        const chunkKey = this.getChunkKeyForWorldPosition(mesh.position.x, mesh.position.z);
+        zombie.navChunkKey = chunkKey;
+        assignChunkToMesh(mesh, chunkKey);
+        if (chunkKey) {
+          summary.zombies.rebound += 1;
+          if (typeof this.ensureNavigationMeshForActorChunk === 'function') {
+            this.ensureNavigationMeshForActorChunk('zombie', chunkKey, {
+              reason: `${reason}-rebind`,
+              stage: 'chunk-rebind',
+              zombieId: zombie?.id ?? null,
+            });
+          }
+        } else {
+          addError('zombie', { reason: 'chunk-missing', index, zombieId: zombie?.id ?? null });
+        }
+      });
+
+      const golems = Array.isArray(this.golems) ? this.golems : [];
+      summary.golems.total = golems.length;
+      golems.forEach((golem, index) => {
+        const mesh = golem?.mesh || null;
+        if (!mesh || !mesh.position) {
+          golem.chunkKey = null;
+          addError('golem', { reason: 'mesh-missing', index, golemId: golem?.id ?? null });
+          return;
+        }
+        const chunkKey = this.getChunkKeyForWorldPosition(mesh.position.x, mesh.position.z);
+        golem.chunkKey = chunkKey;
+        assignChunkToMesh(mesh, chunkKey);
+        if (chunkKey) {
+          summary.golems.rebound += 1;
+          if (typeof this.ensureNavigationMeshForActorChunk === 'function') {
+            this.ensureNavigationMeshForActorChunk('golem', chunkKey, {
+              reason: `${reason}-rebind`,
+              stage: 'chunk-rebind',
+              golemId: golem?.id ?? null,
+            });
+          }
+        } else {
+          addError('golem', { reason: 'chunk-missing', index, golemId: golem?.id ?? null });
+        }
+      });
+
+      this.lastEntityChunkRebindSummary = summary;
+      return summary;
     }
 
     findInteractableChest(range = CHEST_INTERACT_RANGE) {
@@ -21341,6 +21481,12 @@
         navChunkKey: spawnChunkKey ?? null,
         spawnedAt: this.elapsed,
       };
+      if (!zombie.navChunkKey) {
+        zombie.navChunkKey = this.getChunkKeyForWorldPosition(mesh.position.x, mesh.position.z);
+      }
+      if (mesh && typeof mesh === 'object') {
+        mesh.userData = { ...(mesh.userData || {}), chunkKey: zombie.navChunkKey ?? null };
+      }
       this.zombies.push(zombie);
       this.upgradeZombie(zombie);
       this.runImmediateGolemDefense();
@@ -21996,6 +22142,11 @@
         animation: null,
       };
       this.golems.push(golem);
+      const golemChunkKey = this.getChunkKeyForWorldPosition(actor.position.x, actor.position.z);
+      golem.chunkKey = golemChunkKey;
+      if (actor && typeof actor === 'object') {
+        actor.userData = { ...(actor.userData || {}), chunkKey: golemChunkKey };
+      }
       this.upgradeGolem(golem);
       this.lastGolemSpawn = this.elapsed;
       this.showHint('An iron golem joins your defense.');
