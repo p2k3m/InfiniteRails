@@ -284,7 +284,7 @@ This repository ships with a GitHub Actions workflow that deploys the static sit
 
 The manifest lives at the repository root (`asset-manifest.json`) and serves as the canonical checklist of production assets. Update it whenever you add or retire a runtime bundle, vendor shim, or static asset that must ship with the experience. The deployment tests and workflow both fail fast if the manifest is missing entries or points at non-existent files.
 
-When you update any bundled asset (for example `script.js` or `simple-experience.js`), run `npm run sync:asset-digests` to regenerate the cache-busting `?v=` values in the manifest. This keeps the asset digests aligned with the on-disk files so the pre-release checks and deploy workflow stay green.
+When you update any bundled asset (for example `script.js` or `simple-experience.js`), run `npm run sync:asset-digests` to regenerate the cache-busting `?v=` values in the manifest. The pre-release gate (`npm run test:pre-release`) now runs this sync automatically before validating the manifest, so you can simply execute the gate and commit the refreshed manifest alongside your asset changes.
 
 Run `node scripts/validate-asset-manifest.js` before publishing to ensure nothing falls through the cracks. Pass `--base-url https://<domain>/` (or set `ASSET_MANIFEST_BASE_URL`) so the validator can issue anonymous `HEAD` requests against every entry. The command now verifies four buckets:
 
