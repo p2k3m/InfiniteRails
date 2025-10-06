@@ -764,6 +764,73 @@ describe('simple experience terrain generation', () => {
     expect(experience.heightMap.length).toBe(64);
   });
 
+  it('activates a safe spawn box fallback when the world fails to populate', () => {
+    const canvas = {
+      width: 512,
+      height: 512,
+      clientWidth: 512,
+      clientHeight: 512,
+      getContext: () => null,
+    };
+
+    const experience = window.SimpleExperience.create({ canvas, ui: {} });
+    experience.scene = new THREE.Scene();
+    experience.worldRoot = new THREE.Group();
+    experience.scene.add(experience.worldRoot);
+    experience.playerRig = new THREE.Group();
+
+    experience.columns.clear();
+
+    experience.positionPlayer();
+
+    expect(experience.totalWorldFailureActive).toBe(true);
+    expect(experience.safeSpawnBoxGroup).toBeInstanceOf(THREE.Group);
+    expect(experience.safeSpawnBoxGroup?.parent).toBe(experience.worldRoot);
+    expect(experience.safeSpawnBoxGroup?.children.length).toBe(25);
+
+    const floorHeight = experience.safeSpawnBoxGroup?.userData?.floorHeight ?? 0;
+    const playerEyeHeight = -experience.playerPhysicsCenterOffset * 2;
+
+    expect(experience.playerRig.position.x).toBeCloseTo(0);
+    expect(experience.playerRig.position.z).toBeCloseTo(0);
+    expect(experience.playerRig.position.y).toBeCloseTo(floorHeight + playerEyeHeight);
+  });
+
+  it('clears the safe spawn box once terrain columns become available', () => {
+    const canvas = {
+      width: 512,
+      height: 512,
+      clientWidth: 512,
+      clientHeight: 512,
+      getContext: () => null,
+    };
+
+    const experience = window.SimpleExperience.create({ canvas, ui: {} });
+    experience.scene = new THREE.Scene();
+    experience.worldRoot = new THREE.Group();
+    experience.scene.add(experience.worldRoot);
+    experience.playerRig = new THREE.Group();
+
+    const spawnIndex = Math.floor((experience.heightMap?.length ?? 0) / 2);
+    const spawnColumnKey = `${spawnIndex}|${spawnIndex}`;
+    const topBlock = new THREE.Mesh(experience.blockGeometry, experience.materials.stone);
+    topBlock.position.set(0, 0.5, 0);
+    experience.columns.set(spawnColumnKey, [topBlock]);
+
+    experience.ensureSafeSpawnBox('test-precondition');
+    expect(experience.safeSpawnBoxGroup).not.toBeNull();
+
+    experience.positionPlayer();
+
+    expect(experience.safeSpawnBoxGroup).toBeNull();
+    expect(experience.totalWorldFailureActive).toBe(false);
+
+    const playerEyeHeight = -experience.playerPhysicsCenterOffset * 2;
+    expect(experience.playerRig.position.x).toBeCloseTo(topBlock.position.x);
+    expect(experience.playerRig.position.z).toBeCloseTo(topBlock.position.z);
+    expect(experience.playerRig.position.y).toBeCloseTo(topBlock.position.y + playerEyeHeight);
+  });
+
   it('rebuilds navigation meshes after terrain edits even when the render loop is idle', () => {
     const canvas = {
       width: 512,
