@@ -1,27 +1,35 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createExperience, ensureSimpleExperienceLoaded } from './helpers/simple-experience-test-utils.js';
 
-function createHudElement() {
+function createHudElement(overrides = {}) {
   const attributes = {};
-  return {
-    innerHTML: '',
-    textContent: '',
-    dataset: {},
-    classList: {
-      add: vi.fn(),
-      remove: vi.fn(),
-      contains: vi.fn(() => false),
+  return Object.assign(
+    {
+      innerHTML: '',
+      textContent: '',
+      dataset: {},
+      style: {
+        setProperty: vi.fn(),
+        removeProperty: vi.fn(),
+      },
+      classList: {
+        add: vi.fn(),
+        remove: vi.fn(),
+        contains: vi.fn(() => false),
+      },
+      setAttribute(name, value) {
+        attributes[name] = String(value);
+      },
+      removeAttribute(name) {
+        delete attributes[name];
+      },
+      getAttribute(name) {
+        return attributes[name];
+      },
+      offsetWidth: 0,
     },
-    setAttribute(name, value) {
-      attributes[name] = String(value);
-    },
-    removeAttribute(name) {
-      delete attributes[name];
-    },
-    getAttribute(name) {
-      return attributes[name];
-    },
-  };
+    overrides,
+  );
 }
 
 describe('SimpleExperience HUD bindings', () => {
@@ -43,6 +51,13 @@ describe('SimpleExperience HUD bindings', () => {
     const scoreCombatEl = createHudElement();
     const scoreLootEl = createHudElement();
     const dimensionInfoEl = createHudElement();
+    const portalProgressLabel = createHudElement();
+    const portalProgressBar = createHudElement();
+    const portalStatusEl = createHudElement();
+    const portalStatusText = createHudElement();
+    const portalStatusStateText = createHudElement();
+    const portalStatusDetailText = createHudElement();
+    const portalStatusIcon = createHudElement();
 
     const { experience } = createExperience({
       ui: {
@@ -55,13 +70,20 @@ describe('SimpleExperience HUD bindings', () => {
         scoreCombatEl,
         scoreLootEl,
         dimensionInfoEl,
+        portalProgressLabel,
+        portalProgressBar,
+        portalStatusEl,
+        portalStatusText,
+        portalStatusStateText,
+        portalStatusDetailText,
+        portalStatusIcon,
       },
     });
 
     experience.updateInventoryUi = vi.fn();
-    experience.updatePortalProgress = vi.fn();
     experience.updateFooterSummary = vi.fn();
     vi.spyOn(experience, 'publishStateSnapshot').mockImplementation(() => {});
+    const updatePortalProgressSpy = vi.spyOn(experience, 'updatePortalProgress');
 
     experience.maxHealth = 10;
     experience.health = 7;
@@ -92,6 +114,23 @@ describe('SimpleExperience HUD bindings', () => {
       speedMultiplier: 1.2,
     };
 
+    const portalSnapshot = {
+      progress: 0.75,
+      progressPercent: 75,
+      remainingBlocks: 1,
+      requiredBlocks: 12,
+      state: 'ready',
+      statusLabel: 'Portal Ready',
+      statusMessage: 'Ignite to travel through the Lush Frontier.',
+      progressLabel: 'Portal ready — press F to ignite',
+      displayProgress: 1,
+      blocked: false,
+      obstructionSummary: '',
+      nextDimension: 'Lush Frontier',
+      nextRules: 'Gravity ×0.90 · Speed ×1.10',
+    };
+    vi.spyOn(experience, 'getPortalStatusSnapshot').mockReturnValue(portalSnapshot);
+
     experience.updateHud();
 
     expect(heartsEl.innerHTML).toContain('hud-hearts');
@@ -116,7 +155,20 @@ describe('SimpleExperience HUD bindings', () => {
     expect(dimensionInfoEl.dataset.simpleInit).toBe('true');
 
     expect(experience.updateInventoryUi).toHaveBeenCalled();
-    expect(experience.updatePortalProgress).toHaveBeenCalled();
+    expect(updatePortalProgressSpy).toHaveBeenCalled();
+    expect(portalProgressLabel.textContent).toBe(portalSnapshot.progressLabel);
+    expect(portalProgressBar.style.setProperty).toHaveBeenCalledWith(
+      '--progress',
+      portalSnapshot.displayProgress.toFixed(2),
+    );
+    expect(portalStatusEl.dataset.state).toBe('ready');
+    expect(portalStatusEl.getAttribute('aria-label')).toBe(
+      `Portal status: ${portalSnapshot.statusLabel}. ${portalSnapshot.statusMessage}`,
+    );
+    expect(portalStatusStateText.textContent).toBe(portalSnapshot.statusLabel);
+    expect(portalStatusDetailText.textContent).toBe(portalSnapshot.statusMessage);
+    expect(portalStatusIcon.dataset.state).toBe('ready');
+    expect(portalStatusEl.classList.add).toHaveBeenCalledWith('portal-status--flash');
     expect(experience.updateFooterSummary).toHaveBeenCalled();
     expect(experience.publishStateSnapshot).toHaveBeenCalledWith('hud-update');
   });
