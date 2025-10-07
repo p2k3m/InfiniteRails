@@ -179,6 +179,42 @@ describe('SimpleExperience audio bootstrapping', () => {
 
     dispatchSpy.mockRestore();
   });
+
+  it('dispatches a missing audio warning when the welcome alias resolves to a fallback sample', () => {
+    const experience = prepareExperienceForBoot();
+    const resumeSpy = vi.fn();
+    const playSpy = vi.fn();
+    const hasSpy = vi.fn(() => false);
+    const resolveSpy = vi.fn(() => 'victoryCheer');
+    const windowStub = getWindowStub();
+    const dispatchSpy = vi.spyOn(windowStub, 'dispatchEvent').mockImplementation(() => {});
+
+    experience.audio = {
+      has: hasSpy,
+      play: playSpy,
+      resumeContextIfNeeded: resumeSpy,
+      _resolve: resolveSpy,
+    };
+
+    experience.start();
+
+    const audioErrorEvent = dispatchSpy.mock.calls
+      .map(([event]) => event)
+      .find((event) => event?.type === 'infinite-rails:audio-error');
+
+    expect(audioErrorEvent).toBeDefined();
+    expect(audioErrorEvent.detail).toEqual(
+      expect.objectContaining({
+        requestedName: 'welcome',
+        resolvedName: 'victoryCheer',
+        code: 'missing-sample',
+        missingSample: true,
+        fallbackActive: true,
+      }),
+    );
+
+    dispatchSpy.mockRestore();
+  });
 });
 
 describe('SimpleExperience audio diagnostics', () => {

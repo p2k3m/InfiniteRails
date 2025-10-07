@@ -28,8 +28,7 @@
             code: 'missing-sample',
             missingSample: true,
             fallbackActive: true,
-          },
-          { emitEvent: typeof audio?._resolve !== 'function' }
+          }
         );
       }
     }
