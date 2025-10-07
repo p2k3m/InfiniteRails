@@ -231,6 +231,23 @@ describe('control UI sync check', () => {
         source: 'detector',
       }),
     );
+    expect(experience.lastControlUiSyncContext).toEqual(
+      expect.objectContaining({
+        reason: 'input-mode-change:touch',
+        mode: 'touch',
+        source: 'detector',
+        touchPreferred: true,
+      }),
+    );
+    expect(Object.isFrozen(experience.lastControlUiSyncSnapshots)).toBe(true);
+    expect(Object.isFrozen(experience.lastControlUiSyncSnapshots.controls)).toBe(true);
+    expect(Object.isFrozen(experience.lastControlUiSyncSnapshots.hud)).toBe(true);
+    expect(experience.lastControlUiSyncSnapshots.controls.interact).toEqual(
+      expect.arrayContaining(['KeyF']),
+    );
+    expect(experience.lastControlUiSyncSnapshots.hud.interact).toEqual(
+      expect.arrayContaining(['KeyF']),
+    );
 
     syncSpy.mockClear();
     experience.mobileControlsActive = false;
@@ -243,6 +260,14 @@ describe('control UI sync check', () => {
         reason: 'input-mode-change:pointer',
         mode: 'pointer',
         source: 'detector',
+      }),
+    );
+    expect(experience.lastControlUiSyncContext).toEqual(
+      expect.objectContaining({
+        reason: 'input-mode-change:pointer',
+        mode: 'pointer',
+        source: 'detector',
+        touchPreferred: false,
       }),
     );
   });
