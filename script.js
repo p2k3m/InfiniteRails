@@ -884,6 +884,50 @@
     domReadyListenerAttached: false,
   };
 
+  const inputModeListeners = new Set();
+
+  function getInputModeSnapshot(detail = {}) {
+    const mode = inputModeState.mode || 'pointer';
+    const touchPreferred = mode === 'touch';
+    const source = detail.source ?? inputModeState.source ?? null;
+    return {
+      mode,
+      source,
+      touchPreferred,
+      touchActive: touchPreferred,
+      controlScheme: touchPreferred ? 'touch' : 'pointer',
+    };
+  }
+
+  function notifyInputModeListeners(detail = {}) {
+    if (!inputModeListeners.size) {
+      return;
+    }
+    const snapshot = Object.freeze({ ...getInputModeSnapshot(detail) });
+    inputModeListeners.forEach((listener) => {
+      if (typeof listener !== 'function') {
+        return;
+      }
+      try {
+        listener(snapshot);
+      } catch (error) {
+        if (globalScope?.console?.debug) {
+          globalScope.console.debug('Input mode listener failed.', error);
+        }
+      }
+    });
+  }
+
+  function subscribeToInputMode(listener) {
+    if (typeof listener !== 'function') {
+      return () => {};
+    }
+    inputModeListeners.add(listener);
+    return () => {
+      inputModeListeners.delete(listener);
+    };
+  }
+
   function normaliseInputMode(value) {
     const raw = typeof value === 'string' ? value.trim().toLowerCase() : '';
     if (!raw) {
@@ -909,8 +953,13 @@
     } catch (error) {}
     try {
       globalScope.InfiniteRails = globalScope.InfiniteRails || {};
+      const touchPreferred = mode === 'touch';
+      const controlScheme = touchPreferred ? 'touch' : 'pointer';
       globalScope.InfiniteRails.inputMode = mode;
-      globalScope.InfiniteRails.mobileControlsActive = mode === 'touch';
+      globalScope.InfiniteRails.controlScheme = controlScheme;
+      globalScope.InfiniteRails.mobileControlsActive = touchPreferred;
+      globalScope.InfiniteRails.touchPreferred = touchPreferred;
+      globalScope.InfiniteRails.isTouchPreferred = touchPreferred;
       if (typeof globalScope.InfiniteRails.getInputMode !== 'function') {
         globalScope.InfiniteRails.getInputMode = () => inputModeState.mode;
       }
@@ -919,21 +968,49 @@
           scheduleInputMode(value, { ...detail, source: detail.source || 'api' });
         };
       }
+      if (typeof globalScope.InfiniteRails.subscribeInputMode !== 'function') {
+        globalScope.InfiniteRails.subscribeInputMode = (listener) => subscribeToInputMode(listener);
+      }
+      if (typeof globalScope.InfiniteRails.getInputModeSnapshot !== 'function') {
+        globalScope.InfiniteRails.getInputModeSnapshot = () => getInputModeSnapshot({});
+      }
+    } catch (error) {}
+    try {
+      const scopeConfig =
+        globalScope.APP_CONFIG && typeof globalScope.APP_CONFIG === 'object'
+          ? globalScope.APP_CONFIG
+          : (globalScope.APP_CONFIG = {});
+      const touchPreferred = mode === 'touch';
+      scopeConfig.inputMode = mode;
+      scopeConfig.controlScheme = touchPreferred ? 'touch' : 'pointer';
+      scopeConfig.touchPreferred = touchPreferred;
+      scopeConfig.isTouchPreferred = touchPreferred;
+      scopeConfig.mobileControlsActive = touchPreferred;
     } catch (error) {}
   }
 
   function dispatchInputModeChange(doc, mode, detail = {}) {
     if (!doc || typeof doc.dispatchEvent !== 'function' || typeof CustomEvent !== 'function') {
+      notifyInputModeListeners({ ...detail, mode });
       return;
     }
+    const touchPreferred = mode === 'touch';
+    const eventDetail = {
+      mode,
+      source: detail.source || null,
+      touchActive: touchPreferred,
+      touchPreferred,
+      controlScheme: touchPreferred ? 'touch' : 'pointer',
+    };
     try {
       const event = new CustomEvent('infinite-rails:input-mode-change', {
         bubbles: false,
         cancelable: false,
-        detail: { mode, source: detail.source || null, touchActive: mode === 'touch' },
+        detail: eventDetail,
       });
       doc.dispatchEvent(event);
     } catch (error) {}
+    notifyInputModeListeners(eventDetail);
   }
 
   function toggleBooleanAttribute(element, attribute, enabled) {
@@ -1037,6 +1114,12 @@
         try {
           body.dataset.controlScheme = nextMode === 'touch' ? 'touch' : 'pointer';
         } catch (error) {}
+        try {
+          body.dataset.touchPreferred = nextMode === 'touch' ? 'true' : 'false';
+        } catch (error) {}
+        try {
+          body.dataset.mobileControlsActive = nextMode === 'touch' ? 'true' : 'false';
+        } catch (error) {}
       }
     }
 
@@ -1057,6 +1140,15 @@
       if (mobileControls.dataset) {
         try {
           mobileControls.dataset.mode = nextMode;
+        } catch (error) {}
+        try {
+          mobileControls.dataset.ready = 'true';
+        } catch (error) {}
+        try {
+          mobileControls.dataset.active = active ? 'true' : 'false';
+        } catch (error) {}
+        try {
+          mobileControls.dataset.controlScheme = active ? 'touch' : 'pointer';
         } catch (error) {}
       }
     }
@@ -13670,6 +13762,23 @@
     return {
       identity: { ...identityState.identity },
       applyIdentity,
+      input: {
+        get mode() {
+          return inputModeState.mode || 'pointer';
+        },
+        get touchPreferred() {
+          return (inputModeState.mode || 'pointer') === 'touch';
+        },
+        get mobileControlsActive() {
+          return (inputModeState.mode || 'pointer') === 'touch';
+        },
+        getSnapshot() {
+          return getInputModeSnapshot({});
+        },
+        subscribe(listener) {
+          return subscribeToInputMode(listener);
+        },
+      },
     };
   }
 
