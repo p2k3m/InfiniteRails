@@ -7280,7 +7280,7 @@
         typeof detail?.message === 'string' && detail.message.trim().length
           ? detail.message.trim()
           : fallbackActive
-            ? 'Missing audio assets detected. Playing alert tone until assets are restored.'
+            ? 'Audio assets unavailable. Playing alert tone until assets are restored.'
             : 'Audio initialised successfully.';
       if (typeof logDiagnosticsEvent === 'function') {
         logDiagnosticsEvent('audio', baseMessage, {
@@ -7303,7 +7303,7 @@
         if (!audioFallbackOverlayShown) {
           audioFallbackOverlayShown = true;
           presentCriticalErrorOverlay({
-            title: 'Missing audio assets',
+            title: 'Audio assets unavailable',
             message: baseMessage,
             diagnosticScope: 'audio',
             diagnosticStatus: 'error',
