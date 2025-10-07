@@ -170,6 +170,49 @@ export function createBootstrapSandbox(options = {}) {
   inputOverlay.setAttribute('id', 'inputOverlay');
   documentStub.body.appendChild(inputOverlay);
 
+  const inactivityOverlay = createElement('div', { ownerDocument: documentStub });
+  inactivityOverlay.className = 'compose-overlay compose-overlay--global';
+  inactivityOverlay.setAttribute('id', 'inactivityOverlay');
+  inactivityOverlay.setAttribute('data-mode', 'idle');
+  inactivityOverlay.setAttribute('hidden', '');
+  inactivityOverlay.hidden = true;
+
+  const inactivityDialog = createElement('div', { ownerDocument: documentStub });
+  inactivityDialog.className = 'compose-overlay__dialog';
+  inactivityDialog.setAttribute('id', 'inactivityOverlayDialog');
+  const inactivityBody = createElement('div', { ownerDocument: documentStub });
+  inactivityBody.className = 'compose-overlay__body';
+
+  const inactivityTitle = createElement('h3', { ownerDocument: documentStub });
+  inactivityTitle.className = 'compose-overlay__title';
+  inactivityTitle.setAttribute('id', 'inactivityOverlayTitle');
+  inactivityBody.appendChild(inactivityTitle);
+
+  const inactivityMessage = createElement('p', { ownerDocument: documentStub });
+  inactivityMessage.className = 'compose-overlay__message';
+  inactivityMessage.setAttribute('id', 'inactivityOverlayMessage');
+  const countdownValue = createElement('span', { ownerDocument: documentStub });
+  countdownValue.setAttribute('id', 'inactivityOverlayCountdown');
+  countdownValue.textContent = '0';
+  inactivityMessage.appendChild(countdownValue);
+  inactivityBody.appendChild(inactivityMessage);
+
+  const inactivityActions = createElement('div', { ownerDocument: documentStub });
+  inactivityActions.className = 'compose-overlay__actions';
+  const stayButton = createElement('button', { ownerDocument: documentStub });
+  stayButton.setAttribute('id', 'inactivityStayButton');
+  stayButton.textContent = 'Continue';
+  const refreshButton = createElement('button', { ownerDocument: documentStub });
+  refreshButton.setAttribute('id', 'inactivityRefreshButton');
+  refreshButton.textContent = 'Refresh';
+  inactivityActions.appendChild(stayButton);
+  inactivityActions.appendChild(refreshButton);
+  inactivityBody.appendChild(inactivityActions);
+
+  inactivityDialog.appendChild(inactivityBody);
+  inactivityOverlay.appendChild(inactivityDialog);
+  documentStub.body.appendChild(inactivityOverlay);
+
   let timerCounter = 1;
   const timers = new Map();
   const setTimeoutStub = vi.fn((handler) => {

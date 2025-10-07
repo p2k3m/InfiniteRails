@@ -4446,6 +4446,13 @@ body.sidebar-open .player-hint {
   color: var(--text-secondary);
 }
 
+#inactivityOverlayCountdown {
+  display: inline-block;
+  min-width: 1.5ch;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
 .bootstrap-status {
   width: 100%;
   border-radius: 12px;
