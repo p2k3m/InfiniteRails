@@ -100,6 +100,23 @@
 
   const SIGNED_URL_ALERT_EVENT = 'infinite-rails:signed-url-expiry';
   const DEFAULT_SIGNED_URL_WARNING_WINDOW_MS = 24 * 60 * 60 * 1000;
+  const AUDIO_FALLBACK_BEEP_SRC =
+    'data:audio/wav;base64,UklGRuQDAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YcADAACAmKWhjnRfWmV9lqSikHZhWWR7lKSjknhiWWJ4kq' +
+    'OklHtkWWF2kKKkln1lWl90jqGlmH9nWl5xi6ClmoJpW11viZ6mm4RrW1xth52mnYdtXFtrhJumnolvXVtpgpqloItxXlpngJiloY50X1plfZakopB2YVlke5' +
+    'Sko5J4YllieJKjpJR7ZFlhdpCipJZ9ZVpfdI6hpZiAZ1pecYugpZqCaVtdb4meppuEa1tcbYedpp2HbVxba4Sbpp6Jb11baYKapaCLcV5aZ4CYpaGOdF9aZX' +
+    '2WpKKQdmFZZHuUpKOSeGJZYniSo6SUe2RZYXaQoqSWfWVaX3SOoaWYf2daXnGLoKWagmlbXW+JnqabhGtbXG2Hnaadh21cW2uEm6aeiW9dW2mCmqWgi3FeWm' +
+    'd/mKWhjnRfWmV9lqSikHZhWWR7lKSjknhiWWJ4kqOklHtkWWF2kKKkln1lWl90jqGlmH9nWl5xi6ClmoJpW11viZ6mm4RrW1xth52mnYdtXFtrhJumnolvXV' +
+    'tpgpqloItxXlpngJiloY50X1plfZakopB2YVlke5Sko5J4YllieJKjpJR7ZFlhdpCipJZ9ZVpfdI6hpZh/Z1pecYugpZqCaVtdb4meppuEa1tcbYedpp2HbV' +
+    'xba4Sbpp6Jb11baYKapaCLcV5aZ4CYpaGOdF9aZX2WpKKQdmFZZHuUpKOSeGJZYniSo6SUe2RZYXaQoqSWfWVaX3SOoaWYf2daXnGLoKWagmlbXW+JnqabhG' +
+    'tbXG2Hnaadh21cW2uEm6aeiW9dW2mCmqWgi3FeWmd/mKWhjnRfWmV9lqSikHZhWWR7lKSjknhiWWJ4kqOklHtkWWF2kKKkln1lWl90jqGlmIBnWl5xi6Clmo' +
+    'JpW11viZ6mm4RrW1xth52mnYdtXFtrhJumnolvXVtpgpqloItxXlpngJiloY50X1plfZakopB2YVlke5Sko5J4YllieJKjpJR7ZFlhdpCipJZ9ZVpfdI6hpZ' +
+    'h/Z1pecYugpZqCaVtdb4meppuEa1tcbYedpp2HbVxba4Sbpp6Jb11baYKapaCLcV5aZ4CYpaGOdF9aZX2WpKKQdmFZZHuUpKOSeGJZYniSo6SUe2RZYXaQoq' +
+    'SWfWVaX3SOoaWYf2daXnGLoKWagmlbXW+JnqabhGtbXG2Hnaadh21cW2uEm6aeiW9dW2mCmqWgi3FeWmeAmKWhjnRfWmV9lqSikHZhWWR7lKSjknhiWWJ4kq' +
+    'OklHtkWWF2kKKkln1lWl90jqGlmH9nWl5xi6ClmoI=';
+  const AUDIO_FALLBACK_BEEP_MIN_INTERVAL_MS = 1500;
+  const AUDIO_MISSING_SAMPLE_CODES = new Set(['missing-sample', 'boot-missing-sample']);
+  let audioFallbackBeepContext = null;
+  let lastAudioFallbackBeepTimestamp = 0;
   const signedUrlExpiryChecks = new Set();
   let invalidSignedUrlWarningWindowLogged = false;
 
@@ -132,6 +149,56 @@
     }
     if (typeof consoleRef.log === 'function') {
       consoleRef.log(message, payload);
+    }
+  }
+
+  function playAudioFallbackBeep() {
+    if (!globalScope) {
+      return;
+    }
+    const now = Date.now();
+    if (now - lastAudioFallbackBeepTimestamp < AUDIO_FALLBACK_BEEP_MIN_INTERVAL_MS) {
+      return;
+    }
+    lastAudioFallbackBeepTimestamp = now;
+    try {
+      if (typeof globalScope.Audio === 'function') {
+        const element = new globalScope.Audio(AUDIO_FALLBACK_BEEP_SRC);
+        element.volume = 0.6;
+        const playResult = typeof element.play === 'function' ? element.play() : null;
+        if (playResult && typeof playResult.catch === 'function') {
+          playResult.catch(() => {});
+        }
+        return;
+      }
+    } catch (elementError) {
+      globalScope?.console?.debug?.('Fallback beep playback failed via <audio>.', elementError);
+    }
+    try {
+      const AudioContextCtor = globalScope.AudioContext || globalScope.webkitAudioContext;
+      if (!AudioContextCtor) {
+        return;
+      }
+      if (!audioFallbackBeepContext) {
+        audioFallbackBeepContext = new AudioContextCtor();
+      }
+      const context = audioFallbackBeepContext;
+      if (context.state === 'suspended' && typeof context.resume === 'function') {
+        context.resume().catch(() => {});
+      }
+      const oscillator = context.createOscillator();
+      const gain = context.createGain();
+      oscillator.type = 'sine';
+      oscillator.frequency.setValueAtTime(880, context.currentTime);
+      gain.gain.setValueAtTime(0.0001, context.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.2, context.currentTime + 0.01);
+      gain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + 0.2);
+      oscillator.connect(gain);
+      gain.connect(context.destination);
+      oscillator.start();
+      oscillator.stop(context.currentTime + 0.25);
+    } catch (contextError) {
+      globalScope?.console?.debug?.('Fallback beep playback failed via AudioContext.', contextError);
     }
   }
 
@@ -7205,6 +7272,7 @@
       clearAssetLoadingIndicator(detail?.kind, detail?.key);
     });
     let audioFallbackOverlayShown = false;
+    let audioFallbackAlertArmed = false;
     globalScope.addEventListener('infinite-rails:audio-boot-status', (event) => {
       const detail = event?.detail && typeof event.detail === 'object' ? event.detail : {};
       const fallbackActive = Boolean(detail?.fallbackActive);
@@ -7212,7 +7280,7 @@
         typeof detail?.message === 'string' && detail.message.trim().length
           ? detail.message.trim()
           : fallbackActive
-            ? 'Audio fallback alert tone active until assets are restored.'
+            ? 'Missing audio assets detected. Playing alert tone until assets are restored.'
             : 'Audio initialised successfully.';
       if (typeof logDiagnosticsEvent === 'function') {
         logDiagnosticsEvent('audio', baseMessage, {
@@ -7228,10 +7296,14 @@
         });
       }
       if (fallbackActive) {
+        if (!audioFallbackAlertArmed) {
+          playAudioFallbackBeep();
+          audioFallbackAlertArmed = true;
+        }
         if (!audioFallbackOverlayShown) {
           audioFallbackOverlayShown = true;
           presentCriticalErrorOverlay({
-            title: 'Audio assets unavailable',
+            title: 'Missing audio assets',
             message: baseMessage,
             diagnosticScope: 'audio',
             diagnosticStatus: 'error',
@@ -7245,6 +7317,7 @@
         }
       } else {
         audioFallbackOverlayShown = false;
+        audioFallbackAlertArmed = false;
       }
     });
 
@@ -7270,6 +7343,13 @@
           ? detail.errorMessage.trim()
           : null;
       const errorCode = typeof detail?.code === 'string' && detail.code.trim().length ? detail.code.trim() : null;
+      const missingSampleDetected =
+        (errorCode && AUDIO_MISSING_SAMPLE_CODES.has(errorCode)) ||
+        detail?.missingSample === true ||
+        detail?.fallbackActive === true;
+      if (missingSampleDetected) {
+        playAudioFallbackBeep();
+      }
       const extraParts = [];
       if (errorName && errorMessage) {
         extraParts.push(`${errorName}: ${errorMessage}`);
@@ -7284,19 +7364,21 @@
       const overlayMessage = extraParts.length
         ? `${baseMessage} — ${extraParts.join(' — ')}`
         : baseMessage;
+      const overlayTitle = missingSampleDetected ? 'Missing audio sample' : 'Audio playback failed';
+      const diagnosticStatus = missingSampleDetected ? 'error' : 'warning';
       presentCriticalErrorOverlay({
-        title: 'Audio playback failed',
+        title: overlayTitle,
         message: overlayMessage,
-        diagnosticScope: 'assets',
-        diagnosticStatus: 'error',
+        diagnosticScope: 'audio',
+        diagnosticStatus,
         diagnosticMessage: baseMessage,
-        logScope: 'assets',
+        logScope: 'audio',
         logMessage: baseMessage,
         detail,
         timestamp: Number.isFinite(detail?.timestamp) ? detail.timestamp : undefined,
       });
       if (typeof bootstrapOverlay?.setDiagnostic === 'function') {
-        const status = detail?.code === 'boot-missing-sample' ? 'error' : 'warning';
+        const status = missingSampleDetected ? 'error' : 'warning';
         bootstrapOverlay.setDiagnostic('audio', {
           status,
           message: baseMessage,
