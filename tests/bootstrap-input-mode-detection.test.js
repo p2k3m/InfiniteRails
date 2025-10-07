@@ -56,6 +56,14 @@ function getToggleCall(documentStub, className) {
   return calls.length ? calls[calls.length - 1][1] : null;
 }
 
+function getOverlayScheme(documentStub) {
+  const overlay = documentStub.getElementById('inputOverlay');
+  if (!overlay) {
+    return null;
+  }
+  return overlay.dataset?.scheme ?? null;
+}
+
 describe('bootstrap input mode detection', () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -76,6 +84,7 @@ describe('bootstrap input mode detection', () => {
     expect(getLatestInputModeCall(documentStub)).toBe('touch');
     expect(getToggleCall(documentStub, 'input-touch')).toBe(true);
     expect(getToggleCall(documentStub, 'input-pointer')).toBe(false);
+    expect(getOverlayScheme(documentStub)).toBe('touch');
   });
 
   it('switches to pointer mode when mouse pointer events are observed', () => {
@@ -98,6 +107,7 @@ describe('bootstrap input mode detection', () => {
     expect(getLatestInputModeCall(documentStub)).toBe('pointer');
     expect(getToggleCall(documentStub, 'input-touch')).toBe(false);
     expect(getToggleCall(documentStub, 'input-pointer')).toBe(true);
+    expect(getOverlayScheme(documentStub)).toBe('pointer');
   });
 
   it('responds to coarse pointer media query changes', () => {
@@ -124,5 +134,6 @@ describe('bootstrap input mode detection', () => {
     expect(getLatestInputModeCall(documentStub)).toBe('pointer');
     expect(getToggleCall(documentStub, 'input-touch')).toBe(false);
     expect(getToggleCall(documentStub, 'input-pointer')).toBe(true);
+    expect(getOverlayScheme(documentStub)).toBe('pointer');
   });
 });

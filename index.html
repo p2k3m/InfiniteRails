@@ -512,6 +512,56 @@
         >
           Click the viewport to capture your mouse, then use WASD or the arrow keys to move and left-click to mine.
         </div>
+        <div
+          class="input-overlay"
+          id="inputOverlay"
+          role="region"
+          aria-live="polite"
+          aria-hidden="true"
+          hidden
+          data-visible="false"
+          data-scheme="pointer"
+        >
+          <div class="input-overlay__panel input-overlay__panel--pointer" data-variant="pointer">
+            <div class="input-overlay__icon" aria-hidden="true">⌨️</div>
+            <div class="input-overlay__body">
+              <p class="input-overlay__eyebrow">Desktop Controls</p>
+              <h3 class="input-overlay__title">Capture your mouse to explore</h3>
+              <ul class="input-overlay__list">
+                <li>
+                  <span id="inputOverlayPointerMove" class="input-overlay__key">W · A · S · D</span>
+                  to move · Mouse to look
+                </li>
+                <li>
+                  <span id="inputOverlayPointerInteract" class="input-overlay__key">F</span>
+                  to interact · Click to mine or use
+                </li>
+                <li>
+                  <span id="inputOverlayPointerPlace" class="input-overlay__key">Q</span>
+                  to place blocks ·
+                  <span id="inputOverlayPointerCraft" class="input-overlay__key">E</span>
+                  for crafting
+                </li>
+              </ul>
+            </div>
+          </div>
+          <div class="input-overlay__panel input-overlay__panel--touch" data-variant="touch">
+            <div class="input-overlay__icon" aria-hidden="true">🤚</div>
+            <div class="input-overlay__body">
+              <p class="input-overlay__eyebrow">Touch Controls</p>
+              <h3 class="input-overlay__title">Use the on-screen joystick</h3>
+              <ul class="input-overlay__list">
+                <li>Drag the left joystick to move around the island</li>
+                <li>Swipe the viewport to look and steer the camera</li>
+                <li>Tap ✦ to mine or interact · hold to jump · tap ⧉ to ignite portals</li>
+              </ul>
+            </div>
+          </div>
+          <button type="button" class="input-overlay__dismiss" id="dismissInputOverlay">
+            <span class="sr-only">Dismiss control overlay</span>
+            Got it
+          </button>
+        </div>
         <div class="hand-overlay" id="handOverlay" data-item="fist" data-hint="Currently equipped item.">
           <div
             class="hand-overlay__icon"
