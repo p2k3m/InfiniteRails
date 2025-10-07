@@ -884,6 +884,445 @@
     domReadyListenerAttached: false,
   };
 
+  const inactivityMonitorState = {
+    enabled: true,
+    idleThresholdMs: 5 * 60 * 1000,
+    refreshCountdownMs: 15000,
+    checkIntervalMs: 1000,
+    lastActivityAt: Date.now(),
+    promptVisible: false,
+    overlay: null,
+    countdownEl: null,
+    stayButton: null,
+    refreshButton: null,
+    doc: documentRef || (typeof document !== 'undefined' ? document : null),
+    scope: globalScope || (typeof window !== 'undefined' ? window : globalThis),
+    checkHandle: null,
+    countdownHandle: null,
+    countdownExpiresAt: null,
+    waitingForDom: false,
+    detachListeners: null,
+    monitorRunning: false,
+    hudInactiveApplied: false,
+  };
+
+  function dispatchInactivityEvent(type, detail = {}) {
+    const scope = inactivityMonitorState.scope || globalScope || globalThis;
+    const CustomEventCtor =
+      (scope && typeof scope.CustomEvent === 'function'
+        ? scope.CustomEvent
+        : typeof globalScope?.CustomEvent === 'function'
+          ? globalScope.CustomEvent
+          : typeof CustomEvent === 'function'
+            ? CustomEvent
+            : null);
+    if (!scope || typeof scope.dispatchEvent !== 'function' || !CustomEventCtor) {
+      return;
+    }
+    const eventName = `infinite-rails:${type}`;
+    try {
+      scope.dispatchEvent(new CustomEventCtor(eventName, { detail }));
+    } catch (error) {}
+  }
+
+  function applyHudInactiveClass(active) {
+    const doc = inactivityMonitorState.doc || documentRef || globalScope?.document || null;
+    const body = doc?.body ?? null;
+    if (!body?.classList?.add) {
+      inactivityMonitorState.hudInactiveApplied = false;
+      return;
+    }
+    if (active) {
+      if (!inactivityMonitorState.hudInactiveApplied) {
+        try {
+          body.classList.add('hud-inactive');
+        } catch (error) {}
+        inactivityMonitorState.hudInactiveApplied = true;
+      }
+      return;
+    }
+    if (!inactivityMonitorState.hudInactiveApplied) {
+      return;
+    }
+    try {
+      body.classList.remove('hud-inactive');
+    } catch (error) {}
+    inactivityMonitorState.hudInactiveApplied = false;
+  }
+
+  function updateInactivityCountdownDisplay(remainingMs) {
+    const countdownEl = inactivityMonitorState.countdownEl;
+    if (!countdownEl) {
+      return;
+    }
+    const displayMs = Number.isFinite(remainingMs) && remainingMs > 0 ? remainingMs : 0;
+    const seconds = Math.max(0, Math.ceil(displayMs / 1000));
+    countdownEl.textContent = String(seconds);
+  }
+
+  function clearInactivityCountdownTimer() {
+    const scope = inactivityMonitorState.scope || globalScope || globalThis;
+    const clear =
+      (scope && typeof scope.clearTimeout === 'function'
+        ? scope.clearTimeout.bind(scope)
+        : typeof clearTimeout === 'function'
+          ? clearTimeout
+          : null);
+    if (inactivityMonitorState.countdownHandle !== null && clear) {
+      try {
+        clear(inactivityMonitorState.countdownHandle);
+      } catch (error) {}
+    }
+    inactivityMonitorState.countdownHandle = null;
+    inactivityMonitorState.countdownExpiresAt = null;
+    updateInactivityCountdownDisplay(null);
+  }
+
+  function hideInactivityPrompt(options = {}) {
+    if (!inactivityMonitorState.promptVisible) {
+      return;
+    }
+    inactivityMonitorState.promptVisible = false;
+    const overlay = inactivityMonitorState.overlay;
+    if (overlay) {
+      try {
+        overlay.setAttribute('data-mode', 'idle');
+        overlay.setAttribute('hidden', '');
+      } catch (error) {}
+      overlay.hidden = true;
+      setInert(overlay, true);
+    }
+    applyHudInactiveClass(false);
+    clearInactivityCountdownTimer();
+    dispatchInactivityEvent('inactivity-dismissed', {
+      reason: options.reason ?? 'dismissed',
+      source: options.source ?? null,
+    });
+  }
+
+  function triggerInactivityRefresh(reason = 'countdown') {
+    hideInactivityPrompt({ reason: 'refresh', source: reason });
+    inactivityMonitorState.lastActivityAt = Date.now();
+    const messageDetail =
+      reason === 'button'
+        ? 'Refreshing world — reconnecting you to the rails.'
+        : 'Refreshing idle session to rebuild the world.';
+    showHudAlert({
+      title: 'Refreshing world',
+      message: messageDetail,
+      severity: 'info',
+      autoHideMs: 8000,
+    });
+    dispatchInactivityEvent('inactivity-refresh', { reason });
+    const scope = inactivityMonitorState.scope || globalScope || globalThis;
+    const reloadFn =
+      typeof scope?.InfiniteRails?.renderers?.reloadActive === 'function'
+        ? scope.InfiniteRails.renderers.reloadActive
+        : typeof reloadActiveRenderer === 'function'
+          ? reloadActiveRenderer
+          : null;
+    if (!reloadFn) {
+      return;
+    }
+    const payload = { reason: `inactivity-${reason}` };
+    try {
+      const result = reloadFn(payload);
+      if (result && typeof result.then === 'function') {
+        result.catch((error) => {
+          scope?.console?.warn?.('Idle refresh failed.', error);
+        });
+      }
+    } catch (error) {
+      scope?.console?.warn?.('Idle refresh failed.', error);
+    }
+  }
+
+  function scheduleInactivityCountdownTick() {
+    if (!inactivityMonitorState.promptVisible) {
+      return;
+    }
+    const scope = inactivityMonitorState.scope || globalScope || globalThis;
+    const scheduler =
+      (scope && typeof scope.setTimeout === 'function'
+        ? scope.setTimeout.bind(scope)
+        : typeof setTimeout === 'function'
+          ? setTimeout
+          : null);
+    if (!scheduler) {
+      return;
+    }
+    const now = Date.now();
+    const remaining = inactivityMonitorState.countdownExpiresAt
+      ? inactivityMonitorState.countdownExpiresAt - now
+      : 0;
+    if (remaining <= 0) {
+      updateInactivityCountdownDisplay(0);
+      triggerInactivityRefresh('countdown');
+      return;
+    }
+    const delay = Math.min(Math.max(remaining, 250), 1000);
+    inactivityMonitorState.countdownHandle = scheduler(() => {
+      inactivityMonitorState.countdownHandle = null;
+      const nextRemaining = inactivityMonitorState.countdownExpiresAt
+        ? inactivityMonitorState.countdownExpiresAt - Date.now()
+        : 0;
+      if (nextRemaining <= 0) {
+        updateInactivityCountdownDisplay(0);
+        triggerInactivityRefresh('countdown');
+        return;
+      }
+      updateInactivityCountdownDisplay(nextRemaining);
+      scheduleInactivityCountdownTick();
+    }, delay);
+  }
+
+  function beginInactivityCountdown() {
+    clearInactivityCountdownTimer();
+    inactivityMonitorState.countdownExpiresAt = Date.now() + inactivityMonitorState.refreshCountdownMs;
+    updateInactivityCountdownDisplay(inactivityMonitorState.refreshCountdownMs);
+    scheduleInactivityCountdownTick();
+  }
+
+  function showInactivityPrompt(options = {}) {
+    if (!inactivityMonitorState.enabled) {
+      return;
+    }
+    if (inactivityMonitorState.promptVisible) {
+      return;
+    }
+    const overlay = inactivityMonitorState.overlay;
+    if (!overlay) {
+      triggerInactivityRefresh('overlay-missing');
+      return;
+    }
+    inactivityMonitorState.promptVisible = true;
+    try {
+      overlay.removeAttribute('hidden');
+      overlay.setAttribute('data-mode', 'prompt');
+    } catch (error) {}
+    overlay.hidden = false;
+    setInert(overlay, false);
+    applyHudInactiveClass(true);
+    beginInactivityCountdown();
+    dispatchInactivityEvent('inactivity-prompt', {
+      idleDurationMs: options.idleDurationMs ?? null,
+    });
+  }
+
+  function evaluateInactivity(now = Date.now()) {
+    if (!inactivityMonitorState.enabled) {
+      return;
+    }
+    const idleFor = now - inactivityMonitorState.lastActivityAt;
+    if (idleFor < inactivityMonitorState.idleThresholdMs) {
+      return;
+    }
+    showInactivityPrompt({ idleDurationMs: idleFor });
+  }
+
+  function clearInactivityCheckTimer() {
+    const scope = inactivityMonitorState.scope || globalScope || globalThis;
+    const clear =
+      (scope && typeof scope.clearTimeout === 'function'
+        ? scope.clearTimeout.bind(scope)
+        : typeof clearTimeout === 'function'
+          ? clearTimeout
+          : null);
+    if (inactivityMonitorState.checkHandle !== null && clear) {
+      try {
+        clear(inactivityMonitorState.checkHandle);
+      } catch (error) {}
+    }
+    inactivityMonitorState.checkHandle = null;
+  }
+
+  function scheduleInactivityCheck() {
+    if (!inactivityMonitorState.enabled || !inactivityMonitorState.monitorRunning) {
+      return;
+    }
+    if (inactivityMonitorState.checkHandle !== null) {
+      return;
+    }
+    const scope = inactivityMonitorState.scope || globalScope || globalThis;
+    const scheduler =
+      (scope && typeof scope.setTimeout === 'function'
+        ? scope.setTimeout.bind(scope)
+        : typeof setTimeout === 'function'
+          ? setTimeout
+          : null);
+    if (!scheduler) {
+      return;
+    }
+    inactivityMonitorState.checkHandle = scheduler(() => {
+      inactivityMonitorState.checkHandle = null;
+      evaluateInactivity(Date.now());
+      scheduleInactivityCheck();
+    }, inactivityMonitorState.checkIntervalMs);
+  }
+
+  function stopInactivityMonitor() {
+    inactivityMonitorState.monitorRunning = false;
+    clearInactivityCheckTimer();
+    clearInactivityCountdownTimer();
+    applyHudInactiveClass(false);
+    if (typeof inactivityMonitorState.detachListeners === 'function') {
+      try {
+        inactivityMonitorState.detachListeners();
+      } catch (error) {}
+    }
+    inactivityMonitorState.detachListeners = null;
+  }
+
+  function startInactivityMonitor() {
+    if (inactivityMonitorState.monitorRunning) {
+      return;
+    }
+    inactivityMonitorState.monitorRunning = true;
+    inactivityMonitorState.lastActivityAt = Date.now();
+    scheduleInactivityCheck();
+  }
+
+  function setupInactivityOverlay(doc = null) {
+    const targetDoc =
+      doc || inactivityMonitorState.doc || documentRef || globalScope?.document || null;
+    inactivityMonitorState.doc = targetDoc;
+    if (!targetDoc || typeof targetDoc.getElementById !== 'function') {
+      return;
+    }
+    const overlay = targetDoc.getElementById('inactivityOverlay');
+    if (!overlay) {
+      if (typeof targetDoc.addEventListener === 'function' && !inactivityMonitorState.waitingForDom) {
+        inactivityMonitorState.waitingForDom = true;
+        try {
+          targetDoc.addEventListener(
+            'DOMContentLoaded',
+            () => {
+              inactivityMonitorState.waitingForDom = false;
+              setupInactivityOverlay(targetDoc);
+            },
+            { once: true },
+          );
+        } catch (error) {}
+      }
+      return;
+    }
+    inactivityMonitorState.overlay = overlay;
+    inactivityMonitorState.countdownEl = targetDoc.getElementById('inactivityOverlayCountdown');
+    inactivityMonitorState.stayButton = targetDoc.getElementById('inactivityStayButton');
+    inactivityMonitorState.refreshButton = targetDoc.getElementById('inactivityRefreshButton');
+    try {
+      overlay.setAttribute('data-mode', 'idle');
+      overlay.setAttribute('hidden', '');
+    } catch (error) {}
+    overlay.hidden = true;
+    setInert(overlay, true);
+    updateInactivityCountdownDisplay(null);
+    const stayButton = inactivityMonitorState.stayButton;
+    if (stayButton && !stayButton.dataset.inactivityBound) {
+      stayButton.addEventListener('click', (event) => {
+        event?.preventDefault?.();
+        hideInactivityPrompt({ reason: 'resume', source: 'stay-button' });
+        inactivityMonitorState.lastActivityAt = Date.now();
+      });
+      stayButton.dataset.inactivityBound = 'true';
+    }
+    const refreshButton = inactivityMonitorState.refreshButton;
+    if (refreshButton && !refreshButton.dataset.inactivityBound) {
+      refreshButton.addEventListener('click', (event) => {
+        event?.preventDefault?.();
+        triggerInactivityRefresh('button');
+      });
+      refreshButton.dataset.inactivityBound = 'true';
+    }
+  }
+
+  function configureInactivityMonitor(options = {}) {
+    if (!options || typeof options !== 'object') {
+      return inactivityMonitorState;
+    }
+    if (Object.prototype.hasOwnProperty.call(options, 'enabled')) {
+      const enabled = Boolean(options.enabled);
+      if (enabled !== inactivityMonitorState.enabled) {
+        inactivityMonitorState.enabled = enabled;
+        if (!enabled) {
+          stopInactivityMonitor();
+        } else {
+          startInactivityMonitor();
+        }
+      }
+    }
+    if (Number.isFinite(options.idleThresholdMs) && options.idleThresholdMs > 0) {
+      inactivityMonitorState.idleThresholdMs = Math.max(1000, Math.floor(options.idleThresholdMs));
+    }
+    if (Number.isFinite(options.refreshCountdownMs) && options.refreshCountdownMs > 0) {
+      inactivityMonitorState.refreshCountdownMs = Math.max(
+        1000,
+        Math.floor(options.refreshCountdownMs),
+      );
+      if (inactivityMonitorState.promptVisible) {
+        beginInactivityCountdown();
+      }
+    }
+    if (Number.isFinite(options.checkIntervalMs) && options.checkIntervalMs > 0) {
+      inactivityMonitorState.checkIntervalMs = Math.max(
+        500,
+        Math.floor(options.checkIntervalMs),
+      );
+      if (inactivityMonitorState.monitorRunning) {
+        clearInactivityCheckTimer();
+        scheduleInactivityCheck();
+      }
+    }
+    if (Number.isFinite(options.lastActivityAt)) {
+      inactivityMonitorState.lastActivityAt = Number(options.lastActivityAt);
+    }
+    return inactivityMonitorState;
+  }
+
+  function recordUserActivity(source = 'activity') {
+    inactivityMonitorState.lastActivityAt = Date.now();
+    if (inactivityMonitorState.promptVisible) {
+      hideInactivityPrompt({ reason: 'activity', source });
+    }
+  }
+
+  function setupInactivityMonitor(scope, doc) {
+    inactivityMonitorState.scope = scope || inactivityMonitorState.scope || globalScope || globalThis;
+    setupInactivityOverlay(doc || inactivityMonitorState.doc || scope?.document || null);
+    startInactivityMonitor();
+    if (typeof inactivityMonitorState.detachListeners === 'function') {
+      try {
+        inactivityMonitorState.detachListeners();
+      } catch (error) {}
+    }
+    const disposers = [];
+    const targetDoc =
+      doc || inactivityMonitorState.doc || documentRef || scope?.document || globalScope?.document;
+    if (targetDoc?.addEventListener) {
+      const visibilityListener = () => {
+        if (!targetDoc || targetDoc.visibilityState === 'hidden') {
+          return;
+        }
+        recordUserActivity('visibilitychange');
+      };
+      targetDoc.addEventListener('visibilitychange', visibilityListener);
+      disposers.push(() => targetDoc.removeEventListener('visibilitychange', visibilityListener));
+    }
+    if (scope?.addEventListener) {
+      const focusListener = () => recordUserActivity('window-focus');
+      scope.addEventListener('focus', focusListener);
+      disposers.push(() => scope.removeEventListener('focus', focusListener));
+    }
+    inactivityMonitorState.detachListeners = () => {
+      while (disposers.length) {
+        const dispose = disposers.pop();
+        try {
+          dispose?.();
+        } catch (error) {}
+      }
+    };
+  }
+
   const inputModeListeners = new Set();
 
   function getInputModeSnapshot(detail = {}) {
@@ -1263,8 +1702,10 @@
         return;
       }
       if (pointerTypeRaw === 'touch') {
+        recordUserActivity('pointer-touch');
         scheduleInputMode('touch', { scope, source: 'pointer-event:touch' });
       } else if (pointerTypeRaw === 'mouse' || pointerTypeRaw === 'pen') {
+        recordUserActivity(`pointer-${pointerTypeRaw}`);
         scheduleInputMode('pointer', { scope, source: `pointer-event:${pointerTypeRaw}` });
       }
     };
@@ -1276,8 +1717,14 @@
       disposers.push(() => targetDoc.removeEventListener('pointermove', pointerListener));
     } catch (error) {}
 
-    const touchListener = () => scheduleInputMode('touch', { scope, source: 'touchstart' });
-    const mouseListener = () => scheduleInputMode('pointer', { scope, source: 'mousedown' });
+    const touchListener = () => {
+      recordUserActivity('touchstart');
+      scheduleInputMode('touch', { scope, source: 'touchstart' });
+    };
+    const mouseListener = () => {
+      recordUserActivity('mousedown');
+      scheduleInputMode('pointer', { scope, source: 'mousedown' });
+    };
 
     try {
       targetDoc.addEventListener('touchstart', touchListener, { passive: true });
@@ -1297,6 +1744,7 @@
         if (event.metaKey || event.altKey || event.ctrlKey) {
           return;
         }
+        recordUserActivity('keyboard');
         scheduleInputMode('pointer', { scope, source: 'keyboard' });
       };
       try {
@@ -1359,6 +1807,7 @@
   }
 
   setupInputModeDetection(globalScope, documentRef);
+  setupInactivityMonitor(globalScope, documentRef);
 
   if (!globalScope.__INFINITE_RAILS_STATE__) {
     globalScope.__INFINITE_RAILS_STATE__ = {
@@ -13070,6 +13519,28 @@
       hooks.getBackendLiveCheckState = () => backendLiveCheckState;
       hooks.activateMissionBriefingFallback = activateMissionBriefingFallback;
       hooks.offerMissionBriefingFallback = offerMissionBriefingFallback;
+      hooks.configureInactivityMonitor = (options) => configureInactivityMonitor(options || {});
+      hooks.getInactivityMonitorState = () => ({
+        enabled: inactivityMonitorState.enabled,
+        idleThresholdMs: inactivityMonitorState.idleThresholdMs,
+        refreshCountdownMs: inactivityMonitorState.refreshCountdownMs,
+        checkIntervalMs: inactivityMonitorState.checkIntervalMs,
+        lastActivityAt: inactivityMonitorState.lastActivityAt,
+        promptVisible: inactivityMonitorState.promptVisible,
+        countdownExpiresAt: inactivityMonitorState.countdownExpiresAt,
+        checkHandle: inactivityMonitorState.checkHandle,
+        countdownHandle: inactivityMonitorState.countdownHandle,
+      });
+      hooks.setInactivityLastActivity = (timestamp) => {
+        if (Number.isFinite(timestamp)) {
+          inactivityMonitorState.lastActivityAt = Number(timestamp);
+        }
+        return inactivityMonitorState.lastActivityAt;
+      };
+      hooks.runInactivityCheck = () => evaluateInactivity(Date.now());
+      hooks.recordInactivityActivity = (source) => recordUserActivity(source);
+      hooks.setupInactivityOverlay = () => setupInactivityOverlay(inactivityMonitorState.doc);
+      hooks.forceInactivityRefresh = (reason) => triggerInactivityRefresh(reason || 'test');
     } catch (hookError) {
       if (globalScope.console?.debug) {
         globalScope.console.debug('Failed to expose ensureSimpleExperience to test hooks.', hookError);
