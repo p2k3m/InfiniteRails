@@ -72,6 +72,7 @@ beforeEach(() => {
     ...existingAliases,
     ambientOverworld: existingAliases.ambientOverworld || ['bubble'],
     ambientDefault: existingAliases.ambientDefault || ['bubble'],
+    welcome: existingAliases.welcome || ['victoryCheer', 'bubble'],
   };
 });
 
@@ -96,9 +97,17 @@ describe('SimpleExperience audio bootstrapping', () => {
 
     expect(resumeSpy).toHaveBeenCalledTimes(1);
     expect(hasSpy).toHaveBeenCalledWith('ambientOverworld');
-    expect(playSpy).toHaveBeenCalledWith(
+    expect(hasSpy).toHaveBeenCalledWith('welcome');
+    expect(playSpy).toHaveBeenCalledTimes(2);
+    expect(playSpy).toHaveBeenNthCalledWith(
+      1,
       'ambientOverworld',
       expect.objectContaining({ loop: true, volume: expect.any(Number) }),
+    );
+    expect(playSpy).toHaveBeenNthCalledWith(
+      2,
+      'welcome',
+      expect.objectContaining({ volume: expect.any(Number) }),
     );
     expect(experience.activeAmbientTrack).toBe('ambientOverworld');
   });
@@ -107,7 +116,7 @@ describe('SimpleExperience audio bootstrapping', () => {
     const experience = prepareExperienceForBoot();
     const resumeSpy = vi.fn();
     const playSpy = vi.fn();
-    const hasSpy = vi.fn((name) => name === 'ambientDefault');
+    const hasSpy = vi.fn((name) => name === 'ambientDefault' || name === 'welcome');
 
     experience.audio = {
       has: hasSpy,
@@ -119,9 +128,18 @@ describe('SimpleExperience audio bootstrapping', () => {
 
     expect(resumeSpy).toHaveBeenCalledTimes(1);
     expect(hasSpy).toHaveBeenCalledWith('ambientOverworld');
-    expect(playSpy).toHaveBeenCalledWith(
+    expect(hasSpy).toHaveBeenCalledWith('ambientDefault');
+    expect(hasSpy).toHaveBeenCalledWith('welcome');
+    expect(playSpy).toHaveBeenCalledTimes(2);
+    expect(playSpy).toHaveBeenNthCalledWith(
+      1,
       'ambientDefault',
       expect.objectContaining({ loop: true, volume: expect.any(Number) }),
+    );
+    expect(playSpy).toHaveBeenNthCalledWith(
+      2,
+      'welcome',
+      expect.objectContaining({ volume: expect.any(Number) }),
     );
     expect(experience.activeAmbientTrack).toBe('ambientDefault');
   });
@@ -141,6 +159,7 @@ describe('SimpleExperience audio bootstrapping', () => {
     experience.start();
 
     expect(resumeSpy).toHaveBeenCalledTimes(1);
+    expect(hasSpy).toHaveBeenCalledWith('welcome');
     expect(playSpy).not.toHaveBeenCalled();
     expect(experience.activeAmbientTrack).toBeNull();
   });

@@ -21,6 +21,7 @@
     portalPrimed: existing.portalPrimed || 'Portal hums, waiting for activation.',
     victoryCheer: existing.victoryCheer || 'A triumphant cheer erupts in the distance.',
     zombieGroan: existing.zombieGroan || 'A zombie groans from the shadows.',
+    welcome: existing.welcome || 'Control tower greets the expedition with a bright chime.',
   });
 
   scope.INFINITE_RAILS_AUDIO_CAPTIONS = captions;

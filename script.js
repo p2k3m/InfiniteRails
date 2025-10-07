@@ -7204,6 +7204,7 @@
       }
       clearAssetLoadingIndicator(detail?.kind, detail?.key);
     });
+    let audioFallbackOverlayShown = false;
     globalScope.addEventListener('infinite-rails:audio-boot-status', (event) => {
       const detail = event?.detail && typeof event.detail === 'object' ? event.detail : {};
       const fallbackActive = Boolean(detail?.fallbackActive);
@@ -7225,6 +7226,25 @@
           status: fallbackActive ? 'error' : 'ok',
           message: baseMessage,
         });
+      }
+      if (fallbackActive) {
+        if (!audioFallbackOverlayShown) {
+          audioFallbackOverlayShown = true;
+          presentCriticalErrorOverlay({
+            title: 'Audio assets unavailable',
+            message: baseMessage,
+            diagnosticScope: 'audio',
+            diagnosticStatus: 'error',
+            diagnosticMessage: baseMessage,
+            logScope: 'audio',
+            logMessage: baseMessage,
+            logLevel: 'error',
+            detail,
+            timestamp: Number.isFinite(detail?.timestamp) ? detail.timestamp : undefined,
+          });
+        }
+      } else {
+        audioFallbackOverlayShown = false;
       }
     });
 
