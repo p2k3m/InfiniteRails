@@ -272,7 +272,7 @@
               ></ul>
             </div>
             <p class="first-run-tutorial__note" id="firstRunTutorialNote">
-              Need a refresher later? Press <strong>?</strong> or tap the <strong>How to Play</strong> button in the HUD.
+              Need a refresher later? Press <strong>F1</strong> or tap the <strong>How to Play</strong> button in the HUD.
             </p>
             <div class="first-run-tutorial__actions">
               <button type="button" class="primary" id="firstRunTutorialBegin">Let's explore</button>
@@ -422,7 +422,7 @@
                   type="button"
                   id="openTutorial"
                   class="ghost"
-                  data-hint="Reopen the How to Play tutorial for control reminders."
+                  data-hint="Press F1 or use this button to reopen the How to Play tutorial."
                 >How to Play</button>
                 <button type="button" id="openGuide" class="ghost" data-hint="Open the survival guide.">Game Guide</button>
                 <button
@@ -1343,8 +1343,13 @@
                 <td>&mdash;</td>
               </tr>
               <tr>
+                <th scope="row">How to Play</th>
+                <td data-keybinding-table="toggleTutorial"><kbd>F1</kbd></td>
+                <td>HUD button</td>
+              </tr>
+              <tr>
                 <th scope="row">Game guide</th>
-                <td data-keybinding-table="openGuide"><kbd>F1</kbd></td>
+                <td>HUD button</td>
                 <td>&mdash;</td>
               </tr>
               <tr>
