@@ -144,11 +144,13 @@ describe('SimpleExperience audio bootstrapping', () => {
     expect(experience.activeAmbientTrack).toBe('ambientDefault');
   });
 
-  it('skips ambient playback when no configured tracks are available', () => {
+  it('skips ambient playback when no configured tracks are available but still plays the welcome cue', () => {
     const experience = prepareExperienceForBoot();
     const resumeSpy = vi.fn();
     const playSpy = vi.fn();
     const hasSpy = vi.fn(() => false);
+    const windowStub = getWindowStub();
+    const dispatchSpy = vi.spyOn(windowStub, 'dispatchEvent').mockImplementation(() => {});
 
     experience.audio = {
       has: hasSpy,
@@ -160,8 +162,22 @@ describe('SimpleExperience audio bootstrapping', () => {
 
     expect(resumeSpy).toHaveBeenCalledTimes(1);
     expect(hasSpy).toHaveBeenCalledWith('welcome');
-    expect(playSpy).not.toHaveBeenCalled();
+    expect(playSpy).toHaveBeenCalledTimes(1);
+    expect(playSpy).toHaveBeenCalledWith('welcome', expect.objectContaining({ volume: expect.any(Number) }));
     expect(experience.activeAmbientTrack).toBeNull();
+
+    const audioErrorEvent = dispatchSpy.mock.calls
+      .map(([event]) => event)
+      .find((event) => event?.type === 'infinite-rails:audio-error');
+    expect(audioErrorEvent).toBeDefined();
+    expect(audioErrorEvent.detail).toEqual(
+      expect.objectContaining({
+        requestedName: 'welcome',
+        code: 'missing-sample',
+      }),
+    );
+
+    dispatchSpy.mockRestore();
   });
 });
 
