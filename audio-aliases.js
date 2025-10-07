@@ -18,6 +18,7 @@
     portalActivate: existing.portalActivate || ['victoryCheer', 'miningA'],
     portalDormant: existing.portalDormant || ['bubble', 'crunch'],
     portalPrimed: existing.portalPrimed || ['bubble', 'miningA'],
+    welcome: existing.welcome || ['victoryCheer', 'bubble'],
   });
 
   scope.INFINITE_RAILS_AUDIO_ALIASES = aliasConfig;
