@@ -1153,6 +1153,36 @@
       }
     }
 
+    let inputOverlay = null;
+    if (typeof doc.getElementById === 'function') {
+      try {
+        inputOverlay = doc.getElementById('inputOverlay');
+      } catch (error) {}
+    }
+    if (inputOverlay) {
+      const scheme = nextMode === 'touch' ? 'touch' : 'pointer';
+      try {
+        inputOverlay.setAttribute('data-scheme', scheme);
+      } catch (error) {}
+      try {
+        inputOverlay.setAttribute('data-mode', nextMode);
+      } catch (error) {}
+      if (inputOverlay.dataset) {
+        try {
+          inputOverlay.dataset.scheme = scheme;
+        } catch (error) {}
+        try {
+          inputOverlay.dataset.mode = nextMode;
+        } catch (error) {}
+        try {
+          inputOverlay.dataset.controlScheme = scheme;
+        } catch (error) {}
+        try {
+          inputOverlay.dataset.touchPreferred = scheme === 'touch' ? 'true' : 'false';
+        } catch (error) {}
+      }
+    }
+
     if (changed) {
       dispatchInputModeChange(doc, nextMode, detail);
     }
@@ -11931,6 +11961,12 @@
       handOverlayLabelEl: byId('handOverlayLabel'),
       playerHintEl: byId('playerHint'),
       pointerHintEl: byId('pointerHint'),
+      inputOverlay: byId('inputOverlay'),
+      inputOverlayDismissButton: byId('dismissInputOverlay'),
+      inputOverlayPointerMove: byId('inputOverlayPointerMove'),
+      inputOverlayPointerInteract: byId('inputOverlayPointerInteract'),
+      inputOverlayPointerPlace: byId('inputOverlayPointerPlace'),
+      inputOverlayPointerCraft: byId('inputOverlayPointerCraft'),
       footerEl: byId('siteFooter'),
       footerScoreEl: byId('footerScore'),
       footerDimensionEl: byId('footerDimension'),

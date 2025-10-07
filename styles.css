@@ -8764,6 +8764,148 @@ body.game-active .crosshair {
   }
 }
 
+.input-overlay {
+  position: absolute;
+  bottom: clamp(1.5rem, 5vw, 3rem);
+  left: 50%;
+  transform: translate3d(-50%, 24px, 0);
+  display: flex;
+  align-items: center;
+  gap: clamp(0.75rem, 3vw, 1.5rem);
+  padding: clamp(0.85rem, 3vw, 1.25rem) clamp(1rem, 4vw, 1.8rem);
+  border-radius: 22px;
+  background: linear-gradient(155deg, rgba(12, 22, 34, 0.92), rgba(20, 32, 50, 0.88));
+  border: 1px solid rgba(144, 198, 255, 0.35);
+  box-shadow: 0 26px 46px rgba(8, 14, 26, 0.45);
+  color: #f4f8ff;
+  max-width: min(560px, 90vw);
+  pointer-events: auto;
+  opacity: 0;
+  transition: opacity 0.32s ease, transform 0.32s ease;
+  z-index: 43;
+}
+
+.input-overlay[hidden] {
+  display: none !important;
+}
+
+.input-overlay.is-visible {
+  opacity: 1;
+  transform: translate3d(-50%, 0, 0);
+}
+
+.input-overlay__panel {
+  display: none;
+  align-items: flex-start;
+  gap: clamp(0.85rem, 3vw, 1.3rem);
+  flex: 1 1 auto;
+}
+
+.input-overlay[data-scheme='pointer'] .input-overlay__panel--pointer,
+.input-overlay[data-scheme='pointer'] .input-overlay__panel[data-variant='pointer'] {
+  display: flex;
+}
+
+.input-overlay[data-scheme='touch'] .input-overlay__panel--touch,
+.input-overlay[data-scheme='touch'] .input-overlay__panel[data-variant='touch'] {
+  display: flex;
+}
+
+.input-overlay__icon {
+  width: clamp(44px, 8vw, 56px);
+  height: clamp(44px, 8vw, 56px);
+  border-radius: 16px;
+  background: rgba(10, 28, 46, 0.6);
+  border: 1px solid rgba(166, 216, 255, 0.4);
+  display: grid;
+  place-items: center;
+  font-size: clamp(1.35rem, 4vw, 1.6rem);
+  box-shadow: inset 0 0 12px rgba(12, 22, 36, 0.35);
+}
+
+.input-overlay__body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.input-overlay__eyebrow {
+  margin: 0;
+  font-size: 0.75rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgba(208, 230, 255, 0.72);
+}
+
+.input-overlay__title {
+  margin: 0;
+  font-size: clamp(1.05rem, 3vw, 1.2rem);
+  font-weight: 600;
+}
+
+.input-overlay__list {
+  margin: 0;
+  padding-left: 1.1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  font-size: clamp(0.9rem, 2.6vw, 1rem);
+  line-height: 1.45;
+}
+
+.input-overlay__list li {
+  list-style: disc;
+}
+
+.input-overlay__key {
+  font-weight: 600;
+  color: #fff;
+}
+
+.input-overlay__dismiss {
+  flex: 0 0 auto;
+  align-self: center;
+  border-radius: 999px;
+  border: 1px solid rgba(144, 198, 255, 0.42);
+  background: rgba(255, 255, 255, 0.08);
+  color: #f4f8ff;
+  font-size: 0.9rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  padding: 0.45rem 1rem;
+  cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease, transform 0.2s ease;
+}
+
+.input-overlay__dismiss:hover,
+.input-overlay__dismiss:focus-visible {
+  border-color: rgba(210, 255, 250, 0.65);
+  background: rgba(255, 255, 255, 0.16);
+  transform: translateY(-1px);
+  outline: none;
+}
+
+body:not(.game-active) .input-overlay {
+  display: none !important;
+}
+
+@media (max-width: 640px) {
+  .input-overlay {
+    flex-direction: column;
+    align-items: stretch;
+    transform: translate3d(-50%, 28px, 0);
+  }
+
+  .input-overlay__panel {
+    gap: 0.9rem;
+  }
+
+  .input-overlay__dismiss {
+    width: 100%;
+    text-align: center;
+  }
+}
+
 .pointer-hint {
   position: absolute;
   top: 1.5rem;

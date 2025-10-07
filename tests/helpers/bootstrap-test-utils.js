@@ -62,6 +62,7 @@ function createElement(tagName, { ownerDocument } = {}) {
     classList: createClassList(),
     disabled: false,
     textContent: '',
+    hidden: false,
     addEventListener: vi.fn(),
     removeEventListener: vi.fn(),
     appendChild(child) {
@@ -78,25 +79,29 @@ function createElement(tagName, { ownerDocument } = {}) {
         this.parentNode.removeChild(this);
       }
     },
-    setAttribute(name, value) {
-      const key = String(name);
-      this.attributes[key] = String(value);
-      if (key === 'id' && this.ownerDocument) {
-        this.ownerDocument.__elementsById.set(String(value), this);
-      }
-    },
+    setAttribute: null,
     getAttribute(name) {
       return Object.prototype.hasOwnProperty.call(this.attributes, name) ? this.attributes[name] : null;
     },
-    removeAttribute(name) {
-      const key = String(name);
-      if (Object.prototype.hasOwnProperty.call(this.attributes, key)) {
-        delete this.attributes[key];
-      }
-    },
+    removeAttribute: null,
     querySelector: vi.fn(() => null),
     querySelectorAll: vi.fn(() => []),
   };
+  const setAttributeImpl = (name, value) => {
+    const key = String(name);
+    element.attributes[key] = String(value);
+    if (key === 'id' && element.ownerDocument) {
+      element.ownerDocument.__elementsById.set(String(value), element);
+    }
+  };
+  element.setAttribute = vi.fn(setAttributeImpl);
+  const removeAttributeImpl = (name) => {
+    const key = String(name);
+    if (Object.prototype.hasOwnProperty.call(element.attributes, key)) {
+      delete element.attributes[key];
+    }
+  };
+  element.removeAttribute = vi.fn(removeAttributeImpl);
   return element;
 }
 
@@ -160,6 +165,10 @@ export function createBootstrapSandbox(options = {}) {
   documentStub.body.appendChild(startButton);
   documentStub.body.appendChild(canvas);
   documentStub.body.appendChild(scoreboardStatus);
+
+  const inputOverlay = createElement('div', { ownerDocument: documentStub });
+  inputOverlay.setAttribute('id', 'inputOverlay');
+  documentStub.body.appendChild(inputOverlay);
 
   let timerCounter = 1;
   const timers = new Map();
