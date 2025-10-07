@@ -84,10 +84,20 @@ describe('bootstrap inactivity monitor', () => {
     expect(state.countdownHandle).toBeTruthy();
 
     const previousActivity = state.lastActivityAt;
-    hooks.forceInactivityRefresh('test');
+    hooks.setInactivityCountdownExpiresAt(Date.now() - 1000);
+    state = hooks.getInactivityMonitorState();
+    let countdownHandle = state.countdownHandle;
+    let guard = 0;
+    while (countdownHandle) {
+      runTimer(timers, countdownHandle);
+      state = hooks.getInactivityMonitorState();
+      countdownHandle = state.countdownHandle;
+      guard += 1;
+      expect(guard).toBeLessThan(6);
+    }
 
     expect(reloadSpy).toHaveBeenCalledTimes(1);
-    expect(reloadSpy).toHaveBeenCalledWith({ reason: 'inactivity-test' });
+    expect(reloadSpy).toHaveBeenCalledWith({ reason: 'inactivity-countdown' });
     expect(overlay.hidden).toBe(true);
     expect(documentStub.body.classList.remove).toHaveBeenCalledWith('hud-inactive');
     const finalState = hooks.getInactivityMonitorState();

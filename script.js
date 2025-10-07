@@ -1296,6 +1296,19 @@
       } catch (error) {}
     }
     const disposers = [];
+    const registerListener = (target, type, handler, options) => {
+      if (!target?.addEventListener || typeof handler !== 'function') {
+        return;
+      }
+      try {
+        target.addEventListener(type, handler, options);
+        disposers.push(() => {
+          try {
+            target.removeEventListener?.(type, handler, options);
+          } catch (error) {}
+        });
+      } catch (error) {}
+    };
     const targetDoc =
       doc || inactivityMonitorState.doc || documentRef || scope?.document || globalScope?.document;
     if (targetDoc?.addEventListener) {
@@ -1305,13 +1318,77 @@
         }
         recordUserActivity('visibilitychange');
       };
-      targetDoc.addEventListener('visibilitychange', visibilityListener);
-      disposers.push(() => targetDoc.removeEventListener('visibilitychange', visibilityListener));
+      registerListener(targetDoc, 'visibilitychange', visibilityListener);
+
+      const passiveEvents = new Set([
+        'pointerdown',
+        'pointermove',
+        'pointerup',
+        'pointercancel',
+        'touchstart',
+        'touchmove',
+        'touchend',
+        'mousedown',
+        'mousemove',
+        'mouseup',
+        'wheel',
+      ]);
+      const docActivityEvents = [
+        'pointerdown',
+        'pointermove',
+        'pointerup',
+        'pointercancel',
+        'touchstart',
+        'touchmove',
+        'touchend',
+        'mousedown',
+        'mousemove',
+        'mouseup',
+        'wheel',
+        'scroll',
+      ];
+      for (let index = 0; index < docActivityEvents.length; index += 1) {
+        const eventName = docActivityEvents[index];
+        const sourceLabel = `document:${eventName}`;
+        const handler = (event) => {
+          let reason = sourceLabel;
+          if (event) {
+            const pointerType =
+              typeof event.pointerType === 'string' && event.pointerType ? event.pointerType : null;
+            if (pointerType) {
+              reason = `${sourceLabel}:${pointerType}`;
+            } else if (typeof event.type === 'string' && event.type) {
+              reason = `${sourceLabel}:${event.type}`;
+            }
+          }
+          recordUserActivity(reason);
+        };
+        const options = passiveEvents.has(eventName) ? { passive: true } : undefined;
+        registerListener(targetDoc, eventName, handler, options);
+      }
     }
     if (scope?.addEventListener) {
       const focusListener = () => recordUserActivity('window-focus');
-      scope.addEventListener('focus', focusListener);
-      disposers.push(() => scope.removeEventListener('focus', focusListener));
+      registerListener(scope, 'focus', focusListener);
+      const scopeActivityEvents = ['pointerdown', 'pointermove', 'touchstart', 'touchmove', 'mousedown', 'mousemove'];
+      for (let index = 0; index < scopeActivityEvents.length; index += 1) {
+        const eventName = scopeActivityEvents[index];
+        const sourceLabel = `window:${eventName}`;
+        const handler = (event) => {
+          let reason = sourceLabel;
+          if (event) {
+            const pointerType =
+              typeof event.pointerType === 'string' && event.pointerType ? event.pointerType : null;
+            if (pointerType) {
+              reason = `${sourceLabel}:${pointerType}`;
+            } else if (typeof event.type === 'string' && event.type) {
+              reason = `${sourceLabel}:${event.type}`;
+            }
+          }
+          recordUserActivity(reason);
+        };
+        registerListener(scope, eventName, handler, { passive: true });
+      }
     }
     inactivityMonitorState.detachListeners = () => {
       while (disposers.length) {
@@ -13536,6 +13613,16 @@
           inactivityMonitorState.lastActivityAt = Number(timestamp);
         }
         return inactivityMonitorState.lastActivityAt;
+      };
+      hooks.setInactivityCountdownExpiresAt = (timestamp) => {
+        if (timestamp === null) {
+          inactivityMonitorState.countdownExpiresAt = null;
+          return inactivityMonitorState.countdownExpiresAt;
+        }
+        if (Number.isFinite(timestamp)) {
+          inactivityMonitorState.countdownExpiresAt = Number(timestamp);
+        }
+        return inactivityMonitorState.countdownExpiresAt;
       };
       hooks.runInactivityCheck = () => evaluateInactivity(Date.now());
       hooks.recordInactivityActivity = (source) => recordUserActivity(source);
