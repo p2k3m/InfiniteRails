@@ -115,7 +115,7 @@
     'OklHtkWWF2kKKkln1lWl90jqGlmH9nWl5xi6ClmoI=';
   const AUDIO_FALLBACK_BEEP_MIN_INTERVAL_MS = 1500;
   const AUDIO_MISSING_SAMPLE_CODES = new Set(['missing-sample', 'boot-missing-sample']);
-  const AUDIO_FALLBACK_WARNING_SUFFIX = 'Fallback alert tone active until audio assets are restored.';
+  const AUDIO_FALLBACK_WARNING_SUFFIX = 'Fallback beep active until audio assets are restored.';
   let audioFallbackBeepContext = null;
   let lastAudioFallbackBeepTimestamp = 0;
   const signedUrlExpiryChecks = new Set();
@@ -158,10 +158,10 @@
     if (!trimmed) {
       return AUDIO_FALLBACK_WARNING_SUFFIX;
     }
-    if (/fallback alert tone/i.test(trimmed)) {
+    if (/(fallback (alert )?tone|fallback beep)/i.test(trimmed)) {
       return trimmed;
     }
-    if (/fallback/i.test(trimmed) && /(audio|tone)/i.test(trimmed)) {
+    if (/fallback/i.test(trimmed) && /(audio|tone|beep)/i.test(trimmed)) {
       return trimmed;
     }
     if (/[.!?]$/.test(trimmed)) {
@@ -7298,7 +7298,7 @@
         typeof detail?.message === 'string' && detail.message.trim().length
           ? detail.message.trim()
           : fallbackActive
-            ? 'Audio assets unavailable. Playing alert tone until assets are restored.'
+            ? 'Audio assets unavailable. Playing fallback beep until assets are restored.'
             : 'Audio initialised successfully.';
       const normalizedMessage = fallbackActive ? ensureAudioFallbackWarningMessage(baseMessage) : baseMessage;
       if (typeof logDiagnosticsEvent === 'function') {
@@ -7935,7 +7935,7 @@
     if (!sampleInfo || sampleInfo.missing) {
       const message = resolvedName && resolvedName !== 'welcome'
         ? `Audio sample "welcome" unavailable — falling back to "${resolvedName}".`
-        : 'Audio sample "welcome" is unavailable. Playing fallback alert tone instead.';
+        : 'Audio sample "welcome" is unavailable. Playing fallback beep instead.';
       recordAudioAssetLiveTestFailure(message, {
         resolvedName: resolvedName && resolvedName !== 'welcome' ? resolvedName : null,
         missingSample: true,

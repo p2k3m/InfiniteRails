@@ -249,20 +249,20 @@ describe('SimpleExperience audio bootstrapping', () => {
       payload?.title === 'Audio playback failed' || payload?.title === 'Missing audio sample',
     );
     expect(overlayCall).toBeDefined();
-    expect(overlayCall?.[0]?.message).toMatch(/Fallback alert tone active until audio assets are restored\.?/);
+    expect(overlayCall?.[0]?.message).toMatch(/Fallback beep active until audio assets are restored\.?/);
 
     const diagnosticCall = setDiagnosticSpy.mock.calls.find(([scope]) => scope === 'audio');
     expect(diagnosticCall).toBeDefined();
     expect(diagnosticCall?.[1]).toEqual(
       expect.objectContaining({
         status: 'error',
-        message: expect.stringMatching(/Fallback alert tone active until audio assets are restored\.?/),
+        message: expect.stringMatching(/Fallback beep active until audio assets are restored\.?/),
       }),
     );
 
     const logCall = logEventSpy.mock.calls.find(([scope]) => scope === 'audio');
     expect(logCall).toBeDefined();
-    expect(logCall?.[1]).toMatch(/Fallback alert tone active until audio assets are restored\.?/);
+    expect(logCall?.[1]).toMatch(/Fallback beep active until audio assets are restored\.?/);
     expect(logCall?.[2]).toEqual(
       expect.objectContaining({
         level: 'error',
@@ -276,7 +276,7 @@ describe('SimpleExperience audio bootstrapping', () => {
     expect(audioErrorEvent).toBeDefined();
     expect(audioErrorEvent.detail).toEqual(
       expect.objectContaining({
-        message: expect.stringMatching(/Fallback alert tone active until audio assets are restored\.?/),
+        message: expect.stringMatching(/Fallback beep active until audio assets are restored\.?/),
       }),
     );
 
@@ -316,9 +316,7 @@ describe('SimpleExperience audio diagnostics', () => {
 
     const errorMessages = errorSpy.mock.calls.map(([message]) => String(message));
     expect(errorMessages.some((message) => message.includes('Missing audio sample'))).toBe(true);
-    expect(
-      errorMessages.some((message) => message.toLowerCase().includes('fallback alert tone')),
-    ).toBe(true);
+    expect(errorMessages.some((message) => message.toLowerCase().includes('fallback beep'))).toBe(true);
 
     const bootStatusEvent = dispatchSpy.mock.calls
       .map(([event]) => event)
@@ -410,7 +408,7 @@ describe('SimpleExperience audio fallbacks', () => {
     };
   };
 
-  it('plays an alert tone and logs an error when the requested sample is missing', async () => {
+  it('plays a fallback beep and logs an error when the requested sample is missing', async () => {
     const windowStub = getWindowStub();
     windowStub.INFINITE_RAILS_EMBEDDED_ASSETS.audioSamples = {};
     const dispatchSpy = vi.spyOn(windowStub, 'dispatchEvent').mockImplementation(() => {});
@@ -436,7 +434,7 @@ describe('SimpleExperience audio fallbacks', () => {
     const errorMessages = errorSpy.mock.calls.map(([message]) => String(message));
     expect(
       errorMessages.some((message) =>
-        message.includes('Audio sample "bubble" is unavailable. Playing fallback alert tone instead.'),
+        message.includes('Audio sample "bubble" is unavailable. Playing fallback beep instead.'),
       ),
     ).toBe(true);
 
@@ -449,7 +447,7 @@ describe('SimpleExperience audio fallbacks', () => {
     errorSpy.mockRestore();
   });
 
-  it('plays the fallback alert tone when a resolved sample payload is missing', async () => {
+  it('plays the fallback beep when a resolved sample payload is missing', async () => {
     const windowStub = getWindowStub();
     const dispatchSpy = vi.spyOn(windowStub, 'dispatchEvent').mockImplementation(() => {});
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -473,9 +471,7 @@ describe('SimpleExperience audio fallbacks', () => {
     expect(
       errorMessages.some((message) => message.includes('Audio sample "victoryCheer" could not be loaded.')),
     ).toBe(true);
-    expect(
-      errorMessages.some((message) => message.toLowerCase().includes('fallback alert tone')),
-    ).toBe(true);
+    expect(errorMessages.some((message) => message.toLowerCase().includes('fallback beep'))).toBe(true);
 
     const audioErrorEvent = dispatchSpy.mock.calls
       .map(([event]) => event)
