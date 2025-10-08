@@ -755,6 +755,8 @@ if (require.main === module) {
 
 module.exports = {
   loadManifest,
+  loadTemplateDocument,
+  describeBucketPolicyIssues,
   ensureUniqueAssets,
   listMissingFiles,
   listPermissionIssues,
