@@ -316,7 +316,9 @@ describe('SimpleExperience audio diagnostics', () => {
 
     const errorMessages = errorSpy.mock.calls.map(([message]) => String(message));
     expect(errorMessages.some((message) => message.includes('Missing audio sample'))).toBe(true);
-    expect(errorMessages.some((message) => message.includes('fallback alert tone'))).toBe(true);
+    expect(
+      errorMessages.some((message) => message.toLowerCase().includes('fallback alert tone')),
+    ).toBe(true);
 
     const bootStatusEvent = dispatchSpy.mock.calls
       .map(([event]) => event)
@@ -333,80 +335,87 @@ describe('SimpleExperience audio diagnostics', () => {
 });
 
 describe('SimpleExperience audio fallbacks', () => {
+  class AudioStub {
+    static played = [];
+
+    constructor(src) {
+      this.src = src;
+      this.loop = false;
+      this.currentTime = 0;
+      this._volume = 1;
+      this._listeners = new Map();
+      AudioStub.played.push(src);
+    }
+
+    set volume(value) {
+      this._volume = value;
+    }
+
+    get volume() {
+      return this._volume;
+    }
+
+    addEventListener(event, handler) {
+      const listeners = this._listeners.get(event) || [];
+      listeners.push(handler);
+      this._listeners.set(event, listeners);
+    }
+
+    removeEventListener(event, handler) {
+      const listeners = this._listeners.get(event);
+      if (!listeners) {
+        return;
+      }
+      if (!handler) {
+        this._listeners.delete(event);
+        return;
+      }
+      const index = listeners.indexOf(handler);
+      if (index >= 0) {
+        listeners.splice(index, 1);
+      }
+      if (!listeners.length) {
+        this._listeners.delete(event);
+      }
+    }
+
+    pause() {}
+
+    play() {
+      const fire = (event) => {
+        const listeners = this._listeners.get(event) || [];
+        listeners.slice().forEach((listener) => {
+          try {
+            listener();
+          } catch (error) {
+            // Ignore listener errors in test stub.
+          }
+        });
+      };
+      fire('play');
+      fire('playing');
+      fire('canplay');
+      fire('canplaythrough');
+      return Promise.resolve().then(() => {
+        fire('ended');
+      });
+    }
+  }
+
+  const installAudioStub = (windowStub) => {
+    AudioStub.played = [];
+    windowStub.Audio = AudioStub;
+    return () => {
+      delete windowStub.Audio;
+    };
+  };
+
   it('plays an alert tone and logs an error when the requested sample is missing', async () => {
     const windowStub = getWindowStub();
     windowStub.INFINITE_RAILS_EMBEDDED_ASSETS.audioSamples = {};
     const dispatchSpy = vi.spyOn(windowStub, 'dispatchEvent').mockImplementation(() => {});
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-
-    class AudioStub {
-      static played = [];
-
-      constructor(src) {
-        this.src = src;
-        this.loop = false;
-        this.currentTime = 0;
-        this._volume = 1;
-        this._listeners = new Map();
-        AudioStub.played.push(src);
-      }
-
-      set volume(value) {
-        this._volume = value;
-      }
-
-      get volume() {
-        return this._volume;
-      }
-
-      addEventListener(event, handler) {
-        const listeners = this._listeners.get(event) || [];
-        listeners.push(handler);
-        this._listeners.set(event, listeners);
-      }
-
-      removeEventListener(event, handler) {
-        const listeners = this._listeners.get(event);
-        if (!listeners) {
-          return;
-        }
-        if (!handler) {
-          this._listeners.delete(event);
-          return;
-        }
-        const index = listeners.indexOf(handler);
-        if (index >= 0) {
-          listeners.splice(index, 1);
-        }
-        if (!listeners.length) {
-          this._listeners.delete(event);
-        }
-      }
-
-      pause() {}
-
-      play() {
-        const fire = (event) => {
-          const listeners = this._listeners.get(event) || [];
-          listeners.slice().forEach((listener) => {
-            try {
-              listener();
-            } catch (error) {
-              // Ignore listener errors in test stub.
-            }
-          });
-        };
-        fire('play');
-        fire('playing');
-        fire('canplay');
-        fire('canplaythrough');
-        return Promise.resolve().then(() => {
-          fire('ended');
-        });
-      }
-    }
-
-    windowStub.Audio = AudioStub;
+    const cleanupAudioStub = installAudioStub(windowStub);
 
     const { experience } = createExperience();
     const controller = experience.createAudioController();
@@ -435,7 +444,54 @@ describe('SimpleExperience audio fallbacks', () => {
       expect.objectContaining({ type: 'infinite-rails:audio-error' }),
     );
 
-    delete windowStub.Audio;
+    cleanupAudioStub();
+    dispatchSpy.mockRestore();
+    errorSpy.mockRestore();
+  });
+
+  it('plays the fallback alert tone when a resolved sample payload is missing', async () => {
+    const windowStub = getWindowStub();
+    const dispatchSpy = vi.spyOn(windowStub, 'dispatchEvent').mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const cleanupAudioStub = installAudioStub(windowStub);
+
+    const { experience } = createExperience();
+    const controller = experience.createAudioController();
+
+    expect(controller.has('welcome')).toBe(true);
+    windowStub.INFINITE_RAILS_EMBEDDED_ASSETS.audioSamples.victoryCheer = '';
+
+    controller.play('welcome');
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(AudioStub.played).toHaveLength(1);
+    expect(AudioStub.played[0]).toContain('UklGRoQJAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YWAJ');
+
+    const errorMessages = errorSpy.mock.calls.map(([message]) => String(message));
+    expect(
+      errorMessages.some((message) => message.includes('Audio sample "victoryCheer" could not be loaded.')),
+    ).toBe(true);
+    expect(
+      errorMessages.some((message) => message.toLowerCase().includes('fallback alert tone')),
+    ).toBe(true);
+
+    const audioErrorEvent = dispatchSpy.mock.calls
+      .map(([event]) => event)
+      .find((event) => event?.type === 'infinite-rails:audio-error');
+    expect(audioErrorEvent).toBeDefined();
+    expect(audioErrorEvent.detail).toEqual(
+      expect.objectContaining({
+        code: 'missing-sample',
+        requestedName: 'welcome',
+        resolvedName: 'victoryCheer',
+        fallbackActive: true,
+        missingSample: true,
+      }),
+    );
+
+    cleanupAudioStub();
     dispatchSpy.mockRestore();
     errorSpy.mockRestore();
   });
