@@ -115,6 +115,7 @@
     'OklHtkWWF2kKKkln1lWl90jqGlmH9nWl5xi6ClmoI=';
   const AUDIO_FALLBACK_BEEP_MIN_INTERVAL_MS = 1500;
   const AUDIO_MISSING_SAMPLE_CODES = new Set(['missing-sample', 'boot-missing-sample']);
+  const AUDIO_FALLBACK_WARNING_SUFFIX = 'Fallback alert tone active until audio assets are restored.';
   let audioFallbackBeepContext = null;
   let lastAudioFallbackBeepTimestamp = 0;
   const signedUrlExpiryChecks = new Set();
@@ -150,6 +151,23 @@
     if (typeof consoleRef.log === 'function') {
       consoleRef.log(message, payload);
     }
+  }
+
+  function ensureAudioFallbackWarningMessage(message) {
+    const trimmed = typeof message === 'string' ? message.trim() : '';
+    if (!trimmed) {
+      return AUDIO_FALLBACK_WARNING_SUFFIX;
+    }
+    if (/fallback alert tone/i.test(trimmed)) {
+      return trimmed;
+    }
+    if (/fallback/i.test(trimmed) && /(audio|tone)/i.test(trimmed)) {
+      return trimmed;
+    }
+    if (/[.!?]$/.test(trimmed)) {
+      return `${trimmed} ${AUDIO_FALLBACK_WARNING_SUFFIX}`;
+    }
+    return `${trimmed}. ${AUDIO_FALLBACK_WARNING_SUFFIX}`;
   }
 
   function playAudioFallbackBeep() {
@@ -7282,8 +7300,9 @@
           : fallbackActive
             ? 'Audio assets unavailable. Playing alert tone until assets are restored.'
             : 'Audio initialised successfully.';
+      const normalizedMessage = fallbackActive ? ensureAudioFallbackWarningMessage(baseMessage) : baseMessage;
       if (typeof logDiagnosticsEvent === 'function') {
-        logDiagnosticsEvent('audio', baseMessage, {
+        logDiagnosticsEvent('audio', normalizedMessage, {
           level: fallbackActive ? 'error' : 'success',
           detail,
           timestamp: Number.isFinite(detail?.timestamp) ? detail.timestamp : undefined,
@@ -7292,7 +7311,7 @@
       if (typeof bootstrapOverlay?.setDiagnostic === 'function') {
         bootstrapOverlay.setDiagnostic('audio', {
           status: fallbackActive ? 'error' : 'ok',
-          message: baseMessage,
+          message: normalizedMessage,
         });
       }
       if (fallbackActive) {
@@ -7304,14 +7323,19 @@
           audioFallbackOverlayShown = true;
           presentCriticalErrorOverlay({
             title: 'Audio assets unavailable',
-            message: baseMessage,
+            message: normalizedMessage,
             diagnosticScope: 'audio',
             diagnosticStatus: 'error',
-            diagnosticMessage: baseMessage,
+            diagnosticMessage: normalizedMessage,
             logScope: 'audio',
-            logMessage: baseMessage,
+            logMessage: normalizedMessage,
             logLevel: 'error',
-            detail,
+            detail: {
+              ...detail,
+              fallbackActive: true,
+              missingSample: detail?.missingSample === true || fallbackActive,
+              message: normalizedMessage,
+            },
             timestamp: Number.isFinite(detail?.timestamp) ? detail.timestamp : undefined,
           });
         }
@@ -7347,6 +7371,9 @@
         (errorCode && AUDIO_MISSING_SAMPLE_CODES.has(errorCode)) ||
         detail?.missingSample === true ||
         detail?.fallbackActive === true;
+      const normalizedMessage = missingSampleDetected
+        ? ensureAudioFallbackWarningMessage(baseMessage)
+        : baseMessage;
       if (missingSampleDetected) {
         playAudioFallbackBeep();
       }
@@ -7362,26 +7389,34 @@
         extraParts.push(`Code: ${errorCode}`);
       }
       const overlayMessage = extraParts.length
-        ? `${baseMessage} — ${extraParts.join(' — ')}`
-        : baseMessage;
+        ? `${normalizedMessage} — ${extraParts.join(' — ')}`
+        : normalizedMessage;
       const overlayTitle = missingSampleDetected ? 'Missing audio sample' : 'Audio playback failed';
       const diagnosticStatus = missingSampleDetected ? 'error' : 'warning';
+      const overlayDetail = missingSampleDetected
+        ? {
+            ...detail,
+            fallbackActive: true,
+            missingSample: true,
+            message: normalizedMessage,
+          }
+        : detail;
       presentCriticalErrorOverlay({
         title: overlayTitle,
         message: overlayMessage,
         diagnosticScope: 'audio',
         diagnosticStatus,
-        diagnosticMessage: baseMessage,
+        diagnosticMessage: normalizedMessage,
         logScope: 'audio',
-        logMessage: baseMessage,
-        detail,
+        logMessage: normalizedMessage,
+        detail: overlayDetail,
         timestamp: Number.isFinite(detail?.timestamp) ? detail.timestamp : undefined,
       });
       if (typeof bootstrapOverlay?.setDiagnostic === 'function') {
         const status = missingSampleDetected ? 'error' : 'warning';
         bootstrapOverlay.setDiagnostic('audio', {
           status,
-          message: baseMessage,
+          message: normalizedMessage,
         });
       }
     });
