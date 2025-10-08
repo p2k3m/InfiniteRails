@@ -7670,6 +7670,388 @@
     return `${apiBaseUrl.replace(/\/$/, '')}/scores`;
   }
 
+  const audioAssetLiveTestState = {
+    performed: false,
+    success: null,
+    detail: null,
+    promise: null,
+  };
+
+  function resolveWelcomeLiveTestSample() {
+    const scope =
+      globalScope ||
+      (typeof window !== 'undefined' ? window : typeof globalThis !== 'undefined' ? globalThis : null);
+    const aliasSource = scope?.INFINITE_RAILS_AUDIO_ALIASES || null;
+    const sampleSource = scope?.INFINITE_RAILS_EMBEDDED_ASSETS?.audioSamples || null;
+    const candidates = new Set();
+    const addCandidate = (value) => {
+      if (typeof value !== 'string') {
+        return;
+      }
+      const trimmed = value.trim();
+      if (!trimmed.length) {
+        return;
+      }
+      candidates.add(trimmed);
+    };
+    if (aliasSource && typeof aliasSource === 'object') {
+      const aliasValue = aliasSource.welcome;
+      if (Array.isArray(aliasValue)) {
+        aliasValue.forEach(addCandidate);
+      } else {
+        addCandidate(aliasValue);
+      }
+    }
+    addCandidate('welcome');
+    const orderedCandidates = Array.from(candidates);
+    if (sampleSource && typeof sampleSource === 'object') {
+      for (const candidate of orderedCandidates) {
+        const payload = sampleSource[candidate];
+        if (typeof payload === 'string' && payload.trim().length) {
+          const trimmed = payload.trim();
+          const src = trimmed.startsWith('data:') ? trimmed : `data:audio/wav;base64,${trimmed}`;
+          return { sampleKey: candidate, src, payload: trimmed, missing: false, aliasCandidates: orderedCandidates };
+        }
+      }
+    }
+    return {
+      sampleKey: orderedCandidates[0] || null,
+      src: null,
+      payload: null,
+      missing: true,
+      aliasCandidates: orderedCandidates,
+    };
+  }
+
+  function dispatchAudioDiagnosticEvent(type, detail) {
+    const scope =
+      globalScope ||
+      (typeof window !== 'undefined' ? window : typeof globalThis !== 'undefined' ? globalThis : null);
+    if (!scope || typeof scope.dispatchEvent !== 'function') {
+      return false;
+    }
+    const EventCtor =
+      (typeof scope.CustomEvent === 'function' && scope.CustomEvent) ||
+      (typeof CustomEvent === 'function' ? CustomEvent : null);
+    if (!EventCtor) {
+      return false;
+    }
+    try {
+      scope.dispatchEvent(new EventCtor(type, { detail }));
+      return true;
+    } catch (error) {
+      const consoleRef = getConsoleRef();
+      consoleRef?.debug?.(`Failed to dispatch ${type} event.`, error);
+    }
+    return false;
+  }
+
+  function cleanupAudioElement(audio) {
+    if (!audio || typeof audio !== 'object') {
+      return;
+    }
+    try {
+      if (typeof audio.pause === 'function') {
+        audio.pause();
+      }
+    } catch (pauseError) {}
+    try {
+      if (typeof audio.currentTime === 'number') {
+        audio.currentTime = 0;
+      }
+    } catch (resetError) {}
+    try {
+      if (typeof audio.removeAttribute === 'function') {
+        audio.removeAttribute('src');
+      }
+    } catch (removeSrcError) {}
+    try {
+      if (typeof audio.load === 'function') {
+        audio.load();
+      }
+    } catch (loadError) {}
+    try {
+      if (typeof audio.remove === 'function') {
+        audio.remove();
+      }
+    } catch (removeError) {}
+  }
+
+  function recordAudioAssetLiveTestFailure(message, detail = {}) {
+    const consoleRef = getConsoleRef();
+    const timestamp = Number.isFinite(detail?.timestamp) ? detail.timestamp : Date.now();
+    const normalizedMessage = ensureAudioFallbackWarningMessage(
+      typeof message === 'string' && message.trim().length
+        ? message.trim()
+        : 'Unable to play welcome audio cue.',
+    );
+    const resolvedName =
+      typeof detail?.resolvedName === 'string' && detail.resolvedName.trim().length
+        ? detail.resolvedName.trim()
+        : null;
+    const failureDetail = {
+      requestedName: 'welcome',
+      resolvedName,
+      code:
+        typeof detail?.code === 'string' && detail.code.trim().length
+          ? detail.code.trim()
+          : detail?.missingSample
+            ? 'missing-sample'
+            : 'welcome-playback-error',
+      fallbackActive: true,
+      missingSample: detail?.missingSample === true || detail?.code === 'missing-sample',
+      message: normalizedMessage,
+      stage: 'boot',
+      timestamp,
+      success: false,
+      source: detail?.source || 'audio-live-test',
+    };
+    if (typeof detail?.errorName === 'string' && detail.errorName.trim().length) {
+      failureDetail.errorName = detail.errorName.trim();
+    }
+    if (typeof detail?.errorMessage === 'string' && detail.errorMessage.trim().length) {
+      failureDetail.errorMessage = detail.errorMessage.trim();
+    }
+    if (typeof detail?.reason === 'string' && detail.reason.trim().length) {
+      failureDetail.reason = detail.reason.trim();
+    }
+    audioAssetLiveTestState.performed = true;
+    audioAssetLiveTestState.success = false;
+    audioAssetLiveTestState.detail = failureDetail;
+    if (consoleRef?.error) {
+      consoleRef.error('Welcome audio playback test failed.', { detail: failureDetail });
+    }
+    if (typeof logDiagnosticsEvent === 'function') {
+      logDiagnosticsEvent('audio', normalizedMessage, { level: 'error', detail: failureDetail, timestamp });
+    }
+    if (typeof bootstrapOverlay?.setDiagnostic === 'function') {
+      try {
+        bootstrapOverlay.setDiagnostic('audio', { status: 'error', message: normalizedMessage });
+      } catch (overlayError) {
+        consoleRef?.debug?.('Failed to record audio live test diagnostic.', overlayError);
+      }
+    }
+    dispatchAudioDiagnosticEvent('infinite-rails:audio-error', failureDetail);
+    return failureDetail;
+  }
+
+  function recordAudioAssetLiveTestSuccess(detail = {}) {
+    const consoleRef = getConsoleRef();
+    const timestamp = Number.isFinite(detail?.timestamp) ? detail.timestamp : Date.now();
+    const resolvedName =
+      typeof detail?.resolvedName === 'string' && detail.resolvedName.trim().length
+        ? detail.resolvedName.trim()
+        : null;
+    const normalizedMessage =
+      typeof detail?.message === 'string' && detail.message.trim().length
+        ? detail.message.trim()
+        : resolvedName
+          ? `Welcome audio playback verified (${resolvedName}).`
+          : 'Welcome audio playback verified.';
+    const successDetail = {
+      requestedName: 'welcome',
+      resolvedName,
+      message: normalizedMessage,
+      stage: 'boot',
+      timestamp,
+      success: true,
+      source: detail?.source || 'audio-live-test',
+    };
+    audioAssetLiveTestState.performed = true;
+    audioAssetLiveTestState.success = true;
+    audioAssetLiveTestState.detail = successDetail;
+    if (consoleRef?.info) {
+      consoleRef.info('Welcome audio playback test succeeded.', successDetail);
+    }
+    if (typeof logDiagnosticsEvent === 'function') {
+      logDiagnosticsEvent('audio', normalizedMessage, { level: 'success', detail: successDetail, timestamp });
+    }
+    if (typeof bootstrapOverlay?.setDiagnostic === 'function') {
+      try {
+        bootstrapOverlay.setDiagnostic('audio', { status: 'ok', message: normalizedMessage });
+      } catch (overlayError) {
+        consoleRef?.debug?.('Failed to record audio live test success diagnostic.', overlayError);
+      }
+    }
+    return successDetail;
+  }
+
+  async function performAudioAssetLiveTest(options = {}) {
+    const timestamp = Date.now();
+    const sampleInfo = resolveWelcomeLiveTestSample();
+    const resolvedName = sampleInfo.sampleKey;
+    if (!sampleInfo || sampleInfo.missing) {
+      const message = resolvedName && resolvedName !== 'welcome'
+        ? `Audio sample "welcome" unavailable — falling back to "${resolvedName}".`
+        : 'Audio sample "welcome" is unavailable. Playing fallback alert tone instead.';
+      recordAudioAssetLiveTestFailure(message, {
+        resolvedName: resolvedName && resolvedName !== 'welcome' ? resolvedName : null,
+        missingSample: true,
+        code: 'missing-sample',
+        stage: 'boot',
+        timestamp,
+      });
+      return false;
+    }
+    const scope =
+      globalScope ||
+      (typeof window !== 'undefined' ? window : typeof globalThis !== 'undefined' ? globalThis : null);
+    const AudioCtor = scope?.Audio || (typeof Audio !== 'undefined' ? Audio : null);
+    if (typeof AudioCtor !== 'function') {
+      recordAudioAssetLiveTestFailure('Unable to play welcome audio cue.', {
+        resolvedName: resolvedName || null,
+        code: 'welcome-playback-error',
+        errorName: 'AudioUnavailableError',
+        errorMessage: 'Audio constructor is unavailable.',
+        stage: 'boot',
+        timestamp,
+      });
+      return false;
+    }
+    let audio;
+    try {
+      audio = new AudioCtor();
+    } catch (creationError) {
+      recordAudioAssetLiveTestFailure('Unable to play welcome audio cue.', {
+        resolvedName: resolvedName || null,
+        code: 'welcome-playback-error',
+        errorName:
+          typeof creationError?.name === 'string' && creationError.name.trim().length
+            ? creationError.name.trim()
+            : 'AudioError',
+        errorMessage:
+          typeof creationError?.message === 'string' && creationError.message.trim().length
+            ? creationError.message.trim()
+            : 'Failed to instantiate audio element.',
+        stage: 'boot',
+        timestamp,
+      });
+      return false;
+    }
+    let assignedSource = false;
+    try {
+      audio.src = sampleInfo.src;
+      assignedSource = true;
+    } catch (assignError) {
+      assignedSource = false;
+      if (typeof audio.setAttribute === 'function') {
+        try {
+          audio.setAttribute('src', sampleInfo.src);
+          assignedSource = true;
+        } catch (setAttrError) {
+          assignedSource = false;
+        }
+      }
+      if (!assignedSource) {
+        cleanupAudioElement(audio);
+        recordAudioAssetLiveTestFailure('Unable to play welcome audio cue.', {
+          resolvedName: resolvedName || null,
+          code: 'welcome-playback-error',
+          errorName:
+            typeof assignError?.name === 'string' && assignError.name.trim().length
+              ? assignError.name.trim()
+              : 'AudioError',
+          errorMessage:
+            typeof assignError?.message === 'string' && assignError.message.trim().length
+              ? assignError.message.trim()
+              : 'Failed to assign audio source.',
+          stage: 'boot',
+          timestamp,
+        });
+        return false;
+      }
+    }
+    try {
+      if (typeof audio.setAttribute === 'function') {
+        audio.setAttribute('preload', 'auto');
+      }
+    } catch (preloadError) {}
+    try {
+      audio.preload = 'auto';
+    } catch (preloadAssignError) {}
+    try {
+      audio.muted = true;
+    } catch (muteError) {}
+    try {
+      audio.volume = 0;
+    } catch (volumeError) {}
+    if ('loop' in audio) {
+      try {
+        audio.loop = false;
+      } catch (loopError) {}
+    }
+    const playAttempt = () => {
+      try {
+        const playResult = audio.play();
+        if (playResult && typeof playResult.then === 'function') {
+          return playResult;
+        }
+        return Promise.resolve();
+      } catch (playError) {
+        return Promise.reject(playError);
+      }
+    };
+    try {
+      await playAttempt();
+      cleanupAudioElement(audio);
+      recordAudioAssetLiveTestSuccess({ resolvedName, timestamp });
+      return true;
+    } catch (playbackError) {
+      cleanupAudioElement(audio);
+      recordAudioAssetLiveTestFailure('Unable to play welcome audio cue.', {
+        resolvedName: resolvedName || null,
+        code: 'welcome-playback-error',
+        errorName:
+          typeof playbackError?.name === 'string' && playbackError.name.trim().length
+            ? playbackError.name.trim()
+            : undefined,
+        errorMessage:
+          typeof playbackError?.message === 'string' && playbackError.message.trim().length
+            ? playbackError.message.trim()
+            : undefined,
+        stage: 'boot',
+        timestamp,
+      });
+      return false;
+    }
+  }
+
+  function ensureAudioAssetLiveTest(options = {}) {
+    const force = options?.force === true;
+    if (force) {
+      audioAssetLiveTestState.promise = null;
+      audioAssetLiveTestState.performed = false;
+      audioAssetLiveTestState.success = null;
+      audioAssetLiveTestState.detail = null;
+    } else if (audioAssetLiveTestState.promise) {
+      return audioAssetLiveTestState.promise;
+    } else if (audioAssetLiveTestState.performed) {
+      return Promise.resolve(audioAssetLiveTestState.success ?? false);
+    }
+    const runPromise = Promise.resolve().then(() => performAudioAssetLiveTest(options));
+    audioAssetLiveTestState.promise = runPromise
+      .then((result) => result)
+      .catch((error) => {
+        recordAudioAssetLiveTestFailure('Unable to play welcome audio cue.', {
+          resolvedName: null,
+          code: 'welcome-playback-error',
+          errorName:
+            typeof error?.name === 'string' && error.name.trim().length ? error.name.trim() : undefined,
+          errorMessage:
+            typeof error?.message === 'string' && error.message.trim().length ? error.message.trim() : undefined,
+          stage: 'boot',
+          timestamp: Date.now(),
+        });
+        return false;
+      })
+      .finally(() => {
+        if (audioAssetLiveTestState.promise === runPromise) {
+          audioAssetLiveTestState.promise = Promise.resolve(audioAssetLiveTestState.success ?? false);
+        }
+      });
+    return audioAssetLiveTestState.promise;
+  }
+
   const BACKEND_LIVE_CHECK_TIMEOUT_MS = 8000;
   const BACKEND_LIVE_CHECK_ALLOWED_POST_STATUSES = new Set([400, 401, 403, 409, 422, 429]);
   const backendLiveCheckState = {
@@ -13729,6 +14111,8 @@
       hooks.ensureSimpleExperience = ensureSimpleExperience;
       hooks.ensureBackendLiveCheck = ensureBackendLiveCheck;
       hooks.performBackendLiveCheck = performBackendLiveCheck;
+      hooks.ensureAudioAssetLiveTest = ensureAudioAssetLiveTest;
+      hooks.getAudioAssetLiveTestState = () => audioAssetLiveTestState;
       hooks.getIdentityState = () => identityState;
       hooks.getBackendLiveCheckState = () => backendLiveCheckState;
       hooks.activateMissionBriefingFallback = activateMissionBriefingFallback;
@@ -14543,6 +14927,10 @@
   }
   updateScoreboardStatus(initialScoreboardMessage);
   applyIdentity(initialIdentity, { persist: false, silent: true });
+
+  ensureAudioAssetLiveTest().catch((error) => {
+    globalScope?.console?.debug?.('Audio asset live test promise rejected.', error);
+  });
 
   if (identityState.configuredApiBaseUrl) {
     ensureBackendLiveCheck().catch((error) => {
