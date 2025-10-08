@@ -7347,6 +7347,9 @@
 
     globalScope.addEventListener('infinite-rails:audio-error', (event) => {
       const detail = event?.detail && typeof event.detail === 'object' ? event.detail : {};
+      if (detail?.overlayPresented === true) {
+        audioFallbackOverlayShown = true;
+      }
       const fallbackName =
         typeof detail?.resolvedName === 'string' && detail.resolvedName.trim().length
           ? detail.resolvedName.trim()
@@ -7401,17 +7404,20 @@
             message: normalizedMessage,
           }
         : detail;
-      presentCriticalErrorOverlay({
-        title: overlayTitle,
-        message: overlayMessage,
-        diagnosticScope: 'audio',
-        diagnosticStatus,
-        diagnosticMessage: normalizedMessage,
-        logScope: 'audio',
-        logMessage: normalizedMessage,
-        detail: overlayDetail,
-        timestamp: Number.isFinite(detail?.timestamp) ? detail.timestamp : undefined,
-      });
+      if (!audioFallbackOverlayShown) {
+        presentCriticalErrorOverlay({
+          title: overlayTitle,
+          message: overlayMessage,
+          diagnosticScope: 'audio',
+          diagnosticStatus,
+          diagnosticMessage: normalizedMessage,
+          logScope: 'audio',
+          logMessage: normalizedMessage,
+          detail: overlayDetail,
+          timestamp: Number.isFinite(detail?.timestamp) ? detail.timestamp : undefined,
+        });
+        audioFallbackOverlayShown = true;
+      }
       if (typeof bootstrapOverlay?.setDiagnostic === 'function') {
         const status = missingSampleDetected ? 'error' : 'warning';
         bootstrapOverlay.setDiagnostic('audio', {
@@ -7824,6 +7830,52 @@
     if (typeof logDiagnosticsEvent === 'function') {
       logDiagnosticsEvent('audio', normalizedMessage, { level: 'error', detail: failureDetail, timestamp });
     }
+    if (typeof presentCriticalErrorOverlay === 'function') {
+      try {
+        const missingSampleDetected =
+          failureDetail.missingSample === true ||
+          failureDetail.code === 'missing-sample' ||
+          failureDetail.code === 'boot-missing-sample';
+        const overlayTitle = missingSampleDetected ? 'Missing audio sample' : 'Audio playback failed';
+        const overlayParts = [normalizedMessage];
+        const errorName =
+          typeof failureDetail.errorName === 'string' && failureDetail.errorName.trim().length
+            ? failureDetail.errorName.trim()
+            : null;
+        const errorMessage =
+          typeof failureDetail.errorMessage === 'string' && failureDetail.errorMessage.trim().length
+            ? failureDetail.errorMessage.trim()
+            : null;
+        if (errorName && errorMessage) {
+          overlayParts.push(`${errorName}: ${errorMessage}`);
+        } else if (errorMessage) {
+          overlayParts.push(errorMessage);
+        } else if (errorName) {
+          overlayParts.push(errorName);
+        }
+        const overlayCode =
+          typeof failureDetail.code === 'string' && failureDetail.code.trim().length ? failureDetail.code.trim() : null;
+        if (overlayCode) {
+          overlayParts.push(`Code: ${overlayCode}`);
+        }
+        const overlayMessage = overlayParts.join(' — ');
+        presentCriticalErrorOverlay({
+          title: overlayTitle,
+          message: overlayMessage,
+          diagnosticScope: 'audio',
+          diagnosticStatus: missingSampleDetected ? 'error' : 'warning',
+          diagnosticMessage: normalizedMessage,
+          logScope: 'audio',
+          logMessage: normalizedMessage,
+          logLevel: 'error',
+          detail: failureDetail,
+          timestamp,
+        });
+        failureDetail.overlayPresented = true;
+      } catch (overlayError) {
+        consoleRef?.debug?.('Unable to display audio live test overlay.', overlayError);
+      }
+    }
     if (typeof bootstrapOverlay?.setDiagnostic === 'function') {
       try {
         bootstrapOverlay.setDiagnostic('audio', { status: 'error', message: normalizedMessage });
@@ -7970,11 +8022,20 @@
       audio.preload = 'auto';
     } catch (preloadAssignError) {}
     try {
-      audio.muted = true;
-    } catch (muteError) {}
+      if ('defaultMuted' in audio) {
+        audio.defaultMuted = false;
+      }
+    } catch (defaultMuteError) {}
+    const playbackVolumeRaw = typeof options?.volume === 'number' ? options.volume : 0.6;
+    const playbackVolume = Number.isFinite(playbackVolumeRaw)
+      ? Math.min(Math.max(playbackVolumeRaw, 0), 1)
+      : 0.6;
     try {
-      audio.volume = 0;
+      audio.volume = playbackVolume;
     } catch (volumeError) {}
+    try {
+      audio.muted = false;
+    } catch (muteError) {}
     if ('loop' in audio) {
       try {
         audio.loop = false;
@@ -7993,6 +8054,32 @@
     };
     try {
       await playAttempt();
+      try {
+        await waitForAudioPlaybackCompletion(audio, {
+          timeoutMs:
+            Number.isFinite(options?.playbackMonitorTimeoutMs) && options.playbackMonitorTimeoutMs > 0
+              ? options.playbackMonitorTimeoutMs
+              : 5000,
+        });
+      } catch (progressError) {
+        cleanupAudioElement(audio);
+        recordAudioAssetLiveTestFailure('Unable to play welcome audio cue.', {
+          resolvedName: resolvedName || null,
+          code: 'welcome-playback-error',
+          errorName:
+            typeof progressError?.name === 'string' && progressError.name.trim().length
+              ? progressError.name.trim()
+              : undefined,
+          errorMessage:
+            typeof progressError?.message === 'string' && progressError.message.trim().length
+              ? progressError.message.trim()
+              : undefined,
+          reason: 'playback-monitor-error',
+          stage: 'boot',
+          timestamp,
+        });
+        return false;
+      }
       cleanupAudioElement(audio);
       recordAudioAssetLiveTestSuccess({ resolvedName, timestamp });
       return true;
@@ -8014,6 +8101,104 @@
       });
       return false;
     }
+  }
+
+  function waitForAudioPlaybackCompletion(audio, options = {}) {
+    if (!audio || typeof audio !== 'object' || typeof audio.addEventListener !== 'function') {
+      return Promise.resolve();
+    }
+    if (audio.ended === true) {
+      return Promise.resolve();
+    }
+    const timeoutMs = Number.isFinite(options?.timeoutMs) && options.timeoutMs > 0 ? options.timeoutMs : 5000;
+    const timersScope =
+      (typeof globalScope !== 'undefined' && globalScope) ||
+      (typeof globalThis !== 'undefined' ? globalThis : null);
+    const scheduleTimeout =
+      (timersScope && typeof timersScope.setTimeout === 'function'
+        ? timersScope.setTimeout.bind(timersScope)
+        : typeof setTimeout === 'function'
+          ? setTimeout
+          : null);
+    const clearScheduledTimeout =
+      (timersScope && typeof timersScope.clearTimeout === 'function'
+        ? timersScope.clearTimeout.bind(timersScope)
+        : typeof clearTimeout === 'function'
+          ? clearTimeout
+          : null);
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      let timeoutId = null;
+      const finalize = (handler) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        if (timeoutId !== null && clearScheduledTimeout) {
+          try {
+            clearScheduledTimeout(timeoutId);
+          } catch (clearError) {}
+        }
+        try {
+          audio.removeEventListener('ended', handleEnded);
+        } catch (removeEndedError) {}
+        try {
+          audio.removeEventListener('pause', handlePause);
+        } catch (removePauseError) {}
+        try {
+          audio.removeEventListener('error', handleError);
+        } catch (removeErrorError) {}
+        handler();
+      };
+      const handleEnded = () => finalize(resolve);
+      const handlePause = () => finalize(resolve);
+      const handleError = (event) => {
+        const errorDetail =
+          event?.error ||
+          event?.target?.error ||
+          (typeof event === 'object' && 'message' in event ? event : null);
+        finalize(() => {
+          if (errorDetail instanceof Error) {
+            reject(errorDetail);
+            return;
+          }
+          if (errorDetail && typeof errorDetail === 'object') {
+            const syntheticError = new Error(
+              typeof errorDetail.message === 'string' && errorDetail.message.trim().length
+                ? errorDetail.message.trim()
+                : 'Audio playback error event triggered.',
+            );
+            if (typeof errorDetail.name === 'string' && errorDetail.name.trim().length) {
+              syntheticError.name = errorDetail.name.trim();
+            }
+            if (errorDetail.code !== undefined) {
+              try {
+                syntheticError.code = errorDetail.code;
+              } catch (assignError) {}
+            }
+            reject(syntheticError);
+            return;
+          }
+          reject(new Error('Audio playback error event triggered.'));
+        });
+      };
+      try {
+        audio.addEventListener('ended', handleEnded, { once: true });
+      } catch (addEndedError) {}
+      try {
+        audio.addEventListener('pause', handlePause, { once: true });
+      } catch (addPauseError) {}
+      try {
+        audio.addEventListener('error', handleError, { once: true });
+      } catch (addErrorError) {}
+      if (scheduleTimeout) {
+        try {
+          timeoutId = scheduleTimeout(() => finalize(resolve), timeoutMs);
+        } catch (scheduleError) {
+          timeoutId = null;
+        }
+      }
+    });
   }
 
   function ensureAudioAssetLiveTest(options = {}) {
