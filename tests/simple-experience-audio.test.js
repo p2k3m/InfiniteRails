@@ -215,6 +215,74 @@ describe('SimpleExperience audio bootstrapping', () => {
 
     dispatchSpy.mockRestore();
   });
+
+  it('presents an overlay diagnostic when the welcome cue fails to play', () => {
+    const experience = prepareExperienceForBoot();
+    const resumeSpy = vi.fn();
+    const hasSpy = vi.fn(() => true);
+    const playSpy = vi.fn(() => {
+      const error = new Error('Autoplay prevented by browser policy.');
+      error.code = 'NotAllowedError';
+      throw error;
+    });
+    const windowStub = getWindowStub();
+    const showErrorSpy = vi.fn();
+    const setDiagnosticSpy = vi.fn();
+    const logEventSpy = vi.fn();
+    const dispatchSpy = vi.spyOn(windowStub, 'dispatchEvent').mockImplementation(() => {});
+
+    windowStub.bootstrapOverlay = {
+      showError: showErrorSpy,
+      setDiagnostic: setDiagnosticSpy,
+      logEvent: logEventSpy,
+    };
+
+    experience.audio = {
+      has: hasSpy,
+      play: playSpy,
+      resumeContextIfNeeded: resumeSpy,
+    };
+
+    expect(() => experience.start()).not.toThrow();
+
+    const overlayCall = showErrorSpy.mock.calls.find(([payload]) =>
+      payload?.title === 'Audio playback failed' || payload?.title === 'Missing audio sample',
+    );
+    expect(overlayCall).toBeDefined();
+    expect(overlayCall?.[0]?.message).toMatch(/Fallback alert tone active until audio assets are restored\.?/);
+
+    const diagnosticCall = setDiagnosticSpy.mock.calls.find(([scope]) => scope === 'audio');
+    expect(diagnosticCall).toBeDefined();
+    expect(diagnosticCall?.[1]).toEqual(
+      expect.objectContaining({
+        status: 'error',
+        message: expect.stringMatching(/Fallback alert tone active until audio assets are restored\.?/),
+      }),
+    );
+
+    const logCall = logEventSpy.mock.calls.find(([scope]) => scope === 'audio');
+    expect(logCall).toBeDefined();
+    expect(logCall?.[1]).toMatch(/Fallback alert tone active until audio assets are restored\.?/);
+    expect(logCall?.[2]).toEqual(
+      expect.objectContaining({
+        level: 'error',
+        detail: expect.objectContaining({ code: 'welcome-playback-error' }),
+      }),
+    );
+
+    const audioErrorEvent = dispatchSpy.mock.calls
+      .map(([event]) => event)
+      .find((event) => event?.type === 'infinite-rails:audio-error');
+    expect(audioErrorEvent).toBeDefined();
+    expect(audioErrorEvent.detail).toEqual(
+      expect.objectContaining({
+        message: expect.stringMatching(/Fallback alert tone active until audio assets are restored\.?/),
+      }),
+    );
+
+    dispatchSpy.mockRestore();
+    delete windowStub.bootstrapOverlay;
+  });
 });
 
 describe('SimpleExperience audio diagnostics', () => {
