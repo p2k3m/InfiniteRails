@@ -116,6 +116,11 @@
   const AUDIO_FALLBACK_BEEP_MIN_INTERVAL_MS = 1500;
   const AUDIO_MISSING_SAMPLE_CODES = new Set(['missing-sample', 'boot-missing-sample']);
   const AUDIO_FALLBACK_WARNING_SUFFIX = 'Fallback beep active until audio assets are restored.';
+  const AMBIENT_MUSIC_FALLBACK_ORDER = Object.freeze(['ambientOverworld', 'ambientDefault']);
+  const ambientMusicRecoveryState = {
+    attempted: new Set(),
+    pendingHandle: null,
+  };
   let audioFallbackBeepContext = null;
   let lastAudioFallbackBeepTimestamp = 0;
   const signedUrlExpiryChecks = new Set();
@@ -217,6 +222,313 @@
       oscillator.stop(context.currentTime + 0.25);
     } catch (contextError) {
       globalScope?.console?.debug?.('Fallback beep playback failed via AudioContext.', contextError);
+    }
+  }
+
+  function resetAmbientMusicRecoveryState() {
+    ambientMusicRecoveryState.attempted.clear();
+    if (ambientMusicRecoveryState.pendingHandle !== null) {
+      const cancel =
+        (typeof globalScope?.clearTimeout === 'function' && globalScope.clearTimeout.bind(globalScope)) ||
+        (typeof clearTimeout === 'function' ? clearTimeout : null);
+      if (cancel) {
+        try {
+          cancel(ambientMusicRecoveryState.pendingHandle);
+        } catch (error) {
+          globalScope?.console?.debug?.('Failed to cancel pending ambient music recovery handle.', error);
+        }
+      }
+      ambientMusicRecoveryState.pendingHandle = null;
+    }
+  }
+
+  function normaliseAudioSampleName(name) {
+    if (typeof name !== 'string') {
+      return '';
+    }
+    const trimmed = name.trim();
+    return trimmed.length ? trimmed : '';
+  }
+
+  function shouldAttemptAmbientMusicRecovery(sampleName) {
+    const normalized = normaliseAudioSampleName(sampleName);
+    if (!normalized) {
+      return false;
+    }
+    const lower = normalized.toLowerCase();
+    if (lower === 'welcome') {
+      return false;
+    }
+    if (lower.startsWith('ambient')) {
+      return true;
+    }
+    if (lower.includes('theme')) {
+      return true;
+    }
+    return false;
+  }
+
+  function collectAmbientMusicFallbackCandidates(experience, failedName, detail = {}) {
+    const candidates = [];
+    const seen = new Set();
+    const baseFailed = normaliseAudioSampleName(failedName);
+
+    const addCandidate = (value) => {
+      let candidate = '';
+      if (typeof value === 'string') {
+        candidate = value;
+      } else if (value && typeof value.id === 'string') {
+        candidate = value.id;
+      } else if (value && typeof value.name === 'string') {
+        candidate = value.name;
+      }
+      const normalized = normaliseAudioSampleName(candidate);
+      if (!normalized || normalized === baseFailed || seen.has(normalized)) {
+        return;
+      }
+      if (!shouldAttemptAmbientMusicRecovery(normalized)) {
+        return;
+      }
+      seen.add(normalized);
+      candidates.push(normalized);
+    };
+
+    if (Array.isArray(detail?.fallbackCandidates)) {
+      detail.fallbackCandidates.forEach(addCandidate);
+    }
+    if (Array.isArray(detail?.aliasCandidates)) {
+      detail.aliasCandidates.forEach(addCandidate);
+    }
+
+    const dimensionTracks = experience?.dimensionSettings?.ambientTracks;
+    if (Array.isArray(dimensionTracks)) {
+      dimensionTracks.forEach(addCandidate);
+    }
+
+    const ambientSources = [
+      experience?.activeAmbientTrack,
+      experience?.defaultAmbientTrack,
+      experience?.defaultAmbientTracks,
+      experience?.ambientTracks,
+      experience?.ambientTrackOrder,
+      experience?.availableAmbientTracks,
+      experience?.audio?.ambientPlaylist,
+      experience?.audio?.ambientTracks,
+      experience?.audio?.availableTracks,
+    ];
+
+    for (const source of ambientSources) {
+      if (Array.isArray(source)) {
+        source.forEach(addCandidate);
+      } else if (source) {
+        addCandidate(source);
+      }
+    }
+
+    AMBIENT_MUSIC_FALLBACK_ORDER.forEach(addCandidate);
+
+    return candidates;
+  }
+
+  function resolveAmbientFallbackPlaybackOptions(experience, candidate, detail = {}) {
+    const options = {
+      loop: true,
+      channel: 'music',
+      allowDuplicates: false,
+      reason: 'ambient-music-recovery',
+    };
+
+    const volumeResolvers = [
+      () => (typeof experience?.getAudioChannelVolume === 'function' ? experience.getAudioChannelVolume('music') : null),
+      () => (typeof experience?.getMusicVolume === 'function' ? experience.getMusicVolume() : null),
+      () => (typeof experience?.audio?.getChannelVolume === 'function' ? experience.audio.getChannelVolume('music') : null),
+      () => (typeof experience?.audio?.getVolume === 'function' ? experience.audio.getVolume('music') : null),
+      () => experience?.audio?.settings?.music,
+      () => experience?.audioSettings?.music,
+      () => experience?.settings?.audio?.music,
+      () => experience?.musicVolume,
+    ];
+
+    for (const resolve of volumeResolvers) {
+      let value;
+      try {
+        value = resolve();
+      } catch (error) {
+        continue;
+      }
+      if (typeof value === 'number' && Number.isFinite(value)) {
+        const clamped = Math.min(Math.max(value, 0), 1);
+        options.volume = clamped;
+        return options;
+      }
+    }
+
+    options.volume = 0.6;
+    return options;
+  }
+
+  function recordAmbientMusicRecoveryAttempt(failedName, candidate, detail = {}) {
+    const consoleRef = getConsoleRef();
+    const message = `Ambient music fallback activated: "${failedName}" → "${candidate}".`;
+    const payload = {
+      failedTrack: failedName,
+      fallbackTrack: candidate,
+      code: typeof detail?.code === 'string' ? detail.code : null,
+      errorName: detail?.errorName ?? null,
+      errorMessage: detail?.errorMessage ?? null,
+      missingSample: detail?.missingSample === true,
+    };
+    if (consoleRef?.warn) {
+      consoleRef.warn(message, payload);
+    } else if (consoleRef?.log) {
+      consoleRef?.log?.(message, payload);
+    }
+    if (typeof logDiagnosticsEvent === 'function') {
+      logDiagnosticsEvent('audio', message, { level: 'warning', detail: payload });
+    }
+  }
+
+  function recordAmbientMusicRecoveryFailure(failedName, candidate, error, detail = {}) {
+    const consoleRef = getConsoleRef();
+    const baseMessage = `Ambient music fallback "${candidate}" failed to play.`;
+    const errorMessage = typeof error?.message === 'string' ? error.message : String(error ?? 'Unknown audio error');
+    const payload = {
+      failedTrack: failedName,
+      fallbackTrack: candidate,
+      code: typeof detail?.code === 'string' ? detail.code : null,
+      errorName: error?.name ?? detail?.errorName ?? null,
+      errorMessage,
+      missingSample: detail?.missingSample === true,
+    };
+    if (consoleRef?.error) {
+      consoleRef.error(baseMessage, { ...payload, error });
+    } else if (consoleRef?.warn) {
+      consoleRef.warn(baseMessage, { ...payload, error });
+    }
+    if (typeof logDiagnosticsEvent === 'function') {
+      logDiagnosticsEvent('audio', baseMessage, { level: 'error', detail: payload });
+    }
+  }
+
+  function recordAmbientMusicRecoveryExhausted(failedName, detail = {}) {
+    const consoleRef = getConsoleRef();
+    const message = `Ambient music fallback exhausted for "${failedName}".`;
+    const payload = {
+      failedTrack: failedName,
+      code: typeof detail?.code === 'string' ? detail.code : null,
+      missingSample: detail?.missingSample === true,
+    };
+    if (consoleRef?.warn) {
+      consoleRef.warn(message, payload);
+    } else if (consoleRef?.log) {
+      consoleRef?.log?.(message, payload);
+    }
+    if (typeof logDiagnosticsEvent === 'function') {
+      logDiagnosticsEvent('audio', message, { level: 'error', detail: payload });
+    }
+  }
+
+  function attemptAmbientMusicRecovery(detail = {}) {
+    const experience = activeExperienceInstance;
+    if (!experience) {
+      return false;
+    }
+    const audio = experience.audio;
+    if (!audio || typeof audio.play !== 'function') {
+      return false;
+    }
+    const failedName = normaliseAudioSampleName(detail?.resolvedName) || normaliseAudioSampleName(detail?.requestedName);
+    if (!shouldAttemptAmbientMusicRecovery(failedName)) {
+      return false;
+    }
+
+    if (!ambientMusicRecoveryState.attempted) {
+      ambientMusicRecoveryState.attempted = new Set();
+    }
+    ambientMusicRecoveryState.attempted.add(failedName);
+
+    const candidates = collectAmbientMusicFallbackCandidates(experience, failedName, detail);
+    if (!candidates.length) {
+      recordAmbientMusicRecoveryExhausted(failedName, detail);
+      return false;
+    }
+
+    for (const candidate of candidates) {
+      if (!candidate || ambientMusicRecoveryState.attempted.has(candidate)) {
+        continue;
+      }
+      ambientMusicRecoveryState.attempted.add(candidate);
+      let hasCandidate = true;
+      if (typeof audio.has === 'function') {
+        try {
+          hasCandidate = audio.has(candidate);
+        } catch (error) {
+          getConsoleRef()?.debug?.('Ambient music availability probe failed.', error);
+          hasCandidate = true;
+        }
+      }
+      if (!hasCandidate) {
+        continue;
+      }
+
+      recordAmbientMusicRecoveryAttempt(failedName, candidate, detail);
+      const playbackOptions = resolveAmbientFallbackPlaybackOptions(experience, candidate, detail);
+      let playResult;
+      try {
+        playResult = audio.play(candidate, playbackOptions);
+      } catch (error) {
+        recordAmbientMusicRecoveryFailure(failedName, candidate, error, detail);
+        continue;
+      }
+
+      try {
+        experience.activeAmbientTrack = candidate;
+      } catch (stateError) {
+        getConsoleRef()?.debug?.('Failed to update active ambient track after recovery.', stateError);
+      }
+
+      if (playResult && typeof playResult.then === 'function') {
+        playResult.catch((error) => {
+          recordAmbientMusicRecoveryFailure(candidate, candidate, error, detail);
+          scheduleAmbientMusicRecovery({
+            ...detail,
+            requestedName: candidate,
+            resolvedName: candidate,
+          });
+        });
+      }
+
+      return true;
+    }
+
+    recordAmbientMusicRecoveryExhausted(failedName, detail);
+    return false;
+  }
+
+  function scheduleAmbientMusicRecovery(detail = {}) {
+    const failedName = normaliseAudioSampleName(detail?.resolvedName) || normaliseAudioSampleName(detail?.requestedName);
+    if (!shouldAttemptAmbientMusicRecovery(failedName)) {
+      return false;
+    }
+    const scheduler =
+      (typeof globalScope?.setTimeout === 'function' && globalScope.setTimeout.bind(globalScope)) ||
+      (typeof setTimeout === 'function' ? setTimeout : null);
+    if (!scheduler) {
+      return attemptAmbientMusicRecovery(detail);
+    }
+    if (ambientMusicRecoveryState.pendingHandle !== null) {
+      return false;
+    }
+    try {
+      ambientMusicRecoveryState.pendingHandle = scheduler(() => {
+        ambientMusicRecoveryState.pendingHandle = null;
+        attemptAmbientMusicRecovery(detail);
+      }, 0);
+      return true;
+    } catch (error) {
+      ambientMusicRecoveryState.pendingHandle = null;
+      getConsoleRef()?.debug?.('Failed to schedule ambient music recovery.', error);
+      return attemptAmbientMusicRecovery(detail);
     }
   }
 
@@ -7425,6 +7737,7 @@
           message: normalizedMessage,
         });
       }
+      scheduleAmbientMusicRecovery(detail);
     });
     globalScope.addEventListener('infinite-rails:start-error', (event) => {
       cancelRendererStartWatchdog();
@@ -13398,6 +13711,7 @@
     result.destroyed = cleanupApplied;
     activeExperienceInstance = null;
     globalScope.__INFINITE_RAILS_ACTIVE_EXPERIENCE__ = null;
+    resetAmbientMusicRecoveryState();
     return result;
   }
 
@@ -13513,6 +13827,7 @@
     }
     activeExperienceInstance = experience;
     globalScope.__INFINITE_RAILS_ACTIVE_EXPERIENCE__ = experience;
+    resetAmbientMusicRecoveryState();
     const scopeLocation = globalScope?.location || (typeof window !== 'undefined' ? window.location : null);
     const locationProtocol = typeof scopeLocation?.protocol === 'string' ? scopeLocation.protocol.toLowerCase() : '';
     const runningFromFileProtocol = locationProtocol === 'file:';
