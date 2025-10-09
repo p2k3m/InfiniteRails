@@ -8196,6 +8196,10 @@
         consoleRef?.debug?.('Failed to record audio live test diagnostic.', overlayError);
       }
     }
+    dispatchAudioDiagnosticEvent('infinite-rails:audio-boot-status', {
+      ...failureDetail,
+      fallbackActive: true,
+    });
     dispatchAudioDiagnosticEvent('infinite-rails:audio-error', failureDetail);
     return failureDetail;
   }
@@ -8238,6 +8242,10 @@
         consoleRef?.debug?.('Failed to record audio live test success diagnostic.', overlayError);
       }
     }
+    dispatchAudioDiagnosticEvent('infinite-rails:audio-boot-status', {
+      ...successDetail,
+      fallbackActive: false,
+    });
     return successDetail;
   }
 
