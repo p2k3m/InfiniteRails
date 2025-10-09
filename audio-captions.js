@@ -22,6 +22,9 @@
     victoryCheer: existing.victoryCheer || 'A triumphant cheer erupts in the distance.',
     zombieGroan: existing.zombieGroan || 'A zombie groans from the shadows.',
     welcome: existing.welcome || 'Control tower greets the expedition with a bright chime.',
+    inventoryOverflow: existing.inventoryOverflow || 'Satchel groans under the weight of gathered loot.',
+    craftError: existing.craftError || 'Crafting console buzzes in protest.',
+    playerDeath: existing.playerDeath || 'Your vision fades as the void howls.',
   });
 
   scope.INFINITE_RAILS_AUDIO_CAPTIONS = captions;
