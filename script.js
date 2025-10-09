@@ -121,6 +121,7 @@
     attempted: new Set(),
     pendingHandle: null,
   };
+  let activeExperienceInstance = null;
   let audioFallbackBeepContext = null;
   let lastAudioFallbackBeepTimestamp = 0;
   const signedUrlExpiryChecks = new Set();
@@ -534,6 +535,451 @@
       return attemptAmbientMusicRecovery(detail);
     }
   }
+
+  const AUDIO_SETTINGS_STORAGE_KEY = 'infinite-rails:audio-settings';
+  const AUDIO_SETTINGS_CHANNELS = Object.freeze(['master', 'music', 'effects', 'ui']);
+  const AUDIO_SETTINGS_DEFAULTS = Object.freeze({
+    master: 0.8,
+    music: 0.6,
+    effects: 0.85,
+    ui: 0.7,
+  });
+  const audioSettingsState = {
+    volumes: {
+      master: AUDIO_SETTINGS_DEFAULTS.master,
+      music: AUDIO_SETTINGS_DEFAULTS.music,
+      effects: AUDIO_SETTINGS_DEFAULTS.effects,
+      ui: AUDIO_SETTINGS_DEFAULTS.ui,
+    },
+    muted: false,
+    listeners: new Set(),
+  };
+
+  function clampAudioVolume(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) {
+      return 0;
+    }
+    if (numeric <= 0) {
+      return 0;
+    }
+    if (numeric >= 1) {
+      return 1;
+    }
+    return numeric;
+  }
+
+  function normaliseAudioChannelName(input) {
+    if (typeof input !== 'string') {
+      return null;
+    }
+    const trimmed = input.trim().toLowerCase();
+    if (!trimmed) {
+      return null;
+    }
+    if (trimmed === 'master' || trimmed === 'master-volume' || trimmed === 'main') {
+      return 'master';
+    }
+    if (
+      trimmed === 'music' ||
+      trimmed === 'ambient' ||
+      trimmed === 'ambience' ||
+      trimmed === 'theme' ||
+      trimmed === 'bgm'
+    ) {
+      return 'music';
+    }
+    if (trimmed === 'ui' || trimmed === 'interface' || trimmed === 'hud' || trimmed === 'menu') {
+      return 'ui';
+    }
+    if (
+      trimmed === 'effects' ||
+      trimmed === 'effect' ||
+      trimmed === 'sfx' ||
+      trimmed === 'fx' ||
+      trimmed === 'gameplay'
+    ) {
+      return 'effects';
+    }
+    return null;
+  }
+
+  function loadStoredAudioSettings() {
+    if (!globalScope?.localStorage) {
+      return null;
+    }
+    try {
+      const raw = globalScope.localStorage.getItem(AUDIO_SETTINGS_STORAGE_KEY);
+      if (!raw) {
+        return null;
+      }
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object') {
+        return null;
+      }
+      const storedVolumes = {};
+      const volumeSource = parsed.volumes && typeof parsed.volumes === 'object' ? parsed.volumes : {};
+      AUDIO_SETTINGS_CHANNELS.forEach((channel) => {
+        const value = volumeSource[channel];
+        if (typeof value === 'number' && Number.isFinite(value)) {
+          storedVolumes[channel] = clampAudioVolume(value);
+        }
+      });
+      return {
+        muted: parsed.muted === true,
+        volumes: storedVolumes,
+      };
+    } catch (error) {
+      globalScope?.console?.debug?.('Failed to load audio settings from storage.', error);
+      return null;
+    }
+  }
+
+  function computeChannelBaseVolume(channel, state = audioSettingsState) {
+    const key = normaliseAudioChannelName(channel) ?? (channel === 'master' ? 'master' : null);
+    if (key === 'master') {
+      const value = state.volumes.master;
+      return clampAudioVolume(typeof value === 'number' ? value : AUDIO_SETTINGS_DEFAULTS.master);
+    }
+    const targetKey = key || 'effects';
+    const value = state.volumes[targetKey];
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return clampAudioVolume(value);
+    }
+    const fallback = AUDIO_SETTINGS_DEFAULTS[targetKey];
+    return clampAudioVolume(typeof fallback === 'number' ? fallback : 1);
+  }
+
+  function computeEffectiveChannelVolume(baseVolume, channel, state = audioSettingsState) {
+    if (state.muted) {
+      return 0;
+    }
+    const base = clampAudioVolume(baseVolume);
+    const master = computeChannelBaseVolume('master', state);
+    const key = normaliseAudioChannelName(channel);
+    if (key === 'master') {
+      return clampAudioVolume(base * master);
+    }
+    if (key === 'music') {
+      return clampAudioVolume(base * master * computeChannelBaseVolume('music', state));
+    }
+    if (key === 'ui') {
+      return clampAudioVolume(base * master * computeChannelBaseVolume('ui', state));
+    }
+    return clampAudioVolume(base * master * computeChannelBaseVolume('effects', state));
+  }
+
+  function createAudioSettingsSnapshot(state = audioSettingsState) {
+    const volumes = {};
+    AUDIO_SETTINGS_CHANNELS.forEach((channel) => {
+      volumes[channel] = computeChannelBaseVolume(channel, state);
+    });
+    return {
+      muted: state.muted === true,
+      volumes,
+      effective: {
+        master: state.muted ? 0 : volumes.master,
+        music: computeEffectiveChannelVolume(1, 'music', state),
+        effects: computeEffectiveChannelVolume(1, 'effects', state),
+        ui: computeEffectiveChannelVolume(1, 'ui', state),
+      },
+    };
+  }
+
+  function resolveAudioPlaybackChannel(name, options = {}) {
+    const fromOptions = normaliseAudioChannelName(options?.channel);
+    if (fromOptions) {
+      return fromOptions;
+    }
+    const key = typeof name === 'string' ? name.trim().toLowerCase() : '';
+    if (key.includes('ambient') || key.includes('theme') || key.includes('music') || key.includes('bgm')) {
+      return 'music';
+    }
+    if (key.includes('ui') || key.includes('menu') || key.includes('toggle') || key.includes('click')) {
+      return 'ui';
+    }
+    return 'effects';
+  }
+
+  function applyAudioSettingsToExperience(experience, options = {}) {
+    if (!experience || typeof experience !== 'object') {
+      return experience;
+    }
+    const audio = experience.audio;
+    if (!audio || typeof audio !== 'object') {
+      return experience;
+    }
+    const snapshot = createAudioSettingsSnapshot();
+    const { volumes, muted, effective } = snapshot;
+
+    if (typeof audio.setMuted === 'function') {
+      try {
+        audio.setMuted(muted);
+      } catch (error) {
+        globalScope?.console?.debug?.('Failed to apply audio mute state.', error);
+      }
+    } else if ('muted' in audio) {
+      try {
+        audio.muted = muted;
+      } catch (error) {}
+    }
+
+    if (typeof audio.setMasterVolume === 'function') {
+      try {
+        audio.setMasterVolume(volumes.master);
+      } catch (error) {
+        globalScope?.console?.debug?.('Failed to apply master volume.', error);
+      }
+    } else if ('masterVolume' in audio) {
+      try {
+        audio.masterVolume = volumes.master;
+      } catch (error) {}
+    }
+
+    const channelTargets = [
+      ['music', volumes.music],
+      ['effects', volumes.effects],
+      ['ui', volumes.ui],
+    ];
+    channelTargets.forEach(([channel, value]) => {
+      if (typeof audio.setChannelVolume === 'function') {
+        try {
+          audio.setChannelVolume(channel, value);
+        } catch (error) {
+          globalScope?.console?.debug?.(`Failed to apply ${channel} channel volume.`, error);
+        }
+      }
+      if (typeof audio.setVolume === 'function') {
+        try {
+          audio.setVolume(channel, value);
+        } catch (error) {}
+      }
+      const propertyName = `${channel}Volume`;
+      if (Object.prototype.hasOwnProperty.call(audio, propertyName)) {
+        try {
+          audio[propertyName] = value;
+        } catch (error) {}
+      }
+    });
+
+    try {
+      audio.settings = {
+        master: volumes.master,
+        music: volumes.music,
+        effects: volumes.effects,
+        ui: volumes.ui,
+        muted,
+        effective,
+      };
+    } catch (error) {
+      globalScope?.console?.debug?.('Failed to synchronise audio settings snapshot.', error);
+    }
+
+    return experience;
+  }
+
+  function patchAudioController(audio) {
+    if (!audio || typeof audio !== 'object' || audio.__infiniteRailsAudioPatched) {
+      return audio;
+    }
+    const originalPlay = typeof audio.play === 'function' ? audio.play.bind(audio) : null;
+    if (originalPlay) {
+      audio.play = function patchedAudioPlay(name, options = {}) {
+        const playbackOptions = options ? { ...options } : {};
+        const channel = resolveAudioPlaybackChannel(name, playbackOptions);
+        const baseVolume = typeof playbackOptions.volume === 'number' ? playbackOptions.volume : 1;
+        playbackOptions.channel = channel;
+        playbackOptions.volume = computeEffectiveChannelVolume(baseVolume, channel);
+        if (audioSettingsState.muted) {
+          playbackOptions.muted = true;
+        } else if (playbackOptions.muted === true && playbackOptions.volume > 0) {
+          playbackOptions.muted = false;
+        }
+        return originalPlay.call(audio, name, playbackOptions);
+      };
+    }
+    audio.__infiniteRailsAudioPatched = true;
+    return audio;
+  }
+
+  function attachAudioAccessors(experience) {
+    if (!experience || typeof experience !== 'object') {
+      return experience;
+    }
+    if (typeof experience.getAudioChannelVolume !== 'function') {
+      experience.getAudioChannelVolume = (channel) => getAudioChannelVolume(channel);
+    }
+    if (typeof experience.getMusicVolume !== 'function') {
+      experience.getMusicVolume = () => getAudioChannelVolume('music');
+    }
+    if (typeof experience.getUiVolume !== 'function') {
+      experience.getUiVolume = () => getAudioChannelVolume('ui');
+    }
+    if (typeof experience.getEffectsVolume !== 'function') {
+      experience.getEffectsVolume = () => getAudioChannelVolume('effects');
+    }
+    const audio = experience.audio;
+    if (audio && typeof audio === 'object') {
+      if (typeof audio.getChannelVolume !== 'function') {
+        audio.getChannelVolume = (channel) => getAudioChannelVolume(channel);
+      }
+      if (typeof audio.getVolume !== 'function') {
+        audio.getVolume = (channel) => getAudioChannelVolume(channel);
+      }
+      if (typeof audio.getEffectiveVolume !== 'function') {
+        audio.getEffectiveVolume = (channel) => computeEffectiveChannelVolume(1, channel);
+      }
+    }
+    return experience;
+  }
+
+  function integrateAudioSettingsWithExperience(experience, options = {}) {
+    if (!experience || typeof experience !== 'object') {
+      return experience;
+    }
+    if (experience.audio && typeof experience.audio === 'object') {
+      patchAudioController(experience.audio);
+    }
+    attachAudioAccessors(experience);
+    applyAudioSettingsToExperience(experience, options);
+    return experience;
+  }
+
+  function persistAudioSettings(snapshot) {
+    if (!globalScope?.localStorage) {
+      return;
+    }
+    try {
+      const target = snapshot ?? createAudioSettingsSnapshot();
+      const payload = {
+        muted: target.muted === true,
+        volumes: {},
+      };
+      AUDIO_SETTINGS_CHANNELS.forEach((channel) => {
+        payload.volumes[channel] = clampAudioVolume(target.volumes?.[channel]);
+      });
+      globalScope.localStorage.setItem(AUDIO_SETTINGS_STORAGE_KEY, JSON.stringify(payload));
+    } catch (error) {
+      globalScope?.console?.debug?.('Unable to persist audio settings.', error);
+    }
+  }
+
+  function notifyAudioSettingsChange(detail = {}) {
+    const snapshot = createAudioSettingsSnapshot();
+    if (detail.persist !== false) {
+      persistAudioSettings(snapshot);
+    }
+    if (activeExperienceInstance) {
+      try {
+        applyAudioSettingsToExperience(activeExperienceInstance, detail);
+      } catch (error) {
+        globalScope?.console?.debug?.('Failed to apply audio settings to active experience.', error);
+      }
+    }
+    const listeners = Array.from(audioSettingsState.listeners);
+    listeners.forEach((listener) => {
+      try {
+        listener(snapshot, detail);
+      } catch (listenerError) {
+        globalScope?.console?.debug?.('Audio settings listener error.', listenerError);
+      }
+    });
+    return snapshot;
+  }
+
+  function addAudioSettingsListener(listener) {
+    if (typeof listener !== 'function') {
+      return () => {};
+    }
+    audioSettingsState.listeners.add(listener);
+    try {
+      listener(createAudioSettingsSnapshot(), { reason: 'initial' });
+    } catch (error) {
+      globalScope?.console?.debug?.('Audio settings listener error.', error);
+    }
+    return () => {
+      audioSettingsState.listeners.delete(listener);
+    };
+  }
+
+  function setAudioMuted(muted, options = {}) {
+    const next = Boolean(muted);
+    if (audioSettingsState.muted === next && options.force !== true) {
+      return createAudioSettingsSnapshot();
+    }
+    audioSettingsState.muted = next;
+    return notifyAudioSettingsChange({
+      source: options.source,
+      reason: options.reason ?? 'mute-change',
+      channel: 'master',
+      persist: options.persist !== false,
+    });
+  }
+
+  function setAudioChannelVolume(channel, value, options = {}) {
+    const key = normaliseAudioChannelName(channel) ?? (channel === 'master' ? 'master' : 'effects');
+    const clamped = clampAudioVolume(value);
+    if (key === 'master') {
+      if (audioSettingsState.volumes.master === clamped && options.force !== true) {
+        return createAudioSettingsSnapshot();
+      }
+      audioSettingsState.volumes.master = clamped;
+    } else {
+      if (audioSettingsState.volumes[key] === clamped && options.force !== true) {
+        return createAudioSettingsSnapshot();
+      }
+      audioSettingsState.volumes[key] = clamped;
+    }
+    return notifyAudioSettingsChange({
+      source: options.source,
+      reason: options.reason ?? 'volume-change',
+      channel: key,
+      persist: options.persist !== false,
+    });
+  }
+
+  function resetAudioSettings(options = {}) {
+    AUDIO_SETTINGS_CHANNELS.forEach((channel) => {
+      audioSettingsState.volumes[channel] = AUDIO_SETTINGS_DEFAULTS[channel];
+    });
+    audioSettingsState.muted = false;
+    return notifyAudioSettingsChange({
+      source: options.source,
+      reason: options.reason ?? 'reset',
+      persist: options.persist !== false,
+    });
+  }
+
+  function getAudioChannelVolume(channel) {
+    return computeChannelBaseVolume(channel);
+  }
+
+  const storedAudioSettings = loadStoredAudioSettings();
+  if (storedAudioSettings) {
+    AUDIO_SETTINGS_CHANNELS.forEach((channel) => {
+      if (Object.prototype.hasOwnProperty.call(storedAudioSettings.volumes, channel)) {
+        audioSettingsState.volumes[channel] = clampAudioVolume(storedAudioSettings.volumes[channel]);
+      }
+    });
+    audioSettingsState.muted = storedAudioSettings.muted === true;
+  }
+
+  globalScope.InfiniteRails = globalScope.InfiniteRails || {};
+  const audioSettingsApi = globalScope.InfiniteRails.audio || {};
+  audioSettingsApi.getState = () => createAudioSettingsSnapshot();
+  audioSettingsApi.getVolume = (channel) => getAudioChannelVolume(channel);
+  audioSettingsApi.getEffectiveVolume = (channel) => computeEffectiveChannelVolume(1, channel);
+  audioSettingsApi.setVolume = (channel, value, options = {}) =>
+    setAudioChannelVolume(channel, value, { ...options, source: options.source ?? 'api' });
+  audioSettingsApi.setMuted = (muted, options = {}) =>
+    setAudioMuted(muted, { ...options, source: options.source ?? 'api' });
+  audioSettingsApi.toggleMuted = (options = {}) =>
+    setAudioMuted(!audioSettingsState.muted, { ...options, source: options.source ?? 'api' });
+  audioSettingsApi.reset = (options = {}) => resetAudioSettings({ ...options, source: options.source ?? 'api' });
+  audioSettingsApi.onChange = (listener) => addAudioSettingsListener(listener);
+  audioSettingsApi.applyToExperience = (experience, options = {}) =>
+    integrateAudioSettingsWithExperience(experience, { ...options, source: options.source ?? 'api' });
+  globalScope.InfiniteRails.audio = audioSettingsApi;
 
   function getSearchParamEntries(searchParams) {
     if (!searchParams || typeof searchParams.entries !== 'function') {
@@ -2446,8 +2892,6 @@
   bootStatusApi.markWarning = (phase, message, extra) => markBootPhaseWarning(phase, message, extra);
   bootStatusApi.markError = (phase, message, extra) => markBootPhaseError(phase, message, extra);
   globalScope.InfiniteRails.bootStatus = bootStatusApi;
-
-  let activeExperienceInstance = null;
 
   function isDebugModeEnabled() {
     return debugModeState.enabled;
@@ -10317,6 +10761,97 @@
     return setDebugModeEnabled(!isDebugModeEnabled(), options);
   }
 
+  function formatAudioVolumeLabel(channel, snapshot) {
+    if (!snapshot || typeof snapshot !== 'object') {
+      return '0%';
+    }
+    const volumes = snapshot.volumes || {};
+    const base = Number.isFinite(volumes[channel]) ? volumes[channel] : 0;
+    if (channel === 'master') {
+      if (snapshot.muted || base === 0) {
+        return 'Muted';
+      }
+      return `${Math.round(base * 100)}%`;
+    }
+    if (snapshot.muted || !Number.isFinite(volumes.master) || volumes.master === 0) {
+      return 'Muted';
+    }
+    return `${Math.round(base * 100)}%`;
+  }
+
+  function bindAudioSettingsControls(ui) {
+    const doc = documentRef || globalScope.document || null;
+    const form = ui?.settingsForm ?? doc?.querySelector?.('[data-settings-form]') ?? null;
+    if (!form || form.dataset.audioSettingsBound === 'true') {
+      return;
+    }
+
+    const sliderInputs = new Map();
+    AUDIO_SETTINGS_CHANNELS.forEach((channel) => {
+      const input = form.querySelector(`input[name="${channel}"]`);
+      if (input) {
+        sliderInputs.set(channel, input);
+      }
+    });
+
+    const labels = new Map();
+    AUDIO_SETTINGS_CHANNELS.forEach((channel) => {
+      const label = form.querySelector(`[data-volume-label="${channel}"]`);
+      if (label) {
+        labels.set(channel, label);
+      }
+    });
+
+    const muteToggle = form.querySelector('[data-audio-mute]');
+
+    const handleSliderInput = (channel) => (event) => {
+      const rawValue = Number.parseFloat(event?.target?.value ?? sliderInputs.get(channel)?.value ?? '0');
+      const percent = Number.isFinite(rawValue) ? rawValue : 0;
+      const volume = clampAudioVolume(percent / 100);
+      setAudioChannelVolume(channel, volume, { source: 'ui', persist: true, reason: 'ui-volume-change' });
+    };
+
+    sliderInputs.forEach((input, channel) => {
+      const handler = handleSliderInput(channel);
+      input.addEventListener('input', handler);
+      input.addEventListener('change', handler);
+    });
+
+    if (muteToggle) {
+      muteToggle.addEventListener('change', (event) => {
+        setAudioMuted(Boolean(event?.target?.checked), {
+          source: 'ui',
+          persist: true,
+          reason: 'ui-mute-toggle',
+        });
+      });
+    }
+
+    const updateUi = (snapshot = createAudioSettingsSnapshot()) => {
+      AUDIO_SETTINGS_CHANNELS.forEach((channel) => {
+        const input = sliderInputs.get(channel);
+        if (input) {
+          const sliderValue = Math.round((snapshot.volumes?.[channel] ?? 0) * 100);
+          if (Number(input.value) !== sliderValue) {
+            input.value = String(sliderValue);
+          }
+        }
+        const label = labels.get(channel);
+        if (label) {
+          label.textContent = formatAudioVolumeLabel(channel, snapshot);
+        }
+      });
+      if (muteToggle) {
+        muteToggle.checked = snapshot.muted === true;
+      }
+    };
+
+    addAudioSettingsListener((snapshot) => updateUi(snapshot));
+    updateUi(createAudioSettingsSnapshot());
+
+    form.dataset.audioSettingsBound = 'true';
+  }
+
   function bindDebugModeControls(ui) {
     if (!ui) {
       return;
@@ -13636,6 +14171,7 @@
       liveDiagnosticsList: byId('liveDiagnosticsList'),
       liveDiagnosticsEmpty: byId('liveDiagnosticsEmpty'),
       liveDiagnosticsClear: byId('liveDiagnosticsClear'),
+      settingsForm: doc.querySelector('[data-settings-form]'),
       debugModeToggle: byId('debugModeToggle'),
       debugModeStatus: byId('debugModeStatus'),
       blockActionHud: byId('blockActionHud'),
@@ -13801,6 +14337,7 @@
     try {
       ensureHudDefaults(doc);
       ui = collectSimpleExperienceUi(doc);
+      bindAudioSettingsControls(ui);
       ensureHudStateBinding(ui);
       bindDebugModeControls(ui);
       bindDeveloperStatsControls(ui);
@@ -13822,6 +14359,7 @@
         playerName: identityState.identity?.name ?? 'Explorer',
         identityStorageKey,
       });
+      integrateAudioSettingsWithExperience(experience, { source: 'bootstrap' });
     } catch (error) {
       markBootPhaseError('ui', 'Simplified renderer initialisation failed.');
       if (globalScope.console?.error) {
@@ -14624,6 +15162,15 @@
       hooks.performBackendLiveCheck = performBackendLiveCheck;
       hooks.ensureAudioAssetLiveTest = ensureAudioAssetLiveTest;
       hooks.getAudioAssetLiveTestState = () => audioAssetLiveTestState;
+      hooks.getAudioSettingsState = () => createAudioSettingsSnapshot();
+      hooks.setAudioMuted = (value, options = {}) =>
+        setAudioMuted(value, { ...options, source: options.source ?? 'test-hook', persist: options.persist });
+      hooks.setAudioChannelVolume = (channel, value, options = {}) =>
+        setAudioChannelVolume(channel, value, { ...options, source: options.source ?? 'test-hook', persist: options.persist });
+      hooks.resetAudioSettings = (options = {}) =>
+        resetAudioSettings({ ...options, source: options.source ?? 'test-hook', persist: options.persist });
+      hooks.applyAudioSettingsToExperience = (experience, options = {}) =>
+        integrateAudioSettingsWithExperience(experience, { ...options, source: options.source ?? 'test-hook' });
       hooks.getIdentityState = () => identityState;
       hooks.getBackendLiveCheckState = () => backendLiveCheckState;
       hooks.activateMissionBriefingFallback = activateMissionBriefingFallback;

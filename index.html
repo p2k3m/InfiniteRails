@@ -935,6 +935,12 @@
         <form class="settings-modal__form" data-settings-form>
           <fieldset class="settings-modal__fieldset">
             <legend class="settings-modal__legend">Audio mix</legend>
+            <div class="settings-modal__toggle-row">
+              <label class="settings-modal__toggle">
+                <input type="checkbox" name="mute" data-audio-mute />
+                <span>Mute all audio</span>
+              </label>
+            </div>
             <div class="settings-modal__field">
               <div class="settings-modal__label-row">
                 <label for="masterVolume">Master Volume</label>
@@ -967,6 +973,21 @@
             </div>
             <div class="settings-modal__field">
               <div class="settings-modal__label-row">
+                <label for="uiVolume">UI</label>
+                <span class="settings-modal__value" data-volume-label="ui">70%</span>
+              </div>
+              <input
+                type="range"
+                id="uiVolume"
+                name="ui"
+                min="0"
+                max="100"
+                value="70"
+                class="settings-modal__range"
+              />
+            </div>
+            <div class="settings-modal__field">
+              <div class="settings-modal__label-row">
                 <label for="effectsVolume">Effects</label>
                 <span class="settings-modal__value" data-volume-label="effects">85%</span>
               </div>
@@ -980,7 +1001,7 @@
                 class="settings-modal__range"
               />
             </div>
-            <p class="settings-modal__hint">Balance ambient loops and crafting cues independently.</p>
+            <p class="settings-modal__hint">Balance ambient loops, UI chimes, and crafting cues independently.</p>
           </fieldset>
           <fieldset class="settings-modal__fieldset settings-modal__fieldset--keybindings">
             <legend class="settings-modal__legend">Key bindings</legend>
