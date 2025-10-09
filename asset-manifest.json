@@ -4,7 +4,7 @@
   "assets": [
     "index.html?v=b6a3642fd510",
     "styles.css?v=be5159d149bd",
-    "controls.config.js?v=435adbf8575b",
+    "assets/controls.config.js?v=435adbf8575b",
     "script.js?v=de8df2ffe694",
     "test-driver.js?v=0074c367d97c",
     "simple-experience.js?v=613ed82b7d41",

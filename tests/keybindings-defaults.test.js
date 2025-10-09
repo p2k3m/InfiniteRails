@@ -34,7 +34,7 @@ function extractDefaultBindings({ source, hotbarConstantName, hotbarCount }) {
 }
 
 function loadDeclarativeControlMap() {
-  const source = fs.readFileSync(path.join(repoRoot, 'controls.config.js'), 'utf8');
+  const source = fs.readFileSync(path.join(repoRoot, 'assets', 'controls.config.js'), 'utf8');
   const scope = {
     APP_CONFIG: {},
     dispatchEvent: () => {},
@@ -51,7 +51,7 @@ function loadDeclarativeControlMap() {
     globalThis: scope,
     CustomEvent: CustomEventStub,
   };
-  vm.runInNewContext(source, sandbox, { filename: 'controls.config.js' });
+  vm.runInNewContext(source, sandbox, { filename: 'assets/controls.config.js' });
   const map = scope.__INFINITE_RAILS_CONTROL_MAP__;
   if (!map) {
     throw new Error('Declarative control map was not initialised.');
@@ -295,7 +295,7 @@ describe('declarative control map configuration', () => {
   });
 
   it('notifies subscribers when the control map changes', () => {
-    const source = fs.readFileSync(path.join(repoRoot, 'controls.config.js'), 'utf8');
+    const source = fs.readFileSync(path.join(repoRoot, 'assets', 'controls.config.js'), 'utf8');
     const scope = {
       APP_CONFIG: {},
       dispatchEvent: () => {},
@@ -308,7 +308,7 @@ describe('declarative control map configuration', () => {
       console: { debug: () => {} },
     };
     const sandbox = { window: scope, globalThis: scope, CustomEvent: scope.CustomEvent };
-    vm.runInNewContext(source, sandbox, { filename: 'controls.config.js' });
+    vm.runInNewContext(source, sandbox, { filename: 'assets/controls.config.js' });
 
     const notifications = [];
     const unsubscribe = scope.InfiniteRailsControls.subscribe((map) => {
