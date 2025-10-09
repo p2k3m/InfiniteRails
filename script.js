@@ -273,7 +273,7 @@
     const seen = new Set();
     const baseFailed = normaliseAudioSampleName(failedName);
 
-    const addCandidate = (value) => {
+    const addCandidate = (value, options = {}) => {
       let candidate = '';
       if (typeof value === 'string') {
         candidate = value;
@@ -286,7 +286,10 @@
       if (!normalized || normalized === baseFailed || seen.has(normalized)) {
         return;
       }
-      if (!shouldAttemptAmbientMusicRecovery(normalized)) {
+      if (normalized === '__fallback_beep__') {
+        return;
+      }
+      if (options?.allowNonAmbient !== true && !shouldAttemptAmbientMusicRecovery(normalized)) {
         return;
       }
       seen.add(normalized);
@@ -294,10 +297,10 @@
     };
 
     if (Array.isArray(detail?.fallbackCandidates)) {
-      detail.fallbackCandidates.forEach(addCandidate);
+      detail.fallbackCandidates.forEach((value) => addCandidate(value, { allowNonAmbient: true }));
     }
     if (Array.isArray(detail?.aliasCandidates)) {
-      detail.aliasCandidates.forEach(addCandidate);
+      detail.aliasCandidates.forEach((value) => addCandidate(value, { allowNonAmbient: true }));
     }
 
     const dimensionTracks = experience?.dimensionSettings?.ambientTracks;

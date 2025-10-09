@@ -10,6 +10,7 @@
   const aliasConfig = Object.assign({}, existing, {
     ambientOverworld: existing.ambientOverworld || ['bubble', 'miningA'],
     ambientDefault: existing.ambientDefault || existing.ambientOverworld || ['bubble', 'miningA'],
+    theme: existing.theme || ['ambientOverworld', 'ambientDefault'],
     craftChime: existing.craftChime || ['victoryCheer', 'miningA'],
     blockPlace: existing.blockPlace || ['crunch', 'miningB'],
     lootChestOpen: existing.lootChestOpen || ['bubble', 'victoryCheer'],
