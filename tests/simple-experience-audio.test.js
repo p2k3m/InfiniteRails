@@ -413,6 +413,14 @@ describe('SimpleExperience audio fallbacks', () => {
     windowStub.INFINITE_RAILS_EMBEDDED_ASSETS.audioSamples = {};
     const dispatchSpy = vi.spyOn(windowStub, 'dispatchEvent').mockImplementation(() => {});
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const showErrorSpy = vi.fn();
+    const setDiagnosticSpy = vi.fn();
+    const logEventSpy = vi.fn();
+    windowStub.bootstrapOverlay = {
+      showError: showErrorSpy,
+      setDiagnostic: setDiagnosticSpy,
+      logEvent: logEventSpy,
+    };
     const cleanupAudioStub = installAudioStub(windowStub);
 
     const { experience } = createExperience();
@@ -442,9 +450,36 @@ describe('SimpleExperience audio fallbacks', () => {
       expect.objectContaining({ type: 'infinite-rails:audio-error' }),
     );
 
+    expect(showErrorSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: 'Missing audio sample',
+        message: expect.stringMatching(/Audio sample "bubble"/),
+      }),
+    );
+    expect(setDiagnosticSpy).toHaveBeenCalledWith(
+      'audio',
+      expect.objectContaining({
+        status: 'error',
+        message: expect.stringMatching(/Audio sample "bubble"/),
+      }),
+    );
+    expect(logEventSpy).toHaveBeenCalledWith(
+      'audio',
+      expect.stringMatching(/Audio sample "bubble"/),
+      expect.objectContaining({
+        level: 'error',
+        detail: expect.objectContaining({
+          code: expect.stringMatching(/missing-sample/),
+          missingSample: true,
+          fallbackActive: true,
+        }),
+      }),
+    );
+
     cleanupAudioStub();
     dispatchSpy.mockRestore();
     errorSpy.mockRestore();
+    delete windowStub.bootstrapOverlay;
   });
 
   it('plays the fallback beep when a resolved sample payload is missing', async () => {
