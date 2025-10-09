@@ -20,6 +20,9 @@
     portalDormant: existing.portalDormant || ['bubble', 'crunch'],
     portalPrimed: existing.portalPrimed || ['bubble', 'miningA'],
     welcome: existing.welcome || ['victoryCheer', 'bubble'],
+    inventoryOverflow: existing.inventoryOverflow || ['blockPlace', 'crunch'],
+    craftError: existing.craftError || ['playerHit', 'miningB'],
+    playerDeath: existing.playerDeath || ['zombieGroan', 'playerHit'],
   });
 
   scope.INFINITE_RAILS_AUDIO_ALIASES = aliasConfig;

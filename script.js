@@ -9823,6 +9823,267 @@
     return null;
   }
 
+  const statusSoundState = {
+    inventory: { observer: null, pollHandle: null, element: null, visible: false, message: '' },
+    crafting: { observer: null, pollHandle: null, element: null, lastMessage: '' },
+    defeat: { observer: null, pollHandle: null, element: null, visible: false },
+  };
+
+  function getExperienceAudioInterface() {
+    const instance = activeExperienceInstance;
+    if (!instance) {
+      return null;
+    }
+    const audio = instance.audio;
+    if (!audio || typeof audio.play !== 'function') {
+      return null;
+    }
+    return audio;
+  }
+
+  function playStatusSound(names, options = {}) {
+    const audio = getExperienceAudioInterface();
+    if (!audio) {
+      return false;
+    }
+    const candidates = Array.isArray(names) ? names : [names];
+    let played = false;
+    for (const rawName of candidates) {
+      const name = typeof rawName === 'string' ? rawName.trim() : '';
+      if (!name) {
+        continue;
+      }
+      try {
+        const result = audio.play(name, options);
+        if (result && typeof result.catch === 'function') {
+          result.catch(() => {});
+        }
+        played = true;
+        break;
+      } catch (error) {
+        getConsoleRef()?.debug?.('Status sound playback failed.', { name, error });
+      }
+    }
+    return played;
+  }
+
+  function normaliseStatusMessage(message) {
+    if (typeof message !== 'string') {
+      return '';
+    }
+    return message.replace(/\s+/g, ' ').trim();
+  }
+
+  function isElementVisible(element) {
+    if (!element) {
+      return false;
+    }
+    if (element.hidden) {
+      return false;
+    }
+    if (typeof element.getAttribute === 'function' && element.getAttribute('aria-hidden') === 'true') {
+      return false;
+    }
+    const ownerDocument = element.ownerDocument || documentRef || globalScope.document || null;
+    const view = ownerDocument?.defaultView || globalScope;
+    if (view && typeof view.getComputedStyle === 'function') {
+      try {
+        const style = view.getComputedStyle(element);
+        if (style && (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0')) {
+          return false;
+        }
+      } catch (error) {}
+    }
+    return true;
+  }
+
+  function disconnectStatusSoundWatcher(record) {
+    if (!record) {
+      return;
+    }
+    if (record.observer && typeof record.observer.disconnect === 'function') {
+      try {
+        record.observer.disconnect();
+      } catch (error) {}
+    }
+    record.observer = null;
+    if (record.pollHandle !== null) {
+      const cancel =
+        (typeof globalScope?.clearInterval === 'function' && globalScope.clearInterval.bind(globalScope)) ||
+        (typeof clearInterval === 'function' ? clearInterval : null);
+      if (cancel) {
+        try {
+          cancel(record.pollHandle);
+        } catch (error) {}
+      }
+      record.pollHandle = null;
+    }
+  }
+
+  function resetStatusSoundObservers() {
+    disconnectStatusSoundWatcher(statusSoundState.inventory);
+    disconnectStatusSoundWatcher(statusSoundState.crafting);
+    disconnectStatusSoundWatcher(statusSoundState.defeat);
+    statusSoundState.inventory.element = null;
+    statusSoundState.inventory.visible = false;
+    statusSoundState.inventory.message = '';
+    statusSoundState.crafting.element = null;
+    statusSoundState.crafting.lastMessage = '';
+    statusSoundState.defeat.element = null;
+    statusSoundState.defeat.visible = false;
+  }
+
+  const craftErrorMessages = new Set([
+    'Sequence empty. Add materials to craft.',
+    'Recipe ingredients detected, but the order is incorrect.',
+    'Sequence fizzles. No recipe matched.',
+    'Missing ingredients for this recipe.',
+  ]);
+
+  function handleInventoryOverflowChange(element) {
+    if (!element) {
+      return;
+    }
+    const record = statusSoundState.inventory;
+    const visible = isElementVisible(element);
+    const message = visible ? normaliseStatusMessage(element.textContent || '') : '';
+    if (visible && message && (record.message !== message || !record.visible)) {
+      playStatusSound(['inventoryOverflow', 'blockPlace', 'crunch'], { volume: 0.7 });
+    }
+    record.visible = visible;
+    record.message = message;
+  }
+
+  function handleCraftHelperChange(element) {
+    if (!element) {
+      return;
+    }
+    const record = statusSoundState.crafting;
+    const message = normaliseStatusMessage(element.textContent || '');
+    if (!message) {
+      record.lastMessage = '';
+      return;
+    }
+    if (craftErrorMessages.has(message)) {
+      if (record.lastMessage !== message) {
+        playStatusSound(['craftError', 'playerHit', 'miningB'], { volume: 0.75 });
+        record.lastMessage = message;
+      }
+      return;
+    }
+    record.lastMessage = '';
+  }
+
+  function handleDefeatOverlayChange(element) {
+    if (!element) {
+      return;
+    }
+    const record = statusSoundState.defeat;
+    const visible = isElementVisible(element);
+    if (visible && !record.visible) {
+      playStatusSound(['playerDeath', 'zombieGroan', 'playerHit'], { volume: 0.85 });
+    }
+    record.visible = visible;
+  }
+
+  function setupInventoryOverflowSoundWatcher(element) {
+    const record = statusSoundState.inventory;
+    if (record.element === element && (record.observer || record.pollHandle !== null)) {
+      return;
+    }
+    disconnectStatusSoundWatcher(record);
+    record.element = element || null;
+    record.visible = false;
+    record.message = '';
+    if (!element) {
+      return;
+    }
+    if (typeof globalScope?.MutationObserver === 'function') {
+      const observer = new globalScope.MutationObserver(() => handleInventoryOverflowChange(element));
+      observer.observe(element, {
+        attributes: true,
+        attributeFilter: ['hidden', 'aria-hidden', 'style'],
+        childList: true,
+        subtree: true,
+        characterData: true,
+      });
+      record.observer = observer;
+    } else if (typeof globalScope?.setInterval === 'function' || typeof setInterval === 'function') {
+      const scheduler =
+        (typeof globalScope?.setInterval === 'function' && globalScope.setInterval.bind(globalScope)) ||
+        (typeof setInterval === 'function' ? setInterval : null);
+      if (scheduler) {
+        record.pollHandle = scheduler(() => handleInventoryOverflowChange(element), 600);
+      }
+    }
+    handleInventoryOverflowChange(element);
+  }
+
+  function setupCraftingErrorSoundWatcher(element) {
+    const record = statusSoundState.crafting;
+    if (record.element === element && (record.observer || record.pollHandle !== null)) {
+      return;
+    }
+    disconnectStatusSoundWatcher(record);
+    record.element = element || null;
+    record.lastMessage = '';
+    if (!element) {
+      return;
+    }
+    if (typeof globalScope?.MutationObserver === 'function') {
+      const observer = new globalScope.MutationObserver(() => handleCraftHelperChange(element));
+      observer.observe(element, { childList: true, subtree: true, characterData: true });
+      record.observer = observer;
+    } else if (typeof globalScope?.setInterval === 'function' || typeof setInterval === 'function') {
+      const scheduler =
+        (typeof globalScope?.setInterval === 'function' && globalScope.setInterval.bind(globalScope)) ||
+        (typeof setInterval === 'function' ? setInterval : null);
+      if (scheduler) {
+        record.pollHandle = scheduler(() => handleCraftHelperChange(element), 600);
+      }
+    }
+    handleCraftHelperChange(element);
+  }
+
+  function setupDefeatSoundWatcher(element) {
+    const record = statusSoundState.defeat;
+    if (record.element === element && (record.observer || record.pollHandle !== null)) {
+      return;
+    }
+    disconnectStatusSoundWatcher(record);
+    record.element = element || null;
+    record.visible = false;
+    if (!element) {
+      return;
+    }
+    if (typeof globalScope?.MutationObserver === 'function') {
+      const observer = new globalScope.MutationObserver(() => handleDefeatOverlayChange(element));
+      observer.observe(element, { attributes: true, attributeFilter: ['hidden', 'aria-hidden', 'style'] });
+      record.observer = observer;
+    } else if (typeof globalScope?.setInterval === 'function' || typeof setInterval === 'function') {
+      const scheduler =
+        (typeof globalScope?.setInterval === 'function' && globalScope.setInterval.bind(globalScope)) ||
+        (typeof setInterval === 'function' ? setInterval : null);
+      if (scheduler) {
+        record.pollHandle = scheduler(() => handleDefeatOverlayChange(element), 700);
+      }
+    }
+    handleDefeatOverlayChange(element);
+  }
+
+  function attachStatusSoundObservers(ui) {
+    const doc = documentRef || globalScope.document || null;
+    if (!doc) {
+      return;
+    }
+    const inventoryEl = ui?.inventoryOverflowEl || doc.getElementById('inventoryOverflow');
+    const craftHelperEl = ui?.craftingHelperDescriptionEl || doc.getElementById('craftingHelperDescription');
+    const defeatOverlayEl = doc.getElementById('defeatOverlay');
+    setupInventoryOverflowSoundWatcher(inventoryEl);
+    setupCraftingErrorSoundWatcher(craftHelperEl);
+    setupDefeatSoundWatcher(defeatOverlayEl);
+  }
+
   function handleDimensionAdvancedOverlay(detail = {}) {
     const label = extractDimensionLabel(detail) || 'New dimension';
     const assetsVerified = detail?.assetsVerified;
@@ -9872,6 +10133,7 @@
       variant: 'success',
       duration: 6500,
     });
+    playStatusSound(['portalActivate', 'victoryCheer']);
   }
 
   function handleLootCollectedOverlay(detail = {}) {
@@ -13723,6 +13985,7 @@
     activeExperienceInstance = null;
     globalScope.__INFINITE_RAILS_ACTIVE_EXPERIENCE__ = null;
     resetAmbientMusicRecoveryState();
+    resetStatusSoundObservers();
     return result;
   }
 
@@ -13808,6 +14071,7 @@
       bindLiveDiagnosticsControls(ui);
       bindExperienceEventLog(ui);
       bindExperienceEventOverlays(ui);
+      attachStatusSoundObservers(ui);
       markBootPhaseOk('ui', 'HUD interfaces ready.');
     } catch (uiBootstrapError) {
       markBootPhaseError('ui', 'Failed to prepare HUD interfaces.');
