@@ -12,13 +12,16 @@
     ambientDefault: existing.ambientDefault || existing.ambientOverworld || ['bubble', 'miningA'],
     theme: existing.theme || ['ambientOverworld', 'ambientDefault'],
     craftChime: existing.craftChime || ['victoryCheer', 'miningA'],
+    craftError: existing.craftError || ['crunch', 'miningB'],
     blockPlace: existing.blockPlace || ['crunch', 'miningB'],
     lootChestOpen: existing.lootChestOpen || ['bubble', 'victoryCheer'],
     playerHit: existing.playerHit || ['crunch'],
+    playerDefeat: existing.playerDefeat || ['miningB', 'crunch'],
     zombieGroan: existing.zombieGroan || ['miningB', 'crunch'],
     portalActivate: existing.portalActivate || ['victoryCheer', 'miningA'],
     portalDormant: existing.portalDormant || ['bubble', 'crunch'],
     portalPrimed: existing.portalPrimed || ['bubble', 'miningA'],
+    inventoryOverflow: existing.inventoryOverflow || ['bubble', 'victoryCheer'],
     welcome: existing.welcome || ['victoryCheer', 'bubble'],
   });
 

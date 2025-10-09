@@ -12,7 +12,10 @@ describe('audio alias configuration', () => {
     [
       'blockPlace',
       'craftChime',
+      'craftError',
+      'inventoryOverflow',
       'lootChestOpen',
+      'playerDefeat',
       'playerHit',
       'portalActivate',
       'portalDormant',
