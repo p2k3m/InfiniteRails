@@ -632,6 +632,18 @@ function enterPortal(portal, dimension) {
     z: 0,
   });
   const dimensionChanged = currentId ? currentId !== targetId : true;
+  const transitionGuard = {
+    allowIncompleteTransition: false,
+    resetOnFailure: true,
+    triggers: ['world-load-failure', 'dimension-load-failure'],
+  };
+  const failSafe = {
+    resetOnWorldFailure: true,
+    resetOnDimensionFailure: true,
+    previousDimensionId: currentId ?? null,
+    targetDimensionId: targetId,
+    reason: 'dimension-transition-guard',
+  };
   return {
     fade: true,
     resetPosition: { x: playerSpawn.x, y: playerSpawn.y },
@@ -643,13 +655,15 @@ function enterPortal(portal, dimension) {
     dimensionRules: rules,
     announcement,
     dimensionChanged,
+    transitionGuard,
     spawn: {
       player: playerSpawn,
       world: worldSpawn,
     },
     regeneration: {
-      player: { required: true, spawn: playerSpawn },
-      world: { required: true, spawn: worldSpawn },
+      player: { required: true, spawn: playerSpawn, resetOnFailure: true },
+      world: { required: true, spawn: worldSpawn, resetOnFailure: true },
+      failSafe,
     },
   };
 }

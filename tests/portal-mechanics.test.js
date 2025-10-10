@@ -166,6 +166,20 @@ describe('portal mechanics', () => {
     expect(result.spawn.world).toEqual({ x: 12, y: -4, z: 0 });
     expect(result.regeneration.player).toMatchObject({ required: true, spawn: { x: 8, y: 3, z: -2 } });
     expect(result.regeneration.world).toMatchObject({ required: true, spawn: { x: 12, y: -4, z: 0 } });
+    expect(result.regeneration.player.resetOnFailure).toBe(true);
+    expect(result.regeneration.world.resetOnFailure).toBe(true);
+    expect(result.regeneration.failSafe).toMatchObject({
+      resetOnWorldFailure: true,
+      resetOnDimensionFailure: true,
+      previousDimensionId: 'origin',
+      targetDimensionId: 'rock',
+      reason: 'dimension-transition-guard',
+    });
+    expect(result.transitionGuard).toMatchObject({
+      allowIncompleteTransition: false,
+      resetOnFailure: true,
+      triggers: expect.arrayContaining(['world-load-failure', 'dimension-load-failure']),
+    });
   });
 
   it('throws when attempting to enter a portal that is inactive or misaligned', () => {
