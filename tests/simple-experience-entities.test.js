@@ -260,14 +260,13 @@ describe('SimpleExperience lighting safeguards', () => {
     expect(experience.sunLight.intensity).toBeGreaterThanOrEqual(0.85);
   });
 
-  it('reverts to emissive placeholder and surfaces a UI notice when portal uniforms fail', () => {
+  it('falls back to a flashing color plane and surfaces a UI notice when portal uniforms fail', () => {
     const { experience } = createExperienceForTest();
     experience.refreshPortalObstructionState = vi.fn().mockReturnValue({ blocked: false, summary: '' });
     experience.computePortalAnchorGrid = vi.fn().mockReturnValue({ x: 0, z: 0 });
     experience.getPortalAnchorWorldPosition = vi.fn(() => ({ x: 0, y: 0, z: 0 }));
-    const placeholderMesh = new window.THREE_GLOBAL.Mesh();
-    placeholderMesh.userData = {};
-    experience.createPortalPlaceholderMesh = vi.fn(() => placeholderMesh);
+    const fallbackSpy = vi.spyOn(experience, 'createPortalFallbackFlashMesh');
+    const placeholderSpy = vi.spyOn(experience, 'createPortalPlaceholderMesh');
     experience.portalGroup = new window.THREE_GLOBAL.Group();
     experience.hidePortalInteriorBlocks = vi.fn();
     experience.updatePortalInteriorValidity = vi.fn();
@@ -284,9 +283,12 @@ describe('SimpleExperience lighting safeguards', () => {
     const result = experience.activatePortal();
 
     expect(result).toBe(true);
+    expect(fallbackSpy).toHaveBeenCalled();
+    expect(placeholderSpy).not.toHaveBeenCalled();
     expect(experience.portalShaderFallbackActive).toBe(true);
-    expect(experience.portalMesh).toBe(placeholderMesh);
-    expect(placeholderMesh.userData.placeholderReason).toBe('shader-fallback');
+    expect(experience.portalMesh.material).toBeInstanceOf(window.THREE_GLOBAL.MeshBasicMaterial);
+    expect(experience.portalMesh.userData.portalFallbackFlash).toBeTruthy();
+    expect(experience.portalMesh.userData.placeholderReason).toBe('shader-fallback');
     expect(experience.lastHintMessage).toBe(PORTAL_SHADER_FALLBACK_ANNOUNCEMENT);
     expect(experience.portalIgnitionLog[0]).toBe(PORTAL_SHADER_FALLBACK_ANNOUNCEMENT);
     expect(experience.portalStatusMessage).toBe(PORTAL_SHADER_FALLBACK_ANNOUNCEMENT);
