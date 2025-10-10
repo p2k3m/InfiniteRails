@@ -634,7 +634,10 @@ function enterPortal(portal, dimension) {
   const dimensionChanged = currentId ? currentId !== targetId : true;
   const transitionGuard = {
     allowIncompleteTransition: false,
+    neverAllowIncompleteTransition: true,
     resetOnFailure: true,
+    resetOnWorldFailure: true,
+    resetOnDimensionFailure: true,
     triggers: ['world-load-failure', 'dimension-load-failure'],
   };
   const failSafe = {
