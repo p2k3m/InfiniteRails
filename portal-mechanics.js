@@ -1,6 +1,21 @@
 const FRAME_WIDTH = 4;
 const FRAME_HEIGHT = 3;
 
+function normaliseFacingVector(facing = {}) {
+  if (!facing || typeof facing !== 'object') {
+    return { x: 0, y: 1 };
+  }
+  const { x = 0 } = facing;
+  const y =
+    typeof facing.y === 'number'
+      ? facing.y
+      : typeof facing.z === 'number'
+        ? facing.z
+        : 1;
+  const magnitude = Math.sqrt(x * x + y * y) || 1;
+  return { x: x / magnitude, y: y / magnitude };
+}
+
 function resolveOrientation(facing = { x: 0, y: 1 }) {
   if (!facing) return 'horizontal';
   const { x = 0, y = 0 } = facing;
@@ -11,7 +26,7 @@ function buildPortalFrame(origin, facing = { x: 0, y: 1 }) {
   if (!origin || typeof origin.x !== 'number' || typeof origin.y !== 'number') {
     throw new Error('Portal origin must supply numeric x and y.');
   }
-  const orientation = resolveOrientation(facing);
+  const orientation = resolveOrientation(normaliseFacingVector(facing));
   const width = orientation === 'vertical' ? FRAME_HEIGHT : FRAME_WIDTH;
   const height = orientation === 'vertical' ? FRAME_WIDTH : FRAME_HEIGHT;
   const offsetX = Math.floor((width - 1) / 2);
@@ -41,6 +56,367 @@ function buildPortalFrame(origin, facing = { x: 0, y: 1 }) {
 
 const BLOCKING_TILE_TYPES = new Set(['lava', 'water', 'void', 'tree', 'chest', 'player']);
 const BLOCKING_OCCUPANTS = new Set(['player', 'tree', 'chest']);
+
+function placementKey(x, z, level) {
+  return `${x}|${z}|${level}`;
+}
+
+function normaliseHeightResolver(baseHeightMap, fallback) {
+  if (typeof fallback === 'function') {
+    return fallback;
+  }
+  if (Array.isArray(baseHeightMap)) {
+    return (x, z) => {
+      const column = baseHeightMap[x];
+      if (!column) return null;
+      const value = column[z];
+      return Number.isFinite(value) ? value : null;
+    };
+  }
+  if (baseHeightMap && typeof baseHeightMap === 'object') {
+    return (x, z) => {
+      const value = baseHeightMap?.[x]?.[z];
+      return Number.isFinite(value) ? value : null;
+    };
+  }
+  return () => null;
+}
+
+function normalisePlacementLookup(source) {
+  const map = new Map();
+  if (!source) {
+    return map;
+  }
+  const addEntry = (entry) => {
+    if (!entry || typeof entry !== 'object') {
+      return;
+    }
+    const gridX = Number(entry.gridX ?? entry.x);
+    const gridZ = Number(entry.gridZ ?? entry.z ?? entry.y);
+    if (!Number.isFinite(gridX) || !Number.isFinite(gridZ)) {
+      return;
+    }
+    let level = entry.level;
+    if (!Number.isFinite(level)) {
+      if (Number.isFinite(entry.y)) {
+        level = entry.y;
+      } else if (Number.isFinite(entry.gridY)) {
+        level = entry.gridY;
+      } else if (Number.isFinite(entry.relY) || Number.isFinite(entry.baseHeight)) {
+        const base = Number.isFinite(entry.baseHeight) ? entry.baseHeight : 0;
+        const rel = Number.isFinite(entry.relY) ? entry.relY : 0;
+        level = base + rel;
+      }
+    }
+    if (!Number.isFinite(level)) {
+      return;
+    }
+    const key = placementKey(gridX, gridZ, level);
+    if (!map.has(key)) {
+      map.set(key, entry);
+    }
+  };
+  if (Array.isArray(source)) {
+    source.forEach(addEntry);
+    return map;
+  }
+  if (source instanceof Map) {
+    source.forEach((value) => addEntry(value));
+    return map;
+  }
+  if (source instanceof Set) {
+    source.forEach(addEntry);
+    return map;
+  }
+  if (typeof source === 'object') {
+    Object.values(source).forEach(addEntry);
+  }
+  return map;
+}
+
+function createPortalFrameLayout(anchor, options = {}) {
+  if (!anchor || typeof anchor !== 'object') {
+    throw new Error('Portal anchor is required to build frame layout.');
+  }
+  const { x, z, y } = anchor;
+  if (!Number.isFinite(x) || !Number.isFinite(z)) {
+    throw new Error('Portal anchor must include numeric x and z coordinates.');
+  }
+  const facing = normaliseFacingVector(options.facing ?? anchor.facing ?? { x: 0, y: 1 });
+  const footprint = buildPortalFrame({ x, y: z }, facing);
+  const width = footprint.bounds.width;
+  const height = footprint.bounds.height;
+  const offsetX = Math.floor((width - 1) / 2);
+  const offsetZ = Math.floor((height - 1) / 2);
+  const startX = x - offsetX;
+  const startZ = z - offsetZ;
+  const frameSlots = new Map();
+  const interiorSlots = new Map();
+  const columnMap = new Map();
+  const blockSize = Number.isFinite(options.blockSize) ? options.blockSize : 1;
+  const baseHeightResolver = normaliseHeightResolver(
+    options.baseHeightMap ?? options.initialHeightMap,
+    options.getBaseHeight,
+  );
+  const anchorHeight = Number.isFinite(y) ? y : null;
+
+  const upsertColumnSlot = (slot) => {
+    const key = `${slot.gridX}|${slot.gridZ}`;
+    if (!columnMap.has(key)) {
+      columnMap.set(key, {
+        key,
+        gridX: slot.gridX,
+        gridZ: slot.gridZ,
+        slots: [],
+      });
+    }
+    columnMap.get(key).slots.push(slot);
+  };
+
+  const assignSlot = (collection, slot) => {
+    collection.set(slot.id, slot);
+    upsertColumnSlot(slot);
+  };
+
+  for (let dz = 0; dz < height; dz += 1) {
+    for (let dx = 0; dx < width; dx += 1) {
+      const gridX = startX + dx;
+      const gridZ = startZ + dz;
+      const relX = gridX - x;
+      const relZ = gridZ - z;
+      const relY = dz;
+      const columnKey = `${gridX}|${gridZ}`;
+      const baseHeight =
+        Number.isFinite(anchorHeight) && options.anchorHeightFallback !== false
+          ? anchorHeight
+          : null;
+      const resolvedBaseHeight = baseHeightResolver(gridX, gridZ);
+      const slotBaseHeight = Number.isFinite(resolvedBaseHeight)
+        ? resolvedBaseHeight
+        : baseHeight;
+      const level = (Number.isFinite(slotBaseHeight) ? slotBaseHeight : 0) + relY;
+      const worldPosition = {
+        x: gridX * blockSize,
+        y: level * blockSize,
+        z: gridZ * blockSize,
+      };
+      const slot = {
+        id: `${columnKey}|${relY}`,
+        columnKey,
+        gridX,
+        gridZ,
+        relX,
+        relZ,
+        relY,
+        baseHeight: slotBaseHeight,
+        level,
+        worldPosition,
+        role:
+          dx === 0 || dz === 0 || dx === width - 1 || dz === height - 1 ? 'frame' : 'interior',
+        orientation: footprint.orientation,
+        bounds: footprint.bounds,
+      };
+      if (slot.role === 'frame') {
+        assignSlot(frameSlots, slot);
+      } else {
+        assignSlot(interiorSlots, slot);
+      }
+    }
+  }
+
+  return {
+    anchor: { x, z, y: anchorHeight },
+    facing,
+    orientation: footprint.orientation,
+    bounds: footprint.bounds,
+    start: { x: startX, z: startZ },
+    frameSlots,
+    interiorSlots,
+    columnSlots: columnMap,
+    blockSize,
+  };
+}
+
+function evaluatePortalColumnHeight(options = {}) {
+  const { heightMap, columns, getColumnHeight } = options;
+  const heightResolver = normaliseHeightResolver(heightMap, getColumnHeight);
+  return (gridX, gridZ) => {
+    const columnKey = `${gridX}|${gridZ}`;
+    if (columns instanceof Map) {
+      const column = columns.get(columnKey);
+      if (Array.isArray(column) && column.length) {
+        return column.length;
+      }
+    }
+    const resolved = heightResolver(gridX, gridZ);
+    return Number.isFinite(resolved) ? resolved : null;
+  };
+}
+
+function createPreviewSlot(slot, overrides = {}) {
+  return {
+    ...slot,
+    status: 'missing',
+    reason: '',
+    blockType: null,
+    present: false,
+    blocked: false,
+    ghost: true,
+    level: slot.level,
+    ...overrides,
+  };
+}
+
+function buildPortalPlacementPreview(anchorOrLayout, options = {}) {
+  const layout = anchorOrLayout?.frameSlots ? anchorOrLayout : createPortalFrameLayout(anchorOrLayout, options);
+  const placementLookup = normalisePlacementLookup(options.placedBlocks ?? options.blockPlacements);
+  const columnHeightResolver = evaluatePortalColumnHeight({
+    heightMap: options.heightMap ?? options.columnHeights,
+    columns: options.columns,
+    getColumnHeight: options.getColumnHeight,
+  });
+  const collisions = [];
+  if (options.collisionGrid) {
+    const footprint = {
+      frame: Array.from(layout.frameSlots.values()).map(({ gridX, gridZ }) => ({ x: gridX, y: gridZ })),
+      interior: Array.from(layout.interiorSlots.values()).map(({ gridX, gridZ }) => ({ x: gridX, y: gridZ })),
+    };
+    collisions.push(...detectPortalCollision(options.collisionGrid, footprint));
+  }
+  const collisionMap = new Map(collisions.map((entry) => [`${entry.x}|${entry.y}`, entry.reason]));
+  const framePreview = new Map();
+  const interiorPreview = new Map();
+  const previewEntries = [];
+  const requiredBlockType = typeof options.requiredBlockType === 'string' ? options.requiredBlockType : null;
+
+  const getBlockState = typeof options.getBlockState === 'function' ? options.getBlockState : null;
+
+  const evaluateSlot = (slot, role) => {
+    const baseHeight = Number.isFinite(slot.baseHeight)
+      ? slot.baseHeight
+      : columnHeightResolver(slot.gridX, slot.gridZ) ?? 0;
+    const level = baseHeight + slot.relY;
+    const columnKey = `${slot.gridX}|${slot.gridZ}`;
+    const placement = placementLookup.get(placementKey(slot.gridX, slot.gridZ, level));
+    const column = options.columns instanceof Map ? options.columns.get(columnKey) : null;
+    const columnBlock = Array.isArray(column) ? column[level] : null;
+    let status = 'missing';
+    let reason = '';
+    let blockType = null;
+
+    const columnHeight = columnHeightResolver(slot.gridX, slot.gridZ);
+
+    const collisionReason = collisionMap.get(columnKey);
+    if (collisionReason) {
+      status = 'blocked';
+      reason = collisionReason;
+    } else if (getBlockState) {
+      const state = getBlockState(slot, { level, role });
+      if (state && typeof state === 'object') {
+        if (state.blocked) {
+          status = 'blocked';
+          reason = state.reason || 'blocked';
+        } else if (state.present || state.filled) {
+          status = 'present';
+          blockType = state.type ?? state.blockType ?? null;
+        } else if (state.reason) {
+          reason = state.reason;
+        }
+      } else if (state === true || state === 'present') {
+        status = 'present';
+      } else if (typeof state === 'string' && state) {
+        status = 'present';
+        blockType = state;
+      }
+    } else if (placement) {
+      status = placement.blocked ? 'blocked' : 'present';
+      reason = placement.reason || '';
+      blockType = placement.blockType ?? placement.type ?? placement.id ?? null;
+    } else if (columnBlock) {
+      status = columnBlock.blocked ? 'blocked' : 'present';
+      reason = columnBlock.reason || '';
+      blockType = columnBlock.blockType ?? columnBlock.userData?.blockType ?? null;
+    } else if (Number.isFinite(columnHeight) && columnHeight > level) {
+      status = 'present';
+    }
+
+    if (status === 'present' && requiredBlockType && blockType && blockType !== requiredBlockType) {
+      status = 'blocked';
+      reason = reason || `mismatched-block:${blockType}`;
+    }
+
+    if (status === 'missing' && reason) {
+      status = 'ghost';
+    }
+
+    const slotPreview = createPreviewSlot(slot, {
+      role,
+      baseHeight,
+      level,
+      status,
+      reason,
+      blockType,
+      present: status === 'present',
+      blocked: status === 'blocked',
+      ghost: status !== 'present' && status !== 'blocked',
+    });
+    return slotPreview;
+  };
+
+  layout.frameSlots.forEach((slot, key) => {
+    const preview = evaluateSlot(slot, 'frame');
+    framePreview.set(key, preview);
+    previewEntries.push(preview);
+  });
+  layout.interiorSlots.forEach((slot, key) => {
+    const preview = evaluateSlot(slot, 'interior');
+    interiorPreview.set(key, preview);
+    previewEntries.push(preview);
+  });
+
+  const missing = previewEntries.filter((entry) => entry.role === 'frame' && entry.ghost);
+  const blocked = previewEntries.filter((entry) => entry.role === 'frame' && entry.blocked);
+  const present = previewEntries.filter((entry) => entry.role === 'frame' && entry.present);
+
+  const summary = {
+    totalFrameSlots: layout.frameSlots.size,
+    missingFrameSlots: missing.length,
+    blockedFrameSlots: blocked.length,
+    presentFrameSlots: present.length,
+  };
+
+  const messages = [];
+  if (blocked.length) {
+    const reasons = Array.from(new Set(blocked.map((entry) => entry.reason || 'blocked')));
+    messages.push(`Portal frame placement blocked by ${reasons.join(', ')}.`);
+  }
+  if (missing.length) {
+    messages.push(`Missing ${missing.length} of ${layout.frameSlots.size} required portal frame blocks.`);
+  }
+  if (!messages.length) {
+    messages.push('Portal frame footprint complete.');
+  }
+
+  return {
+    layout,
+    frameSlots: framePreview,
+    interiorSlots: interiorPreview,
+    preview: previewEntries,
+    summary,
+    footprintValid: !missing.length && !blocked.length,
+    messages,
+  };
+}
+
+function validatePortalFrameFootprint(anchorOrLayout, options = {}) {
+  const preview = buildPortalPlacementPreview(anchorOrLayout, options);
+  return {
+    valid: preview.footprintValid,
+    messages: preview.messages,
+    summary: preview.summary,
+    preview,
+  };
+}
 
 function normaliseOccupantToken(value) {
   if (!value) return null;
@@ -292,6 +668,9 @@ const api = {
   FRAME_WIDTH,
   FRAME_HEIGHT,
   buildPortalFrame,
+  createPortalFrameLayout,
+  buildPortalPlacementPreview,
+  validatePortalFrameFootprint,
   detectPortalCollision,
   ignitePortalFrame,
   enterPortal,
