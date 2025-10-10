@@ -223,6 +223,22 @@ function createTrackedElement(tag = 'div') {
   return element;
 }
 
+function gatherNodeStrings(node, bag = []) {
+  if (!node || typeof node !== 'object') {
+    return bag;
+  }
+  if (typeof node.textContent === 'string' && node.textContent) {
+    bag.push(node.textContent);
+  }
+  if (typeof node.innerHTML === 'string' && node.innerHTML) {
+    bag.push(node.innerHTML);
+  }
+  if (Array.isArray(node.children)) {
+    node.children.forEach((child) => gatherNodeStrings(child, bag));
+  }
+  return bag;
+}
+
 beforeAll(() => {
   ensureSimpleExperienceLoaded();
 });
@@ -484,5 +500,53 @@ describe('simple experience inventory and crafting flows', () => {
     expect(experience.selectedHotbarIndex).toBe(1);
     expect(updateInventorySpy).toHaveBeenCalled();
     expect(updateHudSpy).toHaveBeenCalledWith(expect.objectContaining({ reason: 'respawn' }));
+  });
+
+  it('falls back to placeholder slots when drag payloads are malformed', () => {
+    const experience = createExperience();
+
+    const hotbarEl = createTrackedElement('div');
+    const craftingInventoryEl = createTrackedElement('div');
+    const extendedInventoryEl = createTrackedElement('div');
+    const inventoryGridEl = createTrackedElement('div');
+    const inventoryOverflowEl = createTrackedElement('p');
+    inventoryOverflowEl.hidden = true;
+
+    experience.hotbarEl = hotbarEl;
+    experience.craftingInventoryEl = craftingInventoryEl;
+    experience.extendedInventoryEl = extendedInventoryEl;
+    experience.inventoryGridEl = inventoryGridEl;
+    experience.inventoryOverflowEl = inventoryOverflowEl;
+
+    experience.hotbar = experience.hotbar.map(() => ({ item: null, quantity: 0 }));
+    experience.hotbar[0] = { item: 'glitched-sample', quantity: undefined };
+    experience.hotbar[1] = { item: 'stick', quantity: 2 };
+    experience.hotbar[2] = { item: 'stone', quantity: 0 };
+
+    experience.satchel.clear();
+    experience.satchel.set('glitched-sample', Number.NaN);
+    experience.satchel.set('stick', 5);
+    experience.satchel.set(undefined, 3);
+
+    experience.updateInventoryUi();
+
+    const scraped = [
+      ...gatherNodeStrings(hotbarEl),
+      ...gatherNodeStrings(inventoryGridEl),
+      ...gatherNodeStrings(extendedInventoryEl),
+    ];
+
+    expect(scraped.length).toBeGreaterThan(0);
+    scraped.forEach((text) => {
+      expect(text.includes('undefined')).toBe(false);
+    });
+
+    expect(hotbarEl.children[0].textContent).toBe('·');
+    expect(hotbarEl.children[1].textContent).toBe('🪵 2');
+    expect(inventoryGridEl.children.length).toBeGreaterThan(0);
+    expect(extendedInventoryEl.children.length).toBeGreaterThan(0);
+    extendedInventoryEl.children.forEach((child) => {
+      expect(child.dataset.quantity).not.toBe('undefined');
+    });
   });
 });
