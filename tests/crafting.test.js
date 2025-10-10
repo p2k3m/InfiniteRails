@@ -62,8 +62,39 @@ describe('crafting system', () => {
     expect(validation.valid).toBe(false);
     expect(validation.reason).toBe('missing-ingredients');
     expect(Array.isArray(validation.missing)).toBe(true);
+    expect(Array.isArray(validation.required)).toBe(true);
+    expect(validation.required).toEqual([
+      expect.objectContaining({ itemId: 'stick', required: 2 }),
+      expect.objectContaining({ itemId: 'stone', required: 1 }),
+    ]);
     const missingStick = validation.missing.find((entry) => entry.itemId === 'stick');
     expect(missingStick?.missing).toBe(1);
+  });
+
+  it('returns error feedback metadata on failed crafts with ingredient detail', () => {
+    const state = createCraftingState({
+      inventory: { stick: 1 },
+      unlockedDimensions: ['origin', 'rock', 'stone'],
+    });
+    const result = craftSequence(state, ['stick', 'stick', 'stone']);
+    expect(result.success).toBe(false);
+    expect(result.feedback).toEqual(
+      expect.objectContaining({
+        type: 'error',
+        visual: 'craft-unavailable',
+        message: 'Missing ingredients for this recipe.',
+      }),
+    );
+    expect(result.feedback?.missing).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ itemId: 'stick', missing: 1 }),
+      ]),
+    );
+    expect(result.feedback?.required).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ itemId: 'stone', required: 1 }),
+      ]),
+    );
   });
 
   it('returns visual feedback metadata on successful crafts', () => {
