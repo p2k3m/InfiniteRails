@@ -2686,6 +2686,12 @@ body[data-renderer-mode='briefing'] .game-briefing.is-visible {
   box-shadow: 0 0 18px var(--hud-progress-glow);
 }
 
+body.portal-fallback-active .portal-progress .bar::after {
+  background: linear-gradient(90deg, rgba(127, 90, 240, 0.75), rgba(127, 90, 240, 0.95));
+  animation: portal-fallback-progress 1.4s ease-in-out infinite;
+  box-shadow: 0 0 22px rgba(127, 90, 240, 0.6);
+}
+
 .portal-status {
   display: inline-flex;
   align-items: center;
@@ -2702,6 +2708,21 @@ body[data-renderer-mode='briefing'] .game-briefing.is-visible {
     opacity 0.35s ease, color 0.35s ease;
   backdrop-filter: blur(10px);
   max-width: min(30rem, 92vw);
+}
+
+.portal-status--fallback {
+  background: rgba(20, 16, 36, 0.82);
+  box-shadow: 0 18px 42px rgba(88, 64, 180, 0.45), 0 0 18px rgba(127, 90, 240, 0.55);
+  border: 1px solid rgba(127, 90, 240, 0.55);
+}
+
+.portal-status--fallback .portal-status__state {
+  color: #f4f1ff;
+}
+
+.portal-status--fallback .portal-status__detail,
+.portal-status--fallback .portal-status__text {
+  color: rgba(244, 241, 255, 0.78);
 }
 
 .portal-status--flash {
@@ -2745,6 +2766,18 @@ body[data-renderer-mode='briefing'] .game-briefing.is-visible {
   box-shadow: 0 0 12px rgba(126, 147, 255, 0.45);
   transition: transform 0.35s ease, box-shadow 0.35s ease, background 0.35s ease,
     opacity 0.35s ease;
+}
+
+body.portal-fallback-active .portal-status__icon {
+  background: rgba(127, 90, 240, 0.8);
+  box-shadow: 0 0 28px rgba(127, 90, 240, 0.8);
+}
+
+body.portal-fallback-active .portal-status__icon::before,
+body.portal-fallback-active .portal-status__icon::after {
+  animation: portal-fallback-flash 1.5s ease-in-out infinite;
+  border-radius: 50%;
+  background: rgba(127, 90, 240, 0.4);
 }
 
 .portal-status__icon::before {
@@ -2873,6 +2906,54 @@ body[data-renderer-mode='briefing'] .game-briefing.is-visible {
   100% {
     transform: translateY(0) scale(1);
     box-shadow: 0 16px 36px rgba(0, 0, 0, 0.4), 0 0 16px rgba(90, 115, 255, 0.25);
+  }
+}
+
+@keyframes portal-fallback-flash {
+  0% {
+    opacity: 0.55;
+    box-shadow: 0 0 18px rgba(127, 90, 240, 0.45), 0 0 32px rgba(127, 90, 240, 0.35);
+    background: rgba(127, 90, 240, 0.4);
+  }
+  50% {
+    opacity: 1;
+    box-shadow: 0 0 28px rgba(127, 90, 240, 0.85), 0 0 48px rgba(127, 90, 240, 0.6);
+    background: rgba(127, 90, 240, 0.72);
+  }
+  100% {
+    opacity: 0.55;
+    box-shadow: 0 0 18px rgba(127, 90, 240, 0.45), 0 0 32px rgba(127, 90, 240, 0.35);
+    background: rgba(127, 90, 240, 0.4);
+  }
+}
+
+@keyframes portal-fallback-progress {
+  0% {
+    filter: saturate(0.8);
+    opacity: 0.65;
+  }
+  45% {
+    filter: saturate(1.15);
+    opacity: 1;
+  }
+  100% {
+    filter: saturate(0.8);
+    opacity: 0.65;
+  }
+}
+
+@keyframes portal-fallback-badge {
+  0% {
+    box-shadow: 0 0 0 0 rgba(127, 90, 240, 0.55);
+    opacity: 0.92;
+  }
+  60% {
+    box-shadow: 0 0 0 6px rgba(127, 90, 240, 0.05);
+    opacity: 0.65;
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(127, 90, 240, 0.55);
+    opacity: 0.92;
   }
 }
 
@@ -4784,6 +4865,57 @@ body.sidebar-open .player-hint {
 
 .compose-overlay__actions[hidden] {
   display: none;
+}
+
+.portal-fallback-overlay {
+  position: fixed;
+  right: min(2.2rem, 6vw);
+  bottom: min(2.2rem, 6vw);
+  max-width: min(24rem, 92vw);
+  padding: 1rem 1.25rem;
+  border-radius: 1rem;
+  background: rgba(14, 12, 24, 0.92);
+  color: #f8f9ff;
+  border: 1px solid rgba(127, 90, 240, 0.55);
+  box-shadow: 0 20px 44px rgba(10, 8, 24, 0.6), 0 0 24px rgba(127, 90, 240, 0.35);
+  display: none;
+  z-index: 6000;
+  backdrop-filter: blur(12px);
+  line-height: 1.5;
+}
+
+.portal-fallback-overlay[data-visible='true'] {
+  display: block;
+}
+
+.portal-fallback-overlay__badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.25rem 0.65rem;
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.26em;
+  color: rgba(245, 239, 255, 0.85);
+  background: rgba(127, 90, 240, 0.22);
+  border: 1px solid rgba(127, 90, 240, 0.45);
+  border-radius: 999px;
+  margin-bottom: 0.65rem;
+  animation: portal-fallback-badge 1.6s ease-in-out infinite;
+}
+
+.portal-fallback-overlay__title {
+  display: block;
+  font-size: 1rem;
+  font-weight: 600;
+  margin-bottom: 0.35rem;
+  letter-spacing: 0.04em;
+}
+
+.portal-fallback-overlay__message {
+  font-size: 0.9rem;
+  color: rgba(238, 236, 255, 0.85);
+  margin: 0;
 }
 
 .compose-overlay__action {
