@@ -203,3 +203,225 @@
         if (dimensionTravelSucceeded) {
           this.audio.play('bubble', { volume: 0.5 });
         }
+
+(function attachNavigationFailsafe(scope) {
+  if (!scope) {
+    return;
+  }
+
+  function selectNavmeshCell(navmesh) {
+    if (!navmesh || typeof navmesh !== 'object') {
+      return null;
+    }
+    const cells = Array.isArray(navmesh.cells) ? navmesh.cells : [];
+    if (!cells.length) {
+      return null;
+    }
+    for (const cell of cells) {
+      if (
+        Number.isFinite(cell?.worldX) &&
+        Number.isFinite(cell?.worldZ) &&
+        Number.isFinite(cell?.surfaceY)
+      ) {
+        return cell;
+      }
+    }
+    return null;
+  }
+
+  function rehomeActor(instance, actorType, actor, navmesh, context) {
+    const cell = selectNavmeshCell(navmesh);
+    if (!cell || !actor?.mesh?.position) {
+      return false;
+    }
+    const yOffset = Number.isFinite(actor?.heightOffset) ? actor.heightOffset : 0.9;
+    actor.mesh.position.set(cell.worldX, cell.surfaceY + yOffset, cell.worldZ);
+    if (actor.mesh.userData && typeof actor.mesh.userData === 'object') {
+      actor.mesh.userData.chunkKey = navmesh.key ?? actor.navChunkKey ?? actor.chunkKey ?? null;
+    }
+    if (actorType === 'zombie') {
+      actor.navChunkKey = navmesh.key ?? actor.navChunkKey ?? null;
+    } else if (actorType === 'golem') {
+      actor.chunkKey = navmesh.key ?? actor.chunkKey ?? null;
+    }
+    if (typeof instance?.console?.warn === 'function') {
+      instance.console.warn(
+        'Navigation mesh recovery triggered. Rehoming mob after coverage loss.',
+        { actorType, reason: context?.reason ?? 'navmesh-missing', stage: context?.stage ?? null },
+      );
+    } else if (typeof console !== 'undefined' && typeof console.warn === 'function') {
+      console.warn('Navigation mesh recovery triggered. Rehoming mob after coverage loss.', {
+        actorType,
+        reason: context?.reason ?? 'navmesh-missing',
+        stage: context?.stage ?? null,
+      });
+    }
+    return true;
+  }
+
+  function despawnActor(instance, actorType, actor, context) {
+    const listKey = actorType === 'golem' ? 'golems' : actorType === 'zombie' ? 'zombies' : null;
+    const groupKey = actorType === 'golem' ? 'golemGroup' : actorType === 'zombie' ? 'zombieGroup' : null;
+
+    if (groupKey && instance?.[groupKey]?.remove && actor?.mesh) {
+      try {
+        instance[groupKey].remove(actor.mesh);
+      } catch (error) {
+        if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+          console.debug('Failed to detach mob mesh during navmesh failsafe.', error);
+        }
+      }
+    } else if (actor?.mesh?.parent && typeof actor.mesh.parent.remove === 'function') {
+      actor.mesh.parent.remove(actor.mesh);
+    }
+
+    if (listKey && Array.isArray(instance?.[listKey])) {
+      const index = instance[listKey].indexOf(actor);
+      if (index >= 0) {
+        instance[listKey].splice(index, 1);
+      }
+    }
+
+    if (typeof actor?.dispose === 'function') {
+      try {
+        actor.dispose();
+      } catch (error) {
+        if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+          console.debug('Failed to dispose mob resources during navmesh failsafe.', error);
+        }
+      }
+    }
+
+    if (typeof instance?.console?.warn === 'function') {
+      instance.console.warn('Navigation mesh recovery triggered. Despawning mob after coverage loss.', {
+        actorType,
+        reason: context?.reason ?? 'navmesh-missing',
+        stage: context?.stage ?? null,
+      });
+    } else if (typeof console !== 'undefined' && typeof console.warn === 'function') {
+      console.warn('Navigation mesh recovery triggered. Despawning mob after coverage loss.', {
+        actorType,
+        reason: context?.reason ?? 'navmesh-missing',
+        stage: context?.stage ?? null,
+      });
+    }
+
+    return true;
+  }
+
+  function applyFailsafe(SimpleExperienceCtor) {
+    if (!SimpleExperienceCtor?.prototype) {
+      return;
+    }
+
+    const proto = SimpleExperienceCtor.prototype;
+
+    if (proto.__navmeshFailsafeApplied) {
+      return;
+    }
+
+    proto.__navmeshFailsafeApplied = true;
+
+    proto.handleNavmeshFailureForMob = function handleNavmeshFailureForMob(actorType, actor, context = {}) {
+      if (!actorType || !actor) {
+        return { action: 'ignored' };
+      }
+
+      const reason = typeof context.reason === 'string' && context.reason.trim().length
+        ? context.reason.trim()
+        : 'navmesh-missing';
+
+      const navmesh =
+        (typeof this.ensureNavigationMeshForActorChunk === 'function'
+          ? this.ensureNavigationMeshForActorChunk(actorType, context.chunkKey ?? actor.navChunkKey ?? actor.chunkKey ?? null, {
+              ...context,
+              reason: `${reason}-failsafe`,
+              stage: 'failsafe',
+            })
+          : null) ||
+        (typeof this.ensureNavigationMeshForWorldPosition === 'function' && actor?.mesh?.position
+          ? this.ensureNavigationMeshForWorldPosition(actor.mesh.position.x, actor.mesh.position.z, {
+              ...context,
+              reason: `${reason}-failsafe`,
+              stage: 'failsafe',
+            })
+          : null);
+
+      if (navmesh && Number.isFinite(navmesh.walkableCellCount) && navmesh.walkableCellCount > 0) {
+        const rehoused = rehomeActor(this, actorType, actor, navmesh, context);
+        if (rehoused) {
+          return { action: 'rehomed', reason, navmesh };
+        }
+      }
+
+      despawnActor(this, actorType, actor, context);
+      return { action: 'despawned', reason };
+    };
+
+    const originalEnsureActorPosition = proto.ensureNavigationMeshForActorPosition;
+
+    if (typeof originalEnsureActorPosition === 'function') {
+      proto.ensureNavigationMeshForActorPosition = function ensureNavigationMeshForActorPosition(actorType, x, z, context = {}) {
+        const result = originalEnsureActorPosition.call(this, actorType, x, z, context);
+        if (!result || result.walkableCellCount === 0) {
+          const listKey = actorType === 'golem' ? 'golems' : actorType === 'zombie' ? 'zombies' : null;
+          if (listKey && Array.isArray(this[listKey])) {
+            for (const actor of this[listKey]) {
+              if (!actor?.mesh?.position) {
+                continue;
+              }
+              if (
+                typeof x === 'number' &&
+                typeof z === 'number' &&
+                Math.abs(actor.mesh.position.x - x) < 1e-3 &&
+                Math.abs(actor.mesh.position.z - z) < 1e-3
+              ) {
+                this.handleNavmeshFailureForMob(actorType, actor, {
+                  ...context,
+                  reason: context?.reason ?? 'navmesh-missing',
+                });
+              }
+            }
+          }
+        }
+        return result;
+      };
+    }
+  }
+
+  function installPatch() {
+    const target = scope.SimpleExperience;
+    if (target?.prototype) {
+      applyFailsafe(target);
+      return true;
+    }
+    return false;
+  }
+
+  if (installPatch()) {
+    return;
+  }
+
+  const descriptor = Object.getOwnPropertyDescriptor(scope, 'SimpleExperience');
+  if (!descriptor || descriptor.configurable !== true) {
+    return;
+  }
+
+  let currentValue = descriptor.value;
+
+  Object.defineProperty(scope, 'SimpleExperience', {
+    configurable: true,
+    enumerable: descriptor.enumerable ?? true,
+    get() {
+      return currentValue;
+    },
+    set(value) {
+      currentValue = value;
+      installPatch();
+    },
+  });
+
+  if (currentValue?.prototype) {
+    applyFailsafe(currentValue);
+  }
+})(typeof window !== 'undefined' ? window : typeof globalThis !== 'undefined' ? globalThis : this);
