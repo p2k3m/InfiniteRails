@@ -12381,6 +12381,16 @@
         : typeof window !== 'undefined'
           ? window
           : globalThis;
+    const applyThreePatches =
+      typeof patchThreeInstance === 'function'
+        ? (value) => {
+            try {
+              return patchThreeInstance(value);
+            } catch (error) {
+              return value;
+            }
+          }
+        : (value) => value;
     function resolveThreeFromScope() {
       const hasThree = scope && typeof scope.THREE === 'object';
       const hasThreeGlobal = scope && typeof scope.THREE_GLOBAL === 'object';
@@ -12437,7 +12447,7 @@
     try {
       const existingThree = resolveThreeFromScope();
       if (existingThree) {
-        return Promise.resolve(patchThreeInstance(existingThree));
+        return Promise.resolve(applyThreePatches(existingThree));
       }
     } catch (error) {
       return Promise.reject(error);
@@ -12475,7 +12485,7 @@
             throw error;
           }
           if (resolvedThreeAfterLoad) {
-            return patchThreeInstance(resolvedThreeAfterLoad);
+            return applyThreePatches(resolvedThreeAfterLoad);
           }
           const exposureError = new Error('Three.js script loaded without exposing THREE.');
           reportThreeFailure(exposureError, { reason: 'no-global', url: THREE_SCRIPT_URL });
@@ -12510,7 +12520,7 @@
       try {
         const existingThree = resolveThreeFromScope();
         if (existingThree) {
-          return Promise.resolve(patchThreeInstance(existingThree));
+          return Promise.resolve(applyThreePatches(existingThree));
         }
       } catch (error) {
         return Promise.reject(error);
@@ -12520,7 +12530,7 @@
         try {
           const resolvedThree = resolveThreeFromScope();
           if (resolvedThree) {
-            return Promise.resolve(patchThreeInstance(resolvedThree));
+            return Promise.resolve(applyThreePatches(resolvedThree));
           }
         } catch (error) {
           return Promise.reject(error);
@@ -12532,7 +12542,7 @@
           try {
             const resolvedThree = resolveThreeFromScope();
             if (resolvedThree) {
-              resolve(patchThreeInstance(resolvedThree));
+              resolve(applyThreePatches(resolvedThree));
             } else {
               reject(new Error('Preloaded Three.js script loaded without exposing THREE.'));
             }
@@ -12552,8 +12562,8 @@
       const preloadPromise = waitForPreloadedThree();
       if (preloadPromise) {
         threeLoaderPromise = preloadPromise
-          .then(patchThreeInstance)
-          .catch(() => loadThreeScript().then(patchThreeInstance));
+          .then(applyThreePatches)
+          .catch(() => loadThreeScript().then(applyThreePatches));
         return threeLoaderPromise;
       }
     } catch (error) {
@@ -12561,7 +12571,7 @@
       return threeLoaderPromise;
     }
 
-    threeLoaderPromise = loadThreeScript().then(patchThreeInstance);
+    threeLoaderPromise = loadThreeScript().then(applyThreePatches);
     return threeLoaderPromise;
   }
 
