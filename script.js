@@ -7456,7 +7456,7 @@
 
     const messageEl = doc.createElement('p');
     messageEl.className = 'portal-fallback-overlay__message';
-    messageEl.textContent = 'Portal fallback active until shaders recover.';
+    messageEl.textContent = 'Portal using a plain flashing color until shaders recover.';
 
     container.appendChild(badge);
     container.appendChild(titleEl);
@@ -7471,10 +7471,17 @@
     return container;
   }
 
-  function showPortalFallbackOverlay(message) {
+  function showPortalFallbackOverlay(message, options = {}) {
     const overlay = ensurePortalFallbackOverlayElement();
     if (!overlay) {
       return;
+    }
+    const title = typeof options.title === 'string' ? options.title.trim() : '';
+    if (title) {
+      const titleEl = overlay.querySelector('.portal-fallback-overlay__title');
+      if (titleEl) {
+        titleEl.textContent = title;
+      }
     }
     const messageEl = overlay.querySelector('.portal-fallback-overlay__message');
     if (messageEl) {
@@ -7519,30 +7526,39 @@
       messageParts.push(`Missing uniforms: ${missingUniforms.join(', ')}`);
     }
     if (context.error?.message) {
-      messageParts.push(context.error.message);
+      messageParts.push(`Error: ${context.error.message}`);
     }
-    const overlayMessage =
+    const fallbackExplanation =
+      'Portal shader offline — plain flashing color active while shaders recover.';
+    const overlayDetail =
       messageParts.length > 0
-        ? `${messageParts.join('. ')}. Portal is running a fallback glow until shaders recover.`
-        : 'Portal shader failed to initialise. Portal is running a fallback glow until shaders recover.';
+        ? `${fallbackExplanation} ${messageParts.join(' ')}`
+        : `${fallbackExplanation} Shader initialisation failed.`;
+    const overlayTitle =
+      context.reason === 'missing-uniforms'
+        ? 'Portal uniforms missing'
+        : context.reason === 'construction-error'
+          ? 'Portal shader error'
+          : 'Portal shader offline';
+    const overlayKey = `${overlayTitle}::${overlayDetail}`;
 
     const alreadyActive = portalShaderFallbackState.active;
     portalShaderFallbackState.active = true;
     portalShaderFallbackState.reason = context.reason ?? portalShaderFallbackState.reason ?? 'unknown';
 
-    if (portalShaderFallbackState.lastMessage !== overlayMessage) {
-      portalShaderFallbackState.lastMessage = overlayMessage;
-      applyPortalFallbackDomState('Shader offline — fallback glow active.');
-      showPortalFallbackOverlay(overlayMessage);
+    if (portalShaderFallbackState.lastMessage !== overlayKey) {
+      portalShaderFallbackState.lastMessage = overlayKey;
+      applyPortalFallbackDomState('Shader offline — plain flashing color active.');
+      showPortalFallbackOverlay(overlayDetail, { title: overlayTitle });
       showHudAlert({
         title: 'Portal shader offline',
-        message: overlayMessage,
+        message: overlayDetail,
         severity: 'warning',
         autoHideMs: null,
       });
     } else if (!alreadyActive) {
-      applyPortalFallbackDomState('Shader offline — fallback glow active.');
-      showPortalFallbackOverlay(overlayMessage);
+      applyPortalFallbackDomState('Shader offline — plain flashing color active.');
+      showPortalFallbackOverlay(overlayDetail, { title: overlayTitle });
     }
 
     if (globalScope?.console?.warn) {
@@ -7573,6 +7589,10 @@
       }
       const value = entry.value;
       if (value === null || value === undefined) {
+        missing.push(name);
+        return;
+      }
+      if (typeof value === 'number' && Number.isNaN(value)) {
         missing.push(name);
       }
     });
