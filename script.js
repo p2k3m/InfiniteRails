@@ -5868,6 +5868,291 @@
     return Boolean(error && typeof error === 'object' && error.__infiniteRailsBoundaryHandled);
   }
 
+  const survivalWatchdogState = {
+    lastResetAt: 0,
+    lastSignature: null,
+  };
+
+  const SURVIVAL_WATCHDOG_STAGE_TOKENS = Object.freeze([
+    'physics',
+    'simulation',
+    'logic',
+    'game-logic',
+    'gameplay',
+    'body',
+    'movement',
+  ]);
+
+  function normaliseSurvivalWatchdogDescriptor(detail, fallbackStage) {
+    const descriptor = detail && typeof detail === 'object' ? detail : {};
+    const stageRaw =
+      typeof descriptor.stage === 'string' && descriptor.stage.trim().length
+        ? descriptor.stage.trim()
+        : typeof descriptor.failureStage === 'string' && descriptor.failureStage.trim().length
+          ? descriptor.failureStage.trim()
+          : typeof fallbackStage === 'string' && fallbackStage.trim().length
+            ? fallbackStage.trim()
+            : '';
+    const reasonRaw =
+      typeof descriptor.reason === 'string' && descriptor.reason.trim().length
+        ? descriptor.reason.trim()
+        : typeof descriptor.failureReason === 'string' && descriptor.failureReason.trim().length
+          ? descriptor.failureReason.trim()
+          : '';
+    const codeRaw =
+      typeof descriptor.code === 'string' && descriptor.code.trim().length
+        ? descriptor.code.trim()
+        : typeof descriptor.errorCode === 'string' && descriptor.errorCode.trim().length
+          ? descriptor.errorCode.trim()
+          : '';
+    return {
+      stage: stageRaw,
+      reason: reasonRaw,
+      code: codeRaw,
+      stageKey: stageRaw.toLowerCase(),
+      reasonKey: reasonRaw.toLowerCase(),
+      codeKey: codeRaw.toLowerCase(),
+    };
+  }
+
+  function shouldTriggerSurvivalWatchdog(descriptor) {
+    if (!descriptor) {
+      return false;
+    }
+    const candidates = [descriptor.stageKey, descriptor.reasonKey, descriptor.codeKey].filter(Boolean);
+    if (!candidates.length) {
+      return false;
+    }
+    return candidates.some((candidate) =>
+      SURVIVAL_WATCHDOG_STAGE_TOKENS.some((token) => candidate.includes(token)),
+    );
+  }
+
+  function resolveMaxValue(source, keys, fallback) {
+    if (source && typeof source === 'object') {
+      for (const key of keys) {
+        if (typeof key !== 'string') {
+          continue;
+        }
+        const value = source[key];
+        if (Number.isFinite(value)) {
+          return Number(value);
+        }
+      }
+    }
+    return Number.isFinite(fallback) ? Number(fallback) : null;
+  }
+
+  function resetMeter(target, valueKeys, maxKeys, fallbackMax, percentKeys = []) {
+    if (!target || typeof target !== 'object') {
+      return { changed: false, key: null, max: null };
+    }
+    const maxValue = resolveMaxValue(target, maxKeys, fallbackMax);
+    if (!Number.isFinite(maxValue)) {
+      return { changed: false, key: null, max: null };
+    }
+    let valueKey = valueKeys.find((candidate) => Number.isFinite(target[candidate]));
+    if (!valueKey) {
+      valueKey = valueKeys.find((candidate) => Object.prototype.hasOwnProperty.call(target, candidate));
+    }
+    if (!valueKey) {
+      valueKey = valueKeys[0];
+    }
+    let changed = false;
+    if (!Number.isFinite(target[valueKey]) || target[valueKey] !== maxValue) {
+      target[valueKey] = maxValue;
+      changed = true;
+    }
+    percentKeys.forEach((percentKey) => {
+      if (!percentKey || !Object.prototype.hasOwnProperty.call(target, percentKey)) {
+        return;
+      }
+      if (target[percentKey] !== 100) {
+        target[percentKey] = 100;
+        changed = true;
+      }
+    });
+    return { changed, key: valueKey, max: maxValue };
+  }
+
+  function resetExperienceSurvivalVitals(instance, descriptor) {
+    if (!instance || typeof instance !== 'object') {
+      return false;
+    }
+    const healthReset = resetMeter(
+      instance,
+      ['health', 'playerHealth'],
+      ['maxHealth', 'playerMaxHealth', 'healthCapacity'],
+      20,
+    );
+    const hungerReset = resetMeter(
+      instance,
+      ['hunger', 'playerHunger', 'foodLevel', 'food', 'satiety', 'stamina'],
+      ['maxHunger', 'playerMaxHunger', 'maxFood', 'maxFoodLevel', 'hungerCapacity', 'foodCapacity', 'maxSatiety', 'maxStamina'],
+      20,
+      ['hungerPercent', 'playerHungerPercent', 'foodLevelPercent', 'satietyPercent', 'staminaPercent'],
+    );
+    const breathReset = resetMeter(
+      instance,
+      ['playerBreath', 'breath'],
+      ['playerBreathCapacity', 'maxBreath', 'breathCapacity'],
+      10,
+      ['playerBreathPercent', 'breathPercent'],
+    );
+    const changed = Boolean(healthReset.changed || hungerReset.changed || breathReset.changed);
+    if (changed) {
+      const hudContext = {
+        reason: 'survival-watchdog',
+        stage: descriptor?.stage || 'watchdog',
+        failureReason: descriptor?.reason || null,
+        failureCode: descriptor?.code || null,
+      };
+      if (typeof instance.updateHud === 'function') {
+        try {
+          instance.updateHud(hudContext);
+        } catch (hudError) {
+          globalScope?.console?.debug?.('Survival watchdog HUD update failed.', hudError);
+        }
+      }
+      if (typeof instance.publishStateSnapshot === 'function') {
+        try {
+          instance.publishStateSnapshot('survival-watchdog');
+        } catch (snapshotError) {
+          globalScope?.console?.debug?.('Survival watchdog snapshot publish failed.', snapshotError);
+        }
+      }
+    }
+    return changed;
+  }
+
+  function resetGlobalSurvivalVitals(instance, descriptor) {
+    const state = globalScope?.__INFINITE_RAILS_STATE__;
+    if (!state || typeof state !== 'object') {
+      return false;
+    }
+    const player =
+      state.player && typeof state.player === 'object' ? state.player : (state.player = {});
+    const healthSource = { ...player };
+    const breathSource = { ...player };
+    const hungerSource = { ...player };
+    if (instance && typeof instance === 'object') {
+      ['maxHealth', 'playerMaxHealth', 'healthCapacity'].forEach((key) => {
+        if (Number.isFinite(instance[key])) {
+          healthSource[key] = Number(instance[key]);
+        }
+      });
+      ['playerBreathCapacity', 'maxBreath', 'breathCapacity'].forEach((key) => {
+        if (Number.isFinite(instance[key])) {
+          breathSource[key] = Number(instance[key]);
+        }
+      });
+      ['maxHunger', 'playerMaxHunger', 'maxFood', 'maxFoodLevel', 'hungerCapacity', 'foodCapacity', 'maxSatiety', 'maxStamina'].forEach(
+        (key) => {
+          if (Number.isFinite(instance[key])) {
+            hungerSource[key] = Number(instance[key]);
+          }
+        },
+      );
+    }
+    const healthMax = resolveMaxValue(
+      healthSource,
+      ['maxHealth', 'playerMaxHealth', 'healthCapacity'],
+      player.maxHealth,
+    );
+    const breathMax = resolveMaxValue(
+      breathSource,
+      ['playerBreathCapacity', 'maxBreath', 'breathCapacity'],
+      player.maxBreath,
+    );
+    const hungerMax = resolveMaxValue(
+      hungerSource,
+      ['maxHunger', 'playerMaxHunger', 'maxFood', 'maxFoodLevel', 'hungerCapacity', 'foodCapacity', 'maxSatiety', 'maxStamina'],
+      player.maxHunger,
+    );
+    let changed = false;
+    if (Number.isFinite(healthMax) && player.maxHealth !== healthMax) {
+      player.maxHealth = healthMax;
+      changed = true;
+    }
+    if (Number.isFinite(breathMax) && player.maxBreath !== breathMax) {
+      player.maxBreath = breathMax;
+      changed = true;
+    }
+    if (Number.isFinite(hungerMax) && player.maxHunger !== hungerMax) {
+      player.maxHunger = hungerMax;
+      changed = true;
+    }
+    const healthResult = resetMeter(
+      player,
+      ['health'],
+      ['maxHealth'],
+      healthMax,
+    );
+    const breathResult = resetMeter(
+      player,
+      ['breath'],
+      ['maxBreath'],
+      breathMax,
+      ['breathPercent'],
+    );
+    const hungerResult = resetMeter(
+      player,
+      ['hunger'],
+      ['maxHunger'],
+      hungerMax,
+      ['hungerPercent'],
+    );
+    changed = Boolean(healthResult.changed || breathResult.changed || hungerResult.changed || changed);
+    if (changed) {
+      state.updatedAt = Date.now();
+      state.signature = `survival-watchdog:${state.updatedAt}`;
+      state.reason = 'survival-watchdog';
+      state.failureStage = descriptor?.stage || null;
+      state.failureReason = descriptor?.reason || null;
+    }
+    return changed;
+  }
+
+  function applySurvivalWatchdog(descriptor, context = {}) {
+    if (!descriptor) {
+      return false;
+    }
+    const signatureBase = `${descriptor.stageKey || 'stage'}|${descriptor.reasonKey || 'reason'}|${
+      descriptor.codeKey || 'code'
+    }`;
+    const now = Date.now();
+    if (survivalWatchdogState.lastSignature === signatureBase && now - survivalWatchdogState.lastResetAt < 200) {
+      return false;
+    }
+    const experienceReset = resetExperienceSurvivalVitals(activeExperienceInstance, descriptor);
+    const stateReset = resetGlobalSurvivalVitals(activeExperienceInstance, descriptor);
+    if (!experienceReset && !stateReset) {
+      return false;
+    }
+    survivalWatchdogState.lastSignature = signatureBase;
+    survivalWatchdogState.lastResetAt = now;
+    const payload = {
+      stage: descriptor.stage || null,
+      reason: descriptor.reason || null,
+      code: descriptor.code || null,
+      boundary: context.boundary || null,
+      experienceUpdated: experienceReset,
+      stateUpdated: stateReset,
+    };
+    if (activeExperienceInstance && typeof activeExperienceInstance.emitGameEvent === 'function') {
+      try {
+        activeExperienceInstance.emitGameEvent('survival-watchdog-reset', payload);
+      } catch (eventError) {
+        globalScope?.console?.debug?.('Survival watchdog event dispatch failed.', eventError);
+      }
+    }
+    const logger = globalScope?.console?.warn || globalScope?.console?.info;
+    if (logger) {
+      logger('Survival watchdog reset player vitals after crash.', payload);
+    }
+    return true;
+  }
+
   function handleErrorBoundary(error, options = {}) {
     if (!error) {
       error = new Error('Unknown runtime failure.');
@@ -5928,6 +6213,10 @@
       error,
       normalised,
     });
+    const watchdogDescriptor = normaliseSurvivalWatchdogDescriptor(detail, stage);
+    if (shouldTriggerSurvivalWatchdog(watchdogDescriptor)) {
+      applySurvivalWatchdog(watchdogDescriptor, { boundary: boundaryKey });
+    }
     if (typeof tryStartSimpleFallback === 'function') {
       let activeMode = null;
       let fallbackActivated = false;
@@ -15494,6 +15783,26 @@
       hooks.recordInactivityActivity = (source) => recordUserActivity(source);
       hooks.setupInactivityOverlay = () => setupInactivityOverlay(inactivityMonitorState.doc);
       hooks.forceInactivityRefresh = (reason) => triggerInactivityRefresh(reason || 'test');
+      hooks.triggerSurvivalWatchdog = (detail = {}, options = {}) => {
+        const descriptor = normaliseSurvivalWatchdogDescriptor(
+          detail,
+          options.stage || detail.stage || null,
+        );
+        if (options.force === true || shouldTriggerSurvivalWatchdog(descriptor)) {
+          return applySurvivalWatchdog(descriptor, { boundary: options.boundary ?? 'test-hook' });
+        }
+        return false;
+      };
+      hooks.getSurvivalWatchdogState = () => ({ ...survivalWatchdogState });
+      hooks.resetSurvivalWatchdogState = () => {
+        survivalWatchdogState.lastResetAt = 0;
+        survivalWatchdogState.lastSignature = null;
+      };
+      hooks.setActiveExperienceInstance = (instance) => {
+        activeExperienceInstance = instance || null;
+        globalScope.__INFINITE_RAILS_ACTIVE_EXPERIENCE__ = instance || null;
+        return activeExperienceInstance;
+      };
     } catch (hookError) {
       if (globalScope.console?.debug) {
         globalScope.console.debug('Failed to expose ensureSimpleExperience to test hooks.', hookError);
