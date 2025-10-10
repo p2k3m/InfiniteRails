@@ -274,7 +274,6 @@ function ensureTestEnvironment() {
   globalThis.performance = { now: () => Date.now() };
   globalThis.requestAnimationFrame = windowStub.requestAnimationFrame;
   globalThis.cancelAnimationFrame = windowStub.cancelAnimationFrame;
-
   return { documentStub, windowStub };
 }
 
