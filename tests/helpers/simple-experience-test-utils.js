@@ -1,8 +1,7 @@
-import fs from 'node:fs';
-import path from 'node:path';
-import vm from 'node:vm';
-import { fileURLToPath } from 'node:url';
-import * as THREE from 'three';
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
+const THREE = require('three');
 
 const HTMLElementBase =
   typeof globalThis.HTMLElement === 'function' ? globalThis.HTMLElement : class HTMLElement {}
@@ -114,15 +113,13 @@ if (typeof globalThis.WebGL2RenderingContext !== 'function') {
   globalThis.WebGL2RenderingContext = DefaultWebGL2RenderingContextStub;
 }
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, '..', '..');
 
 let simpleExperienceLoaded = false;
 let documentStub = null;
 let windowStub = null;
 
-export function createCanvasStub(overrides = {}) {
+function createCanvasStub(overrides = {}) {
   const loseContextStub = { loseContext: () => {} };
   const webglContextPrototype =
     typeof globalThis.WebGL2RenderingContext === 'function'
@@ -281,7 +278,7 @@ function ensureTestEnvironment() {
   return { documentStub, windowStub };
 }
 
-export function ensureSimpleExperienceLoaded() {
+function ensureSimpleExperienceLoaded() {
   ensureTestEnvironment();
   if (simpleExperienceLoaded) {
     return { documentStub, windowStub };
@@ -293,7 +290,7 @@ export function ensureSimpleExperienceLoaded() {
   return { documentStub, windowStub };
 }
 
-export function createExperience(options = {}) {
+function createExperience(options = {}) {
   ensureSimpleExperienceLoaded();
   const canvas = createCanvasStub({ ownerDocument: documentStub });
   const experience = window.SimpleExperience.create({ canvas, ui: {}, ...options });
@@ -301,12 +298,20 @@ export function createExperience(options = {}) {
   return { experience, canvas };
 }
 
-export function getDocumentStub() {
+function getDocumentStub() {
   ensureSimpleExperienceLoaded();
   return documentStub;
 }
 
-export function getWindowStub() {
+function getWindowStub() {
   ensureSimpleExperienceLoaded();
   return windowStub;
 }
+
+module.exports = {
+  ensureSimpleExperienceLoaded,
+  createExperience,
+  getDocumentStub,
+  getWindowStub,
+  createCanvasStub,
+};
