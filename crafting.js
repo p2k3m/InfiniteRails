@@ -191,22 +191,22 @@ function stackHotbarItem(state, itemId, quantity) {
 }
 
 function evaluateIngredientAvailability(state, recipe) {
-  const required = buildIngredientCount(recipe.sequence);
-  const missing = [];
-  for (const [itemId, quantity] of required.entries()) {
+  const requiredCounts = buildIngredientCount(recipe.sequence);
+  const details = [];
+  for (const [itemId, quantity] of requiredCounts.entries()) {
     const available = state.inventory.get(itemId) || 0;
-    if (available < quantity) {
-      missing.push({
-        itemId,
-        required: quantity,
-        available,
-        missing: quantity - available,
-      });
-    }
+    details.push({
+      itemId,
+      required: quantity,
+      available,
+      missing: Math.max(0, quantity - available),
+    });
   }
+  const missing = details.filter((entry) => entry.missing > 0);
   return {
     hasAll: missing.length === 0,
     missing,
+    required: details,
   };
 }
 
@@ -279,19 +279,21 @@ function validateCraftAttempt(state, sequence) {
       alert: 'Sequence fizzles. No recipe matched.',
     };
   }
-  const { hasAll, missing } = evaluateIngredientAvailability(state, recipe);
+  const { hasAll, missing, required } = evaluateIngredientAvailability(state, recipe);
   if (!hasAll) {
     return {
       valid: false,
       reason: 'missing-ingredients',
       recipe,
       missing,
+      required,
       alert: 'Missing ingredients for this recipe.',
     };
   }
   return {
     valid: true,
     recipe,
+    required,
     alert: 'Craft success',
   };
 }
@@ -300,7 +302,18 @@ function craftSequence(state, sequence) {
   const validation = validateCraftAttempt(state, sequence);
   if (!validation.valid) {
     state.lastAlert = validation.alert;
-    return { success: false, alert: state.lastAlert, validation };
+    const feedback = {
+      type: 'error',
+      visual: validation.reason === 'missing-ingredients' ? 'craft-unavailable' : 'craft-invalid',
+      message: state.lastAlert,
+    };
+    if (validation.missing) {
+      feedback.missing = validation.missing.map((entry) => ({ ...entry }));
+    }
+    if (validation.required) {
+      feedback.required = validation.required.map((entry) => ({ ...entry }));
+    }
+    return { success: false, alert: state.lastAlert, validation, feedback };
   }
   const recipe = validation.recipe;
   consumeIngredients(state, recipe);
