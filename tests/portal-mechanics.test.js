@@ -177,7 +177,10 @@ describe('portal mechanics', () => {
     });
     expect(result.transitionGuard).toMatchObject({
       allowIncompleteTransition: false,
+      neverAllowIncompleteTransition: true,
       resetOnFailure: true,
+      resetOnWorldFailure: true,
+      resetOnDimensionFailure: true,
       triggers: expect.arrayContaining(['world-load-failure', 'dimension-load-failure']),
     });
   });
