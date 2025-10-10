@@ -7414,6 +7414,260 @@
     }
   }
 
+  const portalShaderFallbackState = {
+    active: false,
+    reason: null,
+    lastMessage: '',
+    overlayEl: null,
+  };
+
+  if (globalScope && !globalScope.__portalShaderFallbackState) {
+    Object.defineProperty(globalScope, '__portalShaderFallbackState', {
+      value: portalShaderFallbackState,
+      configurable: true,
+      enumerable: false,
+      writable: false,
+    });
+  }
+
+  function ensurePortalFallbackOverlayElement() {
+    if (portalShaderFallbackState.overlayEl?.isConnected) {
+      return portalShaderFallbackState.overlayEl;
+    }
+    const doc = typeof document !== 'undefined' ? document : documentRef;
+    if (!doc?.createElement) {
+      return null;
+    }
+    const container = doc.createElement('div');
+    container.id = 'portalShaderFallbackOverlay';
+    container.className = 'portal-fallback-overlay';
+    container.setAttribute('role', 'status');
+    container.setAttribute('aria-live', 'polite');
+    container.setAttribute('hidden', '');
+    container.hidden = true;
+
+    const badge = doc.createElement('span');
+    badge.className = 'portal-fallback-overlay__badge';
+    badge.textContent = 'Portal warning';
+
+    const titleEl = doc.createElement('span');
+    titleEl.className = 'portal-fallback-overlay__title';
+    titleEl.textContent = 'Portal shader offline';
+
+    const messageEl = doc.createElement('p');
+    messageEl.className = 'portal-fallback-overlay__message';
+    messageEl.textContent = 'Portal fallback active until shaders recover.';
+
+    container.appendChild(badge);
+    container.appendChild(titleEl);
+    container.appendChild(messageEl);
+
+    const root = doc.body || doc.documentElement;
+    if (root?.appendChild) {
+      root.appendChild(container);
+    }
+
+    portalShaderFallbackState.overlayEl = container;
+    return container;
+  }
+
+  function showPortalFallbackOverlay(message) {
+    const overlay = ensurePortalFallbackOverlayElement();
+    if (!overlay) {
+      return;
+    }
+    const messageEl = overlay.querySelector('.portal-fallback-overlay__message');
+    if (messageEl) {
+      messageEl.textContent = message;
+    }
+    overlay.dataset.visible = 'true';
+    overlay.removeAttribute('hidden');
+    overlay.hidden = false;
+  }
+
+  function applyPortalFallbackDomState(contextMessage) {
+    const doc = typeof document !== 'undefined' ? document : documentRef;
+    if (!doc) {
+      return;
+    }
+    const root = doc.body || doc.documentElement;
+    if (root?.classList) {
+      root.classList.add('portal-fallback-active');
+    }
+    const statusEl = doc.getElementById('portalStatus');
+    if (statusEl) {
+      statusEl.classList.add('portal-status--fallback');
+      statusEl.setAttribute('data-state', 'fallback');
+      const stateText = statusEl.querySelector('.portal-status__state');
+      if (stateText) {
+        stateText.textContent = 'Portal fallback';
+      }
+      const detailText = statusEl.querySelector('.portal-status__detail') ||
+        statusEl.querySelector('.portal-status__text');
+      if (detailText && typeof contextMessage === 'string') {
+        detailText.textContent = contextMessage;
+      }
+    }
+  }
+
+  function announcePortalShaderFallback(context = {}) {
+    const missingUniforms = Array.isArray(context.uniformsMissing)
+      ? context.uniformsMissing
+      : [];
+    const messageParts = [];
+    if (missingUniforms.length) {
+      messageParts.push(`Missing uniforms: ${missingUniforms.join(', ')}`);
+    }
+    if (context.error?.message) {
+      messageParts.push(context.error.message);
+    }
+    const overlayMessage =
+      messageParts.length > 0
+        ? `${messageParts.join('. ')}. Portal is running a fallback glow until shaders recover.`
+        : 'Portal shader failed to initialise. Portal is running a fallback glow until shaders recover.';
+
+    const alreadyActive = portalShaderFallbackState.active;
+    portalShaderFallbackState.active = true;
+    portalShaderFallbackState.reason = context.reason ?? portalShaderFallbackState.reason ?? 'unknown';
+
+    if (portalShaderFallbackState.lastMessage !== overlayMessage) {
+      portalShaderFallbackState.lastMessage = overlayMessage;
+      applyPortalFallbackDomState('Shader offline — fallback glow active.');
+      showPortalFallbackOverlay(overlayMessage);
+      showHudAlert({
+        title: 'Portal shader offline',
+        message: overlayMessage,
+        severity: 'warning',
+        autoHideMs: null,
+      });
+    } else if (!alreadyActive) {
+      applyPortalFallbackDomState('Shader offline — fallback glow active.');
+      showPortalFallbackOverlay(overlayMessage);
+    }
+
+    if (globalScope?.console?.warn) {
+      const logContext = { ...context };
+      if (logContext.error instanceof Error) {
+        logContext.error = {
+          message: logContext.error.message,
+          stack: logContext.error.stack,
+        };
+      }
+      globalScope.console.warn('Portal shader fallback activated.', logContext);
+    }
+  }
+
+  function findMissingPortalUniforms(uniforms) {
+    if (!uniforms || typeof uniforms !== 'object') {
+      return [];
+    }
+    const missing = [];
+    Object.entries(uniforms).forEach(([name, entry]) => {
+      if (!entry || typeof entry !== 'object') {
+        missing.push(name);
+        return;
+      }
+      if (!Object.prototype.hasOwnProperty.call(entry, 'value')) {
+        missing.push(name);
+        return;
+      }
+      const value = entry.value;
+      if (value === null || value === undefined) {
+        missing.push(name);
+      }
+    });
+    return missing;
+  }
+
+  function createPortalFallbackMaterial(three, context = {}) {
+    const baseColor = new three.Color(context.baseColor || '#7f5af0');
+    const flashColor = baseColor.clone();
+    const material = new three.MeshBasicMaterial({
+      color: baseColor.clone(),
+      transparent: true,
+      opacity: 0.55,
+      blending: three.AdditiveBlending,
+      depthWrite: false,
+      side: three.DoubleSide,
+    });
+    material.name = 'PortalShaderFallbackMaterial';
+    material.userData = {
+      ...material.userData,
+      portalFallback: true,
+      portalFallbackReason: context.reason ?? 'unknown',
+      portalFallbackDetail: context.detail ?? null,
+    };
+    material.onBeforeRender = function portalFallbackPulse() {
+      try {
+        const now =
+          (typeof globalScope !== 'undefined' && globalScope.performance?.now)
+            ? globalScope.performance.now()
+            : typeof performance !== 'undefined' && performance.now
+              ? performance.now()
+              : Date.now();
+        const pulse = (Math.sin((now / 1000) * 2.8) + 1) / 2;
+        flashColor.copy(baseColor);
+        flashColor.offsetHSL(0, 0, (pulse - 0.5) * 0.25);
+        this.color.lerp(flashColor, 0.6);
+        this.opacity = 0.32 + pulse * 0.36;
+      } catch (error) {
+        this.color.copy(baseColor);
+        this.opacity = 0.5;
+      }
+    };
+    material.needsUpdate = true;
+    return material;
+  }
+
+  function installPortalShaderFallback(three) {
+    if (!three || three.__portalShaderFallbackInstalled) {
+      return;
+    }
+    const { ShaderMaterial } = three;
+    if (typeof ShaderMaterial !== 'function' || typeof three.MeshBasicMaterial !== 'function') {
+      return;
+    }
+    const originalShaderMaterial = ShaderMaterial;
+    const proxy = new Proxy(originalShaderMaterial, {
+      construct(target, args, newTarget) {
+        const params = Array.isArray(args) && args.length > 0 ? args[0] ?? {} : {};
+        const missingUniforms = findMissingPortalUniforms(params.uniforms);
+        if (missingUniforms.length > 0) {
+          announcePortalShaderFallback({ reason: 'missing-uniforms', uniformsMissing: missingUniforms });
+          return createPortalFallbackMaterial(three, {
+            reason: 'missing-uniforms',
+            detail: { uniformsMissing },
+          });
+        }
+        try {
+          return Reflect.construct(target, args, newTarget);
+        } catch (error) {
+          announcePortalShaderFallback({ reason: 'construction-error', error });
+          return createPortalFallbackMaterial(three, {
+            reason: 'construction-error',
+            detail: { error },
+          });
+        }
+      },
+      apply(target, thisArg, args) {
+        return proxy.construct(target, args, target);
+      },
+    });
+    three.ShaderMaterial = proxy;
+    three.__portalShaderFallbackInstalled = true;
+  }
+
+  function patchThreeInstance(three) {
+    try {
+      installPortalShaderFallback(three);
+    } catch (error) {
+      if (globalScope?.console?.debug) {
+        globalScope.console.debug('Failed to install portal shader fallback hooks.', error);
+      }
+    }
+    return three;
+  }
+
   function createHeartMarkupFromHealth(health) {
     const numeric = Number.isFinite(health) ? Math.max(0, Math.round(health)) : 0;
     const fullHearts = Math.floor(numeric / 2);
@@ -12183,7 +12437,7 @@
     try {
       const existingThree = resolveThreeFromScope();
       if (existingThree) {
-        return Promise.resolve(existingThree);
+        return Promise.resolve(patchThreeInstance(existingThree));
       }
     } catch (error) {
       return Promise.reject(error);
@@ -12221,7 +12475,7 @@
             throw error;
           }
           if (resolvedThreeAfterLoad) {
-            return resolvedThreeAfterLoad;
+            return patchThreeInstance(resolvedThreeAfterLoad);
           }
           const exposureError = new Error('Three.js script loaded without exposing THREE.');
           reportThreeFailure(exposureError, { reason: 'no-global', url: THREE_SCRIPT_URL });
@@ -12256,7 +12510,7 @@
       try {
         const existingThree = resolveThreeFromScope();
         if (existingThree) {
-          return Promise.resolve(existingThree);
+          return Promise.resolve(patchThreeInstance(existingThree));
         }
       } catch (error) {
         return Promise.reject(error);
@@ -12266,7 +12520,7 @@
         try {
           const resolvedThree = resolveThreeFromScope();
           if (resolvedThree) {
-            return Promise.resolve(resolvedThree);
+            return Promise.resolve(patchThreeInstance(resolvedThree));
           }
         } catch (error) {
           return Promise.reject(error);
@@ -12278,7 +12532,7 @@
           try {
             const resolvedThree = resolveThreeFromScope();
             if (resolvedThree) {
-              resolve(resolvedThree);
+              resolve(patchThreeInstance(resolvedThree));
             } else {
               reject(new Error('Preloaded Three.js script loaded without exposing THREE.'));
             }
@@ -12297,7 +12551,9 @@
     try {
       const preloadPromise = waitForPreloadedThree();
       if (preloadPromise) {
-        threeLoaderPromise = preloadPromise.catch(() => loadThreeScript());
+        threeLoaderPromise = preloadPromise
+          .then(patchThreeInstance)
+          .catch(() => loadThreeScript().then(patchThreeInstance));
         return threeLoaderPromise;
       }
     } catch (error) {
@@ -12305,7 +12561,7 @@
       return threeLoaderPromise;
     }
 
-    threeLoaderPromise = loadThreeScript();
+    threeLoaderPromise = loadThreeScript().then(patchThreeInstance);
     return threeLoaderPromise;
   }
 
