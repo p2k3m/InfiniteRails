@@ -81,4 +81,56 @@ describe('Audio settings API', () => {
     expect(options.volume).toBe(0);
     expect(options.muted).toBe(true);
   });
+
+  it('binds settings UI controls to the audio state', () => {
+    const { windowStub } = setupBootstrap();
+    const hooks = windowStub.__INFINITE_RAILS_TEST_HOOKS__;
+    const audioApi = windowStub.InfiniteRails.audio;
+    const form = windowStub.document.querySelector('[data-settings-form]');
+
+    expect(form).toBeDefined();
+
+    hooks.bindAudioSettingsControls({ settingsForm: form });
+
+    expect(form.dataset.audioSettingsBound).toBe('true');
+
+    const musicSlider = form.querySelector('input[name="music"]');
+    const musicLabel = form.querySelector('[data-volume-label="music"]');
+
+    expect(musicSlider).toBeDefined();
+    expect(musicLabel).toBeDefined();
+    expect(musicLabel.textContent).toBe('60%');
+
+    const sliderHandler = musicSlider.addEventListener.mock.calls.find(([type]) => type === 'input')?.[1];
+    expect(sliderHandler).toBeTypeOf('function');
+
+    musicSlider.value = '25';
+    sliderHandler({ target: musicSlider });
+
+    const updatedState = audioApi.getState();
+    expect(updatedState.volumes.music).toBeCloseTo(0.25, 5);
+    expect(musicLabel.textContent).toBe('25%');
+
+    const muteToggle = form.querySelector('[data-audio-mute]');
+    const masterLabel = form.querySelector('[data-volume-label="master"]');
+    const muteHandler = muteToggle.addEventListener.mock.calls.find(([type]) => type === 'change')?.[1];
+
+    expect(muteHandler).toBeTypeOf('function');
+
+    muteToggle.checked = true;
+    muteHandler({ target: muteToggle });
+
+    const mutedState = audioApi.getState();
+    expect(mutedState.muted).toBe(true);
+    expect(masterLabel.textContent).toBe('Muted');
+    expect(musicLabel.textContent).toBe('Muted');
+
+    muteToggle.checked = false;
+    muteHandler({ target: muteToggle });
+
+    const unmutedState = audioApi.getState();
+    expect(unmutedState.muted).toBe(false);
+    expect(masterLabel.textContent).toBe('80%');
+    expect(musicLabel.textContent).toBe('25%');
+  });
 });
