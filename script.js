@@ -15171,6 +15171,7 @@
         resetAudioSettings({ ...options, source: options.source ?? 'test-hook', persist: options.persist });
       hooks.applyAudioSettingsToExperience = (experience, options = {}) =>
         integrateAudioSettingsWithExperience(experience, { ...options, source: options.source ?? 'test-hook' });
+      hooks.bindAudioSettingsControls = (ui) => bindAudioSettingsControls(ui);
       hooks.getIdentityState = () => identityState;
       hooks.getBackendLiveCheckState = () => backendLiveCheckState;
       hooks.activateMissionBriefingFallback = activateMissionBriefingFallback;

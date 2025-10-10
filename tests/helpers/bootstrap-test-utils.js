@@ -166,6 +166,73 @@ export function createBootstrapSandbox(options = {}) {
   documentStub.body.appendChild(canvas);
   documentStub.body.appendChild(scoreboardStatus);
 
+  const settingsForm = createElement('form', { ownerDocument: documentStub });
+  settingsForm.setAttribute('data-settings-form', '');
+  settingsForm.dataset.settingsForm = '';
+
+  const settingsSelectors = new Map();
+  const registerSettingsSelector = (selector, element) => {
+    settingsSelectors.set(selector, element);
+    return element;
+  };
+
+  const muteToggle = createElement('input', { ownerDocument: documentStub });
+  muteToggle.setAttribute('type', 'checkbox');
+  muteToggle.type = 'checkbox';
+  muteToggle.setAttribute('data-audio-mute', '');
+  muteToggle.dataset.audioMute = '';
+  registerSettingsSelector('[data-audio-mute]', muteToggle);
+  settingsForm.appendChild(muteToggle);
+
+  const defaultVolumes = new Map([
+    ['master', 80],
+    ['music', 60],
+    ['ui', 70],
+    ['effects', 85],
+  ]);
+
+  defaultVolumes.forEach((percent, channel) => {
+    const slider = createElement('input', { ownerDocument: documentStub });
+    slider.setAttribute('type', 'range');
+    slider.type = 'range';
+    slider.setAttribute('name', channel);
+    slider.name = channel;
+    slider.setAttribute('min', '0');
+    slider.setAttribute('max', '100');
+    slider.setAttribute('value', String(percent));
+    slider.value = String(percent);
+    registerSettingsSelector(`input[name="${channel}"]`, slider);
+    settingsForm.appendChild(slider);
+
+    const valueLabel = createElement('span', { ownerDocument: documentStub });
+    valueLabel.setAttribute('data-volume-label', channel);
+    valueLabel.dataset.volumeLabel = channel;
+    valueLabel.textContent = `${percent}%`;
+    registerSettingsSelector(`[data-volume-label="${channel}"]`, valueLabel);
+    settingsForm.appendChild(valueLabel);
+  });
+
+  settingsForm.querySelector = vi.fn((selector) => settingsSelectors.get(selector) ?? null);
+  settingsForm.querySelectorAll = vi.fn((selector) => {
+    if (selector === 'input[type="range"]') {
+      return Array.from(defaultVolumes.keys())
+        .map((channel) => settingsSelectors.get(`input[name="${channel}"]`))
+        .filter(Boolean);
+    }
+    return [];
+  });
+
+  documentStub.body.appendChild(settingsForm);
+
+  if (documentStub.querySelector?.mockImplementation) {
+    documentStub.querySelector.mockImplementation((selector) => {
+      if (selector === '[data-settings-form]') {
+        return settingsForm;
+      }
+      return null;
+    });
+  }
+
   const inputOverlay = createElement('div', { ownerDocument: documentStub });
   inputOverlay.setAttribute('id', 'inputOverlay');
   documentStub.body.appendChild(inputOverlay);
