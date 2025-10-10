@@ -549,4 +549,59 @@ describe('simple experience inventory and crafting flows', () => {
       expect(child.dataset.quantity).not.toBe('undefined');
     });
   });
+
+  it('guards hotbar drops with invalid payloads by falling back to visible slots', () => {
+    const experience = createExperience();
+
+    const hotbarEl = createTrackedElement('div');
+    const craftingInventoryEl = createTrackedElement('div');
+    const extendedInventoryEl = createTrackedElement('div');
+    const inventoryGridEl = createTrackedElement('div');
+    const inventoryOverflowEl = createTrackedElement('p');
+    inventoryOverflowEl.hidden = true;
+
+    experience.hotbarEl = hotbarEl;
+    experience.craftingInventoryEl = craftingInventoryEl;
+    experience.extendedInventoryEl = extendedInventoryEl;
+    experience.inventoryGridEl = inventoryGridEl;
+    experience.inventoryOverflowEl = inventoryOverflowEl;
+
+    experience.hotbar = experience.hotbar.map(() => ({ item: null, quantity: 0 }));
+    experience.hotbar[0] = { item: 'stick', quantity: 2 };
+    experience.hotbar[1] = { item: 'stone', quantity: 1 };
+
+    experience.updateInventoryUi();
+
+    const firstSlot = hotbarEl.children[0];
+    const secondSlot = hotbarEl.children[1];
+    expect(firstSlot).toBeDefined();
+    expect(secondSlot).toBeDefined();
+
+    experience.activeHotbarDrag = { from: 'glitched' };
+
+    const preventDefault = vi.fn();
+    const event = {
+      preventDefault,
+      currentTarget: secondSlot,
+      dataTransfer: {
+        getData: vi.fn(() => 'glitched'),
+      },
+    };
+
+    experience.handleHotbarDrop(event);
+
+    expect(preventDefault).toHaveBeenCalled();
+    expect(event.dataTransfer.getData).toHaveBeenCalledWith('text/plain');
+    expect(experience.activeHotbarDrag).toBeNull();
+
+    const scraped = gatherNodeStrings(hotbarEl);
+    expect(scraped.length).toBeGreaterThan(0);
+    scraped.forEach((text) => {
+      expect(text.includes('undefined')).toBe(false);
+    });
+    expect(hotbarEl.children[0].textContent).toBe('⬜ 1');
+    expect(hotbarEl.children[1].textContent).toBe('🪵 2');
+    expect(experience.hotbar[0]).toEqual({ item: 'stone', quantity: 1 });
+    expect(experience.hotbar[1]).toEqual({ item: 'stick', quantity: 2 });
+  });
 });
