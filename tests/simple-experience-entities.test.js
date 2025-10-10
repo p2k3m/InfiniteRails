@@ -151,6 +151,7 @@ function createExperienceForTest(options = {}) {
     this.cameraBoom.add(this.camera);
     this.playerRig.add(this.cameraBoom);
     this.scene.add(this.playerRig);
+    this.worldRoot = this.scene;
     this.renderer = { render: vi.fn(), setPixelRatio: () => {}, setSize: () => {} };
     this.terrainGroup = new THREE.Group();
     this.railsGroup = new THREE.Group();
@@ -1155,6 +1156,21 @@ describe('simple experience entity lifecycle', () => {
     experience.start();
     await Promise.resolve();
 
+    experience.resetPortalFrameState();
+    const preview = experience.buildPortalFramePreview();
+    expect(preview).toBeTruthy();
+    expect(experience.portalFrameSlots.size).toBe(experience.portalFrameRequiredCount);
+    const initialGhosts = Array.from(experience.portalGhostMeshes.values());
+    expect(initialGhosts.length).toBe(experience.portalFrameRequiredCount);
+    initialGhosts.forEach((mesh) => {
+      expect(mesh.visible).toBe(true);
+      expect(mesh.userData?.portalGhost).toBe(true);
+    });
+    const initialSnapshot = experience.getPortalStatusSnapshot();
+    expect(initialSnapshot.previewSummary?.missingFrameSlots).toBe(
+      experience.portalFrameRequiredCount,
+    );
+
     const showHintSpy = vi.spyOn(experience, 'showHint').mockImplementation(() => {});
 
     try {
@@ -1219,9 +1235,14 @@ describe('simple experience entity lifecycle', () => {
       experience.portalFrameHighlightMeshes.forEach((mesh) => {
         expect(mesh.material).toBe(experience.materials.portalInvalid);
       });
+      const ghostAfter = Array.from(experience.portalGhostMeshes.values());
+      ghostAfter.forEach((mesh) => {
+        expect(mesh.visible).toBe(false);
+      });
       const snapshot = experience.getPortalStatusSnapshot();
       expect(snapshot.state).toBe('blocked');
       expect(snapshot.statusMessage).toContain('4×3');
+      expect(snapshot.previewSummary).toBeTruthy();
       const hint = showHintSpy.mock.calls.at(-1)?.[0] ?? '';
       expect(hint).toContain('4×3');
     } finally {
@@ -1286,7 +1307,9 @@ describe('simple experience entity lifecycle', () => {
       const snapshot = experience.getPortalStatusSnapshot();
       expect(snapshot.state).toBe('ready');
       expect(snapshot.statusMessage.toLowerCase()).toContain('ignite');
-      expect(showHintSpy).not.toHaveBeenCalledWith(expect.stringContaining('4×3'));
+      expect(snapshot.previewSummary?.missingFrameSlots).toBe(0);
+      const hintMessages = showHintSpy.mock.calls.map((call) => call[0]);
+      expect(hintMessages.at(-1) || '').toContain('ignite');
     } finally {
       showHintSpy.mockRestore();
     }
