@@ -1,0 +1,282 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import vm from 'node:vm';
+import { fileURLToPath } from 'node:url';
+import { describe, expect, it, vi } from 'vitest';
+
+function createClassList() {
+  return {
+    add: vi.fn(),
+    remove: vi.fn(),
+    contains: vi.fn(() => false),
+    toggle: vi.fn(),
+  };
+}
+
+function appendChildImpl(node, child) {
+  if (!child || child === node) {
+    return child;
+  }
+  node.children.push(child);
+  child.parentNode = node;
+  child.ownerDocument = node.ownerDocument;
+  return child;
+}
+
+function insertBeforeImpl(node, child, reference) {
+  if (!child) {
+    return child;
+  }
+  const index = reference ? node.children.indexOf(reference) : -1;
+  if (index >= 0) {
+    node.children.splice(index, 0, child);
+  } else {
+    node.children.push(child);
+  }
+  child.parentNode = node;
+  child.ownerDocument = node.ownerDocument;
+  return child;
+}
+
+function removeChildImpl(node, child) {
+  const index = node.children.indexOf(child);
+  if (index !== -1) {
+    node.children.splice(index, 1);
+    child.parentNode = null;
+  }
+  return child;
+}
+
+function createElement(tagName, { ownerDocument } = {}) {
+  const element = {
+    tagName: String(tagName).toUpperCase(),
+    ownerDocument: ownerDocument ?? null,
+    parentNode: null,
+    children: [],
+    style: {
+      setProperty: vi.fn(),
+      removeProperty: vi.fn(),
+    },
+    dataset: {},
+    attributes: {},
+    classList: createClassList(),
+    disabled: false,
+    hidden: false,
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    appendChild(child) {
+      return appendChildImpl(this, child);
+    },
+    insertBefore(child, reference) {
+      return insertBeforeImpl(this, child, reference);
+    },
+    removeChild(child) {
+      return removeChildImpl(this, child);
+    },
+    remove() {
+      if (this.parentNode?.removeChild) {
+        this.parentNode.removeChild(this);
+      }
+    },
+    setAttribute(name, value) {
+      const key = String(name);
+      this.attributes[key] = String(value);
+      if (key === 'id' && this.ownerDocument) {
+        this.ownerDocument.__elementsById.set(String(value), this);
+      }
+    },
+    getAttribute(name) {
+      return Object.prototype.hasOwnProperty.call(this.attributes, name) ? this.attributes[name] : null;
+    },
+    removeAttribute(name) {
+      const key = String(name);
+      if (Object.prototype.hasOwnProperty.call(this.attributes, key)) {
+        delete this.attributes[key];
+      }
+    },
+    querySelector: vi.fn(() => null),
+    querySelectorAll: vi.fn(() => []),
+  };
+  return element;
+}
+
+function createDocumentStub() {
+  const elementsById = new Map();
+  const documentStub = {
+    __elementsById: elementsById,
+    documentElement: createElement('html'),
+    body: createElement('body'),
+    createElement(tag) {
+      const node = createElement(tag, { ownerDocument: documentStub });
+      return node;
+    },
+    createTextNode: (text) => ({ textContent: text }),
+    createDocumentFragment: () => ({
+      children: [],
+      appendChild(child) {
+        this.children.push(child);
+        return child;
+      },
+    }),
+    getElementById(id) {
+      return elementsById.get(String(id)) ?? null;
+    },
+    querySelector: vi.fn(() => null),
+    querySelectorAll: vi.fn(() => []),
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    dispatchEvent: vi.fn(),
+    visibilityState: 'visible',
+  };
+  documentStub.documentElement.ownerDocument = documentStub;
+  documentStub.body.ownerDocument = documentStub;
+  return documentStub;
+}
+
+function createSandbox() {
+  const documentStub = createDocumentStub();
+  const consoleStub = {
+    log: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+  };
+  const startButton = createElement('button', { ownerDocument: documentStub });
+  startButton.id = 'startButton';
+  documentStub.__elementsById.set('startButton', startButton);
+  const canvas = createElement('canvas', { ownerDocument: documentStub });
+  canvas.id = 'gameCanvas';
+  documentStub.__elementsById.set('gameCanvas', canvas);
+  const briefing = createElement('section', { ownerDocument: documentStub });
+  briefing.id = 'gameBriefing';
+  documentStub.__elementsById.set('gameBriefing', briefing);
+
+  const windowStub = {
+    APP_CONFIG: {},
+    devicePixelRatio: 1,
+    location: { search: '', reload: vi.fn(), protocol: 'https:' },
+    matchMedia: () => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() }),
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    requestAnimationFrame: (cb) => setTimeout(() => cb(Date.now()), 16),
+    cancelAnimationFrame: (id) => clearTimeout(id),
+    document: documentStub,
+    navigator: { geolocation: { getCurrentPosition: vi.fn() }, maxTouchPoints: 0 },
+    setTimeout,
+    clearTimeout,
+    setInterval,
+    clearInterval,
+    console: consoleStub,
+    URL,
+    URLSearchParams,
+  };
+
+  documentStub.defaultView = windowStub;
+  windowStub.window = windowStub;
+  windowStub.globalThis = windowStub;
+
+  const sandbox = {
+    console: consoleStub,
+    window: windowStub,
+    document: documentStub,
+    globalThis: windowStub,
+    navigator: windowStub.navigator,
+    performance: { now: () => Date.now() },
+    requestAnimationFrame: windowStub.requestAnimationFrame,
+    cancelAnimationFrame: windowStub.cancelAnimationFrame,
+    setTimeout,
+    clearTimeout,
+    setInterval,
+    clearInterval,
+    URL,
+    URLSearchParams,
+    __INFINITE_RAILS_TEST_SKIP_BOOTSTRAP__: true,
+  };
+
+  return { sandbox, windowStub, consoleStub };
+}
+
+function evaluateBootstrapScript(sandbox) {
+  const __filename = fileURLToPath(import.meta.url);
+  const __dirname = path.dirname(__filename);
+  const scriptPath = path.resolve(__dirname, '..', 'script.js');
+  const source = fs.readFileSync(scriptPath, 'utf8');
+  vm.createContext(sandbox);
+  vm.runInContext(source, sandbox);
+}
+
+describe('survival watchdog recovery', () => {
+  it('resets player vitals after a simulation crash is reported', () => {
+    const { sandbox, windowStub, consoleStub } = createSandbox();
+
+    evaluateBootstrapScript(sandbox);
+
+    const hooks = windowStub.__INFINITE_RAILS_TEST_HOOKS__;
+    expect(hooks).toBeTruthy();
+
+    const updateHud = vi.fn();
+    const publishStateSnapshot = vi.fn();
+    const emitGameEvent = vi.fn();
+    const experience = {
+      maxHealth: 16,
+      health: 3,
+      maxHunger: 14,
+      hunger: 2,
+      hungerPercent: 20,
+      playerBreathCapacity: 18,
+      playerBreath: 0,
+      playerBreathPercent: 0,
+      updateHud,
+      publishStateSnapshot,
+      emitGameEvent,
+    };
+
+    hooks.setActiveExperienceInstance(experience);
+
+    windowStub.__INFINITE_RAILS_STATE__ = {
+      player: {
+        maxHealth: 10,
+        health: 4,
+        maxBreath: 12,
+        breath: 6,
+        breathPercent: 50,
+        maxHunger: 8,
+        hunger: 1,
+        hungerPercent: 10,
+      },
+      updatedAt: 0,
+    };
+
+    const result = hooks.triggerSurvivalWatchdog({ stage: 'simulation', reason: 'physics-crash' });
+
+    expect(result).toBe(true);
+    expect(experience.health).toBe(16);
+    expect(experience.hunger).toBe(14);
+    expect(experience.playerBreath).toBe(18);
+    expect(experience.playerBreathPercent).toBe(100);
+    expect(experience.hungerPercent).toBe(100);
+    expect(updateHud).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: 'survival-watchdog', stage: 'simulation' }),
+    );
+    expect(publishStateSnapshot).toHaveBeenCalledWith('survival-watchdog');
+    expect(emitGameEvent).toHaveBeenCalledWith(
+      'survival-watchdog-reset',
+      expect.objectContaining({ stage: 'simulation', reason: 'physics-crash', experienceUpdated: true }),
+    );
+
+    const playerState = windowStub.__INFINITE_RAILS_STATE__.player;
+    expect(playerState.health).toBe(16);
+    expect(playerState.maxHealth).toBe(16);
+    expect(playerState.breath).toBe(18);
+    expect(playerState.maxBreath).toBe(18);
+    expect(playerState.breathPercent).toBe(100);
+    expect(playerState.hunger).toBe(14);
+    expect(playerState.maxHunger).toBe(14);
+    expect(playerState.hungerPercent).toBe(100);
+    expect(consoleStub.warn).toHaveBeenCalledWith(
+      'Survival watchdog reset player vitals after crash.',
+      expect.objectContaining({ stage: 'simulation', reason: 'physics-crash' }),
+    );
+  });
+});
