@@ -4,6 +4,110 @@ import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 import * as THREE from 'three';
 
+const HTMLElementBase =
+  typeof globalThis.HTMLElement === 'function' ? globalThis.HTMLElement : class HTMLElement {}
+;
+
+class HTMLElementStub extends HTMLElementBase {
+  constructor(tagName = 'div') {
+    super();
+    this.tagName = typeof tagName === 'string' ? tagName.toUpperCase() : '';
+    this.dataset = {};
+    this.style = {};
+    this.attributes = {};
+    this.children = [];
+    this.childNodes = this.children;
+    this.parentElement = null;
+    this.ownerDocument = null;
+    this.textContent = '';
+    this.classList = {
+      add: () => {},
+      remove: () => {},
+      toggle: () => {},
+      contains: () => false,
+    };
+  }
+
+  appendChild(child) {
+    if (!child) {
+      return child;
+    }
+    this.children.push(child);
+    child.parentElement = this;
+    return child;
+  }
+
+  removeChild(child) {
+    const index = this.children.indexOf(child);
+    if (index >= 0) {
+      this.children.splice(index, 1);
+      if (child) {
+        child.parentElement = null;
+      }
+    }
+    return child;
+  }
+
+  setAttribute(name, value) {
+    this.attributes[name] = value;
+  }
+
+  getAttribute(name) {
+    return Object.prototype.hasOwnProperty.call(this.attributes, name)
+      ? this.attributes[name]
+      : null;
+  }
+
+  hasAttribute(name) {
+    return Object.prototype.hasOwnProperty.call(this.attributes, name);
+  }
+
+  addEventListener() {}
+
+  removeEventListener() {}
+
+  querySelector() {
+    return null;
+  }
+
+  querySelectorAll() {
+    return [];
+  }
+
+  contains(target) {
+    if (!target) {
+      return false;
+    }
+    if (target === this) {
+      return true;
+    }
+    return this.children.includes(target);
+  }
+
+  getBoundingClientRect() {
+    const width = this.clientWidth ?? 0;
+    const height = this.clientHeight ?? 0;
+    return { top: 0, left: 0, right: width, bottom: height, width, height };
+  }
+}
+
+class HTMLCanvasElementStub extends HTMLElementStub {
+  constructor() {
+    super('canvas');
+    this.width = 512;
+    this.height = 512;
+    this.clientWidth = 512;
+    this.clientHeight = 512;
+    this.style = {};
+    this.classList = {
+      add: () => {},
+      remove: () => {},
+      toggle: () => {},
+      contains: () => false,
+    };
+  }
+}
+
 const DefaultWebGL2RenderingContextStub = function WebGL2RenderingContextStub() {};
 
 if (typeof globalThis.WebGL2RenderingContext !== 'function') {
@@ -35,32 +139,24 @@ export function createCanvasStub(overrides = {}) {
     arc: () => {},
     fill: () => {},
   };
-  const canvas = {
-    width: 512,
-    height: 512,
-    clientWidth: 512,
-    clientHeight: 512,
-    style: {},
-    classList: { add: () => {}, remove: () => {}, contains: () => false },
-    addEventListener: () => {},
-    removeEventListener: () => {},
-    setAttribute: () => {},
-    focus: () => {},
-    requestPointerLock: () => ({ catch: () => {} }),
-    releasePointerCapture: () => {},
-    setPointerCapture: () => {},
-    toDataURL: () => 'data:image/png;base64,',
-    getContext: (type) => {
-      if (type === '2d') {
-        return context2d;
-      }
-      if (type === 'webgl' || type === 'webgl2' || type === 'experimental-webgl') {
-        return webglContext;
-      }
-      return null;
-    },
+  const canvas = new HTMLCanvasElementStub();
+  canvas.addEventListener = () => {};
+  canvas.removeEventListener = () => {};
+  canvas.focus = () => {};
+  canvas.requestPointerLock = () => ({ catch: () => {} });
+  canvas.releasePointerCapture = () => {};
+  canvas.setPointerCapture = () => {};
+  canvas.toDataURL = () => 'data:image/png;base64,';
+  canvas.contains = (target) => target === canvas || canvas.children.includes(target);
+  canvas.getContext = (type) => {
+    if (type === '2d') {
+      return context2d;
+    }
+    if (type === 'webgl' || type === 'webgl2' || type === 'experimental-webgl') {
+      return webglContext;
+    }
+    return null;
   };
-  canvas.contains = (target) => target === canvas;
   const ownerDocument = overrides.ownerDocument ?? documentStub;
   if (ownerDocument) {
     canvas.ownerDocument = ownerDocument;
@@ -73,18 +169,62 @@ function ensureTestEnvironment() {
     return { documentStub, windowStub };
   }
 
+  if (typeof globalThis.HTMLElement !== 'function') {
+    globalThis.HTMLElement = HTMLElementStub;
+  }
+  if (typeof globalThis.Element !== 'function') {
+    globalThis.Element = globalThis.HTMLElement;
+  }
+  if (typeof globalThis.Node !== 'function') {
+    globalThis.Node = globalThis.Element;
+  }
+  if (typeof globalThis.HTMLCanvasElement !== 'function') {
+    globalThis.HTMLCanvasElement = HTMLCanvasElementStub;
+  }
+
   documentStub = {
     createElement: (tag) => {
       if (tag === 'canvas') {
         return createCanvasStub({ ownerDocument: documentStub });
       }
-      return { getContext: () => null };
+      const element = new HTMLElementStub(tag);
+      element.ownerDocument = documentStub;
+      return element;
     },
-    body: { classList: { contains: () => false, add: () => {}, remove: () => {} } },
+    createElementNS: () => {
+      const element = new HTMLElementStub();
+      element.ownerDocument = documentStub;
+      return element;
+    },
+    createTextNode: (text = '') => ({ textContent: text }),
+    createDocumentFragment: () => ({
+      children: [],
+      appendChild(child) {
+        if (child) {
+          this.children.push(child);
+        }
+        return child;
+      },
+    }),
     getElementById: () => null,
     querySelector: () => null,
     querySelectorAll: () => [],
+    addEventListener: () => {},
+    removeEventListener: () => {},
   };
+  documentStub.body = new HTMLElementStub('body');
+  documentStub.body.ownerDocument = documentStub;
+  documentStub.body.classList = {
+    add: () => {},
+    remove: () => {},
+    contains: () => false,
+    toggle: () => {},
+  };
+
+  documentStub.documentElement = new HTMLElementStub('html');
+  documentStub.documentElement.ownerDocument = documentStub;
+  documentStub.head = new HTMLElementStub('head');
+  documentStub.head.ownerDocument = documentStub;
 
   windowStub = {
     APP_CONFIG: {},
@@ -117,6 +257,13 @@ function ensureTestEnvironment() {
       position: 'relative',
     }),
   };
+
+  windowStub.Element = globalThis.Element;
+  windowStub.HTMLElement = globalThis.HTMLElement;
+  windowStub.HTMLCanvasElement = globalThis.HTMLCanvasElement;
+  windowStub.Node = globalThis.Node;
+
+  documentStub.defaultView = windowStub;
 
   Object.assign(windowStub, { THREE, THREE_GLOBAL: THREE });
   windowStub.WebGL2RenderingContext = globalThis.WebGL2RenderingContext;
