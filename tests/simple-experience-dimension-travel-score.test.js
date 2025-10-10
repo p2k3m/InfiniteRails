@@ -22,6 +22,7 @@ function prepareExperienceForAdvance(experience) {
   vi.spyOn(experience, 'runDimensionExitHooks').mockResolvedValue();
   vi.spyOn(experience, 'runDimensionEnterHooks').mockResolvedValue();
   vi.spyOn(experience, 'runDimensionReadyHooks').mockResolvedValue();
+  vi.spyOn(experience, 'handleDimensionPostInit').mockResolvedValue();
   vi.spyOn(experience, 'verifyDimensionAssetsAfterTransition').mockReturnValue({ allPresent: true });
   vi.spyOn(experience, 'applyDimensionSettings').mockImplementation(function mockApply(index) {
     this.currentDimensionIndex = index;
@@ -79,7 +80,7 @@ describe('simple experience dimension travel scoring', () => {
     const populateSpy = vi
       .spyOn(experience, 'populateSceneAfterTerrain')
       .mockImplementation(() => {});
-    const handleSpy = vi.spyOn(experience, 'handleDimensionPostInit');
+    const handleSpy = experience.handleDimensionPostInit;
     const exitSpy = experience.runDimensionExitHooks;
     const applySpy = experience.applyDimensionSettings;
     const buildSpy = experience.buildTerrain;
@@ -104,5 +105,54 @@ describe('simple experience dimension travel scoring', () => {
       }),
     );
     expect(verifySpy).toHaveBeenCalledWith(expect.objectContaining({ reason: 'dimension-transition' }));
+  });
+
+  it('resets to the previous dimension when the transition guard refuses an incomplete load', async () => {
+    const { experience } = createExperience();
+    prepareExperienceForAdvance(experience);
+    const startScore = experience.score;
+    const addScoreSpy = vi.spyOn(experience, 'addScoreBreakdown');
+    const populateSpy = vi.spyOn(experience, 'populateSceneAfterTerrain').mockImplementation(() => {});
+
+    experience.portalMechanics = { ...experience.portalMechanics };
+    experience.portalMechanics.enterPortal = vi.fn(() => ({
+      dimensionChanged: true,
+      transitionGuard: {
+        allowIncompleteTransition: false,
+        neverAllowIncompleteTransition: true,
+        resetOnWorldFailure: true,
+        resetOnDimensionFailure: true,
+        reason: 'dimension-transition-guard',
+      },
+    }));
+
+    experience.verifyDimensionAssetsAfterTransition.mockReturnValue({ allPresent: false });
+
+    await experience.advanceDimension();
+
+    expect(experience.portalMechanics.enterPortal).toHaveBeenCalled();
+    expect(experience.applyDimensionSettings).toHaveBeenNthCalledWith(1, 1);
+    expect(experience.applyDimensionSettings).toHaveBeenNthCalledWith(2, 0);
+    expect(experience.currentDimensionIndex).toBe(0);
+    expect(addScoreSpy).not.toHaveBeenCalledWith('dimensions', expect.any(Number));
+    expect(experience.scheduleScoreSync).toHaveBeenCalledWith('dimension-transition-guard');
+    expect(experience.audio.play).not.toHaveBeenCalled();
+    expect(experience.buildTerrain).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: 'dimension-transition-guard' }),
+    );
+    expect(populateSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: 'dimension-transition-guard' }),
+    );
+    expect(experience.refreshPortalState).toHaveBeenCalled();
+    expect(experience.handleDimensionPostInit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        previousDimension: expect.anything(),
+        nextDimension: expect.anything(),
+      }),
+    );
+    expect(experience.showHint).toHaveBeenCalledWith(
+      expect.stringContaining('resetting portal alignment'),
+    );
+    expect(experience.score).toBe(startScore);
   });
 });
