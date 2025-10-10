@@ -254,14 +254,15 @@ sam deploy --guided
 
 ### Recovering portal shaders after uniform failures
 
-The renderer will fall back to emissive planes when it detects that a portal surface material has lost a required uniform (for
-example `uColor`, `uTime`, `uOpacity`, or `uActivation`). The console surfaces this by printing a warning similar to
-`Portal shaders disabled after renderer failure; continuing with emissive fallback materials.` alongside the missing uniforms.
+The renderer will fall back to a plain flashing color when it detects that a portal surface material has lost a required uniform
+(for example `uColor`, `uTime`, `uOpacity`, or `uActivation`). The console surfaces this by printing a warning similar to
+`Portal shaders disabled after renderer failure; running a plain flashing color fallback until shaders recover.` alongside the
+missing uniforms.
 
 1. Rebuild or repair the affected material so that every required uniform once again exposes a `value` (the recovery helpers can
    populate defaults if the container exists).
 2. Reload the scene or refresh the page. Once valid uniforms are present, the warning disappears and the renderer keeps using
-   the true portal shader instead of the emissive fallback, so you retain the intended ripple animation.
+   the true portal shader instead of the plain flashing fallback, so you retain the intended ripple animation.
 
 ## Local Development
 

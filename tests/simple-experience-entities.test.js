@@ -14,7 +14,8 @@ if (typeof globalThis.WebGL2RenderingContext !== 'function') {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, '..');
-const PORTAL_SHADER_FALLBACK_ANNOUNCEMENT = 'Portal shader offline — emissive fallback active.';
+const PORTAL_SHADER_FALLBACK_ANNOUNCEMENT =
+  'Portal shader offline — plain flashing color active while shaders recover.';
 
 function createCanvasStub() {
   const loseContextStub = { loseContext: () => {} };
