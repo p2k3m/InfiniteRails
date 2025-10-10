@@ -371,7 +371,7 @@ function searchRecipes(source, query) {
   };
 }
 
-module.exports = {
+const craftingApi = {
   HOTBAR_STACK_LIMIT,
   ITEM_LIBRARY,
   DEFAULT_RECIPES,
@@ -382,21 +382,38 @@ module.exports = {
   validateCraftAttempt,
   searchRecipes,
 };
-if (typeof Object.defineProperty === 'function') {
-  Object.defineProperty(module.exports, 'default', {
-    value: module.exports,
-    enumerable: false,
-    configurable: true,
-    writable: true,
-  });
-  Object.defineProperty(module.exports, '__esModule', {
-    value: true,
-    enumerable: false,
-    configurable: true,
-  });
-} else {
-  module.exports.default = module.exports;
-  module.exports.__esModule = true;
+
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = craftingApi;
+  if (typeof Object.defineProperty === 'function') {
+    Object.defineProperty(module.exports, 'default', {
+      value: module.exports,
+      enumerable: false,
+      configurable: true,
+      writable: true,
+    });
+    Object.defineProperty(module.exports, '__esModule', {
+      value: true,
+      enumerable: false,
+      configurable: true,
+    });
+  } else {
+    module.exports.default = module.exports;
+    module.exports.__esModule = true;
+  }
+}
+
+const globalTarget =
+  typeof globalThis !== 'undefined'
+    ? globalThis
+    : typeof self !== 'undefined'
+    ? self
+    : typeof window !== 'undefined'
+    ? window
+    : undefined;
+
+if (globalTarget && !globalTarget.InfiniteRailsCrafting) {
+  globalTarget.InfiniteRailsCrafting = craftingApi;
 }
 
 try {
