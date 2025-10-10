@@ -4,6 +4,9 @@ const {
   FRAME_WIDTH,
   FRAME_HEIGHT,
   buildPortalFrame,
+  createPortalFrameLayout,
+  buildPortalPlacementPreview,
+  validatePortalFrameFootprint,
   detectPortalCollision,
   ignitePortalFrame,
   enterPortal,
@@ -64,6 +67,74 @@ describe('portal mechanics', () => {
     expect(result.shaderActive).toBe(true);
     expect(result.activation).toBeGreaterThan(0);
     expect(result.events).toContain('Portal active');
+  });
+
+  it('builds a portal frame layout and exposes preview slots', () => {
+    const layout = createPortalFrameLayout({ x: 10, z: 12, y: 2 }, { blockSize: 1 });
+    expect(layout.bounds.width).toBeGreaterThan(0);
+    expect(layout.frameSlots.size).toBe(2 * (layout.bounds.width + layout.bounds.height) - 4);
+    expect(layout.interiorSlots.size).toBe(layout.bounds.width * layout.bounds.height - layout.frameSlots.size);
+    const sampleSlot = Array.from(layout.frameSlots.values())[0];
+    expect(sampleSlot).toMatchObject({
+      gridX: expect.any(Number),
+      gridZ: expect.any(Number),
+      relY: expect.any(Number),
+      worldPosition: expect.objectContaining({ x: expect.any(Number), y: expect.any(Number), z: expect.any(Number) }),
+    });
+  });
+
+  it('produces preview states for missing, present, and blocked frame slots', () => {
+    const anchor = { x: 8, z: 8, y: 0 };
+    const layout = createPortalFrameLayout(anchor);
+    const emptyPreview = buildPortalPlacementPreview(layout, {});
+    expect(emptyPreview.summary.totalFrameSlots).toBe(layout.frameSlots.size);
+    expect(emptyPreview.summary.missingFrameSlots).toBe(layout.frameSlots.size);
+    expect(emptyPreview.footprintValid).toBe(false);
+
+    const placedBlocks = Array.from(layout.frameSlots.values()).map((slot) => ({
+      gridX: slot.gridX,
+      gridZ: slot.gridZ,
+      level: slot.level,
+      blockType: 'stone',
+    }));
+    const fullPreview = buildPortalPlacementPreview(layout, { placedBlocks, requiredBlockType: 'stone' });
+    expect(fullPreview.summary.presentFrameSlots).toBe(layout.frameSlots.size);
+    expect(fullPreview.summary.missingFrameSlots).toBe(0);
+    expect(fullPreview.summary.blockedFrameSlots).toBe(0);
+    expect(fullPreview.footprintValid).toBe(true);
+    expect(fullPreview.messages[0]).toMatch(/footprint complete/i);
+
+    const blockingGridSize = 32;
+    const grid = Array.from({ length: blockingGridSize }, () =>
+      Array.from({ length: blockingGridSize }, () => ({ type: 'grass', walkable: true })),
+    );
+    const blockedSlot = placedBlocks[0];
+    grid[blockedSlot.gridZ][blockedSlot.gridX] = { type: 'grass', walkable: false, occupant: 'player' };
+    const blockedPreview = buildPortalPlacementPreview(layout, { collisionGrid: grid });
+    expect(blockedPreview.summary.blockedFrameSlots).toBeGreaterThan(0);
+    expect(blockedPreview.footprintValid).toBe(false);
+    expect(blockedPreview.messages.join(' ')).toMatch(/player/);
+  });
+
+  it('validates portal frame footprints and surfaces summary details', () => {
+    const layout = createPortalFrameLayout({ x: 6, z: 6, y: 0 });
+    const resultMissing = validatePortalFrameFootprint(layout, {});
+    expect(resultMissing.valid).toBe(false);
+    expect(resultMissing.summary.missingFrameSlots).toBe(layout.frameSlots.size);
+
+    const placements = Array.from(layout.frameSlots.values()).map((slot) => ({
+      gridX: slot.gridX,
+      gridZ: slot.gridZ,
+      level: slot.level,
+      blockType: 'obsidian',
+    }));
+    const resultComplete = validatePortalFrameFootprint(layout, {
+      placedBlocks: placements,
+      requiredBlockType: 'obsidian',
+    });
+    expect(resultComplete.valid).toBe(true);
+    expect(resultComplete.summary.presentFrameSlots).toBe(layout.frameSlots.size);
+    expect(resultComplete.messages[0]).toMatch(/complete/i);
   });
 
   it('logs the dimension name, applies physics, and returns spawn regeneration data', () => {
