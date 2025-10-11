@@ -15237,13 +15237,31 @@
   let googleIdentityScriptPromise = null;
 
   function updateScoreboardStatus(message, options = {}) {
-    if (typeof options.offline === 'boolean') {
-      identityState.scoreboardOffline = options.offline;
-      identityState.discoverabilityOffline = options.offline;
+    const hasOfflineOption = Object.prototype.hasOwnProperty.call(options, 'offline');
+    const circuitTripped =
+      typeof networkCircuitBreaker?.isTripped === 'function' ? networkCircuitBreaker.isTripped() : null;
+    const offlineState = hasOfflineOption
+      ? Boolean(options.offline)
+      : circuitTripped === true
+        ? true
+        : identityState.scoreboardOffline === true;
+
+    if (hasOfflineOption || offlineState !== identityState.scoreboardOffline) {
+      identityState.scoreboardOffline = offlineState;
+      identityState.discoverabilityOffline = offlineState;
     }
-    if (typeof message === 'string' && message.trim().length > 0) {
-      identityState.scoreboardMessage = message.trim();
+
+    const rawMessage =
+      typeof message === 'string' && message.trim().length > 0 ? message.trim() : identityState.scoreboardMessage ?? '';
+    const decoratedMessage =
+      typeof networkCircuitBreaker?.applyOfflineMessage === 'function'
+        ? networkCircuitBreaker.applyOfflineMessage(rawMessage)
+        : rawMessage;
+
+    if (typeof decoratedMessage === 'string' && decoratedMessage.trim().length > 0) {
+      identityState.scoreboardMessage = decoratedMessage.trim();
     }
+
     if (scoreboardStatusEl) {
       scoreboardStatusEl.textContent = identityState.scoreboardMessage;
       if (identityState.scoreboardOffline) {
@@ -18373,6 +18391,12 @@
         }
         return activeExperienceInstance;
       };
+      hooks.recordNetworkFailure = (kind, detail) => networkCircuitBreaker.recordFailure(kind, detail || {});
+      hooks.recordNetworkRecovery = (kind, detail) => networkCircuitBreaker.recordRecovery(kind, detail || {});
+      hooks.getNetworkCircuitState = () => ({
+        tripped: networkCircuitBreaker.isTripped(),
+        message: networkCircuitBreaker.getMessage(),
+      });
     } catch (hookError) {
       if (globalScope.console?.debug) {
         globalScope.console.debug('Failed to expose ensureSimpleExperience to test hooks.', hookError);

@@ -76,4 +76,24 @@ describe('backend live-check', () => {
     expect(scoreboardStatus.dataset.offline).toBe('true');
     expect(scoreboardStatus.textContent).toContain('Leaderboard offline');
   });
+
+  it('enters Offline/Recovery Mode after repeated API failures', async () => {
+    const { sandbox, windowStub, scoreboardStatus } = createBootstrapSandbox({
+      appConfig: { apiBaseUrl: 'https://api.example.invalid' },
+    });
+
+    evaluateBootstrapScript(sandbox);
+
+    const hooks = windowStub.__INFINITE_RAILS_TEST_HOOKS__;
+    expect(hooks).toBeTruthy();
+
+    expect(scoreboardStatus.textContent).not.toContain('Offline/Recovery Mode');
+
+    hooks.recordNetworkFailure('api', { source: 'test', message: 'Failure 1' });
+    hooks.recordNetworkFailure('api', { source: 'test', message: 'Failure 2' });
+    hooks.recordNetworkFailure('api', { source: 'test', message: 'Failure 3' });
+
+    expect(scoreboardStatus.dataset.offline).toBe('true');
+    expect(scoreboardStatus.textContent).toContain('Offline/Recovery Mode');
+  });
 });
