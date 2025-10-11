@@ -346,4 +346,87 @@ describe('survival watchdog recovery', () => {
       expect.objectContaining({ stage: 'game-logic', reason: 'engine-crash' }),
     );
   });
+
+  it('resets survival vitals when the experience flags a simulation renderer failure', () => {
+    const { sandbox, windowStub, consoleStub } = createSandbox();
+
+    evaluateBootstrapScript(sandbox);
+
+    const hooks = windowStub.__INFINITE_RAILS_TEST_HOOKS__;
+    expect(hooks).toBeTruthy();
+
+    hooks.resetSurvivalWatchdogState();
+
+    const presentRendererFailure = vi.fn();
+    const updateHud = vi.fn();
+    const publishStateSnapshot = vi.fn();
+    const emitGameEvent = vi.fn();
+
+    const experience = {
+      presentRendererFailure,
+      updateHud,
+      publishStateSnapshot,
+      emitGameEvent,
+      maxHealth: 18,
+      health: 2,
+      maxHunger: 16,
+      hunger: 1,
+      hungerPercent: 5,
+      playerBreathCapacity: 12,
+      playerBreath: 3,
+      playerBreathPercent: 25,
+    };
+
+    windowStub.__INFINITE_RAILS_STATE__ = {
+      player: {
+        maxHealth: 18,
+        health: 2,
+        maxHunger: 16,
+        hunger: 1,
+        hungerPercent: 5,
+        maxBreath: 12,
+        breath: 3,
+        breathPercent: 25,
+      },
+      updatedAt: 0,
+    };
+
+    hooks.setActiveExperienceInstance(experience);
+
+    const wrappedFailureHandler = experience.presentRendererFailure;
+    expect(wrappedFailureHandler).not.toBe(presentRendererFailure);
+    expect(wrappedFailureHandler.__survivalWatchdogOriginal).toBe(presentRendererFailure);
+
+    wrappedFailureHandler('Simulation failure', { stage: 'simulation', reason: 'physics-crash' });
+
+    expect(presentRendererFailure).toHaveBeenCalledWith(
+      'Simulation failure',
+      expect.objectContaining({ stage: 'simulation', reason: 'physics-crash' }),
+    );
+    expect(experience.health).toBe(18);
+    expect(experience.hunger).toBe(16);
+    expect(experience.hungerPercent).toBe(100);
+    expect(experience.playerBreath).toBe(12);
+    expect(experience.playerBreathPercent).toBe(100);
+    expect(updateHud).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: 'survival-watchdog', stage: 'simulation' }),
+    );
+    expect(publishStateSnapshot).toHaveBeenCalledWith('survival-watchdog');
+    expect(emitGameEvent).toHaveBeenCalledWith(
+      'survival-watchdog-reset',
+      expect.objectContaining({ stage: 'simulation', reason: 'physics-crash', experienceUpdated: true }),
+    );
+
+    const playerState = windowStub.__INFINITE_RAILS_STATE__.player;
+    expect(playerState.health).toBe(18);
+    expect(playerState.maxHealth).toBe(18);
+    expect(playerState.hunger).toBe(16);
+    expect(playerState.hungerPercent).toBe(100);
+    expect(playerState.breath).toBe(12);
+    expect(playerState.breathPercent).toBe(100);
+    expect(consoleStub.warn).toHaveBeenCalledWith(
+      'Survival watchdog reset player vitals after crash.',
+      expect.objectContaining({ stage: 'simulation', reason: 'physics-crash' }),
+    );
+  });
 });

@@ -5879,6 +5879,15 @@
     lastSignature: null,
   };
 
+  const SURVIVAL_WATCHDOG_INSTANCE_MARKER =
+    typeof Symbol === 'function'
+      ? Symbol.for('infiniteRails.survivalWatchdog.instance')
+      : '__infiniteRailsSurvivalWatchdogInstance__';
+  const SURVIVAL_WATCHDOG_PRESENT_FAILURE_MARKER =
+    typeof Symbol === 'function'
+      ? Symbol.for('infiniteRails.survivalWatchdog.presentRendererFailure')
+      : '__infiniteRailsSurvivalWatchdogPresentRendererFailure__';
+
   const SURVIVAL_WATCHDOG_STAGE_TOKENS = Object.freeze([
     'physics',
     'simulation',
@@ -6126,6 +6135,56 @@
       state.failureReason = descriptor?.reason || null;
     }
     return changed;
+  }
+
+  function attachSurvivalWatchdogHooksToExperience(experience) {
+    if (!experience || typeof experience !== 'object') {
+      return experience;
+    }
+    if (experience[SURVIVAL_WATCHDOG_INSTANCE_MARKER]) {
+      return experience;
+    }
+    try {
+      if (typeof experience.presentRendererFailure === 'function') {
+        const originalPresentRendererFailure = experience.presentRendererFailure;
+        if (!originalPresentRendererFailure[SURVIVAL_WATCHDOG_PRESENT_FAILURE_MARKER]) {
+          const wrappedPresentRendererFailure = function survivalWatchdogRendererFailure(message, detail, ...args) {
+            const invocationArgs = [message, detail, ...args];
+            const failureDetail = detail && typeof detail === 'object' ? detail : {};
+            const fallbackStage =
+              (typeof failureDetail.stage === 'string' && failureDetail.stage.trim().length
+                ? failureDetail.stage
+                : typeof failureDetail.failureStage === 'string' && failureDetail.failureStage.trim().length
+                  ? failureDetail.failureStage
+                  : 'renderer-failure');
+            try {
+              return originalPresentRendererFailure.apply(this, invocationArgs);
+            } finally {
+              try {
+                const descriptor = normaliseSurvivalWatchdogDescriptor(failureDetail, fallbackStage);
+                if (shouldTriggerSurvivalWatchdog(descriptor)) {
+                  applySurvivalWatchdog(descriptor, {
+                    boundary: failureDetail.boundary || 'experience.presentRendererFailure',
+                  });
+                }
+              } catch (watchdogError) {
+                globalScope?.console?.debug?.(
+                  'Survival watchdog hook failed to evaluate renderer failure.',
+                  watchdogError,
+                );
+              }
+            }
+          };
+          wrappedPresentRendererFailure[SURVIVAL_WATCHDOG_PRESENT_FAILURE_MARKER] = true;
+          wrappedPresentRendererFailure.__survivalWatchdogOriginal = originalPresentRendererFailure;
+          experience.presentRendererFailure = wrappedPresentRendererFailure;
+        }
+      }
+    } catch (hookError) {
+      globalScope?.console?.debug?.('Failed to attach survival watchdog hooks to experience.', hookError);
+    }
+    experience[SURVIVAL_WATCHDOG_INSTANCE_MARKER] = true;
+    return experience;
   }
 
   function applySurvivalWatchdog(descriptor, context = {}) {
@@ -14950,6 +15009,7 @@
         identityStorageKey,
       });
       integrateAudioSettingsWithExperience(experience, { source: 'bootstrap' });
+      attachSurvivalWatchdogHooksToExperience(experience);
     } catch (error) {
       markBootPhaseError('ui', 'Simplified renderer initialisation failed.');
       if (globalScope.console?.error) {
@@ -14966,6 +15026,7 @@
     }
     activeExperienceInstance = experience;
     globalScope.__INFINITE_RAILS_ACTIVE_EXPERIENCE__ = experience;
+    attachSurvivalWatchdogHooksToExperience(experience);
     resetAmbientMusicRecoveryState();
     const scopeLocation = globalScope?.location || (typeof window !== 'undefined' ? window.location : null);
     const locationProtocol = typeof scopeLocation?.protocol === 'string' ? scopeLocation.protocol.toLowerCase() : '';
@@ -15816,6 +15877,9 @@
       hooks.setActiveExperienceInstance = (instance) => {
         activeExperienceInstance = instance || null;
         globalScope.__INFINITE_RAILS_ACTIVE_EXPERIENCE__ = instance || null;
+        if (activeExperienceInstance) {
+          attachSurvivalWatchdogHooksToExperience(activeExperienceInstance);
+        }
         return activeExperienceInstance;
       };
     } catch (hookError) {
