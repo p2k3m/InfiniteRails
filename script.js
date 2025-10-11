@@ -5671,6 +5671,618 @@
 
   const devOrCiEnvironmentActive = detectDevOrCiEnvironment();
 
+  const runtimePerformance =
+    globalScope?.performance ?? (typeof performance !== 'undefined' ? performance : null);
+  const performanceNavigationStart = Number.isFinite(runtimePerformance?.timeOrigin)
+    ? runtimePerformance.timeOrigin
+    : Number.isFinite(runtimePerformance?.timing?.navigationStart)
+      ? runtimePerformance.timing.navigationStart
+      : Date.now();
+
+  function getHighResolutionTimestamp() {
+    try {
+      if (runtimePerformance && typeof runtimePerformance.now === 'function') {
+        const value = runtimePerformance.now();
+        if (Number.isFinite(value)) {
+          return value;
+        }
+      }
+    } catch (error) {
+      // Fallback below.
+    }
+    const now = Date.now();
+    return now - performanceNavigationStart;
+  }
+
+  function normaliseEventTimestamp(value) {
+    if (!Number.isFinite(value)) {
+      return null;
+    }
+    if (value > 1e12) {
+      return value - performanceNavigationStart;
+    }
+    if (value < 0) {
+      return null;
+    }
+    return value;
+  }
+
+  function computeDurationMs(start, end) {
+    if (!Number.isFinite(start) || !Number.isFinite(end)) {
+      return null;
+    }
+    const duration = end - start;
+    return Number.isFinite(duration) && duration >= 0 ? duration : null;
+  }
+
+  function computeAverage(values) {
+    if (!Array.isArray(values) || values.length === 0) {
+      return null;
+    }
+    const total = values.reduce((sum, value) => (Number.isFinite(value) ? sum + value : sum), 0);
+    return total / values.length;
+  }
+
+  function computePercentile(values, percentile) {
+    if (!Array.isArray(values) || !values.length) {
+      return null;
+    }
+    const sorted = values.slice().sort((a, b) => a - b);
+    if (percentile <= 0) {
+      return sorted[0];
+    }
+    if (percentile >= 1) {
+      return sorted[sorted.length - 1];
+    }
+    const index = percentile * (sorted.length - 1);
+    const lowerIndex = Math.floor(index);
+    const upperIndex = Math.min(sorted.length - 1, Math.ceil(index));
+    if (lowerIndex === upperIndex) {
+      return sorted[lowerIndex];
+    }
+    const lower = sorted[lowerIndex];
+    const upper = sorted[upperIndex];
+    return lower + (upper - lower) * (index - lowerIndex);
+  }
+
+  function formatCount(value) {
+    if (!Number.isFinite(value)) {
+      return null;
+    }
+    try {
+      return value.toLocaleString(undefined);
+    } catch (error) {
+      return String(value);
+    }
+  }
+
+  function formatDurationMs(duration) {
+    if (!Number.isFinite(duration)) {
+      return null;
+    }
+    if (duration >= 1000) {
+      return `${(duration / 1000).toFixed(2)}s`;
+    }
+    return `${Math.round(duration)}ms`;
+  }
+
+  const performanceSamplerState = {
+    boot: {
+      startedAt: getHighResolutionTimestamp(),
+      completedAt: null,
+    },
+    start: {
+      startedAt: null,
+      completedAt: null,
+      failed: false,
+    },
+    world: {
+      startedAt: null,
+      completedAt: null,
+      durationMs: null,
+      columnCount: null,
+      voxelCount: null,
+    },
+    fps: {
+      collecting: false,
+      completed: false,
+      samples: [],
+      sampleCount: 0,
+      sampleLimit: 6,
+      sampleIntervalMs: 1000,
+      intervalHandle: null,
+      timeoutHandle: null,
+      completionTimer: null,
+    },
+    input: {
+      installed: false,
+      handler: null,
+      samples: [],
+      sampleLimit: 40,
+      active: false,
+    },
+    metricsEmitted: false,
+  };
+
+  function recordInputLatencySample(latency) {
+    if (!Number.isFinite(latency) || latency < 0) {
+      return;
+    }
+    const clamped = Math.min(Math.max(latency, 0), 2000);
+    performanceSamplerState.input.samples.push(clamped);
+    if (performanceSamplerState.input.samples.length > performanceSamplerState.input.sampleLimit) {
+      performanceSamplerState.input.samples.shift();
+    }
+  }
+
+  function installInputLatencySampler() {
+    if (performanceSamplerState.input.installed) {
+      return;
+    }
+    const scope = typeof globalScope !== 'undefined' ? globalScope : globalThis;
+    if (!scope || typeof scope.addEventListener !== 'function') {
+      return;
+    }
+    const handler = (event) => {
+      if (!performanceSamplerState.input.active) {
+        return;
+      }
+      const eventTimestamp = normaliseEventTimestamp(event?.timeStamp);
+      if (!Number.isFinite(eventTimestamp)) {
+        return;
+      }
+      const now = getHighResolutionTimestamp();
+      const latency = now - eventTimestamp;
+      if (!Number.isFinite(latency)) {
+        return;
+      }
+      recordInputLatencySample(latency);
+    };
+    const listenerOptions = { passive: true, capture: true };
+    ['pointerdown', 'pointerup', 'keydown', 'keyup'].forEach((type) => {
+      try {
+        scope.addEventListener(type, handler, listenerOptions);
+      } catch (error) {
+        scope?.console?.debug?.('Failed to install input latency listener.', error);
+      }
+    });
+    performanceSamplerState.input.handler = handler;
+    performanceSamplerState.input.installed = true;
+  }
+
+  installInputLatencySampler();
+
+  function resetPerformanceSamplerForExperience() {
+    if (Number.isFinite(performanceSamplerState.boot.completedAt)) {
+      performanceSamplerState.boot.startedAt = getHighResolutionTimestamp();
+      performanceSamplerState.boot.completedAt = null;
+    }
+    performanceSamplerState.start.startedAt = null;
+    performanceSamplerState.start.completedAt = null;
+    performanceSamplerState.start.failed = false;
+    performanceSamplerState.world.startedAt = null;
+    performanceSamplerState.world.completedAt = null;
+    performanceSamplerState.world.durationMs = null;
+    performanceSamplerState.world.columnCount = null;
+    performanceSamplerState.world.voxelCount = null;
+    performanceSamplerState.fps.collecting = false;
+    performanceSamplerState.fps.completed = false;
+    performanceSamplerState.fps.samples = [];
+    performanceSamplerState.fps.sampleCount = 0;
+    performanceSamplerState.metricsEmitted = false;
+    performanceSamplerState.input.samples = [];
+  }
+
+  function extractWorldGenerationStats(instance) {
+    const stats = { columnCount: null, voxelCount: null };
+    try {
+      const columns = instance?.columns;
+      if (columns && typeof columns.size === 'number') {
+        stats.columnCount = columns.size;
+        if (typeof columns.forEach === 'function') {
+          let voxelTotal = 0;
+          let valid = true;
+          columns.forEach((column) => {
+            if (Array.isArray(column)) {
+              voxelTotal += column.length;
+            } else if (column && typeof column.length === 'number') {
+              voxelTotal += column.length;
+            } else {
+              valid = false;
+            }
+          });
+          if (valid) {
+            stats.voxelCount = voxelTotal;
+          }
+        }
+      }
+    } catch (error) {
+      globalScope?.console?.debug?.('Failed to extract world generation stats.', error);
+    }
+    return stats;
+  }
+
+  function stopFpsSampling(options = {}) {
+    const scope = typeof globalScope !== 'undefined' ? globalScope : globalThis;
+    const clearIntervalRef =
+      typeof scope?.clearInterval === 'function'
+        ? scope.clearInterval.bind(scope)
+        : typeof clearInterval === 'function'
+          ? clearInterval
+          : null;
+    const clearTimeoutRef =
+      typeof scope?.clearTimeout === 'function'
+        ? scope.clearTimeout.bind(scope)
+        : typeof clearTimeout === 'function'
+          ? clearTimeout
+          : null;
+    if (performanceSamplerState.fps.intervalHandle !== null && clearIntervalRef) {
+      clearIntervalRef(performanceSamplerState.fps.intervalHandle);
+    }
+    if (performanceSamplerState.fps.timeoutHandle !== null && clearTimeoutRef) {
+      clearTimeoutRef(performanceSamplerState.fps.timeoutHandle);
+    }
+    if (performanceSamplerState.fps.completionTimer !== null && clearTimeoutRef) {
+      clearTimeoutRef(performanceSamplerState.fps.completionTimer);
+    }
+    performanceSamplerState.fps.intervalHandle = null;
+    performanceSamplerState.fps.timeoutHandle = null;
+    performanceSamplerState.fps.completionTimer = null;
+    performanceSamplerState.fps.collecting = false;
+    if (options.markCompleted) {
+      performanceSamplerState.fps.completed = true;
+    }
+  }
+
+  function finishFpsSampling(options = {}) {
+    if (performanceSamplerState.fps.completed) {
+      return;
+    }
+    performanceSamplerState.fps.completed = true;
+    stopFpsSampling({ markCompleted: true });
+    if (!options.skipEmit) {
+      maybeEmitPerformanceMetrics();
+    }
+  }
+
+  function startFpsSampling() {
+    if (performanceSamplerState.fps.collecting || performanceSamplerState.fps.completed) {
+      return;
+    }
+    performanceSamplerState.fps.collecting = true;
+    performanceSamplerState.fps.samples = [];
+    performanceSamplerState.fps.sampleCount = 0;
+
+    const scope = typeof globalScope !== 'undefined' ? globalScope : globalThis;
+    const intervalRef =
+      typeof scope?.setInterval === 'function'
+        ? scope.setInterval.bind(scope)
+        : typeof setInterval === 'function'
+          ? setInterval
+          : null;
+    const timeoutRef =
+      typeof scope?.setTimeout === 'function'
+        ? scope.setTimeout.bind(scope)
+        : typeof setTimeout === 'function'
+          ? setTimeout
+          : null;
+
+    const collectSample = () => {
+      performanceSamplerState.fps.sampleCount += 1;
+      try {
+        if (typeof collectDeveloperMetrics === 'function') {
+          const metrics = collectDeveloperMetrics();
+          const fpsValue = metrics?.fps;
+          if (Number.isFinite(fpsValue)) {
+            performanceSamplerState.fps.samples.push(fpsValue);
+          }
+        }
+      } catch (error) {
+        scope?.console?.debug?.('Failed to collect FPS sample.', error);
+      }
+      if (performanceSamplerState.fps.sampleCount >= performanceSamplerState.fps.sampleLimit) {
+        finishFpsSampling();
+      }
+    };
+
+    collectSample();
+
+    if (intervalRef) {
+      performanceSamplerState.fps.intervalHandle = intervalRef(() => {
+        if (performanceSamplerState.fps.completed) {
+          stopFpsSampling();
+          return;
+        }
+        collectSample();
+      }, performanceSamplerState.fps.sampleIntervalMs);
+    } else if (timeoutRef) {
+      const schedule = () => {
+        if (performanceSamplerState.fps.completed) {
+          return;
+        }
+        performanceSamplerState.fps.timeoutHandle = timeoutRef(() => {
+          performanceSamplerState.fps.timeoutHandle = null;
+          collectSample();
+          schedule();
+        }, performanceSamplerState.fps.sampleIntervalMs);
+      };
+      schedule();
+    } else {
+      finishFpsSampling();
+    }
+
+    if (timeoutRef) {
+      const buffer = Math.max(250, performanceSamplerState.fps.sampleIntervalMs / 2);
+      const limit =
+        performanceSamplerState.fps.sampleIntervalMs * performanceSamplerState.fps.sampleLimit + buffer;
+      performanceSamplerState.fps.completionTimer = timeoutRef(() => {
+        finishFpsSampling();
+      }, limit);
+    }
+  }
+
+  function stopPerformanceSampling(options = {}) {
+    stopFpsSampling({ markCompleted: options.markCompleted });
+    if (options.reset) {
+      resetPerformanceSamplerForExperience();
+      performanceSamplerState.input.active = false;
+    }
+  }
+
+  function buildPerformanceMetricsSnapshot() {
+    const bootDuration = computeDurationMs(
+      performanceSamplerState.boot.startedAt,
+      performanceSamplerState.boot.completedAt,
+    );
+    const startDuration = computeDurationMs(
+      performanceSamplerState.start.startedAt,
+      performanceSamplerState.start.completedAt,
+    );
+    const fpsSamples = performanceSamplerState.fps.samples.slice();
+    const fpsAverage = computeAverage(fpsSamples);
+    const fpsStats = fpsSamples.length
+      ? {
+          samples: fpsSamples,
+          sampleCount: fpsSamples.length,
+          average: fpsAverage,
+          min: Math.min(...fpsSamples),
+          max: Math.max(...fpsSamples),
+        }
+      : { sampleCount: 0, samples: [] };
+    const worldStats = (() => {
+      if (!Number.isFinite(performanceSamplerState.world.durationMs)) {
+        return null;
+      }
+      const durationSeconds = performanceSamplerState.world.durationMs / 1000 || 0;
+      const columnRate = durationSeconds > 0 && Number.isFinite(performanceSamplerState.world.columnCount)
+        ? performanceSamplerState.world.columnCount / durationSeconds
+        : null;
+      const voxelRate = durationSeconds > 0 && Number.isFinite(performanceSamplerState.world.voxelCount)
+        ? performanceSamplerState.world.voxelCount / durationSeconds
+        : null;
+      return {
+        startedAt: performanceSamplerState.world.startedAt,
+        completedAt: performanceSamplerState.world.completedAt,
+        durationMs: performanceSamplerState.world.durationMs,
+        columnCount: performanceSamplerState.world.columnCount,
+        voxelCount: performanceSamplerState.world.voxelCount,
+        columnsPerSecond: columnRate,
+        voxelsPerSecond: voxelRate,
+      };
+    })();
+    const inputSamples = performanceSamplerState.input.samples.slice();
+    const inputAverage = computeAverage(inputSamples);
+    const inputStats = inputSamples.length
+      ? {
+          sampleCount: inputSamples.length,
+          samples: inputSamples,
+          averageMs: inputAverage,
+          maxMs: Math.max(...inputSamples),
+          p95Ms: computePercentile(inputSamples, 0.95),
+          medianMs: computePercentile(inputSamples, 0.5),
+        }
+      : { sampleCount: 0, samples: [] };
+    return {
+      boot: {
+        startedAt: performanceSamplerState.boot.startedAt,
+        completedAt: performanceSamplerState.boot.completedAt,
+        durationMs: bootDuration,
+      },
+      start: {
+        startedAt: performanceSamplerState.start.startedAt,
+        completedAt: performanceSamplerState.start.completedAt,
+        durationMs: startDuration,
+        failed: performanceSamplerState.start.failed,
+      },
+      fps: fpsStats,
+      worldGeneration: worldStats,
+      inputLatency: inputStats,
+    };
+  }
+
+  function createPerformanceSummary(metrics) {
+    const parts = [];
+    const bootLabel = formatDurationMs(metrics.boot?.durationMs ?? null);
+    if (bootLabel) {
+      parts.push(`boot ${bootLabel}`);
+    }
+    const startLabel = formatDurationMs(metrics.start?.durationMs ?? null);
+    if (startLabel) {
+      parts.push(`start ${startLabel}`);
+    }
+    if (Number.isFinite(metrics.fps?.average)) {
+      parts.push(`fps ${metrics.fps.average.toFixed(1)}`);
+    }
+    if (metrics.worldGeneration) {
+      const worldCounts = formatCount(metrics.worldGeneration.voxelCount ?? metrics.worldGeneration.columnCount);
+      const worldRate = Number.isFinite(metrics.worldGeneration.voxelsPerSecond)
+        ? `${metrics.worldGeneration.voxelsPerSecond.toFixed(1)}/s`
+        : Number.isFinite(metrics.worldGeneration.columnsPerSecond)
+          ? `${metrics.worldGeneration.columnsPerSecond.toFixed(1)} cols/s`
+          : null;
+      if (worldCounts && worldRate) {
+        parts.push(`world ${worldCounts} @ ${worldRate}`);
+      } else if (worldCounts) {
+        parts.push(`world ${worldCounts}`);
+      }
+    }
+    if (Number.isFinite(metrics.inputLatency?.averageMs) && metrics.inputLatency.sampleCount > 0) {
+      parts.push(`input ${metrics.inputLatency.averageMs.toFixed(1)}ms`);
+    }
+    return parts.length ? parts.join(' · ') : 'Performance metrics captured';
+  }
+
+  function dispatchPerformanceMetrics(event, metrics) {
+    if (!devOrCiEnvironmentActive) {
+      return false;
+    }
+    const scope = typeof globalScope !== 'undefined' ? globalScope : globalThis;
+    if (!scope || typeof scope.dispatchEvent !== 'function') {
+      return false;
+    }
+    const CustomEventCtor = scope.CustomEvent || (typeof CustomEvent === 'function' ? CustomEvent : null);
+    if (typeof CustomEventCtor !== 'function') {
+      return false;
+    }
+    try {
+      const detail = {
+        event,
+        metrics,
+        timestamp: Date.now(),
+      };
+      scope.dispatchEvent(new CustomEventCtor('infinite-rails:performance-metrics', { detail }));
+      return true;
+    } catch (error) {
+      scope?.console?.debug?.('Failed to dispatch performance metrics event.', error);
+      return false;
+    }
+  }
+
+  function emitPerformanceMetrics(event, metrics) {
+    if (!metrics || typeof metrics !== 'object') {
+      return;
+    }
+    const summary = createPerformanceSummary(metrics);
+    metrics.summary = summary;
+    if (globalScope?.console?.info) {
+      globalScope.console.info(`Performance metrics — ${summary}`, metrics);
+    }
+    dispatchPerformanceMetrics(event, metrics);
+  }
+
+  function maybeEmitPerformanceMetrics() {
+    if (performanceSamplerState.metricsEmitted) {
+      return;
+    }
+    if (!Number.isFinite(performanceSamplerState.start.completedAt)) {
+      return;
+    }
+    if (!performanceSamplerState.fps.completed) {
+      return;
+    }
+    const metrics = buildPerformanceMetricsSnapshot();
+    emitPerformanceMetrics('boot', metrics);
+    performanceSamplerState.metricsEmitted = true;
+  }
+
+  function attachPerformanceSamplerToExperience(experience) {
+    if (!experience || experience.__performanceSamplerAttached) {
+      return;
+    }
+    resetPerformanceSamplerForExperience();
+    experience.__performanceSamplerAttached = true;
+
+    if (typeof experience.buildTerrain === 'function') {
+      const originalBuildTerrain = experience.buildTerrain;
+      experience.buildTerrain = function instrumentedBuildTerrain(...args) {
+        const runBuild = () => originalBuildTerrain.apply(this, args);
+        const startAt = getHighResolutionTimestamp();
+        if (!Number.isFinite(performanceSamplerState.world.startedAt)) {
+          performanceSamplerState.world.startedAt = startAt;
+        }
+        const finalise = () => {
+          if (Number.isFinite(performanceSamplerState.world.completedAt)) {
+            return;
+          }
+          const completedAt = getHighResolutionTimestamp();
+          performanceSamplerState.world.completedAt = completedAt;
+          performanceSamplerState.world.durationMs = computeDurationMs(startAt, completedAt);
+          const stats = extractWorldGenerationStats(this);
+          performanceSamplerState.world.columnCount = stats.columnCount;
+          performanceSamplerState.world.voxelCount = stats.voxelCount;
+          maybeEmitPerformanceMetrics();
+        };
+        try {
+          const result = runBuild();
+          if (result && typeof result.then === 'function') {
+            return result
+              .then((value) => {
+                finalise();
+                return value;
+              })
+              .catch((error) => {
+                finalise();
+                throw error;
+              });
+          }
+          finalise();
+          return result;
+        } catch (error) {
+          finalise();
+          throw error;
+        }
+      };
+    }
+
+    if (typeof experience.start === 'function') {
+      const originalStart = experience.start;
+      experience.start = function instrumentedStart(...args) {
+        performanceSamplerState.start.startedAt = getHighResolutionTimestamp();
+        performanceSamplerState.input.active = true;
+        performanceSamplerState.input.samples = [];
+        stopFpsSampling();
+        performanceSamplerState.fps.completed = false;
+        performanceSamplerState.fps.collecting = false;
+        performanceSamplerState.fps.samples = [];
+        performanceSamplerState.fps.sampleCount = 0;
+        const executeStart = () => originalStart.apply(this, args);
+        try {
+          const result = executeStart();
+          if (result && typeof result.then === 'function') {
+            return result
+              .then((value) => {
+                performanceSamplerState.start.completedAt = getHighResolutionTimestamp();
+                startFpsSampling();
+                maybeEmitPerformanceMetrics();
+                return value;
+              })
+              .catch((error) => {
+                performanceSamplerState.start.failed = true;
+                performanceSamplerState.input.active = false;
+                finishFpsSampling({ skipEmit: true });
+                throw error;
+              });
+          }
+          performanceSamplerState.start.completedAt = getHighResolutionTimestamp();
+          startFpsSampling();
+          maybeEmitPerformanceMetrics();
+          return result;
+        } catch (error) {
+          performanceSamplerState.start.failed = true;
+          performanceSamplerState.input.active = false;
+          finishFpsSampling({ skipEmit: true });
+          throw error;
+        }
+      };
+    }
+  }
+
+  function markBootCompleted() {
+    if (!Number.isFinite(performanceSamplerState.boot.completedAt)) {
+      performanceSamplerState.boot.completedAt = getHighResolutionTimestamp();
+    }
+  }
+
   function shouldSendDiagnosticsToServer(entry) {
     if (!diagnosticsEndpoint) {
       return false;
@@ -16781,6 +17393,7 @@
       }
     }
     result.destroyed = cleanupApplied;
+    stopPerformanceSampling({ reset: true });
     activeExperienceInstance = null;
     globalScope.__INFINITE_RAILS_ACTIVE_EXPERIENCE__ = null;
     resetAmbientMusicRecoveryState();
@@ -16885,6 +17498,7 @@
         identityStorageKey,
       });
       integrateAudioSettingsWithExperience(experience, { source: 'bootstrap' });
+      attachPerformanceSamplerToExperience(experience);
       attachSurvivalWatchdogHooksToExperience(experience);
     } catch (error) {
       markBootPhaseError('ui', 'Simplified renderer initialisation failed.');
@@ -16902,6 +17516,7 @@
     }
     activeExperienceInstance = experience;
     globalScope.__INFINITE_RAILS_ACTIVE_EXPERIENCE__ = experience;
+    markBootCompleted();
     attachSurvivalWatchdogHooksToExperience(experience);
     resetAmbientMusicRecoveryState();
     const scopeLocation = globalScope?.location || (typeof window !== 'undefined' ? window.location : null);
