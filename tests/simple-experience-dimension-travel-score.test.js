@@ -155,4 +155,38 @@ describe('simple experience dimension travel scoring', () => {
     );
     expect(experience.score).toBe(startScore);
   });
+
+  it('forces a reset when world assets fail to load even without an explicit guard', async () => {
+    const { experience } = createExperience();
+    prepareExperienceForAdvance(experience);
+    const startScore = experience.score;
+    const addScoreSpy = vi.spyOn(experience, 'addScoreBreakdown');
+    const populateSpy = vi.spyOn(experience, 'populateSceneAfterTerrain').mockImplementation(() => {});
+
+    experience.portalMechanics = { ...experience.portalMechanics };
+    experience.portalMechanics.enterPortal = vi.fn(() => ({ dimensionChanged: true }));
+
+    experience.verifyDimensionAssetsAfterTransition.mockReturnValue({ allPresent: false });
+
+    await experience.advanceDimension();
+
+    expect(experience.portalMechanics.enterPortal).toHaveBeenCalled();
+    expect(experience.applyDimensionSettings).toHaveBeenNthCalledWith(1, 1);
+    expect(experience.applyDimensionSettings).toHaveBeenNthCalledWith(2, 0);
+    expect(experience.currentDimensionIndex).toBe(0);
+    expect(addScoreSpy).not.toHaveBeenCalledWith('dimensions', expect.any(Number));
+    expect(experience.scheduleScoreSync).toHaveBeenCalledWith('dimension-transition-guard');
+    expect(experience.audio.play).not.toHaveBeenCalled();
+    expect(experience.buildTerrain).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: 'dimension-transition-guard' }),
+    );
+    expect(populateSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: 'dimension-transition-guard' }),
+    );
+    expect(experience.refreshPortalState).toHaveBeenCalled();
+    expect(experience.showHint).toHaveBeenCalledWith(
+      expect.stringContaining('resetting portal alignment'),
+    );
+    expect(experience.score).toBe(startScore);
+  });
 });
