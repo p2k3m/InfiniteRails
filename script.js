@@ -5911,14 +5911,14 @@
 
   function normaliseSurvivalWatchdogDescriptor(detail, fallbackStage) {
     const descriptor = detail && typeof detail === 'object' ? detail : {};
+    const fallbackStageRaw =
+      typeof fallbackStage === 'string' && fallbackStage.trim().length ? fallbackStage.trim() : '';
     const stageRaw =
       typeof descriptor.stage === 'string' && descriptor.stage.trim().length
         ? descriptor.stage.trim()
         : typeof descriptor.failureStage === 'string' && descriptor.failureStage.trim().length
           ? descriptor.failureStage.trim()
-          : typeof fallbackStage === 'string' && fallbackStage.trim().length
-            ? fallbackStage.trim()
-            : '';
+          : fallbackStageRaw;
     const reasonRaw =
       typeof descriptor.reason === 'string' && descriptor.reason.trim().length
         ? descriptor.reason.trim()
@@ -5931,13 +5931,80 @@
         : typeof descriptor.errorCode === 'string' && descriptor.errorCode.trim().length
           ? descriptor.errorCode.trim()
           : '';
+    const boundaryRaw =
+      typeof descriptor.boundary === 'string' && descriptor.boundary.trim().length
+        ? descriptor.boundary.trim()
+        : typeof descriptor.scope === 'string' && descriptor.scope.trim().length
+          ? descriptor.scope.trim()
+          : '';
+    const stageKey = normaliseSurvivalWatchdogKey(stageRaw);
+    const reasonKey = normaliseSurvivalWatchdogKey(reasonRaw);
+    const codeKey = normaliseSurvivalWatchdogKey(codeRaw);
+    const boundaryKey = normaliseSurvivalWatchdogKey(boundaryRaw);
+    const fallbackStageKey = normaliseSurvivalWatchdogKey(fallbackStageRaw);
+    const candidateKeys = new Set();
+    [stageKey, reasonKey, codeKey, boundaryKey, fallbackStageKey].forEach((key) => {
+      if (key) {
+        candidateKeys.add(key);
+      }
+    });
+    const messageSources = [
+      descriptor.message,
+      descriptor.errorMessage,
+      descriptor.diagnosticMessage,
+      descriptor.userMessage,
+      descriptor.detailMessage,
+      descriptor.description,
+      descriptor.errorName,
+      descriptor.name,
+      descriptor.phase,
+      descriptor.status,
+      descriptor.moduleId,
+      descriptor.moduleName,
+      descriptor.moduleLabel,
+      descriptor.reasonDetail,
+      descriptor.failureReason,
+      descriptor.failureStage,
+      descriptor.failureCode,
+      descriptor.scope,
+      descriptor.boundary,
+    ];
+    messageSources.forEach((value) => {
+      const key = normaliseSurvivalWatchdogKey(value);
+      if (key) {
+        candidateKeys.add(key);
+      }
+    });
+    if (Array.isArray(descriptor.tags)) {
+      descriptor.tags.forEach((tag) => {
+        const tagKey = normaliseSurvivalWatchdogKey(tag);
+        if (tagKey) {
+          candidateKeys.add(tagKey);
+        }
+      });
+    }
+    if (descriptor.error && typeof descriptor.error === 'object') {
+      const errorNameKey = normaliseSurvivalWatchdogKey(descriptor.error.name);
+      if (errorNameKey) {
+        candidateKeys.add(errorNameKey);
+      }
+      const errorMessageKey = normaliseSurvivalWatchdogKey(descriptor.error.message);
+      if (errorMessageKey) {
+        candidateKeys.add(errorMessageKey);
+      }
+    }
     return {
       stage: stageRaw,
       reason: reasonRaw,
       code: codeRaw,
-      stageKey: normaliseSurvivalWatchdogKey(stageRaw),
-      reasonKey: normaliseSurvivalWatchdogKey(reasonRaw),
-      codeKey: normaliseSurvivalWatchdogKey(codeRaw),
+      boundary: boundaryRaw,
+      fallbackStage: fallbackStageRaw,
+      stageKey,
+      reasonKey,
+      codeKey,
+      boundaryKey,
+      fallbackStageKey,
+      candidateKeys: Array.from(candidateKeys),
     };
   }
 
@@ -5945,7 +6012,12 @@
     if (!descriptor) {
       return false;
     }
-    const candidates = [descriptor.stageKey, descriptor.reasonKey, descriptor.codeKey].filter(Boolean);
+    let candidates = Array.isArray(descriptor.candidateKeys)
+      ? descriptor.candidateKeys.filter(Boolean)
+      : [];
+    if (!candidates.length) {
+      candidates = [descriptor.stageKey, descriptor.reasonKey, descriptor.codeKey].filter(Boolean);
+    }
     if (!candidates.length) {
       return false;
     }
