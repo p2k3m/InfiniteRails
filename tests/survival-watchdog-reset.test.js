@@ -347,6 +347,160 @@ describe('survival watchdog recovery', () => {
     );
   });
 
+  it('resets survival vitals when crash diagnostics reference game logic failures', () => {
+    const { sandbox, windowStub, consoleStub } = createSandbox();
+
+    evaluateBootstrapScript(sandbox);
+
+    const hooks = windowStub.__INFINITE_RAILS_TEST_HOOKS__;
+    expect(hooks).toBeTruthy();
+
+    const updateHud = vi.fn();
+    const publishStateSnapshot = vi.fn();
+    const emitGameEvent = vi.fn();
+    const experience = {
+      maxHealth: 24,
+      health: 4,
+      maxHunger: 18,
+      hunger: 3,
+      hungerPercent: 20,
+      playerBreathCapacity: 14,
+      playerBreath: 5,
+      playerBreathPercent: 35,
+      updateHud,
+      publishStateSnapshot,
+      emitGameEvent,
+    };
+
+    hooks.setActiveExperienceInstance(experience);
+
+    windowStub.__INFINITE_RAILS_STATE__ = {
+      player: {
+        health: 6,
+        maxHealth: 24,
+        hunger: 7,
+        maxHunger: 18,
+        hungerPercent: 45,
+        breath: 6,
+        maxBreath: 14,
+        breathPercent: 50,
+      },
+      updatedAt: 0,
+    };
+
+    const result = hooks.triggerSurvivalWatchdog({
+      stage: 'window.error',
+      reason: 'global-error',
+      message: 'Game logic crashed during the survival tick.',
+    });
+
+    expect(result).toBe(true);
+    expect(experience.health).toBe(24);
+    expect(experience.hunger).toBe(18);
+    expect(experience.hungerPercent).toBe(100);
+    expect(experience.playerBreath).toBe(14);
+    expect(experience.playerBreathPercent).toBe(100);
+    expect(updateHud).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: 'survival-watchdog', stage: 'window.error' }),
+    );
+    expect(publishStateSnapshot).toHaveBeenCalledWith('survival-watchdog');
+    expect(emitGameEvent).toHaveBeenCalledWith(
+      'survival-watchdog-reset',
+      expect.objectContaining({ stage: 'window.error', reason: 'global-error', experienceUpdated: true }),
+    );
+
+    const playerState = windowStub.__INFINITE_RAILS_STATE__.player;
+    expect(playerState.health).toBe(24);
+    expect(playerState.maxHealth).toBe(24);
+    expect(playerState.hunger).toBe(18);
+    expect(playerState.maxHunger).toBe(18);
+    expect(playerState.hungerPercent).toBe(100);
+    expect(playerState.breath).toBe(14);
+    expect(playerState.maxBreath).toBe(14);
+    expect(playerState.breathPercent).toBe(100);
+    expect(consoleStub.warn).toHaveBeenCalledWith(
+      'Survival watchdog reset player vitals after crash.',
+      expect.objectContaining({ stage: 'window.error', reason: 'global-error' }),
+    );
+  });
+
+  it('recovers survival vitals when crash diagnostics highlight physics failures', () => {
+    const { sandbox, windowStub, consoleStub } = createSandbox();
+
+    evaluateBootstrapScript(sandbox);
+
+    const hooks = windowStub.__INFINITE_RAILS_TEST_HOOKS__;
+    expect(hooks).toBeTruthy();
+
+    const updateHud = vi.fn();
+    const publishStateSnapshot = vi.fn();
+    const emitGameEvent = vi.fn();
+    const experience = {
+      maxHealth: 26,
+      health: 5,
+      maxHunger: 19,
+      hunger: 4,
+      hungerPercent: 35,
+      playerBreathCapacity: 16,
+      playerBreath: 6,
+      playerBreathPercent: 40,
+      updateHud,
+      publishStateSnapshot,
+      emitGameEvent,
+    };
+
+    hooks.setActiveExperienceInstance(experience);
+
+    windowStub.__INFINITE_RAILS_STATE__ = {
+      player: {
+        health: 7,
+        maxHealth: 26,
+        hunger: 8,
+        maxHunger: 19,
+        hungerPercent: 55,
+        breath: 7,
+        maxBreath: 16,
+        breathPercent: 60,
+      },
+      updatedAt: 0,
+    };
+
+    const result = hooks.triggerSurvivalWatchdog({
+      stage: 'window.error',
+      reason: 'global-error',
+      message: 'Physics engine panic detected during survival simulation.',
+    });
+
+    expect(result).toBe(true);
+    expect(experience.health).toBe(26);
+    expect(experience.hunger).toBe(19);
+    expect(experience.hungerPercent).toBe(100);
+    expect(experience.playerBreath).toBe(16);
+    expect(experience.playerBreathPercent).toBe(100);
+    expect(updateHud).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: 'survival-watchdog', stage: 'window.error' }),
+    );
+    expect(publishStateSnapshot).toHaveBeenCalledWith('survival-watchdog');
+    expect(emitGameEvent).toHaveBeenCalledWith(
+      'survival-watchdog-reset',
+      expect.objectContaining({ stage: 'window.error', reason: 'global-error', experienceUpdated: true }),
+    );
+
+    const playerState = windowStub.__INFINITE_RAILS_STATE__.player;
+    expect(playerState.health).toBe(26);
+    expect(playerState.maxHealth).toBe(26);
+    expect(playerState.hunger).toBe(19);
+    expect(playerState.maxHunger).toBe(19);
+    expect(playerState.hungerPercent).toBe(100);
+    expect(playerState.breath).toBe(16);
+    expect(playerState.maxBreath).toBe(16);
+    expect(playerState.breathPercent).toBe(100);
+    expect(consoleStub.warn).toHaveBeenCalledWith(
+      'Survival watchdog reset player vitals after crash.',
+      expect.objectContaining({ stage: 'window.error', reason: 'global-error' }),
+    );
+  });
+
   it('normalises crash descriptors before checking survival watchdog triggers', () => {
     const { sandbox, windowStub, consoleStub } = createSandbox();
 
