@@ -2,6 +2,7 @@
 
 const AWS = require('aws-sdk');
 const { createResponse, parseJsonBody, handleOptions } = require('../lib/http');
+const { createTraceContext, createTraceLogger } = require('../lib/trace');
 
 const dynamo = new AWS.DynamoDB.DocumentClient();
 const SCORES_TABLE = process.env.SCORES_TABLE;
@@ -50,9 +51,10 @@ function decodeNextToken(token) {
   }
 }
 
-async function getScores(event) {
+async function getScores(event, trace, logger) {
   if (!SCORES_TABLE) {
-    return createResponse(500, { message: 'SCORES_TABLE environment variable is not configured.' });
+    logger.error('SCORES_TABLE environment variable is not configured.');
+    return createResponse(500, { message: 'SCORES_TABLE environment variable is not configured.' }, { trace });
   }
 
   const limitParam = event?.queryStringParameters?.limit;
@@ -63,7 +65,8 @@ async function getScores(event) {
   try {
     exclusiveStartKey = decodeNextToken(tokenParam);
   } catch (error) {
-    return createResponse(400, { message: error.message });
+    logger.warn('Invalid pagination token provided for scoreboard query.', { error });
+    return createResponse(400, { message: error.message }, { trace });
   }
 
   const params = {
@@ -92,8 +95,8 @@ async function getScores(event) {
   try {
     result = await dynamo.query(params).promise();
   } catch (error) {
-    console.error('Failed to load scoreboard entries.', error);
-    return createResponse(500, { message: 'Failed to load scoreboard entries.' });
+    logger.error('Failed to load scoreboard entries.', error);
+    return createResponse(500, { message: 'Failed to load scoreboard entries.' }, { trace });
   }
 
   const responseBody = {
@@ -104,29 +107,33 @@ async function getScores(event) {
     responseBody.nextToken = encodeNextToken(result.LastEvaluatedKey);
   }
 
-  return createResponse(200, responseBody);
+  return createResponse(200, responseBody, { trace });
 }
 
-async function upsertScore(event) {
+async function upsertScore(event, trace, logger) {
   if (!SCORES_TABLE) {
-    return createResponse(500, { message: 'SCORES_TABLE environment variable is not configured.' });
+    logger.error('SCORES_TABLE environment variable is not configured.');
+    return createResponse(500, { message: 'SCORES_TABLE environment variable is not configured.' }, { trace });
   }
 
   let payload;
   try {
     payload = parseJsonBody(event) || {};
   } catch (error) {
-    return createResponse(400, { message: error.message });
+    logger.warn('Received invalid JSON payload while upserting score.', { error });
+    return createResponse(400, { message: error.message }, { trace });
   }
 
   const googleId = typeof payload.googleId === 'string' ? payload.googleId.trim() : '';
   if (!googleId) {
-    return createResponse(400, { message: 'googleId is required.' });
+    logger.warn('Score submission missing googleId.');
+    return createResponse(400, { message: 'googleId is required.' }, { trace });
   }
 
   const submittedScore = sanitizeNumber(payload.score, undefined);
   if (submittedScore === undefined) {
-    return createResponse(400, { message: 'score must be a number.' });
+    logger.warn('Score submission missing numeric score value.', { googleId });
+    return createResponse(400, { message: 'score must be a number.' }, { trace });
   }
 
   let existing;
@@ -139,8 +146,8 @@ async function upsertScore(event) {
       .promise();
     existing = current.Item || null;
   } catch (error) {
-    console.error('Failed to load existing score entry.', error);
-    return createResponse(500, { message: 'Unable to load existing score entry.' });
+    logger.error('Failed to load existing score entry.', error);
+    return createResponse(500, { message: 'Unable to load existing score entry.' }, { trace });
   }
 
   const now = new Date().toISOString();
@@ -190,28 +197,36 @@ async function upsertScore(event) {
       })
       .promise();
   } catch (error) {
-    console.error('Failed to persist score entry.', error);
-    return createResponse(500, { message: 'Failed to persist score entry.' });
+    logger.error('Failed to persist score entry.', error);
+    return createResponse(500, { message: 'Failed to persist score entry.' }, { trace });
   }
 
-  return createResponse(200, {
-    message: 'Score recorded.',
-    item,
-  });
+  return createResponse(
+    200,
+    {
+      message: 'Score recorded.',
+      item,
+    },
+    { trace },
+  );
 }
 
-exports.handler = async (event) => {
+exports.handler = async (event, awsContext = {}) => {
+  const trace = createTraceContext(event, awsContext);
+  const logger = createTraceLogger(trace);
+
   if (event?.httpMethod === 'OPTIONS') {
-    return handleOptions();
+    return handleOptions({ trace });
   }
 
   if (event?.httpMethod === 'GET') {
-    return getScores(event);
+    return getScores(event, trace, logger);
   }
 
   if (event?.httpMethod === 'POST') {
-    return upsertScore(event);
+    return upsertScore(event, trace, logger);
   }
 
-  return createResponse(405, { message: 'Method Not Allowed' });
+  logger.warn('Score handler received unsupported method.', { method: event?.httpMethod });
+  return createResponse(405, { message: 'Method Not Allowed' }, { trace });
 };

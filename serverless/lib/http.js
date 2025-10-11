@@ -1,16 +1,32 @@
 'use strict';
 
+const { applyTraceHeaders, embedTraceInBody } = require('./trace');
+
 const DEFAULT_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'Content-Type,Authorization,X-Requested-With',
   'Access-Control-Allow-Methods': 'OPTIONS,GET,POST',
 };
 
-function createResponse(statusCode, body) {
+function mergeHeaders(base, extra) {
+  if (!extra || typeof extra !== 'object') {
+    return base;
+  }
+  return { ...base, ...extra };
+}
+
+function createResponse(statusCode, body, { headers: extraHeaders = {}, trace = null } = {}) {
+  const headersWithCors = mergeHeaders(DEFAULT_HEADERS, extraHeaders);
+  const headers = applyTraceHeaders(headersWithCors, trace);
+  let responseBody = '';
+  if (body) {
+    const enrichedBody = embedTraceInBody(body, trace);
+    responseBody = JSON.stringify(enrichedBody);
+  }
   return {
     statusCode,
-    headers: DEFAULT_HEADERS,
-    body: body ? JSON.stringify(body) : '',
+    headers,
+    body: responseBody,
   };
 }
 
@@ -46,10 +62,12 @@ function parseJsonBody(event) {
   }
 }
 
-function handleOptions() {
+function handleOptions({ headers: extraHeaders = {}, trace = null } = {}) {
+  const headersWithCors = mergeHeaders(DEFAULT_HEADERS, extraHeaders);
+  const headers = applyTraceHeaders(headersWithCors, trace);
   return {
     statusCode: 204,
-    headers: DEFAULT_HEADERS,
+    headers,
     body: '',
   };
 }
