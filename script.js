@@ -5868,6 +5868,12 @@
     return Boolean(error && typeof error === 'object' && error.__infiniteRailsBoundaryHandled);
   }
 
+  const SURVIVAL_WATCHDOG_DEFAULTS = Object.freeze({
+    healthMax: 20,
+    hungerMax: 20,
+    breathMax: 10,
+  });
+
   const survivalWatchdogState = {
     lastResetAt: 0,
     lastSignature: null,
@@ -6054,21 +6060,30 @@
         },
       );
     }
-    const healthMax = resolveMaxValue(
+    let healthMax = resolveMaxValue(
       healthSource,
       ['maxHealth', 'playerMaxHealth', 'healthCapacity'],
       player.maxHealth,
     );
-    const breathMax = resolveMaxValue(
+    let breathMax = resolveMaxValue(
       breathSource,
       ['playerBreathCapacity', 'maxBreath', 'breathCapacity'],
       player.maxBreath,
     );
-    const hungerMax = resolveMaxValue(
+    let hungerMax = resolveMaxValue(
       hungerSource,
       ['maxHunger', 'playerMaxHunger', 'maxFood', 'maxFoodLevel', 'hungerCapacity', 'foodCapacity', 'maxSatiety', 'maxStamina'],
       player.maxHunger,
     );
+    if (!Number.isFinite(healthMax)) {
+      healthMax = SURVIVAL_WATCHDOG_DEFAULTS.healthMax;
+    }
+    if (!Number.isFinite(breathMax)) {
+      breathMax = SURVIVAL_WATCHDOG_DEFAULTS.breathMax;
+    }
+    if (!Number.isFinite(hungerMax)) {
+      hungerMax = SURVIVAL_WATCHDOG_DEFAULTS.hungerMax;
+    }
     let changed = false;
     if (Number.isFinite(healthMax) && player.maxHealth !== healthMax) {
       player.maxHealth = healthMax;
