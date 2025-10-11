@@ -633,12 +633,16 @@ function enterPortal(portal, dimension) {
   });
   const dimensionChanged = currentId ? currentId !== targetId : true;
   const transitionGuard = {
+    reason: 'dimension-transition-guard',
     allowIncompleteTransition: false,
     neverAllowIncompleteTransition: true,
     resetOnFailure: true,
     resetOnWorldFailure: true,
     resetOnDimensionFailure: true,
+    resetPortalAlignment: true,
+    restorePreviousDimension: true,
     triggers: ['world-load-failure', 'dimension-load-failure'],
+    actions: ['reset-portal-alignment', 'restore-previous-dimension'],
   };
   const failSafe = {
     resetOnWorldFailure: true,
@@ -646,6 +650,9 @@ function enterPortal(portal, dimension) {
     previousDimensionId: currentId ?? null,
     targetDimensionId: targetId,
     reason: 'dimension-transition-guard',
+    resetPortalAlignment: true,
+    restorePreviousDimension: true,
+    actions: ['reset-portal-alignment', 'restore-previous-dimension'],
   };
   return {
     fade: true,
