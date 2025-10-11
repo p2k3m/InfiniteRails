@@ -1459,6 +1459,74 @@ describe('simple experience entity lifecycle', () => {
     expect(refreshPortalSpy).toHaveBeenCalledTimes(1);
   });
 
+  it('auto-selects a visible spawn column when reloading without an explicit target', () => {
+    const { experience } = createExperienceForTest();
+    experience.setupScene();
+    const worldSize = experience.heightMap.length;
+    const centerIndex = Math.floor(worldSize / 2);
+    const centerKey = `${centerIndex}|${centerIndex}`;
+    const top = new THREE.Object3D();
+    top.position.set(0.25, 2.75, -0.5);
+    experience.columns = new Map([[centerKey, [top]]]);
+    experience.portalAnchorGrid = { x: centerIndex, z: centerIndex };
+    vi.spyOn(experience, 'spawnDimensionChests').mockImplementation(() => {});
+    vi.spyOn(experience, 'populateInitialMobs').mockImplementation(() => {});
+    vi.spyOn(experience, 'rebindEntityChunkAnchors').mockImplementation(() => ({ reason: 'world-reload' }));
+    vi.spyOn(experience, 'ensureNavigationMeshForWorldPosition').mockImplementation(() => ({}));
+    vi.spyOn(experience, 'clearSafeSpawnBox').mockImplementation(() => {});
+    vi.spyOn(experience, 'sampleGroundHeight').mockImplementation(() => 2.25);
+    vi.spyOn(experience, 'spawnSafetyBlockAtPlayerFeetIfNeeded').mockImplementation(() => false);
+    const applySpawnTargetSpy = vi.spyOn(experience, 'applySpawnTarget');
+
+    experience.populateSceneAfterTerrain({ reason: 'world-reload', buildReason: 'world-reload' });
+
+    expect(applySpawnTargetSpy).toHaveBeenCalledTimes(1);
+    expect(applySpawnTargetSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ gridX: centerIndex, gridZ: centerIndex }),
+      expect.objectContaining({ reason: 'world-reload' }),
+    );
+    expect(experience.lastAutoRespawnPlan).toEqual(
+      expect.objectContaining({
+        columnKey: centerKey,
+        target: expect.objectContaining({ gridX: centerIndex, gridZ: centerIndex }),
+      }),
+    );
+    expect(experience.lastScenePopulationSummaryContext.spawnPlan).toEqual(experience.lastAutoRespawnPlan);
+  });
+
+  it('uses the nearest visible portal-adjacent column when reloading without a spawn target', () => {
+    const { experience } = createExperienceForTest();
+    experience.setupScene();
+    const worldSize = experience.heightMap.length;
+    const centerIndex = Math.floor(worldSize / 2);
+    const portalGridX = Math.min(worldSize - 1, centerIndex + 3);
+    const portalGridZ = Math.max(0, centerIndex - 2);
+    const portalKey = `${portalGridX}|${portalGridZ}`;
+    const portalTop = new THREE.Object3D();
+    portalTop.position.set(3.5, 4.5, -1.75);
+    experience.columns = new Map([[portalKey, [portalTop]]]);
+    experience.portalAnchorGrid = { x: portalGridX, z: portalGridZ };
+    experience.lastPlayerSpawnSummary = null;
+    vi.spyOn(experience, 'spawnDimensionChests').mockImplementation(() => {});
+    vi.spyOn(experience, 'populateInitialMobs').mockImplementation(() => {});
+    vi.spyOn(experience, 'rebindEntityChunkAnchors').mockImplementation(() => ({ reason: 'portal-reload' }));
+    vi.spyOn(experience, 'ensureNavigationMeshForWorldPosition').mockImplementation(() => ({}));
+    vi.spyOn(experience, 'clearSafeSpawnBox').mockImplementation(() => {});
+    vi.spyOn(experience, 'sampleGroundHeight').mockImplementation(() => 1.75);
+    vi.spyOn(experience, 'spawnSafetyBlockAtPlayerFeetIfNeeded').mockImplementation(() => false);
+    const applySpawnTargetSpy = vi.spyOn(experience, 'applySpawnTarget');
+
+    experience.populateSceneAfterTerrain({ reason: 'portal-reload', buildReason: 'portal-reload' });
+
+    expect(applySpawnTargetSpy).toHaveBeenCalledTimes(1);
+    const spawnTarget = applySpawnTargetSpy.mock.calls[0][0];
+    expect(spawnTarget).toMatchObject({ gridX: portalGridX, gridZ: portalGridZ });
+    expect(experience.lastAutoRespawnPlan).toEqual(
+      expect.objectContaining({ source: 'portal-anchor', columnKey: portalKey }),
+    );
+    expect(experience.lastScenePopulationSummaryContext.spawnPlan).toEqual(experience.lastAutoRespawnPlan);
+  });
+
   it('highlights misaligned portal frames and prompts the player', async () => {
     const { experience } = createExperienceForTest();
     experience.start();
