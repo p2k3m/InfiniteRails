@@ -2,6 +2,201 @@
   const globalScope = typeof window !== 'undefined' ? window : globalThis;
   const documentRef = globalScope.document ?? null;
 
+  const centralLogStore = (() => {
+    const ENTRY_LIMIT = 500;
+    const entries = [];
+    const listeners = new Set();
+    let counter = 0;
+
+    const CATEGORY_ALIASES = new Map(
+      Object.entries({
+        asset: 'asset',
+        assets: 'asset',
+        gltf: 'asset',
+        texture: 'asset',
+        audio: 'asset',
+        renderer: 'render',
+        render: 'render',
+        webgl: 'render',
+        graphics: 'render',
+        backend: 'api',
+        api: 'api',
+        network: 'api',
+        http: 'api',
+        request: 'api',
+        script: 'script',
+        runtime: 'script',
+        logic: 'script',
+        ui: 'ui',
+        interface: 'ui',
+        hud: 'ui',
+        controls: 'ui',
+        overlay: 'ui',
+      }),
+    );
+
+    function sanitiseDetail(value, depth = 0) {
+      if (value == null) {
+        return null;
+      }
+      if (depth > 3) {
+        if (typeof value === 'string') {
+          return value.length > 2000 ? `${value.slice(0, 1997)}…` : value;
+        }
+        if (Array.isArray(value)) {
+          return value.slice(0, 5).map((item) => sanitiseDetail(item, depth + 1));
+        }
+        if (typeof value === 'object') {
+          const shallow = {};
+          Object.keys(value)
+            .slice(0, 5)
+            .forEach((key) => {
+              const next = value[key];
+              if (typeof next === 'function' || typeof next === 'symbol') {
+                return;
+              }
+              shallow[key] = typeof next === 'object' ? '[object]' : next;
+            });
+          return shallow;
+        }
+        return value;
+      }
+      if (Array.isArray(value)) {
+        return value.slice(0, 20).map((item) => sanitiseDetail(item, depth + 1));
+      }
+      if (typeof value === 'object') {
+        const clone = {};
+        Object.keys(value)
+          .slice(0, 20)
+          .forEach((key) => {
+            const next = value[key];
+            if (typeof next === 'function' || typeof next === 'symbol') {
+              return;
+            }
+            clone[key] = sanitiseDetail(next, depth + 1);
+          });
+        return clone;
+      }
+      if (typeof value === 'string') {
+        return value.length > 2000 ? `${value.slice(0, 1997)}…` : value;
+      }
+      return value;
+    }
+
+    function normaliseCategory(value, fallback = 'general') {
+      if (typeof value === 'string' && value.trim().length) {
+        const raw = value.trim().toLowerCase();
+        if (CATEGORY_ALIASES.has(raw)) {
+          return CATEGORY_ALIASES.get(raw);
+        }
+        return raw;
+      }
+      return fallback;
+    }
+
+    function normaliseLevel(value) {
+      if (typeof value !== 'string') {
+        return 'info';
+      }
+      const trimmed = value.trim().toLowerCase();
+      if (trimmed === 'error' || trimmed === 'warning' || trimmed === 'success') {
+        return trimmed;
+      }
+      return 'info';
+    }
+
+    function notify(entry) {
+      if (!listeners.size) {
+        return;
+      }
+      const snapshot = getEntries();
+      listeners.forEach((listener) => {
+        try {
+          listener(entry, snapshot);
+        } catch (error) {
+          if (globalScope?.console?.debug) {
+            globalScope.console.debug('Central log listener error ignored.', error);
+          }
+        }
+      });
+    }
+
+    function getEntries() {
+      return entries.map((entry) => ({ ...entry, detail: entry.detail ? sanitiseDetail(entry.detail) : null }));
+    }
+
+    function record({
+      category = 'general',
+      scope = null,
+      level = 'info',
+      message = '',
+      detail = null,
+      origin = 'runtime',
+      timestamp = null,
+    } = {}) {
+      const resolvedScope = typeof scope === 'string' && scope.trim().length ? scope.trim().toLowerCase() : category;
+      const finalCategory = normaliseCategory(category || resolvedScope || 'general', resolvedScope || 'general');
+      const trimmedMessage = typeof message === 'string' && message.trim().length ? message.trim() : String(message ?? '');
+      if (!trimmedMessage) {
+        return null;
+      }
+      const entry = {
+        id: `central-${Date.now()}-${counter + 1}`,
+        category: finalCategory,
+        scope: resolvedScope || finalCategory,
+        level: normaliseLevel(level),
+        message: trimmedMessage,
+        timestamp: Number.isFinite(timestamp) ? timestamp : Date.now(),
+        origin: typeof origin === 'string' && origin.trim().length ? origin.trim() : 'runtime',
+        detail: detail ? sanitiseDetail(detail) : null,
+      };
+      counter += 1;
+      entries.push(entry);
+      if (entries.length > ENTRY_LIMIT) {
+        entries.splice(0, entries.length - ENTRY_LIMIT);
+      }
+      notify(entry);
+      return entry;
+    }
+
+    function subscribe(listener) {
+      if (typeof listener !== 'function') {
+        return () => {};
+      }
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    }
+
+    function clear() {
+      entries.splice(0, entries.length);
+    }
+
+    return {
+      record,
+      getEntries,
+      subscribe,
+      clear,
+    };
+  })();
+
+  const centralLoggingState = {
+    errorHandlersBound: false,
+    apiInstrumentationApplied: false,
+    renderHandlersBound: false,
+  };
+
+  if (globalScope) {
+    try {
+      globalScope.InfiniteRails = globalScope.InfiniteRails || {};
+      globalScope.InfiniteRails.centralLogStore = centralLogStore;
+      globalScope.InfiniteRails.logs = centralLogStore;
+    } catch (logExposeError) {
+      globalScope?.console?.debug?.('Failed to expose central log store on InfiniteRails namespace.', logExposeError);
+    }
+  }
+
   const BOOT_STATUS_DEFAULT_MESSAGES = {
     script: 'Initialising bootstrap script…',
     assets: 'Preparing asset pipelines…',
@@ -4967,13 +5162,24 @@
         return { ...diagnosticsState };
       },
       logEvent(scope, message, options = {}) {
-        appendLogEntry({
+        const entry = appendLogEntry({
           scope,
           message,
           level: options.level,
           detail: options.detail,
           timestamp: options.timestamp,
         });
+        if (entry && typeof centralLogStore?.record === 'function') {
+          centralLogStore.record({
+            category: scope,
+            scope,
+            level: entry.level,
+            message: entry.message,
+            detail: entry.detail,
+            origin: 'diagnostics-overlay',
+            timestamp: entry.timestamp,
+          });
+        }
       },
       clearLog() {
         clearLogEntries();
@@ -5229,6 +5435,252 @@
       bootstrapOverlay.logEvent(scope, message, payload);
     }
     sendDiagnosticsEventToServer(entry);
+  }
+
+  function logThroughDiagnostics(scope, message, options = {}) {
+    if (typeof logDiagnosticsEvent === 'function') {
+      logDiagnosticsEvent(scope, message, options);
+      return;
+    }
+    if (typeof centralLogStore?.record === 'function') {
+      centralLogStore.record({
+        category: scope,
+        scope,
+        level: options.level ?? 'info',
+        message,
+        detail: options.detail ?? null,
+        origin: options.origin ?? 'runtime',
+        timestamp: options.timestamp ?? Date.now(),
+      });
+    }
+  }
+
+  function normaliseRequestInfo(resource, init = {}) {
+    let url = '';
+    if (typeof resource === 'string') {
+      url = resource;
+    } else if (resource && typeof resource === 'object') {
+      if (typeof resource.url === 'string') {
+        url = resource.url;
+      } else if (typeof resource.href === 'string') {
+        url = resource.href;
+      }
+    }
+    let method = null;
+    if (typeof init?.method === 'string' && init.method.trim().length) {
+      method = init.method.trim();
+    } else if (resource && typeof resource.method === 'string' && resource.method.trim().length) {
+      method = resource.method.trim();
+    }
+    if (!method) {
+      method = 'GET';
+    }
+    return { url, method: method.toUpperCase() };
+  }
+
+  function registerCentralErrorChannels() {
+    if (centralLoggingState.errorHandlersBound) {
+      return;
+    }
+    const scope = typeof globalScope !== 'undefined' ? globalScope : globalThis;
+    if (!scope?.addEventListener) {
+      return;
+    }
+    const handleWindowError = (event) => {
+      if (!event) {
+        return;
+      }
+      const timestamp = Date.now();
+      const target = event.target || event.srcElement || null;
+      if (target && target !== scope && target !== scope.document) {
+        const tagName = typeof target.tagName === 'string' ? target.tagName.toLowerCase() : 'resource';
+        const url =
+          target?.currentSrc ||
+          target?.src ||
+          target?.href ||
+          (typeof target?.getAttribute === 'function' ? target.getAttribute('src') : null) ||
+          null;
+        const message = url
+          ? `Failed to load ${tagName} asset: ${url}`
+          : `Failed to load ${tagName} asset.`;
+        const detail = {
+          tagName,
+          url,
+          eventType: event.type,
+        };
+        if (typeof target.outerHTML === 'string') {
+          detail.outerHTML = target.outerHTML.slice(0, 500);
+        }
+        logThroughDiagnostics('assets', message, {
+          level: 'error',
+          detail,
+          timestamp,
+          origin: 'resource-error',
+        });
+        return;
+      }
+      const message =
+        typeof event?.message === 'string' && event.message.trim().length
+          ? event.message.trim()
+          : 'Unhandled script error detected.';
+      const detail = {
+        filename: event?.filename ?? null,
+        lineno: Number.isFinite(event?.lineno) ? event.lineno : null,
+        colno: Number.isFinite(event?.colno) ? event.colno : null,
+        errorName: event?.error?.name ?? null,
+        stack: typeof event?.error?.stack === 'string' ? event.error.stack : null,
+      };
+      logThroughDiagnostics('script', message, {
+        level: 'error',
+        detail,
+        timestamp,
+        origin: 'window-error',
+      });
+    };
+
+    const handleUnhandledRejection = (event) => {
+      const timestamp = Date.now();
+      const reason = event?.reason;
+      const detail = { origin: 'unhandled-rejection' };
+      let message = 'Unhandled promise rejection detected.';
+      if (reason && typeof reason === 'object') {
+        if (typeof reason.message === 'string' && reason.message.trim().length) {
+          message = reason.message.trim();
+        }
+        if (typeof reason.stack === 'string') {
+          detail.stack = reason.stack;
+        }
+        if (typeof reason.name === 'string') {
+          detail.errorName = reason.name;
+        }
+      } else if (typeof reason === 'string' && reason.trim().length) {
+        message = reason.trim();
+      }
+      logThroughDiagnostics('ui', message, {
+        level: 'error',
+        detail,
+        timestamp,
+        origin: 'runtime',
+      });
+    };
+
+    scope.addEventListener('error', handleWindowError, true);
+    scope.addEventListener('unhandledrejection', handleUnhandledRejection);
+    centralLoggingState.errorHandlersBound = true;
+  }
+
+  function installApiDiagnosticsHooks() {
+    if (centralLoggingState.apiInstrumentationApplied) {
+      return;
+    }
+    const scope = typeof globalScope !== 'undefined' ? globalScope : globalThis;
+    const fetchRef = scope?.fetch;
+    if (typeof fetchRef !== 'function') {
+      return;
+    }
+    if (scope.fetch && scope.fetch.__infiniteRailsDiagnosticsWrapped) {
+      centralLoggingState.apiInstrumentationApplied = true;
+      return;
+    }
+    const originalFetch = fetchRef.bind(scope);
+    const wrappedFetch = function (...args) {
+      const [resource, init] = args;
+      const info = normaliseRequestInfo(resource, init || {});
+      const start = Date.now();
+      return originalFetch(...args).then(
+        (response) => {
+          if (response && !response.ok) {
+            const detail = {
+              url: response.url || info.url,
+              method: info.method,
+              status: response.status,
+              statusText: response.statusText,
+              redirected: Boolean(response.redirected),
+              type: response.type ?? null,
+              elapsedMs: Date.now() - start,
+            };
+            const statusLabel = Number.isFinite(response.status) ? response.status : 'unknown status';
+            const message = detail.url
+              ? `API request failed: ${info.method} ${detail.url} → ${statusLabel}`
+              : `API request failed with ${statusLabel}.`;
+            logThroughDiagnostics('api', message, {
+              level: 'error',
+              detail,
+              timestamp: Date.now(),
+              origin: 'fetch-response',
+            });
+          }
+          return response;
+        },
+        (error) => {
+          const detail = {
+            url: info.url || null,
+            method: info.method,
+            message: error?.message ?? String(error),
+            errorName: error?.name ?? null,
+            stack: typeof error?.stack === 'string' ? error.stack : null,
+            elapsedMs: Date.now() - start,
+          };
+          const message = detail.url
+            ? `API request error: ${info.method} ${detail.url}`
+            : `API request error during ${info.method} request.`;
+          logThroughDiagnostics('api', message, {
+            level: 'error',
+            detail,
+            timestamp: Date.now(),
+            origin: 'fetch-error',
+          });
+          throw error;
+        },
+      );
+    };
+    wrappedFetch.__infiniteRailsDiagnosticsWrapped = true;
+    scope.fetch = wrappedFetch;
+    centralLoggingState.apiInstrumentationApplied = true;
+  }
+
+  function installRenderDiagnosticsHooks() {
+    if (centralLoggingState.renderHandlersBound) {
+      return;
+    }
+    const scope = typeof globalScope !== 'undefined' ? globalScope : globalThis;
+    const doc = documentRef || scope.document || null;
+    if (!doc?.addEventListener) {
+      return;
+    }
+    const handleContextLost = (event) => {
+      const timestamp = Date.now();
+      const target = event?.target || null;
+      const detail = {
+        canvasId: target?.id ?? null,
+        tagName: typeof target?.tagName === 'string' ? target.tagName.toLowerCase() : null,
+        eventType: event?.type ?? 'webglcontextlost',
+      };
+      logThroughDiagnostics('render', 'WebGL context lost — renderer unavailable until reload.', {
+        level: 'error',
+        detail,
+        timestamp,
+        origin: 'webgl-context',
+      });
+    };
+    const handleContextRestored = (event) => {
+      const timestamp = Date.now();
+      const target = event?.target || null;
+      const detail = {
+        canvasId: target?.id ?? null,
+        tagName: typeof target?.tagName === 'string' ? target.tagName.toLowerCase() : null,
+        eventType: event?.type ?? 'webglcontextrestored',
+      };
+      logThroughDiagnostics('render', 'WebGL context restored.', {
+        level: 'success',
+        detail,
+        timestamp,
+        origin: 'webgl-context',
+      });
+    };
+    doc.addEventListener('webglcontextlost', handleContextLost, true);
+    doc.addEventListener('webglcontextrestored', handleContextRestored, true);
+    centralLoggingState.renderHandlersBound = true;
   }
 
   function includesTextureLanguage(value) {
@@ -11319,6 +11771,10 @@
         typeof bootstrapOverlay?.getLogEntries === 'function'
           ? bootstrapOverlay.getLogEntries()
           : [],
+      structuredLog:
+        typeof centralLogStore?.getEntries === 'function'
+          ? centralLogStore.getEntries()
+          : [],
       liveDiagnostics: getLiveDiagnosticsEntriesSnapshot(),
       bootDiagnostics: bootDiagnosticsSnapshot,
       bootDiagnosticsErrors,
@@ -11398,6 +11854,117 @@
     return false;
   }
 
+  function fallbackCopyDiagnosticsText(text) {
+    const scope = typeof globalScope !== 'undefined' ? globalScope : globalThis;
+    const doc = documentRef || scope.document || null;
+    if (!doc?.body?.appendChild) {
+      return false;
+    }
+    let textarea = null;
+    try {
+      textarea = doc.createElement('textarea');
+      textarea.value = text;
+      textarea.setAttribute('readonly', 'true');
+      textarea.style.position = 'absolute';
+      textarea.style.left = '-9999px';
+      textarea.style.top = '0';
+      doc.body.appendChild(textarea);
+      textarea.focus();
+      textarea.select();
+      if (typeof doc.execCommand === 'function') {
+        return doc.execCommand('copy');
+      }
+      if (typeof globalScope?.document?.execCommand === 'function') {
+        return globalScope.document.execCommand('copy');
+      }
+      return false;
+    } catch (error) {
+      scope?.console?.debug?.('Fallback clipboard copy failed.', error);
+      return false;
+    } finally {
+      if (textarea && textarea.parentNode) {
+        textarea.parentNode.removeChild(textarea);
+      }
+    }
+  }
+
+  async function reportDiagnosticsIssue() {
+    const scope = typeof globalScope !== 'undefined' ? globalScope : globalThis;
+    let payload;
+    try {
+      payload = JSON.stringify(buildDiagnosticsReport(), null, 2);
+    } catch (error) {
+      payload = JSON.stringify(
+        {
+          generatedAt: new Date().toISOString(),
+          error: 'Failed to serialise diagnostics report',
+          message: error?.message ?? String(error),
+        },
+        null,
+        2,
+      );
+    }
+    let copied = false;
+    if (scope?.navigator?.clipboard?.writeText) {
+      try {
+        await scope.navigator.clipboard.writeText(payload);
+        copied = true;
+      } catch (error) {
+        scope?.console?.debug?.('Navigator clipboard write failed; falling back.', error);
+      }
+    }
+    if (!copied) {
+      copied = fallbackCopyDiagnosticsText(payload);
+    }
+    const logDetail = { origin: 'report-action' };
+    if (copied) {
+      if (typeof logDiagnosticsEvent === 'function') {
+        logDiagnosticsEvent('ui', 'Diagnostics report copied to clipboard for support.', {
+          level: 'success',
+          detail: logDetail,
+        });
+      } else if (typeof centralLogStore?.record === 'function') {
+        centralLogStore.record({
+          category: 'ui',
+          scope: 'ui',
+          level: 'success',
+          message: 'Diagnostics report copied to clipboard for support.',
+          origin: 'report-action',
+        });
+      }
+    } else {
+      if (typeof logDiagnosticsEvent === 'function') {
+        logDiagnosticsEvent('ui', 'Clipboard unavailable. Triggered diagnostics download instead.', {
+          level: 'warning',
+          detail: logDetail,
+        });
+      } else if (typeof centralLogStore?.record === 'function') {
+        centralLogStore.record({
+          category: 'ui',
+          scope: 'ui',
+          level: 'warning',
+          message: 'Clipboard unavailable. Triggered diagnostics download instead.',
+          origin: 'report-action',
+        });
+      }
+      downloadDiagnosticsReport();
+    }
+    const doc = documentRef || scope.document || null;
+    const supportLink = doc?.getElementById?.('globalOverlaySupportLink');
+    if (supportLink) {
+      try {
+        if (typeof supportLink.click === 'function') {
+          supportLink.click();
+        } else if (supportLink.href && typeof scope?.open === 'function') {
+          scope.open(supportLink.href, '_blank', 'noopener');
+        }
+      } catch (error) {
+        scope?.console?.debug?.('Support link trigger failed.', error);
+      }
+    }
+    return copied;
+  }
+
   function bindDiagnosticsActions() {
     const scope = typeof globalScope !== 'undefined' ? globalScope : globalThis;
     const doc = documentRef || scope.document || null;
@@ -11414,9 +11981,25 @@
       });
       downloadButton.dataset.diagnosticsBound = 'true';
     }
+    const reportButton = doc.getElementById('globalOverlayReportIssue');
+    if (reportButton && !reportButton.dataset.diagnosticsBound) {
+      reportButton.addEventListener('click', (event) => {
+        if (event?.preventDefault) {
+          event.preventDefault();
+        }
+        reportDiagnosticsIssue().catch((error) => {
+          scope?.console?.debug?.('Diagnostics report action failed.', error);
+          downloadDiagnosticsReport();
+        });
+      });
+      reportButton.dataset.diagnosticsBound = 'true';
+    }
   }
 
   bindDiagnosticsActions();
+  registerCentralErrorChannels();
+  installApiDiagnosticsHooks();
+  installRenderDiagnosticsHooks();
 
   function persistDebugModePreference(enabled) {
     if (!globalScope?.localStorage) {
