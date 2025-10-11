@@ -89,6 +89,93 @@
     return manager;
   })();
 
+  const TRACE_METADATA_SYMBOL =
+    typeof Symbol === 'function' ? Symbol.for('infiniteRails.traceMetadata') : '__infiniteRailsTraceMetadata__';
+
+  function isMockFunction(fn) {
+    if (!fn || typeof fn !== 'function') {
+      return false;
+    }
+    if (typeof fn.getMockName === 'function') {
+      return true;
+    }
+    if (typeof fn.mock === 'object' && fn.mock !== null) {
+      return true;
+    }
+    return Boolean(fn._isMockFunction);
+  }
+
+  function createTraceMetadata(context) {
+    const metadata = {
+      traceId: context.traceId,
+      sessionId: context.sessionId,
+      trace: {
+        traceId: context.traceId,
+        sessionId: context.sessionId,
+        source: 'console',
+      },
+    };
+    if (TRACE_METADATA_SYMBOL && typeof Object.defineProperty === 'function') {
+      try {
+        Object.defineProperty(metadata, TRACE_METADATA_SYMBOL, {
+          value: true,
+          enumerable: false,
+          configurable: true,
+        });
+      } catch (error) {
+        // Best-effort metadata flag; ignore definition failures.
+      }
+    }
+    return metadata;
+  }
+
+  function installConsoleTraceHooks() {
+    const scope = typeof globalScope !== 'undefined' ? globalScope : globalThis;
+    const consoleRef = scope?.console || (typeof console !== 'undefined' ? console : null);
+    if (!consoleRef || consoleRef.__infiniteRailsTraceWrapped) {
+      return;
+    }
+    const methods = ['log', 'info', 'warn', 'error', 'debug', 'trace', 'assert'];
+    methods.forEach((method) => {
+      const original = consoleRef[method];
+      if (typeof original !== 'function' || original.__infiniteRailsTraceWrapped || isMockFunction(original)) {
+        return;
+      }
+      const instrumented = function tracedConsole(...args) {
+        const context = traceUtilities.buildContext(null, `console-${method}`);
+        const metadata = createTraceMetadata(context);
+        return Reflect.apply(original, consoleRef, [...args, metadata]);
+      };
+      instrumented.__infiniteRailsTraceWrapped = true;
+      instrumented.__infiniteRailsTraceOriginal = original;
+      consoleRef[method] = instrumented;
+    });
+    try {
+      Object.defineProperty(consoleRef, '__infiniteRailsTraceWrapped', {
+        value: true,
+        configurable: true,
+      });
+    } catch (error) {
+      consoleRef.__infiniteRailsTraceWrapped = true;
+    }
+    try {
+      Object.defineProperty(consoleRef, '__infiniteRailsTraceSessionId', {
+        value: traceUtilities.sessionId,
+        configurable: true,
+      });
+    } catch (error) {
+      consoleRef.__infiniteRailsTraceSessionId = traceUtilities.sessionId;
+    }
+    try {
+      Object.defineProperty(consoleRef, '__infiniteRailsTraceMetadataSymbol', {
+        value: TRACE_METADATA_SYMBOL,
+        configurable: true,
+      });
+    } catch (error) {
+      consoleRef.__infiniteRailsTraceMetadataSymbol = TRACE_METADATA_SYMBOL;
+    }
+  }
+
   const centralLogStore = (() => {
     const ENTRY_LIMIT = 500;
     const entries = [];
@@ -6128,7 +6215,11 @@
       centralLoggingState.apiInstrumentationApplied = true;
       return;
     }
-    const originalFetch = fetchRef.bind(scope);
+    const underlyingFetch =
+      typeof fetchRef.__infiniteRailsTraceOriginal === 'function'
+        ? fetchRef.__infiniteRailsTraceOriginal
+        : fetchRef;
+    const originalFetch = underlyingFetch.bind(scope);
     const wrappedFetch = function (...args) {
       const [resource, init] = args;
       const context = traceUtilities.buildContext(init?.traceId ?? null, 'fetch');
@@ -6190,7 +6281,12 @@
       );
     };
     wrappedFetch.__infiniteRailsDiagnosticsWrapped = true;
+    wrappedFetch.__infiniteRailsTraceOriginal = underlyingFetch;
     scope.fetch = wrappedFetch;
+    const globalRef = typeof globalThis !== 'undefined' ? globalThis : null;
+    if (globalRef && globalRef !== scope && globalRef.fetch === fetchRef) {
+      globalRef.fetch = wrappedFetch;
+    }
     centralLoggingState.apiInstrumentationApplied = true;
   }
 
@@ -12788,6 +12884,7 @@
     }
   }
 
+  installConsoleTraceHooks();
   bindDiagnosticsActions();
   registerCentralErrorChannels();
   installApiDiagnosticsHooks();
