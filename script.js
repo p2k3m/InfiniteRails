@@ -8390,6 +8390,43 @@
         ui.timeEl.textContent = 'Daylight 0%';
       }
     }
+
+    const ensureOverlayCopy = (element, fallbackText, options = {}) => {
+      if (!element || typeof fallbackText !== 'string' || !fallbackText.trim()) {
+        return;
+      }
+      const hasElementChildren =
+        typeof element.childElementCount === 'number'
+          ? element.childElementCount > 0
+          : Array.isArray(element.children) && element.children.length > 0;
+      const currentText = typeof element.textContent === 'string' ? element.textContent.trim() : '';
+      if (hasElementChildren || currentText.length > 0) {
+        return;
+      }
+      element.textContent = fallbackText;
+      const datasetUpdates = options.dataset;
+      if (datasetUpdates && element.dataset) {
+        Object.keys(datasetUpdates).forEach((key) => {
+          const value = datasetUpdates[key];
+          if (typeof value === 'string' && value.trim().length) {
+            element.dataset[key] = value.trim();
+          }
+        });
+      }
+    };
+
+    ensureOverlayCopy(
+      ui.defeatMessageEl,
+      'Respawn to recover your world snapshot and restore your gear.',
+    );
+    ensureOverlayCopy(ui.defeatInventoryEl, 'Recover world cache ready — inventory will be restored on respawn.', {
+      dataset: { empty: 'true' },
+    });
+    ensureOverlayCopy(
+      ui.defeatCountdownEl,
+      'Recover world timer syncing…',
+    );
+    ensureOverlayCopy(ui.defeatRespawnButton, 'Respawn Now');
   }
 
   function ensureHudStateBinding(ui) {
