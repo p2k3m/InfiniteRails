@@ -6124,12 +6124,30 @@
   }
 
   function resetGlobalSurvivalVitals(instance, descriptor) {
-    const state = globalScope?.__INFINITE_RAILS_STATE__;
+    let state = globalScope?.__INFINITE_RAILS_STATE__;
     if (!state || typeof state !== 'object') {
-      return false;
+      if (!globalScope || typeof globalScope !== 'object') {
+        return false;
+      }
+      state = { player: {} };
+      try {
+        globalScope.__INFINITE_RAILS_STATE__ = state;
+      } catch (stateAssignmentError) {
+        globalScope?.console?.debug?.(
+          'Survival watchdog could not initialise global state container.',
+          stateAssignmentError,
+        );
+        return false;
+      }
     }
     const player =
       state.player && typeof state.player === 'object' ? state.player : (state.player = {});
+    if (!Object.prototype.hasOwnProperty.call(player, 'breathPercent')) {
+      player.breathPercent = 0;
+    }
+    if (!Object.prototype.hasOwnProperty.call(player, 'hungerPercent')) {
+      player.hungerPercent = 0;
+    }
     const healthSource = { ...player };
     const breathSource = { ...player };
     const hungerSource = { ...player };
