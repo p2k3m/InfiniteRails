@@ -151,6 +151,13 @@ describe('simple experience scoreboard restore', () => {
       expect(payload.playerId).toBe('user-123');
       expect(payload.id).toBe('user-123');
       expect(payload.name).toBe('Cloud Hero');
+      expect(payload.trace).toBeDefined();
+      expect(typeof payload.trace.traceId).toBe('string');
+      expect(payload.trace.traceId.length).toBeGreaterThan(0);
+      expect(typeof payload.trace.sessionId).toBe('string');
+      expect(payload.trace.sessionId.length).toBeGreaterThan(0);
+      expect(requestInit.traceId).toBe(payload.trace.traceId);
+      expect(requestInit.sessionId).toBe(payload.trace.sessionId);
 
       await new Promise((resolve) => setTimeout(resolve, 0));
       expect(experience.hasQueuedScoreSyncEntries()).toBe(false);
