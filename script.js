@@ -9815,6 +9815,173 @@
         });
       }
     });
+    globalScope.addEventListener('infinite-rails:storage-quarantine-requested', (event) => {
+      const detail = event?.detail && typeof event.detail === 'object' ? { ...event.detail } : {};
+      const rawKeys = [];
+      const addKey = (value) => {
+        if (typeof value !== 'string') {
+          return;
+        }
+        const trimmed = value.trim();
+        if (!trimmed) {
+          return;
+        }
+        if (!rawKeys.includes(trimmed)) {
+          rawKeys.push(trimmed);
+        }
+      };
+      addKey(detail.storageKey);
+      if (Array.isArray(detail.storageKeys)) {
+        detail.storageKeys.forEach(addKey);
+      }
+      if (rawKeys.length === 0) {
+        return;
+      }
+      const contextLabel =
+        typeof detail.context === 'string' && detail.context.trim().length
+          ? detail.context.trim()
+          : 'game state';
+      const reloadReason =
+        typeof detail.reason === 'string' && detail.reason.trim().length
+          ? detail.reason.trim()
+          : 'Reload the page to continue with a fresh session.';
+      const reasonMessage =
+        typeof detail.message === 'string' && detail.message.trim().length
+          ? detail.message.trim()
+          : `Corrupted ${contextLabel} removed. Reload the page to continue with a fresh session.`;
+      const reportedError = detail.error instanceof Error ? detail.error : null;
+
+      let quarantined = false;
+      rawKeys.forEach((storageKey) => {
+        try {
+          const result = quarantineLocalStorageKey(storageKey, {
+            context: contextLabel,
+            reason: reloadReason,
+            error: reportedError,
+          });
+          quarantined = quarantined || result;
+        } catch (quarantineError) {
+          globalScope?.console?.warn?.(
+            `Failed to quarantine localStorage entry "${storageKey}" (${contextLabel}).`,
+            quarantineError,
+          );
+        }
+      });
+
+      if (!quarantined) {
+        return;
+      }
+
+      try {
+        if (typeof showHudAlert === 'function') {
+          showHudAlert({
+            title: 'Local data reset',
+            message: reasonMessage,
+            severity: 'warning',
+            autoHideMs: 10000,
+          });
+        }
+      } catch (hudError) {
+        globalScope?.console?.debug?.('Unable to present storage quarantine HUD alert.', hudError);
+      }
+
+      if (typeof bootstrapOverlay?.setDiagnostic === 'function') {
+        try {
+          bootstrapOverlay.setDiagnostic('storage', {
+            status: 'warning',
+            message: reasonMessage,
+          });
+        } catch (diagnosticError) {
+          globalScope?.console?.debug?.(
+            'Failed to update storage diagnostic after quarantine.',
+            diagnosticError,
+          );
+        }
+      }
+
+      const reloadStrategy =
+        detail.reload === 'page' ? 'page' : detail.reload === false ? 'none' : 'renderer';
+
+      const performReload = () => {
+        if (reloadStrategy === 'none') {
+          return;
+        }
+        if (reloadStrategy === 'page') {
+          const pageReloader = globalScope?.location?.reload;
+          if (typeof pageReloader === 'function') {
+            try {
+              pageReloader.call(globalScope.location);
+            } catch (reloadError) {
+              globalScope?.console?.debug?.('Failed to reload page after storage quarantine.', reloadError);
+            }
+          }
+          return;
+        }
+        if (typeof reloadActiveRenderer === 'function') {
+          try {
+            const reloadResult = reloadActiveRenderer({
+              reason: detail.reloadReason || 'storage-quarantine',
+              mode: detail.mode,
+              ensurePlugins: detail.ensurePlugins,
+              restart: detail.restart !== false,
+            });
+            if (reloadResult && typeof reloadResult.catch === 'function') {
+              reloadResult.catch((reloadError) => {
+                globalScope?.console?.debug?.(
+                  'Renderer reload rejected after storage quarantine.',
+                  reloadError,
+                );
+              });
+            }
+            return;
+          } catch (reloadError) {
+            globalScope?.console?.debug?.('Renderer reload threw after storage quarantine.', reloadError);
+          }
+        }
+        const fallbackReloader = globalScope?.location?.reload;
+        if (typeof fallbackReloader === 'function') {
+          try {
+            fallbackReloader.call(globalScope.location);
+          } catch (fallbackError) {
+            globalScope?.console?.debug?.(
+              'Failed to reload page after storage quarantine fallback.',
+              fallbackError,
+            );
+          }
+        }
+      };
+
+      if (detail.autoReload === true) {
+        performReload();
+      } else if (reloadStrategy !== 'none' && typeof bootstrapOverlay?.setDiagnosticAction === 'function') {
+        try {
+          bootstrapOverlay.setDiagnosticAction('storage', {
+            label: reloadStrategy === 'page' ? 'Reload page' : 'Reload experience',
+            action: reloadStrategy === 'page' ? 'reload-page' : 'reload-experience',
+            description:
+              reloadStrategy === 'page'
+                ? 'Reloads the page to start with a fresh session.'
+                : 'Restarts the renderer with a clean session.',
+            detail: {
+              storageKeys: rawKeys.slice(),
+              context: contextLabel,
+              source: 'storage-quarantine',
+            },
+            source: 'storage-quarantine',
+            statuses: ['warning', 'error'],
+            onSelect: () => performReload(),
+          });
+        } catch (actionError) {
+          globalScope?.console?.debug?.('Failed to configure storage reload action.', actionError);
+        }
+      } else if (reloadStrategy === 'none' && typeof bootstrapOverlay?.clearDiagnosticAction === 'function') {
+        try {
+          bootstrapOverlay.clearDiagnosticAction('storage');
+        } catch (clearError) {
+          globalScope?.console?.debug?.('Failed to clear storage diagnostic action.', clearError);
+        }
+      }
+    });
     globalScope.addEventListener('infinite-rails:asset-load-delay-indicator', (event) => {
       const detail = event?.detail && typeof event.detail === 'object' ? event.detail : {};
       registerAssetLoadingIndicator(detail);
