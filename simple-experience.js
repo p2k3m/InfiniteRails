@@ -3978,6 +3978,62 @@
         block: 'terrain-blocks',
         mob: 'mob-actors',
       };
+      const missingList = missingKeys.slice();
+      if (typeof console !== 'undefined' && typeof console.assert === 'function') {
+        try {
+          console.assert(
+            false,
+            'Scene graph validation failed — required nodes missing after scene population.',
+            { missing: missingList, reason, summary },
+          );
+        } catch (error) {
+          if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+            console.debug('Failed to record scene validation assertion.', error);
+          }
+        }
+      }
+      const overlay =
+        typeof bootstrapOverlay === 'object' && bootstrapOverlay !== null
+          ? bootstrapOverlay
+          : typeof window !== 'undefined'
+            ? window.bootstrapOverlay
+            : null;
+      if (overlay && typeof overlay.showError === 'function') {
+        try {
+          overlay.showError({
+            title: 'Scene validation failed',
+            message: 'Required scene objects are missing after scene population.',
+            reason,
+            missing: missingList,
+          });
+        } catch (error) {
+          if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+            console.debug('Failed to display scene validation overlay error.', error);
+          }
+        }
+      }
+      if (overlay && typeof overlay.setDiagnostic === 'function') {
+        try {
+          overlay.setDiagnostic('scene', { status: 'error', reason, missing: missingList });
+        } catch (error) {
+          if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+            console.debug('Failed to update scene diagnostic overlay.', error);
+          }
+        }
+      }
+      if (overlay && typeof overlay.logEvent === 'function') {
+        try {
+          overlay.logEvent(
+            'scene',
+            'Scene validation failed — required nodes missing after scene population.',
+            { level: 'error', reason, missing: missingList },
+          );
+        } catch (error) {
+          if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+            console.debug('Failed to log scene validation overlay event.', error);
+          }
+        }
+      }
       for (const missingKey of missingKeys) {
         const asset = assetNameMap[missingKey] || missingKey;
         const summaryKey = summaryKeyMap[missingKey] || missingKey;
@@ -14875,6 +14931,38 @@
         this.populateInitialMobs(mobOptions);
       });
 
+      const spawnOptions = typeof options.spawn === 'object' && options.spawn !== null ? options.spawn : null;
+      let spawnSummary = null;
+      if (spawnOptions?.player && typeof this.applySpawnTarget === 'function') {
+        try {
+          spawnSummary = this.applySpawnTarget(spawnOptions.player, { reason });
+        } catch (error) {
+          recordPopulationError('player-spawn', error);
+        }
+      } else if (typeof this.clearSafeSpawnBox === 'function') {
+        try {
+          this.clearSafeSpawnBox({ reason: `${reason}-spawn-clear` });
+        } catch (error) {
+          recordPopulationError('player-spawn', error);
+        }
+      }
+
+      let rebindSummary = null;
+      if (typeof this.rebindEntityChunkAnchors === 'function') {
+        try {
+          rebindSummary = this.rebindEntityChunkAnchors({
+            reason,
+            spawn: spawnOptions,
+            mobs: mobOptions,
+          });
+        } catch (error) {
+          recordPopulationError('entity-chunks', error);
+        }
+      }
+
+      populationContext.spawnSummary = spawnSummary;
+      populationContext.rebindSummary = rebindSummary;
+
       if (typeof this.summariseRequiredSceneNodes === 'function') {
         const summary = this.summariseRequiredSceneNodes();
         this.lastScenePopulationSummary = summary || null;
@@ -14889,6 +14977,28 @@
       this.lastScenePopulationSummary = null;
       populationContext.reportedMissing = false;
       return null;
+    }
+
+    reloadWorld(options = {}) {
+      const reasonRaw = typeof options.reason === 'string' ? options.reason.trim() : '';
+      const reason = reasonRaw.length ? reasonRaw : 'world-reload';
+      const navmeshReasonRaw = typeof options.navmeshReason === 'string' ? options.navmeshReason.trim() : '';
+      const navmeshReason = navmeshReasonRaw.length ? navmeshReasonRaw : reason;
+      const spawnOptions = typeof options.spawn === 'object' && options.spawn !== null ? options.spawn : null;
+      const mobOptions = typeof options.mobs === 'object' && options.mobs !== null ? options.mobs : {};
+      if (typeof this.cancelNavigationMeshMaintenance === 'function') {
+        try {
+          this.cancelNavigationMeshMaintenance();
+        } catch (error) {
+          if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+            console.debug('Failed to cancel navmesh maintenance before world reload.', error);
+          }
+        }
+      }
+      this.buildTerrain({ reason, navmeshReason });
+      this.populateSceneAfterTerrain({ reason, buildReason: reason, spawn: spawnOptions, mobs: mobOptions });
+      this.buildRails();
+      this.refreshPortalState();
     }
 
     rebindEntityChunkAnchors(context = {}) {
@@ -15344,6 +15454,7 @@
       }
       const mesh = mob.mesh;
       const candidateChunks = [];
+      const candidateSet = new Set();
       const stageOptions = { reason: `${reason}-rebind`, stage: 'chunk-rebind' };
       const initialChunk =
         (typeof context.chunkKey === 'string' && context.chunkKey.trim()) ||
@@ -15351,32 +15462,76 @@
         (typeof mob.chunkKey === 'string' && mob.chunkKey.trim()) ||
         this.getChunkKeyForWorldPosition(mesh.position.x, mesh.position.z);
       if (initialChunk) {
-        candidateChunks.push(initialChunk);
+        const trimmed = initialChunk.trim();
+        if (!candidateSet.has(trimmed)) {
+          candidateSet.add(trimmed);
+          candidateChunks.push(trimmed);
+        }
       }
-      if (typeof mob.chunkKey === 'string' && mob.chunkKey.trim() && !candidateChunks.includes(mob.chunkKey)) {
-        candidateChunks.push(mob.chunkKey.trim());
+      if (typeof mob.chunkKey === 'string' && mob.chunkKey.trim()) {
+        const trimmed = mob.chunkKey.trim();
+        if (!candidateSet.has(trimmed)) {
+          candidateSet.add(trimmed);
+          candidateChunks.push(trimmed);
+        }
       }
-      if (typeof mob.navChunkKey === 'string' && mob.navChunkKey.trim() && !candidateChunks.includes(mob.navChunkKey)) {
-        candidateChunks.push(mob.navChunkKey.trim());
+      if (typeof mob.navChunkKey === 'string' && mob.navChunkKey.trim()) {
+        const trimmed = mob.navChunkKey.trim();
+        if (!candidateSet.has(trimmed)) {
+          candidateSet.add(trimmed);
+          candidateChunks.push(trimmed);
+        }
       }
       const playerPosition = this.getPlayerWorldPosition ? this.getPlayerWorldPosition(this.tmpVector3) : null;
       if (playerPosition) {
         const playerChunk = this.getChunkKeyForWorldPosition(playerPosition.x, playerPosition.z);
-        if (playerChunk && !candidateChunks.includes(playerChunk)) {
-          candidateChunks.push(playerChunk);
+        if (playerChunk) {
+          const trimmed = playerChunk.trim();
+          if (!candidateSet.has(trimmed)) {
+            candidateSet.add(trimmed);
+            candidateChunks.push(trimmed);
+          }
         }
       }
+      const failureChunk =
+        reason === 'navmesh-rebuild-failed' && typeof context.chunkKey === 'string' && context.chunkKey.trim().length
+          ? context.chunkKey.trim()
+          : null;
       let recoveredNavmesh = null;
       let recoveredChunk = null;
+      let recoveredCell = null;
       for (const chunkKey of candidateChunks) {
+        if (failureChunk && chunkKey === failureChunk) {
+          continue;
+        }
         const navmesh = this.ensureNavigationMeshForActorChunk(actorType, chunkKey, {
           ...stageOptions,
           [`${actorType}Id`]: mob.id ?? null,
         });
-        if (navmesh?.walkableCellCount > 0 && Array.isArray(navmesh.cells) && navmesh.cells.length > 0) {
+        if (navmesh?.walkableCellCount > 0) {
           recoveredNavmesh = navmesh;
-          recoveredChunk = chunkKey;
+          recoveredChunk = chunkKey ?? navmesh.key ?? null;
+          if (Array.isArray(navmesh.cells) && navmesh.cells.length > 0) {
+            recoveredCell = navmesh.cells[0];
+          }
           break;
+        }
+      }
+      if (
+        (!recoveredNavmesh || !Array.isArray(recoveredNavmesh.cells) || !recoveredNavmesh.cells.length) &&
+        this.navigationMeshes instanceof Map
+      ) {
+        for (const [key, navmesh] of this.navigationMeshes) {
+          if (!navmesh || navmesh.walkableCellCount <= 0) {
+            continue;
+          }
+          const hasCells = Array.isArray(navmesh.cells) && navmesh.cells.length > 0;
+          recoveredNavmesh = navmesh;
+          recoveredChunk = navmesh.key || key || recoveredChunk;
+          if (hasCells) {
+            recoveredCell = navmesh.cells[0];
+            break;
+          }
         }
       }
       if (!recoveredNavmesh) {
@@ -15385,19 +15540,21 @@
           stage: 'chunk-rebind',
           [`${actorType}Id`]: mob.id ?? null,
         });
-        if (fallbackNavmesh?.walkableCellCount > 0 && Array.isArray(fallbackNavmesh.cells) && fallbackNavmesh.cells.length > 0) {
+        if (fallbackNavmesh?.walkableCellCount > 0) {
           recoveredNavmesh = fallbackNavmesh;
           recoveredChunk = fallbackNavmesh.key || this.getChunkKeyForWorldPosition(mesh.position.x, mesh.position.z);
+          if (Array.isArray(fallbackNavmesh.cells) && fallbackNavmesh.cells.length > 0) {
+            recoveredCell = fallbackNavmesh.cells[0];
+          }
         }
       }
       if (recoveredNavmesh) {
-        const cell = recoveredNavmesh.cells[0];
         const offset = actorType === 'golem' ? 1.1 : actorType === 'zombie' ? 0.9 : 1;
-        if (Number.isFinite(cell.worldX) && Number.isFinite(cell.worldZ)) {
-          const surfaceY = Number.isFinite(cell.surfaceY)
-            ? cell.surfaceY
-            : this.sampleGroundHeight(cell.worldX, cell.worldZ);
-          mesh.position.set(cell.worldX, surfaceY + offset, cell.worldZ);
+        if (recoveredCell && Number.isFinite(recoveredCell.worldX) && Number.isFinite(recoveredCell.worldZ)) {
+          const surfaceY = Number.isFinite(recoveredCell.surfaceY)
+            ? recoveredCell.surfaceY
+            : this.sampleGroundHeight(recoveredCell.worldX, recoveredCell.worldZ);
+          mesh.position.set(recoveredCell.worldX, surfaceY + offset, recoveredCell.worldZ);
         }
         if (!mesh.userData || typeof mesh.userData !== 'object') {
           mesh.userData = {};
@@ -15405,6 +15562,7 @@
         mesh.userData.chunkKey = recoveredChunk;
         if (actorType === 'golem') {
           mob.chunkKey = recoveredChunk;
+          mob.navChunkKey = recoveredChunk;
         } else {
           mob.navChunkKey = recoveredChunk;
         }
@@ -15479,6 +15637,7 @@
         if (this.dirtyNavigationChunks) {
           this.dirtyNavigationChunks.delete(chunkKey);
         }
+        this.handleNavigationMeshRebuildFailure(chunkKey, options);
         return null;
       }
       this.navigationMeshBuildCounter += 1;
@@ -15490,6 +15649,62 @@
       }
       this.validateNavigationMesh(navmesh, { chunkKey, reason: options.reason ?? 'rebuild' });
       return navmesh;
+    }
+
+    handleNavigationMeshRebuildFailure(chunkKey, options = {}) {
+      if (!chunkKey) {
+        return;
+      }
+      if (!(this.navmeshRecoveryInProgress instanceof Set)) {
+        this.navmeshRecoveryInProgress = new Set();
+      }
+      if (this.navmeshRecoveryInProgress.has(chunkKey)) {
+        return;
+      }
+      this.navmeshRecoveryInProgress.add(chunkKey);
+      const reason = 'navmesh-rebuild-failed';
+      const collections = [
+        { type: 'zombie', list: this.zombies },
+        { type: 'golem', list: this.golems },
+      ];
+      try {
+        collections.forEach(({ type, list }) => {
+          if (!Array.isArray(list)) {
+            return;
+          }
+          list.slice().forEach((mob) => {
+            if (!mob?.mesh) {
+              return;
+            }
+            const candidates = new Set();
+            if (typeof mob.chunkKey === 'string' && mob.chunkKey.trim()) {
+              candidates.add(mob.chunkKey.trim());
+            }
+            if (typeof mob.navChunkKey === 'string' && mob.navChunkKey.trim()) {
+              candidates.add(mob.navChunkKey.trim());
+            }
+            try {
+              const meshChunk = this.getChunkKeyForWorldPosition(
+                mob.mesh.position?.x ?? Number.NaN,
+                mob.mesh.position?.z ?? Number.NaN,
+              );
+              if (meshChunk) {
+                candidates.add(meshChunk);
+              }
+            } catch (error) {
+              if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+                console.debug('Failed to resolve mesh chunk while handling navmesh rebuild failure.', error);
+              }
+            }
+            if (!candidates.has(chunkKey)) {
+              return;
+            }
+            this.handleNavmeshFailureForMob(type, mob, { reason, chunkKey });
+          });
+        });
+      } finally {
+        this.navmeshRecoveryInProgress.delete(chunkKey);
+      }
     }
 
     computeNavigationMeshForChunk(chunkKey, chunk = null) {
@@ -16791,7 +17006,28 @@
 
     highlightPortalFrameIssues(slots = []) {
       this.clearPortalFrameHighlights();
-      if (!Array.isArray(slots) || !slots.length) {
+      const hasHighlights = Array.isArray(slots) && slots.length > 0;
+      let missingSlots = 0;
+      let slotCount = 0;
+      if (this.portalFrameSlots instanceof Map) {
+        slotCount = this.portalFrameSlots.size;
+        this.portalFrameSlots.forEach((slot) => {
+          if (!slot?.filled) {
+            missingSlots += 1;
+          }
+        });
+      }
+      this.portalPreviewSummary = {
+        totalSlots: slotCount,
+        missingFrameSlots: missingSlots,
+      };
+      if (this.portalGhostMeshes instanceof Map) {
+        this.portalGhostMeshes.forEach((mesh) => {
+          if (!mesh) return;
+          mesh.visible = !hasHighlights;
+        });
+      }
+      if (!hasHighlights) {
         return;
       }
       const highlightMeshes = new Set();
@@ -17652,6 +17888,7 @@
           this.triggerVictory();
           return null;
         }
+        const previousIndex = Number.isFinite(this.currentDimensionIndex) ? this.currentDimensionIndex : 0;
         const nextIndex = this.currentDimensionIndex + 1;
         const nextSettings = DIMENSION_THEME[nextIndex] || null;
         let pointsAwarded = 5;
@@ -17698,26 +17935,82 @@
           transition: transitionResult,
           rulesSummary,
         });
-        if (dimensionTravelSucceeded && Number.isFinite(pointsAwarded)) {
+        const transitionGuard =
+          transitionResult?.transitionGuard ||
+          transitionResult?.guard ||
+          transitionResult?.regeneration?.failSafe ||
+          null;
+        const guardAllowsIncomplete =
+          transitionGuard?.allowIncompleteTransition === true && transitionGuard?.neverAllowIncompleteTransition !== true;
+        const assetsVerified = assetSummary ? assetSummary.allPresent === true : null;
+        const transitionSuccessful =
+          dimensionTravelSucceeded && (assetsVerified !== false || guardAllowsIncomplete === true);
+        if (transitionSuccessful && Number.isFinite(pointsAwarded)) {
           this.score += pointsAwarded;
           this.addScoreBreakdown('dimensions', pointsAwarded);
         }
-        this.updateHud();
-        this.scheduleScoreSync('dimension-advanced');
-        this.audio.play('bubble', { volume: 0.5 });
-        if (portalLog) {
-          this.showHint(portalLog);
+        if (transitionSuccessful) {
+          this.updateHud();
+          this.scheduleScoreSync('dimension-advanced');
+          if (this.audio?.play) {
+            this.audio.play('bubble', { volume: 0.5 });
+          }
+          if (portalLog) {
+            this.showHint(portalLog);
+          }
+        } else {
+          const guardReasonRaw = typeof transitionGuard?.reason === 'string' ? transitionGuard.reason.trim() : '';
+          const guardReason = guardReasonRaw.length ? guardReasonRaw : 'dimension-transition-guard';
+          if (Number.isFinite(previousIndex)) {
+            this.applyDimensionSettings(previousIndex);
+          } else {
+            this.applyDimensionSettings(this.currentDimensionIndex);
+          }
+          this.buildTerrain({ reason: guardReason, navmeshReason: guardReason });
+          this.populateSceneAfterTerrain({ reason: guardReason });
+          this.buildRails();
+          this.refreshPortalState();
+          if (typeof this.rebindDimensionContext === 'function') {
+            try {
+              this.rebindDimensionContext();
+            } catch (error) {
+              if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+                console.debug('Failed to rebind dimension context after transition guard reset.', error);
+              }
+            }
+          }
+          this.updateHud();
+          this.scheduleScoreSync(guardReason);
+          const fallbackHint =
+            typeof transitionGuard?.message === 'string' && transitionGuard.message.trim().length
+              ? transitionGuard.message.trim()
+              : 'Dimension transition incomplete — resetting portal alignment to the previous realm.';
+          if (typeof this.showHint === 'function') {
+            this.showHint(fallbackHint);
+          }
         }
         this.portalState = null;
-        const assetsVerified = assetSummary ? assetSummary.allPresent === true : null;
-        this.emitGameEvent('dimension-advanced', {
-          dimension: this.dimensionSettings?.id ?? null,
-          index: this.currentDimensionIndex,
-          summary: this.createRunSummary('dimension-advanced'),
-          assetsVerified,
-        });
-        this.publishStateSnapshot('dimension-advanced');
-        this.markGuidanceProgress('dimension');
+        if (transitionSuccessful) {
+          this.emitGameEvent('dimension-advanced', {
+            dimension: this.dimensionSettings?.id ?? null,
+            index: this.currentDimensionIndex,
+            summary: this.createRunSummary('dimension-advanced'),
+            assetsVerified,
+          });
+          this.publishStateSnapshot('dimension-advanced');
+          this.markGuidanceProgress('dimension');
+        } else {
+          this.emitGameEvent('dimension-transition-guard', {
+            dimension: this.dimensionSettings?.id ?? null,
+            index: this.currentDimensionIndex,
+            summary: this.createRunSummary('dimension-transition-guard'),
+            assetsVerified,
+            reason:
+              typeof transitionGuard?.reason === 'string' && transitionGuard.reason.trim().length
+                ? transitionGuard.reason.trim()
+                : 'dimension-transition-guard',
+          });
+        }
         return assetSummary;
       };
       try {
@@ -17907,6 +18200,104 @@
       this.emitGameEvent('victory', { summary: this.createRunSummary('victory') });
       this.showVictoryCelebration();
       this.showVictoryBanner('Eternal Ingot secured — celebrate and share your run.');
+    }
+
+    applySpawnTarget(spawn = {}, context = {}) {
+      const reasonRaw = typeof context.reason === 'string' ? context.reason.trim() : '';
+      const reason = reasonRaw.length ? reasonRaw : 'spawn-update';
+      if (!spawn || typeof spawn !== 'object') {
+        return null;
+      }
+      let worldX = Number.isFinite(spawn.x) ? Number(spawn.x) : null;
+      let worldZ = Number.isFinite(spawn.z) ? Number(spawn.z) : null;
+      let baseY = Number.isFinite(spawn.y) ? Number(spawn.y) : null;
+      let columnKey = null;
+      let anchor = null;
+      if ((!Number.isFinite(worldX) || !Number.isFinite(worldZ)) && Number.isFinite(spawn.gridX) && Number.isFinite(spawn.gridZ)) {
+        const gridX = Math.max(0, Math.min(WORLD_SIZE - 1, Math.floor(spawn.gridX)));
+        const gridZ = Math.max(0, Math.min(WORLD_SIZE - 1, Math.floor(spawn.gridZ)));
+        columnKey = `${gridX}|${gridZ}`;
+        const column = this.columns?.get(columnKey) ?? [];
+        for (let index = column.length - 1; index >= 0; index -= 1) {
+          const entry = column[index];
+          if (entry) {
+            anchor = entry;
+            break;
+          }
+        }
+        worldX = Number.isFinite(anchor?.position?.x) ? anchor.position.x : (gridX - WORLD_SIZE / 2) * BLOCK_SIZE;
+        worldZ = Number.isFinite(anchor?.position?.z) ? anchor.position.z : (gridZ - WORLD_SIZE / 2) * BLOCK_SIZE;
+        baseY = Number.isFinite(anchor?.position?.y) ? anchor.position.y : null;
+      }
+      if (!Number.isFinite(worldX) || !Number.isFinite(worldZ)) {
+        return null;
+      }
+      if (!Number.isFinite(baseY)) {
+        try {
+          baseY = this.sampleGroundHeight(worldX, worldZ);
+        } catch (error) {
+          baseY = 0;
+          if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+            console.debug('Failed to sample ground height for spawn target.', error);
+          }
+        }
+      }
+      const targetY = baseY + PLAYER_EYE_HEIGHT;
+      if (this.playerRig?.position?.set) {
+        this.playerRig.position.set(worldX, targetY, worldZ);
+      } else if (this.playerRig?.position) {
+        this.playerRig.position.x = worldX;
+        this.playerRig.position.y = targetY;
+        this.playerRig.position.z = worldZ;
+      }
+      if (this.camera?.position?.set) {
+        this.camera.position.set(worldX, targetY, worldZ);
+      } else if (this.camera?.position) {
+        this.camera.position.x = worldX;
+        this.camera.position.y = targetY;
+        this.camera.position.z = worldZ;
+      }
+      if (typeof this.clearSafeSpawnBox === 'function') {
+        try {
+          this.clearSafeSpawnBox({ reason: `${reason}-applied` });
+        } catch (error) {
+          if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+            console.debug('Failed to clear safe spawn box after applying spawn target.', error);
+          }
+        }
+      }
+      let chunkKey = null;
+      try {
+        chunkKey = this.getChunkKeyForWorldPosition(worldX, worldZ);
+        if (chunkKey) {
+          this.playerChunkKey = chunkKey;
+        }
+      } catch (error) {
+        if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+          console.debug('Failed to resolve chunk key for spawn target.', error);
+        }
+      }
+      if (typeof this.ensureNavigationMeshForWorldPosition === 'function') {
+        try {
+          this.ensureNavigationMeshForWorldPosition(worldX, worldZ, {
+            reason: `${reason}-navmesh`,
+            stage: 'spawn',
+          });
+        } catch (error) {
+          if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+            console.debug('Failed to ensure navigation mesh for spawn target.', error);
+          }
+        }
+      }
+      const summary = {
+        reason,
+        chunkKey: chunkKey || null,
+        columnKey,
+        anchor: anchor || null,
+        worldPosition: { x: worldX, y: targetY, z: worldZ },
+      };
+      this.lastPlayerSpawnSummary = summary;
+      return summary;
     }
 
     positionPlayer() {
