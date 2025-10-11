@@ -3074,6 +3074,7 @@
     hotkey: { label: 'Hotkey', icon: '⌨️' },
     movement: { label: 'Movement', icon: '🏃' },
     system: { label: 'System', icon: '🛰️' },
+    performance: { label: 'Performance', icon: '⏱️' },
   });
 
   const liveDiagnosticsState = {
@@ -5481,12 +5482,84 @@
 
   bootstrapOverlay.showLoading();
 
+  function detectDevOrCiEnvironment(scope = globalScope) {
+    try {
+      const runtime = scope && typeof scope === 'object' ? scope : globalThis;
+      const config =
+        runtime?.APP_CONFIG && typeof runtime.APP_CONFIG === 'object' ? runtime.APP_CONFIG : null;
+      const rawEnv =
+        typeof config?.environment === 'string'
+          ? config.environment
+          : typeof config?.env === 'string'
+            ? config.env
+            : null;
+      const normalisedEnv = rawEnv ? rawEnv.trim().toLowerCase() : '';
+      if (normalisedEnv && ['development', 'dev', 'ci', 'test', 'qa', 'staging'].includes(normalisedEnv)) {
+        return true;
+      }
+      if (config) {
+        if (config.devMode === true || config.ciMode === true) {
+          return true;
+        }
+        const modeValue =
+          typeof config.mode === 'string'
+            ? config.mode
+            : typeof config.diagnosticsMode === 'string'
+              ? config.diagnosticsMode
+              : null;
+        if (modeValue && ['development', 'dev', 'ci', 'test'].includes(modeValue.trim().toLowerCase())) {
+          return true;
+        }
+      }
+      const location = runtime?.location;
+      if (location?.hostname) {
+        const host = location.hostname.toLowerCase();
+        if (host === 'localhost' || host === '127.0.0.1' || host === '[::1]' || host.endsWith('.local')) {
+          return true;
+        }
+      }
+      if (location?.search && typeof location.search === 'string') {
+        const searchLower = location.search.toLowerCase();
+        if (/[?&](ci|dev|test)=1\b/.test(searchLower) || /[?&]env=(ci|dev|test)\b/.test(searchLower)) {
+          return true;
+        }
+      }
+      if (typeof process !== 'undefined' && process && process.env) {
+        const env = process.env;
+        if (env.CI === 'true' || env.CI === '1') {
+          return true;
+        }
+        if (typeof env.NODE_ENV === 'string' && ['development', 'test'].includes(env.NODE_ENV.toLowerCase())) {
+          return true;
+        }
+      }
+    } catch (error) {
+      // Ignore environment detection failures and fall through to production behaviour.
+    }
+    return false;
+  }
+
+  const devOrCiEnvironmentActive = detectDevOrCiEnvironment();
+
   function shouldSendDiagnosticsToServer(entry) {
     if (!diagnosticsEndpoint) {
       return false;
     }
     const level = typeof entry?.level === 'string' ? entry.level.toLowerCase() : '';
-    return level === 'error' || level === 'critical' || level === 'fatal';
+    if (level === 'error' || level === 'critical' || level === 'fatal') {
+      return true;
+    }
+    if (!devOrCiEnvironmentActive) {
+      return false;
+    }
+    const detail = entry?.detail && typeof entry.detail === 'object' ? entry.detail : null;
+    const analyticsValue =
+      typeof detail?.analytics === 'string'
+        ? detail.analytics.trim().toLowerCase()
+        : typeof detail?.category === 'string'
+          ? detail.category.trim().toLowerCase()
+          : null;
+    return analyticsValue === 'performance';
   }
 
   const traceManager =
@@ -10013,6 +10086,36 @@
         status: 'ok',
         message,
       });
+    });
+    globalScope.addEventListener('infinite-rails:performance-metrics', (event) => {
+      try {
+        const detail = event?.detail && typeof event.detail === 'object' ? event.detail : {};
+        const metrics = detail.metrics && typeof detail.metrics === 'object' ? detail.metrics : null;
+        const label =
+          typeof detail.event === 'string' && detail.event.trim().length ? detail.event.trim() : 'sample';
+        const message = `Performance metrics sample captured — ${label}`;
+        const payload = {
+          analytics: 'performance',
+          event: label,
+          metrics,
+          timestamp: Number.isFinite(detail.timestamp) ? detail.timestamp : Date.now(),
+        };
+        if (typeof logThroughDiagnostics === 'function') {
+          logThroughDiagnostics('performance', message, {
+            level: 'info',
+            detail: payload,
+            timestamp: payload.timestamp,
+          });
+        } else if (typeof logDiagnosticsEvent === 'function') {
+          logDiagnosticsEvent('performance', message, {
+            level: 'info',
+            detail: payload,
+            timestamp: payload.timestamp,
+          });
+        }
+      } catch (error) {
+        globalScope?.console?.debug?.('Failed to record performance metrics sample.', error);
+      }
     });
   }
 
