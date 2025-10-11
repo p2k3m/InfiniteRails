@@ -11348,6 +11348,8 @@
     },
   };
 
+  let initialBackendLiveCheckPromise = null;
+
   if (!identityState.configuredApiBaseUrl) {
     if (apiBaseInvalid) {
       bootstrapOverlay.setDiagnostic('backend', {
@@ -18158,6 +18160,30 @@
         const mode = startSimple ? 'simple' : 'advanced';
         setRendererModeIndicator(mode);
         scheduleRendererStartWatchdog(mode);
+        let backendHealthCheckPromise = null;
+        if (identityState.configuredApiBaseUrl) {
+          backendHealthCheckPromise = initialBackendLiveCheckPromise || ensureBackendLiveCheck();
+        }
+        if (backendHealthCheckPromise) {
+          try {
+            await backendHealthCheckPromise;
+          } catch (error) {
+            scope.console?.debug?.('Backend live-check rejected during bootstrap; continuing in offline mode.', error);
+            if (!backendLiveCheckState.performed) {
+              const fallbackReason =
+                (typeof error?.code === 'string' && error.code.trim().length && error.code.trim()) ||
+                (typeof error?.reason === 'string' && error.reason.trim().length && error.reason.trim()) ||
+                'bootstrap-live-check-error';
+              const fallbackMessage =
+                (typeof error?.message === 'string' && error.message.trim().length && error.message.trim()) ||
+                'Unexpected error during backend validation.';
+              markBackendLiveCheckFailure({
+                reason: fallbackReason,
+                message: fallbackMessage,
+              });
+            }
+          }
+        }
         const locationProtocol = typeof scope?.location?.protocol === 'string' ? scope.location.protocol.toLowerCase() : '';
         const runningFromFileProtocol = locationProtocol === 'file:';
         if (runningFromFileProtocol) {
@@ -18270,7 +18296,8 @@
   });
 
   if (identityState.configuredApiBaseUrl) {
-    ensureBackendLiveCheck().catch((error) => {
+    initialBackendLiveCheckPromise = ensureBackendLiveCheck();
+    initialBackendLiveCheckPromise.catch((error) => {
       globalScope?.console?.debug?.('Backend live-check promise rejected.', error);
     });
   }
