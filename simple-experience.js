@@ -2772,7 +2772,11 @@
         throw new Error('SimpleExperience requires a target canvas element.');
       }
       const appConfig =
-        scope?.APP_CONFIG && typeof scope.APP_CONFIG === 'object' ? scope.APP_CONFIG : null;
+        runtimeScope?.APP_CONFIG && typeof runtimeScope.APP_CONFIG === 'object'
+          ? runtimeScope.APP_CONFIG
+          : scope?.APP_CONFIG && typeof scope.APP_CONFIG === 'object'
+            ? scope.APP_CONFIG
+            : null;
       const THREE = scope?.THREE_GLOBAL || null;
       const resolvedThree = THREE || scope?.THREE || null;
       if (!resolvedThree) {
@@ -9347,11 +9351,27 @@
           .filter(Boolean)
           .forEach((value) => sources.push(value));
       }
+      const appendFromBase = (baseUrl) => {
+        if (!baseUrl) {
+          return;
+        }
+        const trimmed = baseUrl.trim();
+        if (!trimmed) {
+          return;
+        }
+        const normalised = trimmed.endsWith('/') ? trimmed.slice(0, -1) : trimmed;
+        sources.push(`${normalised}/${key}.png`);
+      };
       const base = typeof config.textureBaseUrl === 'string' ? config.textureBaseUrl.trim() : '';
       if (base) {
-        const normalised = base.endsWith('/') ? base.slice(0, -1) : base;
-        sources.push(`${normalised}/${key}.png`);
+        appendFromBase(base);
       }
+      const alternateBases = Array.isArray(config.textureAlternateBaseUrls)
+        ? config.textureAlternateBaseUrls
+            .map((value) => (typeof value === 'string' ? value.trim() : ''))
+            .filter(Boolean)
+        : [];
+      alternateBases.forEach((value) => appendFromBase(value));
       const manifest = config.textureManifest && typeof config.textureManifest === 'object' ? config.textureManifest : null;
       if (manifest) {
         const manifestEntry = manifest[key];
@@ -9373,7 +9393,17 @@
           .filter(Boolean)
           .forEach((value) => sources.push(value));
       }
-      return sources.filter(Boolean);
+      const seen = new Set();
+      return sources.filter((value) => {
+        if (!value) {
+          return false;
+        }
+        if (seen.has(value)) {
+          return false;
+        }
+        seen.add(value);
+        return true;
+      });
     }
 
     prepareExternalTexture(texture) {
@@ -9440,10 +9470,15 @@
     }
 
     loadExternalVoxelTexture(key) {
+      const canvasSupport =
+        typeof document !== 'undefined' && typeof document.createElement === 'function';
+      const loaderPrototype = this.THREE?.TextureLoader?.prototype || null;
+      const loadFn = loaderPrototype ? loaderPrototype.load : null;
+      const loaderMocked = typeof loadFn === 'function' && typeof loadFn.mock === 'object';
+      const imageSupport = typeof Image !== 'undefined';
+      const namespaceSupport = typeof document?.createElementNS === 'function';
       const canStreamTextures =
-        typeof document !== 'undefined' &&
-        typeof document.createElement === 'function' &&
-        typeof Image !== 'undefined';
+        canvasSupport && (imageSupport || loaderMocked) && (namespaceSupport || loaderMocked);
       if (!canStreamTextures) {
         const fallback = this.ensureProceduralTexture(key);
         this.noteTexturePackFallback('unsupported-environment', { key });
@@ -9515,7 +9550,7 @@
             (texture) => {
               resolve({ texture, url });
             },
-            undefined,
+            () => {},
             () => {
               console.warn(`Failed to load texture ${url}; attempting fallback source.`);
               notifyLiveDiagnostics(
@@ -9542,37 +9577,53 @@
             this.completeAssetTimer('textures', key, { success: false, url });
             return useCachedFallbackTexture({ url }) ?? null;
           }
-          this.prepareExternalTexture(result.texture);
           const resolvedUrl = result.url || '';
           const sourceIndex = typeof resolvedUrl === 'string' ? sources.indexOf(resolvedUrl) : -1;
           const wasPrimarySource = sourceIndex <= 0;
           const usedEmbeddedTexture = typeof resolvedUrl === 'string' && resolvedUrl.startsWith('data:');
           const logMode = usedEmbeddedTexture ? (wasPrimarySource ? 'default' : 'fallback') : 'check';
+          let finalTexture = result.texture;
+          let finalSuccess = true;
+          let finalUrl = result.url;
           if (usedEmbeddedTexture && !wasPrimarySource) {
             this.noteTexturePackFallback('embedded-texture', { key, url: resolvedUrl });
             this.scheduleTextureRetry(key, { reason: 'embedded-texture', url: resolvedUrl });
+            const fallbackTexture = useCachedFallbackTexture({ url: resolvedUrl, silent: true });
+            if (fallbackTexture) {
+              finalTexture = fallbackTexture;
+              finalSuccess = false;
+              finalUrl = resolvedUrl;
+            }
           } else {
             this.noteTexturePackRecovery(key, { url: resolvedUrl || null });
           }
-          const logger = logMode === 'fallback' ? console.warn : console.info;
+          if (finalTexture === result.texture) {
+            this.prepareExternalTexture(result.texture);
+          }
+          const logger = logMode === 'fallback' || finalTexture !== result.texture ? console.warn : console.info;
           if (typeof logger === 'function') {
-            const sourceDescription = usedEmbeddedTexture
-              ? wasPrimarySource
-                ? 'the embedded default texture'
-                : 'an embedded fallback texture'
-              : resolvedUrl;
+            const sourceDescription =
+              finalTexture === result.texture
+                ? usedEmbeddedTexture
+                  ? wasPrimarySource
+                    ? 'the embedded default texture'
+                    : 'an embedded fallback texture'
+                  : resolvedUrl
+                : 'a procedural fallback texture';
             const advisory =
-              logMode === 'fallback'
-                ? 'External sources failed, using embedded texture data.'
-                : logMode === 'default'
-                  ? 'Embedded default texture applied immediately. Configure APP_CONFIG.textureManifest to override this asset.'
-                  : 'External texture stream succeeded.';
+              finalTexture !== result.texture
+                ? 'External sources failed, using procedural fallback colours.'
+                : logMode === 'fallback'
+                  ? 'External sources failed, using embedded texture data.'
+                  : logMode === 'default'
+                    ? 'Embedded default texture applied immediately. Configure APP_CONFIG.textureManifest to override this asset.'
+                    : 'External texture stream succeeded.';
             logger(
-              `Texture streaming ${logMode} — ${key} resolved via ${sourceDescription}. ${advisory} If textures appear blank, verify CDN availability and fallback cache configuration.`,
+              `Texture streaming ${finalTexture === result.texture ? logMode : 'fallback'} — ${key} resolved via ${sourceDescription}. ${advisory} If textures appear blank, verify CDN availability and fallback cache configuration.`,
             );
           }
-          this.completeAssetTimer('textures', key, { success: true, url: result.url });
-          return result.texture;
+          this.completeAssetTimer('textures', key, { success: finalSuccess, url: finalUrl });
+          return finalTexture;
         })
         .catch((error) => {
           console.warn(`Unable to stream external texture for ${key}`, error);
@@ -14878,18 +14929,55 @@
           heightmapResult,
         };
       };
+      const buildSafeFallbackTerrain = (error, reasonOverride = null) => {
+        const fallbackReason =
+          typeof reasonOverride === 'string' && reasonOverride.trim().length
+            ? reasonOverride.trim()
+            : 'terrain-build-error';
+        if (typeof console !== 'undefined' && typeof console.error === 'function') {
+          console.error('Terrain build failed; generating safe fallback world.', {
+            reason: fallbackReason,
+            error,
+          });
+        }
+        resetTerrainState();
+        const safeHeight = Math.max(minColumnHeight, Math.min(maxColumnHeight, 4));
+        const fallbackResult = {
+          matrix: createHeightmapMatrix(WORLD_SIZE, safeHeight),
+          meta: { fallback: true },
+          source: 'safe-fallback',
+          fallbackReason,
+          fallbackFromStream: true,
+        };
+        return applyHeightmapToTerrain(fallbackResult);
+      };
       const executeTerrainBuild = (preferSeeded = false, forcedFallbackReason = null) => {
         resetTerrainState();
-        const heightmapResult = this.resolveHeightmapMatrix({
-          dimensionKey,
-          profile,
-          minColumnHeight,
-          maxColumnHeight,
-          voxelBudget,
-          preferSeeded,
-          forcedFallbackReason,
-        });
-        return applyHeightmapToTerrain(heightmapResult);
+        let heightmapResult;
+        try {
+          heightmapResult = this.resolveHeightmapMatrix({
+            dimensionKey,
+            profile,
+            minColumnHeight,
+            maxColumnHeight,
+            voxelBudget,
+            preferSeeded,
+            forcedFallbackReason,
+          });
+        } catch (error) {
+          const fallbackReason = forcedFallbackReason && forcedFallbackReason.trim().length
+            ? `${forcedFallbackReason.trim()}+terrain-build-error`
+            : 'terrain-build-error';
+          return buildSafeFallbackTerrain(error, fallbackReason);
+        }
+        try {
+          return applyHeightmapToTerrain(heightmapResult);
+        } catch (error) {
+          const fallbackReason = forcedFallbackReason && forcedFallbackReason.trim().length
+            ? `${forcedFallbackReason.trim()}+terrain-build-error`
+            : 'terrain-build-error';
+          return buildSafeFallbackTerrain(error, fallbackReason);
+        }
       };
       let { summary, heightmapResult } = executeTerrainBuild(false, null);
       if (!summary?.integrity?.valid && heightmapResult?.source === 'streamed') {
