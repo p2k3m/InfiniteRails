@@ -2,6 +2,93 @@
   const globalScope = typeof window !== 'undefined' ? window : globalThis;
   const documentRef = globalScope.document ?? null;
 
+  function createTraceUtilities(scope) {
+    const runtimeScope = scope || (typeof globalThis !== 'undefined' ? globalThis : null);
+
+    function generateRandomUUID() {
+      const cryptoRef = runtimeScope?.crypto ?? (typeof crypto !== 'undefined' ? crypto : null);
+      if (cryptoRef?.randomUUID) {
+        try {
+          return cryptoRef.randomUUID();
+        } catch (error) {
+          // Fallback below if randomUUID is unavailable or throws.
+        }
+      }
+      const buffer = new Uint8Array(16);
+      if (cryptoRef?.getRandomValues) {
+        cryptoRef.getRandomValues(buffer);
+      } else {
+        for (let index = 0; index < buffer.length; index += 1) {
+          buffer[index] = Math.floor(Math.random() * 256);
+        }
+      }
+      buffer[6] = (buffer[6] & 0x0f) | 0x40;
+      buffer[8] = (buffer[8] & 0x3f) | 0x80;
+      const hex = Array.from(buffer, (value) => value.toString(16).padStart(2, '0'));
+      return `${hex.slice(0, 4).join('')}-${hex.slice(4, 6).join('')}-${hex.slice(6, 8).join('')}-${hex
+        .slice(8, 10)
+        .join('')}-${hex.slice(10, 16).join('')}`;
+    }
+
+    const sessionId = generateRandomUUID();
+    let counter = 0;
+
+    function resolveTraceId(provided, label = 'trace') {
+      if (typeof provided === 'string' && provided.trim().length) {
+        return provided.trim();
+      }
+      counter += 1;
+      const suffix = generateRandomUUID();
+      return `${sessionId}-${label}-${counter}-${suffix}`;
+    }
+
+    function enrichDetail(detail, traceId, session = sessionId) {
+      if (!detail || typeof detail !== 'object' || Array.isArray(detail)) {
+        return detail;
+      }
+      const existingTrace = detail.trace && typeof detail.trace === 'object' ? detail.trace : {};
+      return {
+        ...detail,
+        trace: {
+          ...existingTrace,
+          traceId: existingTrace.traceId ?? traceId,
+          sessionId: existingTrace.sessionId ?? session,
+        },
+      };
+    }
+
+    return {
+      sessionId,
+      resolveTraceId,
+      createTraceId(label = 'trace') {
+        return resolveTraceId(null, label);
+      },
+      buildContext(provided, label = 'trace') {
+        const traceId = resolveTraceId(provided, label);
+        return { traceId, sessionId };
+      },
+      enrichDetail,
+    };
+  }
+
+  const traceUtilities = (() => {
+    const scope = typeof globalScope !== 'undefined' ? globalScope : globalThis;
+    if (scope?.__INFINITE_RAILS_TRACE__ && typeof scope.__INFINITE_RAILS_TRACE__ === 'object') {
+      return scope.__INFINITE_RAILS_TRACE__;
+    }
+    const manager = createTraceUtilities(scope);
+    if (scope) {
+      try {
+        scope.__INFINITE_RAILS_TRACE__ = manager;
+        scope.InfiniteRails = scope.InfiniteRails || {};
+        scope.InfiniteRails.trace = manager;
+      } catch (error) {
+        scope?.console?.debug?.('Failed to expose trace utilities.', error);
+      }
+    }
+    return manager;
+  })();
+
   const centralLogStore = (() => {
     const ENTRY_LIMIT = 500;
     const entries = [];
@@ -133,6 +220,8 @@
       detail = null,
       origin = 'runtime',
       timestamp = null,
+      traceId: providedTraceId = null,
+      sessionId: providedSessionId = null,
     } = {}) {
       const resolvedScope = typeof scope === 'string' && scope.trim().length ? scope.trim().toLowerCase() : category;
       const finalCategory = normaliseCategory(category || resolvedScope || 'general', resolvedScope || 'general');
@@ -140,6 +229,13 @@
       if (!trimmedMessage) {
         return null;
       }
+      const contextLabel = finalCategory ? `log-${finalCategory}` : 'log';
+      const context = traceUtilities.buildContext(providedTraceId, contextLabel);
+      const sessionId =
+        typeof providedSessionId === 'string' && providedSessionId.trim().length
+          ? providedSessionId.trim()
+          : context.sessionId;
+      const enrichedDetail = detail ? traceUtilities.enrichDetail(detail, context.traceId, sessionId) : detail;
       const entry = {
         id: `central-${Date.now()}-${counter + 1}`,
         category: finalCategory,
@@ -148,7 +244,9 @@
         message: trimmedMessage,
         timestamp: Number.isFinite(timestamp) ? timestamp : Date.now(),
         origin: typeof origin === 'string' && origin.trim().length ? origin.trim() : 'runtime',
-        detail: detail ? sanitiseDetail(detail) : null,
+        detail: enrichedDetail ? sanitiseDetail(enrichedDetail) : null,
+        traceId: context.traceId,
+        sessionId,
       };
       counter += 1;
       entries.push(entry);
@@ -4860,6 +4958,16 @@
         item.appendChild(timeEl);
         item.appendChild(scopeEl);
         item.appendChild(messageEl);
+        if (entry.traceId) {
+          item.dataset.traceId = entry.traceId;
+        } else {
+          item.removeAttribute('data-trace-id');
+        }
+        if (entry.sessionId) {
+          item.dataset.sessionId = entry.sessionId;
+        } else {
+          item.removeAttribute('data-session-id');
+        }
         if (entry.detail) {
           try {
             item.dataset.detail = JSON.stringify(entry.detail);
@@ -4887,6 +4995,16 @@
       const scope = normaliseLogScope(entry.scope);
       const level = normaliseLogLevel(entry.level);
       const timestamp = Number.isFinite(entry.timestamp) ? entry.timestamp : Date.now();
+      const contextLabel = scope ? `log-${scope}` : 'log';
+      const context = traceUtilities.buildContext(entry.traceId ?? null, contextLabel);
+      const sessionId =
+        typeof entry.sessionId === 'string' && entry.sessionId.trim().length
+          ? entry.sessionId.trim()
+          : context.sessionId;
+      let detail = entry.detail ?? null;
+      if (detail && typeof detail === 'object') {
+        detail = traceUtilities.enrichDetail(detail, context.traceId, sessionId);
+      }
       diagnosticsLogState.counter += 1;
       const normalised = {
         id: `log-${timestamp}-${diagnosticsLogState.counter}`,
@@ -4894,7 +5012,9 @@
         level,
         message: entry.message.trim(),
         timestamp,
-        detail: sanitiseLogDetail(entry.detail),
+        detail: sanitiseLogDetail(detail),
+        traceId: context.traceId,
+        sessionId,
       };
       diagnosticsLogState.entries.push(normalised);
       if (diagnosticsLogState.entries.length > diagnosticsLogState.limit) {
@@ -5168,6 +5288,8 @@
           level: options.level,
           detail: options.detail,
           timestamp: options.timestamp,
+          traceId: options.traceId,
+          sessionId: options.sessionId,
         });
         if (entry && typeof centralLogStore?.record === 'function') {
           centralLogStore.record({
@@ -5178,6 +5300,8 @@
             detail: entry.detail,
             origin: 'diagnostics-overlay',
             timestamp: entry.timestamp,
+            traceId: entry.traceId,
+            sessionId: entry.sessionId,
           });
         }
       },
@@ -5191,6 +5315,8 @@
           message: entry.message,
           timestamp: entry.timestamp,
           detail: entry.detail ?? null,
+          traceId: entry.traceId ?? null,
+          sessionId: entry.sessionId ?? null,
         }));
       },
       get logEntries() {
@@ -5363,12 +5489,90 @@
     return level === 'error' || level === 'critical' || level === 'fatal';
   }
 
+  const traceManager =
+    typeof traceUtilities !== 'undefined'
+      ? traceUtilities
+      : (() => {
+          const scope = typeof globalScope !== 'undefined' ? globalScope : globalThis;
+          const fallbackRuntime = scope || (typeof globalThis !== 'undefined' ? globalThis : null);
+
+          function fallbackUUID() {
+            const cryptoRef = fallbackRuntime?.crypto ?? (typeof crypto !== 'undefined' ? crypto : null);
+            if (cryptoRef?.randomUUID) {
+              try {
+                return cryptoRef.randomUUID();
+              } catch (error) {
+                // Fallback to manual generation below.
+              }
+            }
+            const buffer = new Uint8Array(16);
+            if (cryptoRef?.getRandomValues) {
+              cryptoRef.getRandomValues(buffer);
+            } else {
+              for (let index = 0; index < buffer.length; index += 1) {
+                buffer[index] = Math.floor(Math.random() * 256);
+              }
+            }
+            buffer[6] = (buffer[6] & 0x0f) | 0x40;
+            buffer[8] = (buffer[8] & 0x3f) | 0x80;
+            const hex = Array.from(buffer, (value) => value.toString(16).padStart(2, '0'));
+            return `${hex.slice(0, 4).join('')}-${hex.slice(4, 6).join('')}-${hex.slice(6, 8).join('')}-${hex
+              .slice(8, 10)
+              .join('')}-${hex.slice(10, 16).join('')}`;
+          }
+
+          const sessionId = fallbackUUID();
+          let counter = 0;
+
+          function resolveTraceId(provided, label = 'trace') {
+            if (typeof provided === 'string' && provided.trim().length) {
+              return provided.trim();
+            }
+            counter += 1;
+            const suffix = fallbackUUID();
+            return `${sessionId}-${label}-${counter}-${suffix}`;
+          }
+
+          function enrichDetail(detail, traceId, session = sessionId) {
+            if (!detail || typeof detail !== 'object' || Array.isArray(detail)) {
+              return detail;
+            }
+            const existingTrace = detail.trace && typeof detail.trace === 'object' ? detail.trace : {};
+            return {
+              ...detail,
+              trace: {
+                ...existingTrace,
+                traceId: existingTrace.traceId ?? traceId,
+                sessionId: existingTrace.sessionId ?? session,
+              },
+            };
+          }
+
+          return {
+            sessionId,
+            resolveTraceId,
+            createTraceId(label = 'trace') {
+              return resolveTraceId(null, label);
+            },
+            buildContext(provided, label = 'trace') {
+              const traceId = resolveTraceId(provided, label);
+              return { traceId, sessionId };
+            },
+            enrichDetail,
+          };
+        })();
+
   function sendDiagnosticsEventToServer(entry) {
     if (!shouldSendDiagnosticsToServer(entry)) {
       return;
     }
     const scope = typeof globalScope !== 'undefined' ? globalScope : globalThis;
     const timestamp = Number.isFinite(entry?.timestamp) ? entry.timestamp : Date.now();
+    const context = traceManager.buildContext(entry?.traceId ?? null, 'diagnostics');
+    const sessionId =
+      typeof entry?.sessionId === 'string' && entry.sessionId.trim().length
+        ? entry.sessionId.trim()
+        : context.sessionId;
     const payload = {
       scope: entry?.scope ?? null,
       message: entry?.message ?? null,
@@ -5376,6 +5580,8 @@
       detail: entry?.detail ?? null,
       timestamp,
       rendererMode: scope?.InfiniteRails?.rendererMode ?? null,
+      traceId: context.traceId,
+      sessionId,
     };
     let body;
     try {
@@ -5407,6 +5613,8 @@
         headers: { 'Content-Type': 'application/json' },
         body,
         keepalive: true,
+        traceId: context.traceId,
+        sessionId,
       }).catch((error) => {
         scope?.console?.debug?.('Diagnostics beacon fetch failed', error);
       });
@@ -5503,23 +5711,40 @@
     });
   }
 
-  function logDiagnosticsEvent(scope, message, { level = 'info', detail = null, timestamp = null } = {}) {
+  function logDiagnosticsEvent(
+    scope,
+    message,
+    { level = 'info', detail = null, timestamp = null, traceId: providedTraceId = null, sessionId: providedSessionId = null } = {},
+  ) {
+    const contextLabel = typeof scope === 'string' && scope.trim().length ? `log-${scope.trim().toLowerCase()}` : 'log';
+    const context = traceManager.buildContext(providedTraceId, contextLabel);
+    const sessionId =
+      typeof providedSessionId === 'string' && providedSessionId.trim().length
+        ? providedSessionId.trim()
+        : context.sessionId;
     const payload = {};
     if (typeof level === 'string') {
       payload.level = level;
     }
-    if (detail && typeof detail === 'object') {
-      payload.detail = { ...detail };
+    const enrichedDetail = detail && typeof detail === 'object' ? traceManager.enrichDetail(detail, context.traceId, sessionId) : detail ?? null;
+    if (enrichedDetail && typeof enrichedDetail === 'object') {
+      payload.detail = { ...enrichedDetail };
+    } else if (enrichedDetail !== null) {
+      payload.detail = enrichedDetail;
     }
     if (Number.isFinite(timestamp)) {
       payload.timestamp = timestamp;
     }
+    payload.traceId = context.traceId;
+    payload.sessionId = sessionId;
     const entry = {
       scope,
       message,
-      level: payload.level || 'info',
+      level: typeof payload.level === 'string' ? payload.level : 'info',
       detail: payload.detail ?? null,
       timestamp: Number.isFinite(payload.timestamp) ? payload.timestamp : Date.now(),
+      traceId: context.traceId,
+      sessionId,
     };
     mirrorCriticalErrorToOverlay(scope, message, {
       level: entry.level,
@@ -5533,19 +5758,35 @@
   }
 
   function logThroughDiagnostics(scope, message, options = {}) {
+    const contextLabel = typeof scope === 'string' && scope.trim().length ? `log-${scope.trim().toLowerCase()}` : 'log';
+    const context = traceManager.buildContext(options.traceId ?? null, contextLabel);
+    const sessionId =
+      typeof options.sessionId === 'string' && options.sessionId.trim().length
+        ? options.sessionId.trim()
+        : context.sessionId;
+    const enrichedOptions = {
+      ...options,
+      traceId: context.traceId,
+      sessionId,
+    };
+    if (options.detail && typeof options.detail === 'object') {
+      enrichedOptions.detail = traceManager.enrichDetail(options.detail, context.traceId, sessionId);
+    }
     if (typeof logDiagnosticsEvent === 'function') {
-      logDiagnosticsEvent(scope, message, options);
+      logDiagnosticsEvent(scope, message, enrichedOptions);
       return;
     }
     if (typeof centralLogStore?.record === 'function') {
       centralLogStore.record({
         category: scope,
         scope,
-        level: options.level ?? 'info',
+        level: enrichedOptions.level ?? 'info',
         message,
-        detail: options.detail ?? null,
-        origin: options.origin ?? 'runtime',
-        timestamp: options.timestamp ?? Date.now(),
+        detail: enrichedOptions.detail ?? null,
+        origin: enrichedOptions.origin ?? 'runtime',
+        timestamp: enrichedOptions.timestamp ?? Date.now(),
+        traceId: enrichedOptions.traceId,
+        sessionId: enrichedOptions.sessionId,
       });
     }
   }
@@ -5571,6 +5812,100 @@
       method = 'GET';
     }
     return { url, method: method.toUpperCase() };
+  }
+
+  function applyTraceHeadersToFetchArgs(resource, init, context) {
+    const scope = typeof globalScope !== 'undefined' ? globalScope : globalThis;
+    const RequestCtor = scope?.Request || (typeof Request !== 'undefined' ? Request : null);
+    const baseInit = init && typeof init === 'object' ? { ...init } : undefined;
+    const headers = {};
+
+    const assignHeader = (key, value) => {
+      if (typeof key !== 'string') {
+        return;
+      }
+      const trimmed = key.trim();
+      if (!trimmed) {
+        return;
+      }
+      if (typeof value === 'undefined' || value === null) {
+        return;
+      }
+      headers[trimmed] = Array.isArray(value) ? value.map((item) => String(item)).join(', ') : String(value);
+    };
+
+    const mergeHeaders = (source) => {
+      if (!source) {
+        return;
+      }
+      if (typeof source.forEach === 'function') {
+        try {
+          source.forEach((value, key) => {
+            assignHeader(key, value);
+          });
+          return;
+        } catch (error) {
+          // fall through to other strategies
+        }
+      }
+      if (Array.isArray(source)) {
+        source.forEach((entry) => {
+          if (!entry) {
+            return;
+          }
+          const [name, value] = entry;
+          assignHeader(name, value);
+        });
+        return;
+      }
+      if (typeof source === 'object') {
+        Object.keys(source).forEach((key) => {
+          assignHeader(key, source[key]);
+        });
+      }
+    };
+
+    if (RequestCtor && resource instanceof RequestCtor) {
+      mergeHeaders(resource.headers);
+    }
+    if (init && typeof init === 'object' && 'headers' in init) {
+      mergeHeaders(init.headers);
+    }
+
+    assignHeader('x-trace-id', context.traceId);
+    assignHeader('x-trace-session', context.sessionId);
+
+    if (RequestCtor && resource instanceof RequestCtor) {
+      const requestInit = baseInit ? { ...baseInit } : {};
+      if (requestInit && typeof requestInit === 'object') {
+        if ('headers' in requestInit) {
+          delete requestInit.headers;
+        }
+        if ('traceId' in requestInit) {
+          delete requestInit.traceId;
+        }
+        if ('sessionId' in requestInit) {
+          delete requestInit.sessionId;
+        }
+      }
+      requestInit.headers = headers;
+      return { resource: new RequestCtor(resource, requestInit), init: undefined, headers };
+    }
+
+    const finalInit = baseInit ? { ...baseInit } : {};
+    if (finalInit && typeof finalInit === 'object') {
+      if ('headers' in finalInit) {
+        delete finalInit.headers;
+      }
+      if ('traceId' in finalInit) {
+        delete finalInit.traceId;
+      }
+      if ('sessionId' in finalInit) {
+        delete finalInit.sessionId;
+      }
+    }
+    finalInit.headers = headers;
+    return { resource, init: finalInit, headers };
   }
 
   function registerCentralErrorChannels() {
@@ -5680,9 +6015,14 @@
     const originalFetch = fetchRef.bind(scope);
     const wrappedFetch = function (...args) {
       const [resource, init] = args;
-      const info = normaliseRequestInfo(resource, init || {});
+      const context = traceUtilities.buildContext(init?.traceId ?? null, 'fetch');
+      const tracedArgs = applyTraceHeadersToFetchArgs(resource, init, context);
+      const fetchResource = tracedArgs.resource;
+      const fetchInit = tracedArgs.init;
+      const info = normaliseRequestInfo(fetchResource, fetchInit || {});
       const start = Date.now();
-      return originalFetch(...args).then(
+      const finalArgs = typeof fetchInit === 'undefined' ? [fetchResource] : [fetchResource, fetchInit];
+      return originalFetch(...finalArgs).then(
         (response) => {
           if (response && !response.ok) {
             const detail = {
@@ -5703,6 +6043,8 @@
               detail,
               timestamp: Date.now(),
               origin: 'fetch-response',
+              traceId: context.traceId,
+              sessionId: context.sessionId,
             });
           }
           return response;
@@ -5724,6 +6066,8 @@
             detail,
             timestamp: Date.now(),
             origin: 'fetch-error',
+            traceId: context.traceId,
+            sessionId: context.sessionId,
           });
           throw error;
         },
