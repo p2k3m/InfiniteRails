@@ -2,6 +2,7 @@
 
 const AWS = require('aws-sdk');
 const { createResponse, parseJsonBody, handleOptions } = require('../lib/http');
+const { createTraceContext, createTraceLogger } = require('../lib/trace');
 
 const dynamo = new AWS.DynamoDB.DocumentClient();
 const USERS_TABLE = process.env.USERS_TABLE;
@@ -223,13 +224,17 @@ function sanitizeProgress(payload) {
   return progress;
 }
 
-exports.handler = async (event) => {
+exports.handler = async (event, awsContext = {}) => {
+  const trace = createTraceContext(event, awsContext);
+  const logger = createTraceLogger(trace);
+
   if (event?.httpMethod === 'OPTIONS') {
-    return handleOptions();
+    return handleOptions({ trace });
   }
 
   if (!USERS_TABLE) {
-    return createResponse(500, { message: 'USERS_TABLE environment variable is not configured.' });
+    logger.error('USERS_TABLE environment variable is not configured.');
+    return createResponse(500, { message: 'USERS_TABLE environment variable is not configured.' }, { trace });
   }
 
   if (event?.httpMethod === 'GET') {
@@ -239,7 +244,8 @@ exports.handler = async (event) => {
       event?.multiValueQueryStringParameters?.googleId?.[0];
     const googleId = typeof param === 'string' ? param.trim() : '';
     if (!googleId) {
-      return createResponse(400, { message: 'googleId query parameter is required.' });
+      logger.warn('User profile fetch missing googleId parameter.');
+      return createResponse(400, { message: 'googleId query parameter is required.' }, { trace });
     }
     try {
       const result = await dynamo
@@ -249,32 +255,36 @@ exports.handler = async (event) => {
         })
         .promise();
       if (!result.Item) {
-        return createResponse(404, { message: 'User not found.' });
+        logger.warn('User record not found for provided googleId.', { googleId });
+        return createResponse(404, { message: 'User not found.' }, { trace });
       }
       const { sourceIp, ...item } = result.Item;
-      return createResponse(200, { item });
+      return createResponse(200, { item }, { trace });
     } catch (error) {
-      console.error('Failed to load user record.', error);
-      return createResponse(500, { message: 'Failed to load user record.' });
+      logger.error('Failed to load user record.', error);
+      return createResponse(500, { message: 'Failed to load user record.' }, { trace });
     }
   }
 
   if (event?.httpMethod !== 'POST') {
-    return createResponse(405, { message: 'Method Not Allowed' });
+    logger.warn('User handler received unsupported method.', { method: event?.httpMethod });
+    return createResponse(405, { message: 'Method Not Allowed' }, { trace });
   }
 
   let payload;
   try {
     payload = parseJsonBody(event) || {};
   } catch (error) {
-    return createResponse(400, { message: error.message });
+    logger.warn('Received invalid JSON payload while updating user.', { error });
+    return createResponse(400, { message: error.message }, { trace });
   }
 
   const googleId = typeof payload.googleId === 'string' ? payload.googleId.trim() : '';
   const name = typeof payload.name === 'string' ? payload.name.trim() : '';
 
   if (!googleId || !name) {
-    return createResponse(400, { message: 'googleId and name are required fields.' });
+    logger.warn('User profile update missing required identity fields.', { hasGoogleId: Boolean(googleId), hasName: Boolean(name) });
+    return createResponse(400, { message: 'googleId and name are required fields.' }, { trace });
   }
 
   const timestamp = new Date().toISOString();
@@ -306,12 +316,16 @@ exports.handler = async (event) => {
       })
       .promise();
   } catch (error) {
-    console.error('Failed to persist user record.', error);
-    return createResponse(500, { message: 'Failed to persist user record.' });
+    logger.error('Failed to persist user record.', error);
+    return createResponse(500, { message: 'Failed to persist user record.' }, { trace });
   }
 
-  return createResponse(200, {
-    message: 'User profile synchronised.',
-    item,
-  });
+  return createResponse(
+    200,
+    {
+      message: 'User profile synchronised.',
+      item,
+    },
+    { trace },
+  );
 };
