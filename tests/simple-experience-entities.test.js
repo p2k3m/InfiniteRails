@@ -655,6 +655,91 @@ describe('simple experience entity lifecycle', () => {
     }
   });
 
+  it('rehomes a golem when fallback navmesh coverage is located', async () => {
+    const { experience } = createExperienceForTest();
+
+    experience.start();
+    await Promise.resolve();
+
+    experience.lastGolemSpawn = experience.elapsed - 100;
+    experience.spawnGolem();
+
+    expect(experience.golems.length).toBeGreaterThan(0);
+    const golem = experience.golems[experience.golems.length - 1];
+
+    const fallbackNavmesh = {
+      key: 'fallback',
+      walkableCellCount: 1,
+      cells: [
+        {
+          worldX: 4,
+          worldZ: -3,
+          surfaceY: 2,
+        },
+      ],
+    };
+
+    const ensureChunkSpy = vi
+      .spyOn(experience, 'ensureNavigationMeshForActorChunk')
+      .mockImplementation((actorType, chunkKey) => {
+        if (actorType === 'golem' && chunkKey === 'fallback') {
+          return fallbackNavmesh;
+        }
+        return null;
+      });
+
+    const ensureWorldSpy = vi.spyOn(experience, 'ensureNavigationMeshForWorldPosition').mockReturnValue(null);
+
+    try {
+      const result = experience.handleNavmeshFailureForMob('golem', golem, {
+        chunkKey: 'fallback',
+        reason: 'navmesh-missing',
+      });
+
+      expect(result).toEqual({ action: 'rehomed', reason: 'navmesh-missing', navmesh: fallbackNavmesh });
+      expect(golem.mesh.position.x).toBeCloseTo(fallbackNavmesh.cells[0].worldX, 5);
+      expect(golem.mesh.position.z).toBeCloseTo(fallbackNavmesh.cells[0].worldZ, 5);
+      expect(golem.mesh.position.y).toBeCloseTo(fallbackNavmesh.cells[0].surfaceY + 1.1, 5);
+      expect(golem.navChunkKey).toBe('fallback');
+    } finally {
+      ensureChunkSpy.mockRestore();
+      ensureWorldSpy.mockRestore();
+    }
+  });
+
+  it('despawns a golem when navmesh recovery fails', async () => {
+    const { experience } = createExperienceForTest();
+
+    experience.start();
+    await Promise.resolve();
+
+    experience.lastGolemSpawn = experience.elapsed - 100;
+    experience.spawnGolem();
+
+    expect(experience.golems.length).toBeGreaterThan(0);
+    const golem = experience.golems[experience.golems.length - 1];
+    const golemGroupChildren = experience.golemGroup?.children?.length ?? 0;
+
+    const ensureChunkSpy = vi
+      .spyOn(experience, 'ensureNavigationMeshForActorChunk')
+      .mockReturnValue(null);
+    const ensureWorldSpy = vi.spyOn(experience, 'ensureNavigationMeshForWorldPosition').mockReturnValue(null);
+
+    try {
+      const result = experience.handleNavmeshFailureForMob('golem', golem, {
+        chunkKey: 'missing-chunk',
+        reason: 'navmesh-missing',
+      });
+
+      expect(result).toEqual({ action: 'despawned', reason: 'navmesh-missing' });
+      expect(experience.golems).not.toContain(golem);
+      expect(experience.golemGroup.children.length).toBe(golemGroupChildren - 1);
+    } finally {
+      ensureChunkSpy.mockRestore();
+      ensureWorldSpy.mockRestore();
+    }
+  });
+
   it('warns when AI movement cannot resolve a navigation chunk', () => {
     const { experience } = createExperienceForTest();
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
