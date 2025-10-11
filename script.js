@@ -5898,6 +5898,17 @@
     'movement',
   ]);
 
+  function normaliseSurvivalWatchdogKey(value) {
+    if (typeof value !== 'string') {
+      return '';
+    }
+    const trimmed = value.trim();
+    if (!trimmed.length) {
+      return '';
+    }
+    return trimmed.toLowerCase().replace(/[\s_]+/g, '-');
+  }
+
   function normaliseSurvivalWatchdogDescriptor(detail, fallbackStage) {
     const descriptor = detail && typeof detail === 'object' ? detail : {};
     const stageRaw =
@@ -5924,9 +5935,9 @@
       stage: stageRaw,
       reason: reasonRaw,
       code: codeRaw,
-      stageKey: stageRaw.toLowerCase(),
-      reasonKey: reasonRaw.toLowerCase(),
-      codeKey: codeRaw.toLowerCase(),
+      stageKey: normaliseSurvivalWatchdogKey(stageRaw),
+      reasonKey: normaliseSurvivalWatchdogKey(reasonRaw),
+      codeKey: normaliseSurvivalWatchdogKey(codeRaw),
     };
   }
 
