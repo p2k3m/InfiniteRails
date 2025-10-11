@@ -6164,10 +6164,55 @@
     }
     const summary = createPerformanceSummary(metrics);
     metrics.summary = summary;
+    const timestamp = Date.now();
+    const consoleMessage = `Performance metrics — ${summary}`;
     if (globalScope?.console?.info) {
-      globalScope.console.info(`Performance metrics — ${summary}`, metrics);
+      globalScope.console.info(consoleMessage, metrics);
     }
-    dispatchPerformanceMetrics(event, metrics);
+    const detailPayload = {
+      analytics: 'performance',
+      event,
+      metrics,
+      summary,
+      timestamp,
+    };
+    if (typeof centralLogStore?.record === 'function') {
+      try {
+        centralLogStore.record({
+          category: 'performance',
+          scope: 'performance',
+          level: 'info',
+          message: consoleMessage,
+          detail: detailPayload,
+          origin: 'runtime',
+          timestamp,
+        });
+      } catch (error) {
+        globalScope?.console?.debug?.('Failed to record performance metrics in central log store.', error);
+      }
+    }
+    const dispatched = dispatchPerformanceMetrics(event, metrics);
+    if (!dispatched && devOrCiEnvironmentActive) {
+      const label = typeof event === 'string' && event.trim().length ? event.trim() : 'sample';
+      const diagnosticsMessage = `Performance metrics sample captured — ${label}: ${summary}`;
+      try {
+        if (typeof logThroughDiagnostics === 'function') {
+          logThroughDiagnostics('performance', diagnosticsMessage, {
+            level: 'info',
+            detail: detailPayload,
+            timestamp,
+          });
+        } else if (typeof logDiagnosticsEvent === 'function') {
+          logDiagnosticsEvent('performance', diagnosticsMessage, {
+            level: 'info',
+            detail: detailPayload,
+            timestamp,
+          });
+        }
+      } catch (error) {
+        globalScope?.console?.debug?.('Failed to log performance metrics sample for diagnostics.', error);
+      }
+    }
   }
 
   function maybeEmitPerformanceMetrics() {
