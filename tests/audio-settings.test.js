@@ -133,4 +133,27 @@ describe('Audio settings API', () => {
     expect(masterLabel.textContent).toBe('80%');
     expect(musicLabel.textContent).toBe('25%');
   });
+
+  it('quarantines corrupted audio settings before falling back to defaults', () => {
+    const { sandbox, windowStub } = createBootstrapSandbox();
+    const storage = {
+      getItem: vi.fn((key) => (key === 'infinite-rails:audio-settings' ? '{"muted":true' : null)),
+      setItem: vi.fn(),
+      removeItem: vi.fn(),
+    };
+    windowStub.localStorage = storage;
+    evaluateBootstrapScript(sandbox);
+
+    const hooks = windowStub.__INFINITE_RAILS_TEST_HOOKS__;
+    const audioState = hooks.getAudioSettingsState();
+
+    expect(audioState.muted).toBe(false);
+    expect(storage.removeItem).toHaveBeenCalledWith('infinite-rails:audio-settings');
+    const warnCall = windowStub.console.warn.mock.calls.find(([message]) =>
+      typeof message === 'string' && message.includes('"infinite-rails:audio-settings"'),
+    );
+    expect(warnCall).toBeDefined();
+    expect(warnCall[1]).toBeTruthy();
+    expect(warnCall[1].name).toBe('SyntaxError');
+  });
 });

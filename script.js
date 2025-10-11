@@ -830,6 +830,34 @@
   }
 
   const AUDIO_SETTINGS_STORAGE_KEY = 'infinite-rails:audio-settings';
+
+  function quarantineLocalStorageKey(storageKey, options = {}) {
+    if (!storageKey || !globalScope?.localStorage) {
+      return false;
+    }
+    const { context = null, reason = null, error = null } = options;
+    const consoleRef = globalScope.console ?? null;
+    let entryLabel = `"${storageKey}"`;
+    if (context) {
+      entryLabel = `${entryLabel} (${context})`;
+    }
+    try {
+      globalScope.localStorage.removeItem(storageKey);
+    } catch (removeError) {
+      consoleRef?.warn?.(`Failed to quarantine localStorage entry ${entryLabel}.`, removeError);
+      return false;
+    }
+    let message = `Quarantined corrupted localStorage entry ${entryLabel}.`;
+    if (reason) {
+      message = `${message} ${reason}`;
+    }
+    if (error) {
+      consoleRef?.warn?.(message, error);
+    } else {
+      consoleRef?.warn?.(message);
+    }
+    return true;
+  }
   const AUDIO_SETTINGS_CHANNELS = Object.freeze(['master', 'music', 'effects', 'ui']);
   const AUDIO_SETTINGS_DEFAULTS = Object.freeze({
     master: 0.8,
@@ -901,31 +929,46 @@
     if (!globalScope?.localStorage) {
       return null;
     }
+    let raw;
     try {
-      const raw = globalScope.localStorage.getItem(AUDIO_SETTINGS_STORAGE_KEY);
-      if (!raw) {
-        return null;
-      }
-      const parsed = JSON.parse(raw);
-      if (!parsed || typeof parsed !== 'object') {
-        return null;
-      }
-      const storedVolumes = {};
-      const volumeSource = parsed.volumes && typeof parsed.volumes === 'object' ? parsed.volumes : {};
-      AUDIO_SETTINGS_CHANNELS.forEach((channel) => {
-        const value = volumeSource[channel];
-        if (typeof value === 'number' && Number.isFinite(value)) {
-          storedVolumes[channel] = clampAudioVolume(value);
-        }
-      });
-      return {
-        muted: parsed.muted === true,
-        volumes: storedVolumes,
-      };
+      raw = globalScope.localStorage.getItem(AUDIO_SETTINGS_STORAGE_KEY);
     } catch (error) {
       globalScope?.console?.debug?.('Failed to load audio settings from storage.', error);
       return null;
     }
+    if (!raw) {
+      return null;
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (error) {
+      quarantineLocalStorageKey(AUDIO_SETTINGS_STORAGE_KEY, {
+        context: 'audio settings',
+        reason: 'Resetting to defaults.',
+        error,
+      });
+      return null;
+    }
+    if (!parsed || typeof parsed !== 'object') {
+      quarantineLocalStorageKey(AUDIO_SETTINGS_STORAGE_KEY, {
+        context: 'audio settings',
+        reason: 'Resetting to defaults.',
+      });
+      return null;
+    }
+    const storedVolumes = {};
+    const volumeSource = parsed.volumes && typeof parsed.volumes === 'object' ? parsed.volumes : {};
+    AUDIO_SETTINGS_CHANNELS.forEach((channel) => {
+      const value = volumeSource[channel];
+      if (typeof value === 'number' && Number.isFinite(value)) {
+        storedVolumes[channel] = clampAudioVolume(value);
+      }
+    });
+    return {
+      muted: parsed.muted === true,
+      volumes: storedVolumes,
+    };
   }
 
   function computeChannelBaseVolume(channel, state = audioSettingsState) {
@@ -14873,17 +14916,36 @@
     if (!globalScope.localStorage) {
       return null;
     }
+    let raw;
     try {
-      const raw = globalScope.localStorage.getItem(identityStorageKey);
-      if (!raw) {
-        return null;
-      }
-      const payload = JSON.parse(raw);
-      return payload && typeof payload === 'object' ? payload : null;
+      raw = globalScope.localStorage.getItem(identityStorageKey);
     } catch (error) {
       console.warn('Failed to restore identity snapshot from localStorage', error);
       return null;
     }
+    if (!raw) {
+      return null;
+    }
+    let payload;
+    try {
+      payload = JSON.parse(raw);
+    } catch (error) {
+      quarantineLocalStorageKey(identityStorageKey, {
+        context: 'identity snapshot',
+        reason: 'Reloading will start a fresh session.',
+        error,
+      });
+      console.warn('Failed to restore identity snapshot from localStorage', error);
+      return null;
+    }
+    if (!payload || typeof payload !== 'object') {
+      quarantineLocalStorageKey(identityStorageKey, {
+        context: 'identity snapshot',
+        reason: 'Reloading will start a fresh session.',
+      });
+      return null;
+    }
+    return payload;
   }
 
   function persistIdentitySnapshot(identity) {
