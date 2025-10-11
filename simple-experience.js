@@ -356,6 +356,9 @@
   const POINTER_LOCK_MAX_RETRIES = 2;
   const POINTER_LOCK_RETRY_DELAY_MS = 200;
   const POINTER_LOCK_RETRY_HINT_MESSAGE = 'Browser blocked mouse capture — retrying…';
+  const PLAYER_ANIMATION_WATCHDOG_COOLDOWN_MS = 600;
+  const PLAYER_ANIMATION_WATCHDOG_MAX_RESTARTS = 3;
+  const PLAYER_ANIMATION_HEALTH_WEIGHT_EPSILON = 0.05;
   const POINTER_LOCK_CHANGE_EVENTS = ['pointerlockchange', 'mozpointerlockchange', 'webkitpointerlockchange'];
   const POINTER_LOCK_ERROR_EVENTS = ['pointerlockerror', 'mozpointerlockerror', 'webkitpointerlockerror'];
   const HUD_INTERACTION_TIMEOUT_MS = 4500;
@@ -429,6 +432,15 @@
     });
     return Object.freeze(map);
   })();
+
+  if (runtimeScope && (runtimeScope.InfiniteRailsControls === null || runtimeScope.InfiniteRailsControls === undefined)) {
+    runtimeScope.InfiniteRailsControls = {
+      get: () => cloneKeyBindingMap(DEFAULT_KEY_BINDINGS),
+      defaults: () => cloneKeyBindingMap(DEFAULT_KEY_BINDINGS),
+      set: () => {},
+      onChange: () => {},
+    };
+  }
 
   function normaliseLiveDiagnosticError(error) {
     if (!error) {
@@ -10502,18 +10514,33 @@
 
     initializeMobileControls() {
       if (!this.mobileControlsRoot) {
-        return;
+        return false;
       }
       const controls = this.mobileControlsRoot;
+      const previousActive = Boolean(this.mobileControlsActive);
       const controlsVerified = this.verifyMobileControlsDom();
       if (!controlsVerified) {
-        this.teardownMobileControls();
-        controls.dataset.active = 'false';
-        setElementHidden(controls, true);
-        this.mobileControlsActive = false;
-        this.updatePointerHintForInputMode();
+        if (previousActive) {
+          this.teardownMobileControls();
+        } else {
+          controls.dataset.active = 'false';
+          setElementHidden(controls, true);
+          this.mobileControlsActive = false;
+          this.updatePointerHintForInputMode();
+        }
         this.refreshFirstRunTutorialContent();
-        return;
+        if (previousActive && typeof this.runControlUiSyncCheck === 'function') {
+          this.runControlUiSyncCheck({
+            reason: 'touch-controls-deactivated',
+            mode: 'pointer',
+            source: 'mobile-controls',
+            mobileControlsChanged: true,
+            preferenceChanged: false,
+            touchPreferred: Boolean(this.isTouchPreferred),
+            mobileControlsActive: Boolean(this.mobileControlsActive),
+          });
+        }
+        return false;
       }
       const shouldActivate = Boolean(this.isTouchPreferred);
       if (shouldActivate === this.mobileControlsActive) {
@@ -10523,7 +10550,7 @@
           this.updatePointerHintForInputMode();
         }
         this.refreshFirstRunTutorialContent();
-        return;
+        return shouldActivate;
       }
       this.teardownMobileControls();
       setElementHidden(controls, !shouldActivate);
@@ -10531,7 +10558,18 @@
       if (!shouldActivate) {
         this.updatePointerHintForInputMode();
         this.refreshFirstRunTutorialContent();
-        return;
+        if (previousActive !== this.mobileControlsActive && typeof this.runControlUiSyncCheck === 'function') {
+          this.runControlUiSyncCheck({
+            reason: 'touch-controls-deactivated',
+            mode: 'pointer',
+            source: 'mobile-controls',
+            mobileControlsChanged: true,
+            preferenceChanged: false,
+            touchPreferred: Boolean(this.isTouchPreferred),
+            mobileControlsActive: Boolean(this.mobileControlsActive),
+          });
+        }
+        return false;
       }
       this.hidePointerHint(true);
       const blockDefault = (event) => event.preventDefault();
@@ -10621,6 +10659,18 @@
       }
       this.mobileControlsActive = true;
       this.refreshFirstRunTutorialContent();
+      if (typeof this.runControlUiSyncCheck === 'function') {
+        this.runControlUiSyncCheck({
+          reason: 'touch-controls-activated',
+          mode: 'touch',
+          source: 'mobile-controls',
+          mobileControlsChanged: previousActive !== this.mobileControlsActive,
+          preferenceChanged: false,
+          touchPreferred: Boolean(this.isTouchPreferred),
+          mobileControlsActive: Boolean(this.mobileControlsActive),
+        });
+      }
+      return true;
     }
 
     verifyMobileControlsDom() {
@@ -10707,6 +10757,8 @@
     }
 
     handlePointerPreferenceChange(event) {
+      const previousTouchPreferred = Boolean(this.isTouchPreferred);
+      const previousMobileControlsActive = Boolean(this.mobileControlsActive);
       const prefersTouch = Boolean(event?.matches) || this.detectTouchPreferred();
       if (prefersTouch !== this.isTouchPreferred) {
         this.isTouchPreferred = prefersTouch;
@@ -10715,6 +10767,47 @@
         this.initializeMobileControls();
       }
       this.refreshFirstRunTutorialContent();
+      if (typeof this.runControlUiSyncCheck === 'function') {
+        this.runControlUiSyncCheck({
+          reason: `pointer-preference-change:${prefersTouch ? 'touch' : 'pointer'}`,
+          mode: prefersTouch ? 'touch' : 'pointer',
+          source: 'pointer-preference',
+          preferenceChanged: prefersTouch !== previousTouchPreferred,
+          mobileControlsChanged: Boolean(this.mobileControlsActive) !== previousMobileControlsActive,
+          touchPreferred: prefersTouch,
+          mobileControlsActive: Boolean(this.mobileControlsActive),
+        });
+      }
+    }
+
+    handleInputModeChange(event) {
+      const detail = event?.detail || {};
+      const modeRaw = typeof detail.mode === 'string' ? detail.mode.trim() : '';
+      const mode = modeRaw || 'unknown';
+      const sourceRaw = typeof detail.source === 'string' ? detail.source.trim() : '';
+      const source = sourceRaw || 'input-mode';
+      const prefersTouch = mode === 'touch' || (mode === 'coarse');
+      const previousTouchPreferred = Boolean(this.isTouchPreferred);
+      const previousMobileControlsActive = Boolean(this.mobileControlsActive);
+      if (prefersTouch !== this.isTouchPreferred) {
+        this.isTouchPreferred = prefersTouch;
+      }
+      if (prefersTouch !== this.mobileControlsActive) {
+        this.initializeMobileControls();
+      }
+      this.refreshFirstRunTutorialContent();
+      if (typeof this.runControlUiSyncCheck === 'function') {
+        this.runControlUiSyncCheck({
+          reason: `input-mode-change:${mode || (prefersTouch ? 'touch' : 'pointer')}`,
+          mode: prefersTouch ? 'touch' : mode || 'pointer',
+          source,
+          preferenceChanged: prefersTouch !== previousTouchPreferred,
+          mobileControlsChanged: Boolean(this.mobileControlsActive) !== previousMobileControlsActive,
+          touchPreferred: prefersTouch,
+          mobileControlsActive: Boolean(this.mobileControlsActive),
+        });
+      }
+      return prefersTouch;
     }
 
     getPointerInputTargets() {
@@ -18680,9 +18773,10 @@
       let settingsSnapshot = null;
       const scope = typeof window !== 'undefined' ? window : typeof globalThis !== 'undefined' ? globalThis : null;
       const controlApi = scope?.InfiniteRailsControls || null;
-      if (controlApi && typeof controlApi.get === 'function') {
+      const resolveControlSnapshot = controlApi ? controlApi.get : null;
+      if (typeof resolveControlSnapshot === 'function') {
         try {
-          const raw = controlApi.get();
+          const raw = resolveControlSnapshot.call(controlApi);
           const normalised = normaliseKeyBindingMap(raw);
           if (normalised) {
             settingsSnapshot = cloneKeyBindingMap(normalised);
@@ -19386,6 +19480,15 @@
       const code = normalizeKeyboardEventCode(event);
       if (code) {
         this.keys.add(code);
+      }
+      if (code === 'Escape' && !event?.repeat) {
+        try {
+          this.attemptPointerLockRecovery?.('keyboard-escape');
+        } catch (error) {
+          if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+            console.debug('Pointer lock recovery attempt failed during Escape handling.', error);
+          }
+        }
       }
       if (this.isMovementKey(code) || this.isKeyForAction(code, 'jump')) {
         event.preventDefault();
@@ -20273,6 +20376,22 @@
       if (typeof document === 'undefined') {
         return true;
       }
+      const scope = typeof window !== 'undefined' ? window : globalThis;
+      const webgl2Ctor = scope?.WebGL2RenderingContext || globalThis?.WebGL2RenderingContext || null;
+      if (typeof webgl2Ctor !== 'function') {
+        const error = new Error('WebGL2RenderingContext is unavailable.');
+        error.name = 'WebGL2UnavailableError';
+        const message =
+          'WebGL2 support is required to explore the realms. Update your browser or enable hardware acceleration.';
+        this.emitGameEvent('initialisation-error', {
+          stage: 'webgl2-probe',
+          reason: 'webgl2-unavailable',
+          message,
+          errorName: error.name,
+        });
+        this.presentRendererFailure(message, { stage: 'webgl2-probe', reason: 'webgl2-unavailable', error });
+        return false;
+      }
       try {
         const probe = document.createElement('canvas');
         const attributeCandidates = [
@@ -20281,53 +20400,49 @@
           {},
         ];
         let context = null;
-        let attributesUsed = null;
         for (const attributes of attributeCandidates) {
-          context =
-            probe.getContext('webgl2', attributes) ||
-            probe.getContext('webgl', attributes) ||
-            probe.getContext('experimental-webgl', attributes);
+          context = probe.getContext('webgl2', attributes);
           if (context) {
-            attributesUsed = attributes;
             break;
           }
         }
         if (!context) {
-          this.emitGameEvent('initialisation-error', {
-            stage: 'webgl-probe',
-            message:
-              'WebGL is unavailable. Enable hardware acceleration or switch to a compatible browser to explore the realms.',
-          });
-          this.presentRendererFailure(
-            'WebGL is unavailable. Enable hardware acceleration or switch to a compatible browser to explore the realms.',
-          );
-          return false;
+          const error = new Error('Unable to create a WebGL2 context.');
+          error.name = 'WebGL2ContextUnavailable';
+          throw error;
         }
-        const loseContext = typeof context.getExtension === 'function' ? context.getExtension('WEBGL_lose_context') : null;
+        const loseContext =
+          typeof context.getExtension === 'function' ? context.getExtension('WEBGL_lose_context') : null;
         loseContext?.loseContext?.();
         if (typeof console !== 'undefined') {
-          const attributeSummary = attributesUsed
-            ? Object.entries(attributesUsed)
-                .map(([key, value]) => `${key}=${value}`)
-                .join(', ')
-            : 'default attributes';
-          console.info(`WebGL probe succeeded (${attributeSummary}).`);
+          console.info('WebGL2 probe succeeded.');
         }
         return true;
       } catch (error) {
-        const errorMessage =
-          typeof error?.message === 'string' && error.message.trim().length
-            ? error.message.trim()
-            : 'Unable to initialise WebGL.';
+        const capturedError = error instanceof Error ? error : new Error('WebGL2 context unavailable.');
+        if (typeof capturedError.name !== 'string' || !capturedError.name.trim()) {
+          capturedError.name = 'WebGL2ContextUnavailable';
+        }
+        const message =
+          'WebGL2 support is unavailable. Enable hardware acceleration or switch to a compatible browser to explore the realms.';
         this.emitGameEvent('initialisation-error', {
-          stage: 'webgl-probe',
-          message: 'Unable to initialise WebGL.',
-          errorMessage,
-          errorName: typeof error?.name === 'string' && error.name.trim().length ? error.name.trim() : undefined,
-          stack: typeof error?.stack === 'string' && error.stack.trim().length ? error.stack.trim() : undefined,
+          stage: 'webgl2-probe',
+          reason: 'webgl2-unavailable',
+          message,
+          errorName: capturedError.name,
+          errorMessage:
+            typeof capturedError.message === 'string' && capturedError.message.trim().length
+              ? capturedError.message.trim()
+              : undefined,
+          stack:
+            typeof capturedError.stack === 'string' && capturedError.stack.trim().length
+              ? capturedError.stack.trim()
+              : undefined,
         });
-        this.presentRendererFailure('Unable to initialise WebGL. See console output for troubleshooting steps.', {
-          error,
+        this.presentRendererFailure(message, {
+          stage: 'webgl2-probe',
+          reason: 'webgl2-unavailable',
+          error: capturedError,
         });
         return false;
       }
@@ -20575,10 +20690,107 @@
     updatePlayerAnimation(delta) {
       if (this.playerAnimationRig) {
         this.updateAnimationRig(this.playerAnimationRig, delta);
+        this.evaluatePlayerAnimationWatchdog(this.playerAnimationRig);
         return;
       }
       if (this.playerMixer) {
         this.playerMixer.update(delta);
+      }
+    }
+
+    isLocomotionActionHealthy(action) {
+      if (!action || action.enabled === false) {
+        return false;
+      }
+      try {
+        if (typeof action.isRunning === 'function' && action.isRunning()) {
+          return true;
+        }
+      } catch (error) {
+        // Ignore faulty isRunning implementations.
+      }
+      let effectiveWeight = null;
+      try {
+        if (typeof action.getEffectiveWeight === 'function') {
+          effectiveWeight = action.getEffectiveWeight();
+        }
+      } catch (error) {
+        effectiveWeight = null;
+      }
+      if (!Number.isFinite(effectiveWeight) && Number.isFinite(action?.weight)) {
+        effectiveWeight = action.weight;
+      }
+      if (Number.isFinite(effectiveWeight) && effectiveWeight > PLAYER_ANIMATION_HEALTH_WEIGHT_EPSILON) {
+        return true;
+      }
+      const elapsed = Number.isFinite(action?.time) ? action.time : null;
+      if (elapsed !== null && elapsed > 0.05) {
+        return true;
+      }
+      return false;
+    }
+
+    evaluatePlayerAnimationWatchdog(rig) {
+      if (!rig || !rig.actions) {
+        return;
+      }
+      const watchdog = this.playerAnimationWatchdog || {
+        restartAttempts: 0,
+        forcedPose: false,
+        cooldownUntil: 0,
+      };
+      this.playerAnimationWatchdog = watchdog;
+      const now =
+        typeof this.getHighResTimestamp === 'function'
+          ? this.getHighResTimestamp()
+          : typeof performance !== 'undefined' && typeof performance.now === 'function'
+          ? performance.now()
+          : Date.now();
+      if (Number.isFinite(watchdog.cooldownUntil) && now < watchdog.cooldownUntil) {
+        return;
+      }
+      const idleAction = rig.actions.idle || null;
+      const walkAction = rig.actions.walk || null;
+      const idleHealthy = this.isLocomotionActionHealthy(idleAction);
+      const walkHealthy = this.isLocomotionActionHealthy(walkAction);
+      if (idleHealthy || walkHealthy) {
+        watchdog.restartAttempts = 0;
+        watchdog.cooldownUntil = now + PLAYER_ANIMATION_WATCHDOG_COOLDOWN_MS;
+        if (watchdog.forcedPose) {
+          watchdog.forcedPose = false;
+        }
+        return;
+      }
+      const attempt = (Number.isInteger(watchdog.restartAttempts) ? watchdog.restartAttempts : 0) + 1;
+      watchdog.restartAttempts = attempt;
+      watchdog.cooldownUntil = now + PLAYER_ANIMATION_WATCHDOG_COOLDOWN_MS;
+      const primed = this.primePlayerLocomotionAnimations(rig);
+      if (typeof console !== 'undefined' && typeof console.warn === 'function') {
+        try {
+          console.warn('Animation mixer watchdog detected stalled locomotion clips — attempting restart.', {
+            attempt,
+            idleHealthy,
+            walkHealthy,
+          });
+        } catch (error) {
+          // Ignore console failures in restricted environments.
+        }
+      }
+      if (primed) {
+        watchdog.forcedPose = false;
+        return;
+      }
+      if (attempt >= PLAYER_ANIMATION_WATCHDOG_MAX_RESTARTS && !watchdog.forcedPose) {
+        if (typeof this.applyPlayerForcedPose === 'function') {
+          try {
+            this.applyPlayerForcedPose('animation-watchdog');
+          } catch (error) {
+            if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+              console.debug('Failed to apply forced pose after animation restart attempts.', error);
+            }
+          }
+        }
+        watchdog.forcedPose = true;
       }
     }
 
@@ -22694,17 +22906,29 @@
         button.dataset.hotbarSlot = String(index);
         const isActive = index === this.selectedHotbarIndex;
         button.dataset.active = isActive ? 'true' : 'false';
-        if (slot?.item) {
-          const def = getItemDefinition(slot.item);
-          button.textContent = `${def.icon} ${slot.quantity}`;
-          button.setAttribute('aria-label', formatInventoryLabel(slot.item, slot.quantity));
+        const itemId = typeof slot?.item === 'string' ? slot.item : null;
+        const rawQuantity = Number.isFinite(slot?.quantity) ? Math.max(0, Math.floor(slot.quantity)) : 0;
+        const hasItem = Boolean(itemId) && rawQuantity > 0;
+        if (slot) {
+          if (hasItem) {
+            slot.item = itemId;
+            slot.quantity = rawQuantity;
+          } else {
+            slot.item = null;
+            slot.quantity = 0;
+          }
+        }
+        if (hasItem) {
+          const def = getItemDefinition(itemId);
+          button.textContent = `${def.icon} ${rawQuantity}`;
+          button.setAttribute('aria-label', formatInventoryLabel(itemId, rawQuantity));
           button.setAttribute('draggable', 'true');
           const hints = [];
           if (def.description) {
             hints.push(def.description);
           }
           hints.push('Click to equip • Drag to reorder');
-          button.setAttribute('data-hint', `${hints.join(' — ')} (×${slot.quantity})`);
+          button.setAttribute('data-hint', `${hints.join(' — ')} (×${rawQuantity})`);
           button.addEventListener('dragstart', this.onHotbarDragStart);
         } else {
           button.textContent = '·';
@@ -22945,14 +23169,20 @@
     }
 
     clearHotbarDragIndicators() {
-      if (!this.hotbarEl) return;
-      this.hotbarEl
-        .querySelectorAll('.hotbar-slot.dragging, .hotbar-slot.drag-over')
-        .forEach((node) => node.classList.remove('dragging', 'drag-over'));
+      if (!this.hotbarEl || typeof this.hotbarEl.querySelectorAll !== 'function') {
+        return;
+      }
+      const nodes = this.hotbarEl.querySelectorAll('.hotbar-slot.dragging, .hotbar-slot.drag-over');
+      if (!nodes || typeof nodes.forEach !== 'function') {
+        return;
+      }
+      nodes.forEach((node) => node.classList.remove?.('dragging', 'drag-over'));
     }
 
     getHotbarSlotIndexFromElement(element) {
-      if (!(element instanceof HTMLElement)) return null;
+      if (!element || typeof element !== 'object') {
+        return null;
+      }
       const raw = element.dataset?.hotbarSlot ?? '-1';
       const index = Number.parseInt(raw, 10);
       if (!Number.isInteger(index) || index < 0 || index >= this.hotbar.length) {
@@ -23044,16 +23274,62 @@
     handleHotbarDragLeave(event) {
       if (!this.activeHotbarDrag) return;
       const { currentTarget, relatedTarget } = event;
-      if (relatedTarget instanceof HTMLElement && currentTarget.contains(relatedTarget)) {
-        return;
+      const HTMLElementCtor = typeof HTMLElement === 'undefined' ? null : HTMLElement;
+      if (relatedTarget && typeof currentTarget?.contains === 'function') {
+        if (HTMLElementCtor && relatedTarget instanceof HTMLElementCtor && currentTarget.contains(relatedTarget)) {
+          return;
+        }
+        if (!HTMLElementCtor) {
+          try {
+            if (currentTarget.contains(relatedTarget)) {
+              return;
+            }
+          } catch (error) {
+            // Ignore DOM API failures in non-browser environments.
+          }
+        }
       }
-      currentTarget.classList.remove('drag-over');
+      currentTarget?.classList?.remove('drag-over');
     }
 
     handleHotbarDrop(event) {
       if (!this.activeHotbarDrag) return;
+      const normaliseHotbarIndex = (value) => {
+        if (Number.isInteger(value)) {
+          return value;
+        }
+        if (typeof value === 'string' && value.trim().length) {
+          const parsed = Number.parseInt(value, 10);
+          if (Number.isInteger(parsed)) {
+            return parsed;
+          }
+        }
+        return null;
+      };
+      const inferVisibleHotbarIndex = () => {
+        if (!Array.isArray(this.hotbar)) {
+          return null;
+        }
+        const selected = Number.isInteger(this.selectedHotbarIndex) ? this.selectedHotbarIndex : null;
+        if (Number.isInteger(selected)) {
+          const slot = this.hotbar[selected];
+          const quantity = Number.isFinite(slot?.quantity) ? Math.max(0, slot.quantity) : 0;
+          if (typeof slot?.item === 'string' && quantity > 0) {
+            return selected;
+          }
+        }
+        for (let index = 0; index < this.hotbar.length; index += 1) {
+          const slot = this.hotbar[index];
+          const item = typeof slot?.item === 'string' ? slot.item : null;
+          const quantity = Number.isFinite(slot?.quantity) ? Math.max(0, slot.quantity) : 0;
+          if (item && quantity > 0) {
+            return index;
+          }
+        }
+        return null;
+      };
       event.preventDefault();
-      let fromIndex = this.activeHotbarDrag.from;
+      let fromIndex = normaliseHotbarIndex(this.activeHotbarDrag.from);
       const targetIndex = this.getHotbarSlotIndexFromElement(event.currentTarget);
       if (event.dataTransfer) {
         try {
@@ -23066,9 +23342,56 @@
           // Ignore unsupported drag data operations.
         }
       }
+      if (!Number.isInteger(fromIndex) && this.hotbarEl?.querySelector) {
+        try {
+          const draggingEl = this.hotbarEl.querySelector('.hotbar-slot.dragging');
+          const fallbackIndex = this.getHotbarSlotIndexFromElement(draggingEl);
+          if (Number.isInteger(fallbackIndex)) {
+            fromIndex = fallbackIndex;
+          }
+        } catch (error) {
+          // Ignore DOM traversal errors in non-browser environments.
+        }
+      }
+      if (!Number.isInteger(fromIndex) && this.hotbarEl?.querySelectorAll) {
+        try {
+          const candidates = this.hotbarEl.querySelectorAll('.hotbar-slot');
+          const list = Array.isArray(candidates)
+            ? candidates
+            : candidates && typeof candidates.length === 'number'
+              ? Array.from(candidates)
+              : [];
+          for (const candidate of list) {
+            const candidateIndex = this.getHotbarSlotIndexFromElement(candidate);
+            if (!Number.isInteger(candidateIndex)) {
+              continue;
+            }
+            const slot = this.hotbar?.[candidateIndex];
+            const quantity = Number.isFinite(slot?.quantity) ? Math.max(0, slot.quantity) : 0;
+            if (typeof slot?.item === 'string' && quantity > 0) {
+              fromIndex = candidateIndex;
+              break;
+            }
+          }
+        } catch (error) {
+          // Ignore DOM traversal failures in non-browser environments.
+        }
+      }
+      if (!Number.isInteger(fromIndex)) {
+        const inferred = inferVisibleHotbarIndex();
+        if (Number.isInteger(inferred)) {
+          fromIndex = inferred;
+        }
+      }
       this.clearHotbarDragIndicators();
       this.activeHotbarDrag = null;
-      if (fromIndex === null || targetIndex === null) {
+      if (!Number.isInteger(fromIndex)) {
+        const inferred = inferVisibleHotbarIndex();
+        if (Number.isInteger(inferred)) {
+          fromIndex = inferred;
+        }
+      }
+      if (!Number.isInteger(fromIndex) || targetIndex === null) {
         return;
       }
       this.swapHotbarSlots(fromIndex, targetIndex);
@@ -23187,14 +23510,28 @@
 
     getCombinedInventoryEntries() {
       const aggregate = new Map();
-      this.hotbar.forEach((slot) => {
-        if (!slot?.item || slot.quantity <= 0) return;
-        aggregate.set(slot.item, (aggregate.get(slot.item) ?? 0) + slot.quantity);
-      });
-      this.satchel.forEach((quantity, item) => {
-        if (!quantity) return;
-        aggregate.set(item, (aggregate.get(item) ?? 0) + quantity);
-      });
+      if (Array.isArray(this.hotbar)) {
+        this.hotbar.forEach((slot) => {
+          const item = typeof slot?.item === 'string' ? slot.item : null;
+          const quantity = Number.isFinite(slot?.quantity)
+            ? Math.max(0, Math.floor(slot.quantity))
+            : 0;
+          if (!item || quantity <= 0) {
+            return;
+          }
+          aggregate.set(item, (aggregate.get(item) ?? 0) + quantity);
+        });
+      }
+      if (this.satchel instanceof Map) {
+        this.satchel.forEach((quantity, item) => {
+          const safeItem = typeof item === 'string' ? item : null;
+          const safeQuantity = Number.isFinite(quantity) ? Math.max(0, Math.floor(quantity)) : 0;
+          if (!safeItem || safeQuantity <= 0) {
+            return;
+          }
+          aggregate.set(safeItem, (aggregate.get(safeItem) ?? 0) + safeQuantity);
+        });
+      }
       return Array.from(aggregate.entries()).map(([item, quantity]) => ({ item, quantity }));
     }
 
