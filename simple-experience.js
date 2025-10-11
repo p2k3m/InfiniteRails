@@ -364,7 +364,7 @@
   const PORTAL_BLOCK_REQUIREMENT = 10;
   const PORTAL_INTERACTION_RANGE = 4.5;
   const PORTAL_SHADER_FALLBACK_ANNOUNCEMENT =
-    'Portal shader offline — emissive fallback active.';
+    'Portal shader offline — plain flashing color active while shaders recover.';
   const ZOMBIE_CONTACT_RANGE = 1.35;
   const ZOMBIE_COLLISION_RADIUS = 0.62;
   const ZOMBIE_SPAWN_INTERVAL = 8;
@@ -2831,6 +2831,7 @@
       this.zombieGroup = null;
       this.portalMechanics = PORTAL_MECHANICS;
       this.playerRig = null;
+      this.playerChunkKey = null;
       this.playerPhysicsBody = null;
       this.playerPhysicsRadius = 0.6;
       this.playerPhysicsHeight = PLAYER_EYE_HEIGHT + 0.4;
@@ -3027,6 +3028,8 @@
       this.heightMap = Array.from({ length: WORLD_SIZE }, () => Array(WORLD_SIZE).fill(0));
       this.blockGeometry = new THREE.BoxGeometry(BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE);
       this.railGeometry = new THREE.BoxGeometry(BLOCK_SIZE * 0.9, BLOCK_SIZE * 0.15, BLOCK_SIZE * 1.2);
+      this.safeSpawnBoxGroup = null;
+      this.totalWorldFailureActive = false;
       this.textureCache = new Map();
       this.defaultVoxelTexturePalettes = new Map();
       this.textureLoader = null;
@@ -3287,6 +3290,8 @@
       this.portalAnchorGrid = this.computePortalAnchorGrid();
       this.portalFrameLayout = this.createPortalFrameLayout();
       this.portalFrameSlots = new Map();
+      this.portalGhostMeshes = new Map();
+      this.portalPreviewSummary = null;
       this.portalFrameRequiredCount = PORTAL_BLOCK_REQUIREMENT;
       this.portalFrameInteriorValid = false;
       this.portalFrameFootprintValid = false;
@@ -3398,6 +3403,8 @@
       this.virtualJoystickEl = this.ui.virtualJoystick || null;
       this.virtualJoystickThumb = this.ui.virtualJoystickThumb || null;
       this.mobileControlsActive = false;
+      this.lastControlUiSyncContext = null;
+      this.lastControlUiSyncSnapshots = null;
       this.touchButtonStates = { up: false, down: false, left: false, right: false };
       this.joystickVector = new THREE.Vector2();
       this.joystickPointerId = null;
@@ -9536,6 +9543,68 @@
       });
     }
 
+    async refreshTexturePack(options = {}) {
+      const source = typeof options.source === 'string' && options.source.trim().length
+        ? options.source.trim()
+        : 'manual';
+      const requestedKeys = Array.isArray(options.keys)
+        ? options.keys
+            .map((key) => (typeof key === 'string' ? key.trim() : ''))
+            .filter((key) => key.length > 0)
+        : [];
+      const targetKeys = new Set(requestedKeys);
+      if (targetKeys.size === 0 && this.textureFallbackMissingKeys instanceof Set) {
+        this.textureFallbackMissingKeys.forEach((key) => {
+          if (typeof key === 'string' && key.trim().length) {
+            targetKeys.add(key.trim());
+          }
+        });
+      }
+      if (this.textureUpgradeTargets instanceof Map) {
+        for (const key of this.textureUpgradeTargets.keys()) {
+          if (typeof key === 'string' && key.trim().length) {
+            targetKeys.add(key.trim());
+          }
+        }
+      }
+      const keys = Array.from(targetKeys);
+      const results = [];
+      const succeeded = [];
+      const failed = [];
+      if (keys.length === 0) {
+        return { source, keys, results, succeeded, failed, reason: 'no-keys' };
+      }
+      for (const key of keys) {
+        try {
+          const texture = await this.loadExternalVoxelTexture(key);
+          const material = this.textureUpgradeTargets?.get?.(key) || null;
+          if (texture && material) {
+            material.map = texture;
+            material.needsUpdate = true;
+          }
+          const missing = this.textureFallbackMissingKeys?.has?.(key) === true;
+          const success = Boolean(texture) && !missing;
+          if (success) {
+            succeeded.push(key);
+          } else {
+            failed.push(key);
+          }
+          results.push({ key, success, texture: texture ?? null });
+        } catch (error) {
+          failed.push(key);
+          results.push({ key, success: false, error });
+          this.noteTexturePackFallback('refresh-error', { key, error });
+        }
+      }
+      if (succeeded.length && typeof this.applyTextureAnisotropy === 'function') {
+        this.applyTextureAnisotropy();
+      }
+      if (typeof this.refreshTextureFallbackNotice === 'function') {
+        this.refreshTextureFallbackNotice();
+      }
+      return { source, keys, results, succeeded, failed };
+    }
+
     detectTouchPreferred() {
       if (typeof window === 'undefined') return false;
       if (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) {
@@ -13031,6 +13100,68 @@
       return primed;
     }
 
+    applyPlayerForcedPose(reason = 'forced-pose') {
+      this.playerAnimationWatchdog = this.playerAnimationWatchdog || {
+        restartAttempts: 0,
+        forcedPose: false,
+        cooldownUntil: 0,
+      };
+      this.playerAnimationWatchdog.forcedPose = true;
+      const avatar = this.playerAvatar || null;
+      if (!avatar) {
+        return false;
+      }
+      if (!avatar.userData || typeof avatar.userData !== 'object') {
+        avatar.userData = {};
+      }
+      avatar.userData.forcedPose = reason;
+      const resolveLimb = (name) => {
+        if (!avatar || typeof avatar.traverse !== 'function') {
+          return null;
+        }
+        let result = avatar.getObjectByName?.(name) || null;
+        if (result) {
+          return result;
+        }
+        avatar.traverse((child) => {
+          if (!result && child?.name === name) {
+            result = child;
+          }
+        });
+        return result;
+      };
+      const leftArm = resolveLimb('LeftArm');
+      const rightArm = resolveLimb('RightArm');
+      const armRotation = -Math.PI / 4;
+      if (leftArm && leftArm.rotation) {
+        leftArm.rotation.x = armRotation;
+        leftArm.rotation.y = 0;
+      }
+      if (rightArm && rightArm.rotation) {
+        rightArm.rotation.x = armRotation;
+        rightArm.rotation.y = 0;
+      }
+      if (typeof this.ensurePlayerArmsVisible === 'function') {
+        try {
+          this.ensurePlayerArmsVisible();
+        } catch (error) {
+          if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+            console.debug('Failed to ensure player arms visible for forced pose.', error);
+          }
+        }
+      }
+      if (!this.handGroup && typeof this.createFirstPersonHands === 'function') {
+        try {
+          this.createFirstPersonHands();
+        } catch (error) {
+          if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+            console.debug('Failed to create first person hands during forced pose.', error);
+          }
+        }
+      }
+      return true;
+    }
+
     setAnimationRigState(rig, state, options = {}) {
       if (!rig || !rig.actions) {
         return;
@@ -14760,6 +14891,93 @@
       return null;
     }
 
+    rebindEntityChunkAnchors(context = {}) {
+      const reason = typeof context.reason === 'string' && context.reason.trim().length
+        ? context.reason.trim()
+        : 'chunk-rebind';
+      const summary = {
+        reason,
+        player: { chunkKey: null, rebound: false },
+        chests: { total: 0, rebound: 0, missing: 0 },
+        zombies: { total: 0, rebound: 0, missing: 0, despawned: 0 },
+        golems: { total: 0, rebound: 0, missing: 0, despawned: 0 },
+        errors: [],
+      };
+      try {
+        const playerPosition = this.getPlayerWorldPosition(this.tmpVector3);
+        const chunkKey = this.getChunkKeyForWorldPosition(playerPosition.x, playerPosition.z);
+        this.playerChunkKey = chunkKey || null;
+        if (chunkKey) {
+          summary.player = { chunkKey, rebound: true };
+        } else {
+          summary.player = { chunkKey: null, rebound: false };
+          summary.errors.push({ scope: 'player', reason: 'chunk-missing' });
+        }
+      } catch (error) {
+        summary.errors.push({ scope: 'player', error });
+      }
+
+      const bindMeshToChunk = (mesh, chunkKey) => {
+        if (!mesh) {
+          return;
+        }
+        if (!mesh.userData || typeof mesh.userData !== 'object') {
+          mesh.userData = {};
+        }
+        mesh.userData.chunkKey = chunkKey || null;
+      };
+
+      if (Array.isArray(this.chests)) {
+        for (const chest of this.chests) {
+          summary.chests.total += 1;
+          if (!chest?.mesh) {
+            summary.chests.missing += 1;
+            continue;
+          }
+          const chunkKey = this.getChunkKeyForWorldPosition(chest.mesh.position.x, chest.mesh.position.z);
+          if (chunkKey) {
+            chest.chunkKey = chunkKey;
+            bindMeshToChunk(chest.mesh, chunkKey);
+            summary.chests.rebound += 1;
+          } else {
+            summary.chests.missing += 1;
+            bindMeshToChunk(chest.mesh, null);
+          }
+        }
+      }
+
+      const reconcileMobCollection = (actorType, collection, bucket) => {
+        if (!Array.isArray(collection)) {
+          return;
+        }
+        for (const mob of collection.slice()) {
+          if (!mob?.mesh) {
+            bucket.missing += 1;
+            continue;
+          }
+          bucket.total += 1;
+          const chunkKey = this.getChunkKeyForWorldPosition(mob.mesh.position.x, mob.mesh.position.z);
+          const result = this.handleNavmeshFailureForMob(actorType, mob, {
+            chunkKey,
+            reason,
+          });
+          if (result?.action === 'rehomed') {
+            bucket.rebound += 1;
+            bindMeshToChunk(mob.mesh, actorType === 'golem' ? mob.chunkKey : mob.navChunkKey);
+          } else if (result?.action === 'despawned') {
+            bucket.despawned += 1;
+          } else {
+            bindMeshToChunk(mob.mesh, chunkKey || null);
+          }
+        }
+      };
+
+      reconcileMobCollection('zombie', this.zombies, summary.zombies);
+      reconcileMobCollection('golem', this.golems, summary.golems);
+
+      return summary;
+    }
+
     detectChunkDebugFlag() {
       if (typeof window === 'undefined') {
         return false;
@@ -15115,6 +15333,104 @@
         });
       }
       return navmesh;
+    }
+
+    handleNavmeshFailureForMob(actorType, mob, context = {}) {
+      const reason = typeof context.reason === 'string' && context.reason.trim().length
+        ? context.reason.trim()
+        : 'navmesh-missing';
+      if (!mob || !mob.mesh) {
+        return { action: 'ignored', reason, error: 'invalid-mob' };
+      }
+      const mesh = mob.mesh;
+      const candidateChunks = [];
+      const stageOptions = { reason: `${reason}-rebind`, stage: 'chunk-rebind' };
+      const initialChunk =
+        (typeof context.chunkKey === 'string' && context.chunkKey.trim()) ||
+        (typeof mob.navChunkKey === 'string' && mob.navChunkKey.trim()) ||
+        (typeof mob.chunkKey === 'string' && mob.chunkKey.trim()) ||
+        this.getChunkKeyForWorldPosition(mesh.position.x, mesh.position.z);
+      if (initialChunk) {
+        candidateChunks.push(initialChunk);
+      }
+      if (typeof mob.chunkKey === 'string' && mob.chunkKey.trim() && !candidateChunks.includes(mob.chunkKey)) {
+        candidateChunks.push(mob.chunkKey.trim());
+      }
+      if (typeof mob.navChunkKey === 'string' && mob.navChunkKey.trim() && !candidateChunks.includes(mob.navChunkKey)) {
+        candidateChunks.push(mob.navChunkKey.trim());
+      }
+      const playerPosition = this.getPlayerWorldPosition ? this.getPlayerWorldPosition(this.tmpVector3) : null;
+      if (playerPosition) {
+        const playerChunk = this.getChunkKeyForWorldPosition(playerPosition.x, playerPosition.z);
+        if (playerChunk && !candidateChunks.includes(playerChunk)) {
+          candidateChunks.push(playerChunk);
+        }
+      }
+      let recoveredNavmesh = null;
+      let recoveredChunk = null;
+      for (const chunkKey of candidateChunks) {
+        const navmesh = this.ensureNavigationMeshForActorChunk(actorType, chunkKey, {
+          ...stageOptions,
+          [`${actorType}Id`]: mob.id ?? null,
+        });
+        if (navmesh?.walkableCellCount > 0 && Array.isArray(navmesh.cells) && navmesh.cells.length > 0) {
+          recoveredNavmesh = navmesh;
+          recoveredChunk = chunkKey;
+          break;
+        }
+      }
+      if (!recoveredNavmesh) {
+        const fallbackNavmesh = this.ensureNavigationMeshForWorldPosition(mesh.position.x, mesh.position.z, {
+          reason: `${reason}-world-fallback`,
+          stage: 'chunk-rebind',
+          [`${actorType}Id`]: mob.id ?? null,
+        });
+        if (fallbackNavmesh?.walkableCellCount > 0 && Array.isArray(fallbackNavmesh.cells) && fallbackNavmesh.cells.length > 0) {
+          recoveredNavmesh = fallbackNavmesh;
+          recoveredChunk = fallbackNavmesh.key || this.getChunkKeyForWorldPosition(mesh.position.x, mesh.position.z);
+        }
+      }
+      if (recoveredNavmesh) {
+        const cell = recoveredNavmesh.cells[0];
+        const offset = actorType === 'golem' ? 1.1 : actorType === 'zombie' ? 0.9 : 1;
+        if (Number.isFinite(cell.worldX) && Number.isFinite(cell.worldZ)) {
+          const surfaceY = Number.isFinite(cell.surfaceY)
+            ? cell.surfaceY
+            : this.sampleGroundHeight(cell.worldX, cell.worldZ);
+          mesh.position.set(cell.worldX, surfaceY + offset, cell.worldZ);
+        }
+        if (!mesh.userData || typeof mesh.userData !== 'object') {
+          mesh.userData = {};
+        }
+        mesh.userData.chunkKey = recoveredChunk;
+        if (actorType === 'golem') {
+          mob.chunkKey = recoveredChunk;
+        } else {
+          mob.navChunkKey = recoveredChunk;
+        }
+        return { action: 'rehomed', reason, navmesh: recoveredNavmesh };
+      }
+      const group = actorType === 'golem' ? this.golemGroup : actorType === 'zombie' ? this.zombieGroup : null;
+      const collection = actorType === 'golem' ? this.golems : actorType === 'zombie' ? this.zombies : null;
+      if (Array.isArray(collection)) {
+        const index = collection.indexOf(mob);
+        if (index >= 0) {
+          collection.splice(index, 1);
+        }
+      }
+      if (group?.remove && mob.mesh) {
+        try {
+          group.remove(mob.mesh);
+        } catch (error) {
+          if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+            console.debug('Failed to detach mob mesh during navmesh failure cleanup.', error);
+          }
+        }
+      }
+      if (mob.mesh) {
+        disposeObject3D(mob.mesh);
+      }
+      return { action: 'despawned', reason };
     }
 
     ensureNavigationMeshForWorldPosition(x, z, options = {}) {
@@ -16174,6 +16490,67 @@
       this.updatePortalProgress();
     }
 
+    buildPortalFramePreview() {
+      const THREE = this.THREE;
+      if (!THREE) {
+        return null;
+      }
+      if (!(this.portalFrameSlots instanceof Map) || this.portalFrameSlots.size === 0) {
+        this.resetPortalFrameState();
+      }
+      if (!(this.portalGhostMeshes instanceof Map)) {
+        this.portalGhostMeshes = new Map();
+      }
+      const container = this.portalGroup || this.worldRoot || this.scene;
+      if (!container || typeof container.add !== 'function') {
+        return null;
+      }
+      this.portalGhostMeshes.forEach((mesh) => {
+        if (mesh?.parent && typeof mesh.parent.remove === 'function') {
+          mesh.parent.remove(mesh);
+        }
+        disposeObject3D(mesh);
+      });
+      this.portalGhostMeshes.clear();
+      const baseGeometry = this.blockGeometry || new THREE.BoxGeometry(BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE);
+      let missingSlots = 0;
+      this.portalFrameSlots.forEach((slot, key) => {
+        if (!slot) {
+          return;
+        }
+        const material = new THREE.MeshBasicMaterial({
+          color: new THREE.Color('#60a5fa'),
+          transparent: true,
+          opacity: 0.38,
+        });
+        material.depthWrite = false;
+        const ghost = new THREE.Mesh(baseGeometry.clone(), material);
+        const worldX = (slot.gridX - WORLD_SIZE / 2) * BLOCK_SIZE;
+        const worldZ = (slot.gridZ - WORLD_SIZE / 2) * BLOCK_SIZE;
+        const baseHeight = Number.isFinite(slot.baseHeight) ? slot.baseHeight : 0;
+        const worldY = (baseHeight + slot.relY + 0.5) * BLOCK_SIZE;
+        ghost.position.set(worldX, worldY, worldZ);
+        ghost.visible = true;
+        ghost.renderOrder = 1;
+        ghost.userData = {
+          ...(ghost.userData || {}),
+          portalGhost: true,
+          slotKey: key,
+          filled: slot.filled === true,
+        };
+        container.add(ghost);
+        this.portalGhostMeshes.set(key, ghost);
+        if (slot.filled !== true) {
+          missingSlots += 1;
+        }
+      });
+      this.portalPreviewSummary = {
+        totalSlots: this.portalFrameSlots.size,
+        missingFrameSlots: missingSlots,
+      };
+      return this.portalPreviewSummary;
+    }
+
     updatePortalInteriorValidity() {
       const previous = this.portalFrameInteriorValid;
       this.portalFrameInteriorValid = this.checkPortalInterior();
@@ -16917,7 +17294,10 @@
       const usePlaceholder =
         this.portalShaderFallbackActive || !(this.materials.portal instanceof THREE.ShaderMaterial);
       const attachPlaceholderMesh = () => {
-        const placeholder = this.createPortalPlaceholderMesh(this.dimensionSettings || null);
+        const factory = this.portalShaderFallbackActive
+          ? this.createPortalFallbackFlashMesh
+          : this.createPortalPlaceholderMesh;
+        const placeholder = factory.call(this, this.dimensionSettings || null);
         if (placeholder) {
           placeholder.position.set(worldX, worldY, worldZ);
           placeholder.rotation.y = Math.PI;
@@ -16929,7 +17309,7 @@
             placeholder: true,
             placeholderKey: placeholder.userData?.placeholderKey || 'portal-core',
             placeholderReason: this.portalShaderFallbackActive ? 'shader-fallback' : 'model-missing',
-            placeholderSource: 'portal-placeholder',
+            placeholderSource: this.portalShaderFallbackActive ? 'portal-fallback' : 'portal-placeholder',
           };
           this.portalGroup.add(placeholder);
         }
@@ -17542,13 +17922,183 @@
         } else if (this.camera) {
           this.camera.position.set(top.position.x, spawnY, spawnZ);
         }
+        this.clearSafeSpawnBox({ reason: 'spawn-column-ready' });
+        this.totalWorldFailureActive = false;
       } else {
         if (this.playerRig) {
           this.playerRig.position.set(0, PLAYER_EYE_HEIGHT + 1, 0);
         } else if (this.camera) {
           this.camera.position.set(0, PLAYER_EYE_HEIGHT + 1, 0);
         }
+        const fallback = this.ensureSafeSpawnBox('spawn-column-missing');
+        const floorHeight = fallback?.userData?.floorHeight ?? 0;
+        const target = this.playerRig || this.camera || null;
+        if (target) {
+          target.position.y = floorHeight - this.playerPhysicsCenterOffset * 2;
+        }
+        this.totalWorldFailureActive = true;
       }
+    }
+
+    ensureSafeSpawnBox(reason = 'unknown') {
+      if (this.safeSpawnBoxGroup) {
+        if (this.safeSpawnBoxGroup.userData) {
+          this.safeSpawnBoxGroup.userData.reason = reason;
+        }
+        return this.safeSpawnBoxGroup;
+      }
+      const THREE = this.THREE;
+      const root = this.worldRoot || this.scene;
+      if (!THREE || !root || typeof root.add !== 'function') {
+        return null;
+      }
+      const group = new THREE.Group();
+      group.name = 'SafeSpawnBox';
+      const floorHeight = 0;
+      group.userData = {
+        reason,
+        floorHeight,
+        safeSpawn: true,
+      };
+      const material = new THREE.MeshBasicMaterial({
+        color: new THREE.Color('#60a5fa'),
+        transparent: true,
+        opacity: 0.55,
+      });
+      const halfWorld = WORLD_SIZE / 2;
+      const baseGeometry = this.blockGeometry || new THREE.BoxGeometry(BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE);
+      for (let gx = -2; gx <= 2; gx += 1) {
+        for (let gz = -2; gz <= 2; gz += 1) {
+          const mesh = new THREE.Mesh(baseGeometry.clone(), material.clone());
+          mesh.position.set(gx * BLOCK_SIZE, floorHeight - BLOCK_SIZE / 2, gz * BLOCK_SIZE);
+          mesh.castShadow = false;
+          mesh.receiveShadow = false;
+          mesh.userData = {
+            safeSpawn: true,
+            reason,
+            gx: Math.floor(halfWorld + gx),
+            gz: Math.floor(halfWorld + gz),
+          };
+          group.add(mesh);
+        }
+      }
+      root.add(group);
+      this.safeSpawnBoxGroup = group;
+      this.totalWorldFailureActive = true;
+      return group;
+    }
+
+    createPortalFallbackFlashMesh(theme) {
+      const THREE = this.THREE;
+      if (!THREE) {
+        return null;
+      }
+      const accent = theme?.palette?.rails || '#7f5af0';
+      const flashMaterial = new THREE.MeshBasicMaterial({
+        color: new THREE.Color(accent),
+        transparent: true,
+        opacity: 0.75,
+        side: THREE.DoubleSide,
+      });
+      const geometry = new THREE.PlaneGeometry(2.3, 3.1);
+      const mesh = new THREE.Mesh(geometry, flashMaterial);
+      mesh.renderOrder = 2;
+      mesh.userData = {
+        portalFallbackFlash: true,
+        placeholder: true,
+        placeholderKey: 'portal-fallback',
+        placeholderReason: 'shader-fallback',
+      };
+      return mesh;
+    }
+
+    clearSafeSpawnBox(options = {}) {
+      const group = this.safeSpawnBoxGroup;
+      if (!group) {
+        return false;
+      }
+      if (group.parent && typeof group.parent.remove === 'function') {
+        group.parent.remove(group);
+      }
+      if (group.children?.length) {
+        group.children.slice().forEach((child) => {
+          try {
+            disposeObject3D(child);
+          } catch (error) {
+            if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+              console.debug('Failed to dispose safe spawn box child.', error);
+            }
+          }
+        });
+      }
+      try {
+        disposeObject3D(group);
+      } catch (error) {
+        if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+          console.debug('Failed to dispose safe spawn box group.', error);
+        }
+      }
+      this.safeSpawnBoxGroup = null;
+      if (!options?.preserveFailureFlag) {
+        this.totalWorldFailureActive = false;
+      }
+      return true;
+    }
+
+    spawnSafetyBlockAtPlayerFeetIfNeeded(x, z) {
+      if (!Number.isFinite(x) || !Number.isFinite(z)) {
+        return false;
+      }
+      const THREE = this.THREE;
+      if (!THREE || !this.terrainGroup || !this.columns) {
+        return false;
+      }
+      const halfWorld = WORLD_SIZE / 2;
+      const gridX = Math.floor(x / BLOCK_SIZE + halfWorld);
+      const gridZ = Math.floor(z / BLOCK_SIZE + halfWorld);
+      if (gridX < 0 || gridX >= WORLD_SIZE || gridZ < 0 || gridZ >= WORLD_SIZE) {
+        return false;
+      }
+      const columnKey = `${gridX}|${gridZ}`;
+      const existingColumn = this.columns.get(columnKey) || [];
+      if (existingColumn.length > 0) {
+        return false;
+      }
+      const chunkKey = this.getTerrainChunkKey(gridX, gridZ);
+      const chunk = this.ensureTerrainChunk(chunkKey);
+      if (!chunk) {
+        return false;
+      }
+      const material = this.materials?.stone?.clone
+        ? this.materials.stone.clone()
+        : new THREE.MeshBasicMaterial({ color: new THREE.Color('#64748b') });
+      const block = new THREE.Mesh(this.blockGeometry.clone(), material);
+      const worldX = (gridX - halfWorld) * BLOCK_SIZE;
+      const worldZ = (gridZ - halfWorld) * BLOCK_SIZE;
+      const level = existingColumn.length;
+      block.position.set(worldX, (level + 0.5) * BLOCK_SIZE, worldZ);
+      block.castShadow = true;
+      block.receiveShadow = true;
+      block.userData = {
+        columnKey,
+        level,
+        gx: gridX,
+        gz: gridZ,
+        blockType: 'stone',
+        chunkKey,
+        safetyBlock: true,
+      };
+      chunk.add(block);
+      existingColumn.push(block);
+      this.columns.set(columnKey, existingColumn);
+      if (Array.isArray(this.heightMap?.[gridX])) {
+        this.heightMap[gridX][gridZ] = existingColumn.length;
+      }
+      this.markTerrainChunkDirty(chunkKey);
+      if (typeof this.scheduleNavigationMeshMaintenance === 'function') {
+        this.scheduleNavigationMeshMaintenance('safety-block');
+      }
+      return true;
     }
 
     ensureMovementBindingsConfigured() {
@@ -17728,6 +18278,106 @@
 
     getKeyBindings() {
       return cloneKeyBindingMap(this.keyBindings);
+    }
+
+    runControlUiSyncCheck(context = {}) {
+      const reason = typeof context.reason === 'string' && context.reason.trim().length
+        ? context.reason.trim()
+        : 'control-ui-sync';
+      const controlsSnapshot = this.getKeyBindings();
+      const hudSnapshot = cloneKeyBindingMap(this.controlMapBase || this.defaultKeyBindings);
+      let settingsSnapshot = null;
+      const scope = typeof window !== 'undefined' ? window : typeof globalThis !== 'undefined' ? globalThis : null;
+      const controlApi = scope?.InfiniteRailsControls || null;
+      if (controlApi && typeof controlApi.get === 'function') {
+        try {
+          const raw = controlApi.get();
+          const normalised = normaliseKeyBindingMap(raw);
+          if (normalised) {
+            settingsSnapshot = cloneKeyBindingMap(normalised);
+          }
+        } catch (error) {
+          if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+            console.debug('Failed to capture settings control bindings for sync check.', error);
+          }
+        }
+      }
+      if (!settingsSnapshot) {
+        settingsSnapshot = cloneKeyBindingMap(hudSnapshot);
+      }
+      const normaliseKeys = (map, action) => {
+        const values = Array.isArray(map?.[action]) ? map[action] : [];
+        return values
+          .map((value) => (typeof value === 'string' ? value.trim() : ''))
+          .filter((value) => value.length > 0)
+          .sort((a, b) => a.localeCompare(b));
+      };
+      const arraysEqual = (a, b) => {
+        if (a.length !== b.length) {
+          return false;
+        }
+        for (let index = 0; index < a.length; index += 1) {
+          if (a[index] !== b[index]) {
+            return false;
+          }
+        }
+        return true;
+      };
+      const actions = new Set([
+        ...Object.keys(controlsSnapshot),
+        ...Object.keys(hudSnapshot),
+        ...Object.keys(settingsSnapshot),
+      ]);
+      const mismatches = [];
+      actions.forEach((action) => {
+        const controlKeys = normaliseKeys(controlsSnapshot, action);
+        const hudKeys = normaliseKeys(hudSnapshot, action);
+        const settingsKeys = normaliseKeys(settingsSnapshot, action);
+        if (!arraysEqual(controlKeys, hudKeys)) {
+          mismatches.push({ action, source: 'controls', target: 'hud', sourceKeys: controlKeys, targetKeys: hudKeys });
+        }
+        if (!arraysEqual(controlKeys, settingsKeys)) {
+          mismatches.push({ action, source: 'controls', target: 'settings', sourceKeys: controlKeys, targetKeys: settingsKeys });
+        }
+        if (!arraysEqual(hudKeys, settingsKeys)) {
+          mismatches.push({ action, source: 'hud', target: 'settings', sourceKeys: hudKeys, targetKeys: settingsKeys });
+        }
+      });
+      const freezeBindingMap = (map) => {
+        const clone = cloneKeyBindingMap(map);
+        Object.keys(clone).forEach((key) => {
+          if (Array.isArray(clone[key])) {
+            clone[key] = Object.freeze([...clone[key]]);
+          }
+        });
+        return Object.freeze(clone);
+      };
+      const metaContext = {
+        ...context,
+        reason,
+        touchPreferred: Boolean(this.isTouchPreferred),
+        mobileControlsActive: Boolean(this.mobileControlsActive),
+      };
+      this.lastControlUiSyncContext = Object.freeze({ ...metaContext });
+      this.lastControlUiSyncSnapshots = Object.freeze({
+        controls: freezeBindingMap(controlsSnapshot),
+        hud: freezeBindingMap(hudSnapshot),
+        settings: freezeBindingMap(settingsSnapshot),
+      });
+      const inSync = mismatches.length === 0;
+      if (!inSync) {
+        const { reason: reasonMeta, ...contextDetail } = metaContext;
+        this.recordMajorIssue('Input bindings desynchronised — HUD or settings showing stale controls.', {
+          scope: 'input-binding-sync',
+          code: 'control-ui-sync',
+          reason: reasonMeta,
+          context: contextDetail,
+          mismatches,
+        });
+      } else {
+        this.clearMajorIssues('input-binding-sync');
+      }
+      return inSync;
     }
 
     getDefaultKeyBindings() {
@@ -18098,6 +18748,36 @@
         }
         this.attemptPointerLock();
       }, timeout);
+    }
+
+    attemptPointerLockRecovery(reason = 'unknown') {
+      if (!this.canvas || typeof this.attemptPointerLock !== 'function') {
+        return false;
+      }
+      const currentElement = this.getPointerLockElement ? this.getPointerLockElement() : null;
+      if (currentElement === this.canvas || this.pointerLocked === true) {
+        return true;
+      }
+      if (this.pointerLockFallbackActive) {
+        if (typeof this.enablePointerLockFallback === 'function') {
+          this.enablePointerLockFallback('recovery-blocked', null, {
+            message: this.getPointerLockFallbackMessage?.(),
+          });
+        }
+        return false;
+      }
+      try {
+        this.attemptPointerLock();
+        this.schedulePointerLockRetry(POINTER_LOCK_RETRY_DELAY_MS);
+        this.emitGameEvent('pointer-lock-recovery', { reason, success: true });
+        return true;
+      } catch (error) {
+        if (typeof this.enablePointerLockFallback === 'function') {
+          this.enablePointerLockFallback('recovery-error', error);
+        }
+        this.emitGameEvent('pointer-lock-recovery', { reason, success: false, error });
+        return false;
+      }
     }
 
     handlePointerLockChange() {
@@ -19420,6 +20100,9 @@
       position.add(this.velocity);
 
       const groundHeight = this.sampleGroundHeight(position.x, position.z);
+      if (!this.isGrounded && this.verticalVelocity < -0.25) {
+        this.spawnSafetyBlockAtPlayerFeetIfNeeded(position.x, position.z);
+      }
       if ((this.isActionActive('jump') || this.touchJumpRequested) && this.isGrounded) {
         const jumpBoost = 4.6 + (1.5 - Math.min(1.5, this.gravityScale));
         this.verticalVelocity = jumpBoost;
@@ -24898,6 +25581,9 @@
         displayProgress,
         blocked: Boolean(obstructionState.blocked),
         obstructionSummary: obstructionState.summary || '',
+        previewSummary: this.portalPreviewSummary
+          ? { ...this.portalPreviewSummary }
+          : null,
         nextDimension: nextName,
         nextRules: nextRulesSummary,
       };
