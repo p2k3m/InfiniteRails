@@ -5,6 +5,8 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
 
+const PLAYER_EYE_HEIGHT = 1.8;
+
 const DefaultWebGL2RenderingContextStub = function WebGL2RenderingContextStub() {};
 
 if (typeof globalThis.WebGL2RenderingContext !== 'function') {
@@ -1381,6 +1383,80 @@ describe('simple experience entity lifecycle', () => {
 
     navmeshSpy.mockRestore();
     playerPositionSpy.mockRestore();
+  });
+
+  it('respawns actors at a supplied spawn target when the world reloads', () => {
+    const { experience } = createExperienceForTest();
+    experience.setupScene();
+    const worldSize = experience.heightMap.length;
+    const half = worldSize / 2;
+    experience.columns = new Map();
+
+    const centerKey = `${Math.floor(half)}|${Math.floor(half)}`;
+    const centerTop = new THREE.Object3D();
+    centerTop.position.set(0, 2, 0);
+    experience.columns.set(centerKey, [centerTop]);
+
+    const offsetGridX = Math.min(worldSize - 1, Math.floor(half + 2));
+    const offsetGridZ = Math.max(0, Math.floor(half - 3));
+    const offsetKey = `${offsetGridX}|${offsetGridZ}`;
+    const offsetTop = new THREE.Object3D();
+    offsetTop.position.set(offsetGridX - half, 3.4, offsetGridZ - half);
+    experience.columns.set(offsetKey, [offsetTop]);
+
+    vi.spyOn(experience, 'spawnDimensionChests').mockImplementation(() => {
+      experience.chests = [];
+    });
+    vi.spyOn(experience, 'populateInitialMobs').mockImplementation(() => {});
+    vi.spyOn(experience, 'rebindEntityChunkAnchors').mockImplementation(() => ({
+      reason: 'world-reload',
+      player: { chunkKey: offsetKey, rebound: true },
+    }));
+    vi.spyOn(experience, 'ensureNavigationMeshForWorldPosition').mockImplementation(() => ({}));
+
+    experience.populateSceneAfterTerrain({
+      reason: 'world-reload',
+      buildReason: 'world-reload',
+      spawn: { player: { gridX: offsetGridX, gridZ: offsetGridZ } },
+      mobs: {},
+    });
+
+    expect(experience.playerRig.position.x).toBeCloseTo(offsetTop.position.x);
+    expect(experience.playerRig.position.y).toBeCloseTo(offsetTop.position.y + PLAYER_EYE_HEIGHT);
+    expect(experience.playerRig.position.z).toBeCloseTo(offsetTop.position.z);
+    expect(experience.spawnDimensionChests).toHaveBeenCalledTimes(1);
+    expect(experience.populateInitialMobs).toHaveBeenCalledTimes(1);
+    expect(experience.rebindEntityChunkAnchors).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: 'world-reload' }),
+    );
+    expect(experience.safeSpawnBoxGroup).toBeNull();
+  });
+
+  it('reloadWorld rebuilds terrain and respawns actors', () => {
+    const { experience } = createExperienceForTest();
+    experience.setupScene();
+    const buildTerrainSpy = vi.spyOn(experience, 'buildTerrain');
+    const populateSpy = vi.spyOn(experience, 'populateSceneAfterTerrain');
+    const buildRailsSpy = vi.spyOn(experience, 'buildRails');
+    const refreshPortalSpy = vi.spyOn(experience, 'refreshPortalState');
+    vi.spyOn(experience, 'spawnDimensionChests').mockImplementation(() => {});
+    vi.spyOn(experience, 'populateInitialMobs').mockImplementation(() => {});
+    vi.spyOn(experience, 'rebindEntityChunkAnchors').mockImplementation(() => ({ reason: 'world-reload' }));
+
+    experience.reloadWorld({
+      reason: 'world-reload',
+      spawn: { player: { x: 1.5, z: -2.25 } },
+      mobs: { spawnInitialGolems: false },
+    });
+
+    expect(buildTerrainSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: 'world-reload', navmeshReason: 'world-reload' }),
+    );
+    expect(populateSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: 'world-reload', spawn: { player: { x: 1.5, z: -2.25 } } }),
+    );
+    expect(buildRailsSpy).toHaveBeenCalledTimes(1);
+    expect(refreshPortalSpy).toHaveBeenCalledTimes(1);
   });
 
   it('highlights misaligned portal frames and prompts the player', async () => {
