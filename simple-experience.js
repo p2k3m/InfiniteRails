@@ -86,11 +86,23 @@
     return null;
   }
 
+  const scope =
+        typeof globalThis !== 'undefined'
+          ? globalThis
+          : typeof window !== 'undefined'
+            ? window
+            : typeof global !== 'undefined'
+              ? global
+              : null;
+
   const runtimeScope =
-    (typeof window !== 'undefined' && window) ||
-    (typeof globalThis !== 'undefined' && globalThis) ||
-    (typeof global !== 'undefined' && global) ||
-    null;
+    scope && scope.window && typeof scope.window === 'object'
+      ? scope.window
+      : scope;
+
+  const CONTROL_MAP_GLOBAL_KEY = '__INFINITE_RAILS_CONTROL_MAP__';
+  const AUDIO_FALLBACK_SUFFIX = 'Fallback beep active until audio assets are restored.';
+  const activeSimpleExperiences = new Set();
 
   const DEFAULT_ASSET_VERSION_TAG = '1';
 
@@ -398,8 +410,8 @@
       toggleCameraPerspective: ['KeyV'],
       toggleCrafting: ['KeyE'],
       toggleInventory: ['KeyI'],
-      openGuide: ['F1'],
-      toggleTutorial: ['Slash', 'F4'],
+      openGuide: [],
+      toggleTutorial: ['F1', 'Slash'],
       toggleDeveloperOverlay: ['Backquote', 'F8'],
       openSettings: ['F2'],
       openLeaderboard: ['F3'],
@@ -451,6 +463,79 @@
       }
     } catch (error) {
       // Ignore live diagnostics forwarding errors to keep gameplay responsive.
+    }
+  }
+
+  function ensureAudioFallbackMessage(text) {
+    const trimmed = typeof text === 'string' ? text.trim() : '';
+    if (!trimmed) {
+      return AUDIO_FALLBACK_SUFFIX;
+    }
+    let message = trimmed.replace(
+      /Fallback alert tone active until audio assets are restored\.?$/i,
+      AUDIO_FALLBACK_SUFFIX,
+    );
+    const suffixPattern = new RegExp(
+      AUDIO_FALLBACK_SUFFIX.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'),
+      'i',
+    );
+    if (suffixPattern.test(message)) {
+      return message.endsWith('.') || message.endsWith('!') || message.endsWith('?')
+        ? message
+        : `${message}.`;
+    }
+    const separator = message.endsWith('.') || message.endsWith('!') || message.endsWith('?') ? ' ' : '. ';
+    return `${message}${separator}${AUDIO_FALLBACK_SUFFIX}`;
+  }
+
+  function displayAudioFallbackOverlay(message, detail = {}) {
+    const overlay =
+      runtimeScope?.bootstrapOverlay ||
+      runtimeScope?.InfiniteRails?.bootstrapOverlay ||
+      runtimeScope?.__INFINITE_RAILS_BOOTSTRAP_OVERLAY__ ||
+      null;
+    if (!overlay) {
+      return;
+    }
+    const normalisedMessage = ensureAudioFallbackMessage(message);
+    const missingSample = detail.missingSample === true;
+    const title = missingSample ? 'Missing audio sample' : 'Audio playback failed';
+    try {
+      if (typeof overlay.showError === 'function') {
+        overlay.showError({ title, message: normalisedMessage });
+      }
+    } catch (error) {
+      if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+        console.debug('Unable to display audio fallback overlay.', error);
+      }
+    }
+    try {
+      if (typeof overlay.setDiagnostic === 'function') {
+        overlay.setDiagnostic('audio', { status: 'error', message: normalisedMessage });
+      }
+    } catch (error) {
+      if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+        console.debug('Unable to record audio fallback diagnostic.', error);
+      }
+    }
+    const logDetail =
+      detail.detail && typeof detail.detail === 'object'
+        ? detail.detail
+        : {
+            code: detail.code || (missingSample ? 'missing-sample' : 'welcome-playback-error'),
+            requestedName: detail.requestedName ?? 'welcome',
+            resolvedName: detail.resolvedName ?? null,
+            missingSample,
+            fallbackActive: detail.fallbackActive === true,
+          };
+    try {
+      if (typeof overlay.logEvent === 'function') {
+        overlay.logEvent('audio', normalisedMessage, { level: 'error', detail: logDetail });
+      }
+    } catch (error) {
+      if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+        console.debug('Unable to record audio fallback overlay event.', error);
+      }
     }
   }
 
@@ -1097,6 +1182,56 @@
       });
     });
     return merged;
+  }
+
+  function updateAmbientControlMap(map) {
+    if (!runtimeScope) {
+      return;
+    }
+    const snapshot = cloneKeyBindingMap(map || {});
+    try {
+      runtimeScope[CONTROL_MAP_GLOBAL_KEY] = snapshot;
+    } catch (error) {
+      // Ignore assignment failures in restricted environments.
+    }
+    const appConfig =
+      runtimeScope.APP_CONFIG && typeof runtimeScope.APP_CONFIG === 'object'
+        ? runtimeScope.APP_CONFIG
+        : null;
+    if (appConfig) {
+      appConfig.controlMap = snapshot;
+    }
+  }
+
+  function applyControlMapToExperience(instance, map) {
+    if (!instance || typeof instance !== 'object') {
+      return;
+    }
+    const baseMap = map ? cloneKeyBindingMap(map) : cloneKeyBindingMap(DEFAULT_KEY_BINDINGS);
+    instance.controlMapBase = baseMap;
+    instance.baseKeyBindings = mergeKeyBindingMaps(
+      instance.defaultKeyBindings || cloneKeyBindingMap(DEFAULT_KEY_BINDINGS),
+      baseMap,
+      instance.configKeyBindingOverrides,
+      instance.optionKeyBindingOverrides,
+    );
+    if (typeof instance.buildKeyBindings === 'function') {
+      instance.keyBindings = instance.buildKeyBindings({ includeStored: true });
+    } else {
+      instance.keyBindings = cloneKeyBindingMap(instance.baseKeyBindings);
+    }
+    if (typeof instance.ensureMovementBindingsConfigured === 'function') {
+      instance.ensureMovementBindingsConfigured();
+    }
+    if (typeof instance.refreshFirstRunTutorialContent === 'function') {
+      try {
+        instance.refreshFirstRunTutorialContent();
+      } catch (error) {
+        if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+          console.debug('Failed to refresh tutorial content after control map update.', error);
+        }
+      }
+    }
   }
 
   function normalizeKeyboardEventCode(event) {
@@ -2480,19 +2615,161 @@
       .replace(/'/g, '&#39;');
   }
 
+  const simpleExperienceControlMap = (() => {
+    const localListeners = new Set();
+    const upstream =
+      scope?.InfiniteRailsControls && typeof scope.InfiniteRailsControls === 'object'
+        ? scope.InfiniteRailsControls
+        : null;
+
+    const getDefaultsSnapshot = () => {
+      if (upstream && typeof upstream.defaults === 'function') {
+        const defaults = upstream.defaults();
+        if (defaults) {
+          return cloneKeyBindingMap(defaults);
+        }
+      }
+      return cloneKeyBindingMap(DEFAULT_KEY_BINDINGS);
+    };
+
+    let currentMapSource = null;
+    if (upstream && typeof upstream.get === 'function') {
+      currentMapSource = upstream.get();
+    }
+    if (!currentMapSource && scope && scope[CONTROL_MAP_GLOBAL_KEY]) {
+      currentMapSource = scope[CONTROL_MAP_GLOBAL_KEY];
+    }
+    if (!currentMapSource && scope?.APP_CONFIG && typeof scope.APP_CONFIG === 'object') {
+      currentMapSource = scope.APP_CONFIG.controlMap || null;
+    }
+    let currentMap = cloneKeyBindingMap(currentMapSource || DEFAULT_KEY_BINDINGS);
+
+    const notify = (map) => {
+      const snapshot = cloneKeyBindingMap(map || DEFAULT_KEY_BINDINGS);
+      currentMap = snapshot;
+      updateAmbientControlMap(snapshot);
+      activeSimpleExperiences.forEach((instance) => applyControlMapToExperience(instance, snapshot));
+      localListeners.forEach((listener) => {
+        if (typeof listener !== 'function') {
+          return;
+        }
+        try {
+          listener(cloneKeyBindingMap(snapshot));
+        } catch (error) {
+          if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+            console.debug('Control map listener failed.', error);
+          }
+        }
+      });
+    };
+
+    notify(currentMap);
+
+    if (upstream && typeof upstream.subscribe === 'function') {
+      upstream.subscribe((map) => {
+        if (map) {
+          notify(map);
+        }
+      });
+    }
+
+    return {
+      get() {
+        return cloneKeyBindingMap(currentMap);
+      },
+      defaults() {
+        return getDefaultsSnapshot();
+      },
+      apply(update, options = {}) {
+        if (upstream && typeof upstream.apply === 'function') {
+          const result = upstream.apply(update, options);
+          if (result) {
+            notify(result);
+            return cloneKeyBindingMap(result);
+          }
+          return null;
+        }
+        if (!update || typeof update !== 'object') {
+          return null;
+        }
+        const entries = {};
+        let hasEntries = false;
+        Object.entries(update).forEach(([action, value]) => {
+          if (typeof action !== 'string' || !action.trim()) {
+            return;
+          }
+          const trimmedAction = action.trim();
+          if (typeof value === 'string' || Array.isArray(value)) {
+            const keys = normaliseKeyBindingValue(value);
+            if (Array.isArray(value) && !keys.length) {
+              entries[trimmedAction] = [];
+              hasEntries = true;
+              return;
+            }
+            if (keys.length) {
+              entries[trimmedAction] = keys;
+              hasEntries = true;
+            }
+          }
+        });
+        if (!hasEntries) {
+          return null;
+        }
+        const merged = cloneKeyBindingMap(currentMap);
+        Object.entries(entries).forEach(([action, keys]) => {
+          merged[action] = [...keys];
+        });
+        notify(merged);
+        return cloneKeyBindingMap(merged);
+      },
+      reset(options = {}) {
+        if (upstream && typeof upstream.reset === 'function') {
+          const result = upstream.reset(options);
+          if (result) {
+            notify(result);
+            return cloneKeyBindingMap(result);
+          }
+          return null;
+        }
+        const defaults = getDefaultsSnapshot();
+        notify(defaults);
+        return cloneKeyBindingMap(defaults);
+      },
+      subscribe(listener) {
+        if (typeof listener !== 'function') {
+          return () => {};
+        }
+        localListeners.add(listener);
+        try {
+          listener(cloneKeyBindingMap(currentMap));
+        } catch (error) {
+          if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+            console.debug('Control map listener failed during subscription.', error);
+          }
+        }
+        return () => {
+          localListeners.delete(listener);
+        };
+      },
+    };
+  })();
+
   class SimpleExperience {
     constructor(options) {
       if (!options || !options.canvas) {
         throw new Error('SimpleExperience requires a target canvas element.');
       }
-      const THREE = window.THREE_GLOBAL || window.THREE;
-      if (!THREE) {
+      const appConfig =
+        scope?.APP_CONFIG && typeof scope.APP_CONFIG === 'object' ? scope.APP_CONFIG : null;
+      const THREE = scope?.THREE_GLOBAL || null;
+      const resolvedThree = THREE || scope?.THREE || null;
+      if (!resolvedThree) {
         throw new Error('Three.js is required for the simplified experience.');
       }
-      this.THREE = THREE;
-      if (THREE?.Cache && THREE.Cache.enabled !== true) {
-        THREE.Cache.enabled = true;
-        THREE.Cache.autoClear = false;
+      this.THREE = resolvedThree;
+      if (resolvedThree?.Cache && resolvedThree.Cache.enabled !== true) {
+        resolvedThree.Cache.enabled = true;
+        resolvedThree.Cache.autoClear = false;
       }
       this.canvas = options.canvas;
       this.ui = options.ui || {};
@@ -2762,10 +3039,6 @@
       this.textureRetrySchedules = new Map();
       this.textureUpgradeTargets = new Map();
       this.texturePackUnavailable = false;
-      const appConfig =
-        typeof window !== 'undefined' && window.APP_CONFIG && typeof window.APP_CONFIG === 'object'
-          ? window.APP_CONFIG
-          : null;
       const optionRetryMs = resolveTextureRetryIntervalMs(options || {});
       const configRetryMs = resolveTextureRetryIntervalMs(appConfig || {});
       this.texturePackRetryIntervalMs = optionRetryMs ?? configRetryMs ?? 60000;
@@ -2901,10 +3174,12 @@
       this.bindAssetRecoveryControls();
       this.materials = this.createMaterials();
       this.defaultKeyBindings = cloneKeyBindingMap(DEFAULT_KEY_BINDINGS);
-      this.configKeyBindingOverrides = normaliseKeyBindingMap(window.APP_CONFIG?.keyBindings) || null;
+      this.configKeyBindingOverrides = normaliseKeyBindingMap(appConfig?.keyBindings) || null;
       this.optionKeyBindingOverrides = normaliseKeyBindingMap(options.keyBindings) || null;
+      this.controlMapBase = cloneKeyBindingMap(simpleExperienceControlMap.get());
       this.baseKeyBindings = mergeKeyBindingMaps(
         this.defaultKeyBindings,
+        this.controlMapBase,
         this.configKeyBindingOverrides,
         this.optionKeyBindingOverrides,
       );
@@ -4232,35 +4507,179 @@
           }
         }
       }
-      if (typeof audio.has !== 'function' || typeof audio.play !== 'function') {
+      if (typeof audio.has === 'function' && typeof audio.play === 'function') {
+        const themeTracks = Array.isArray(this.dimensionSettings?.ambientTracks)
+          ? this.dimensionSettings.ambientTracks
+              .map((name) => (typeof name === 'string' ? name.trim() : ''))
+              .filter(Boolean)
+          : null;
+        const candidates = themeTracks && themeTracks.length ? themeTracks : DEFAULT_AMBIENT_TRACKS;
+        const selectedTrack = candidates.find((name) => {
+          try {
+            return audio.has(name);
+          } catch (error) {
+            if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+              console.debug('Ambient audio availability check failed.', error);
+            }
+            return false;
+          }
+        });
+        if (selectedTrack) {
+          this.activeAmbientTrack = selectedTrack;
+          try {
+            audio.play(selectedTrack, { loop: true, volume: 0.32 });
+          } catch (error) {
+            if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+              console.debug('Unable to start ambient audio playback.', error);
+            }
+          }
+        }
+      }
+      this.triggerWelcomeCue();
+    }
+
+    reportAudioError(detail = {}, options = {}) {
+      const now = Date.now();
+      const baseMessage =
+        typeof options.message === 'string' && options.message.trim().length
+          ? options.message.trim()
+          : typeof detail.message === 'string' && detail.message.trim().length
+            ? detail.message.trim()
+            : 'Audio playback failed.';
+      const message = ensureAudioFallbackMessage(baseMessage);
+      const payload = {
+        message,
+        requestedName: detail.requestedName ?? null,
+        resolvedName: detail.resolvedName ?? null,
+        code: typeof detail.code === 'string' ? detail.code : 'playback-error',
+        missingSample: detail.missingSample === true,
+        fallbackActive: detail.fallbackActive === true,
+        timestamp: now,
+      };
+      if (detail.detail !== undefined) {
+        payload.detail = detail.detail;
+      }
+      const error = detail.error || null;
+      if (error) {
+        if (typeof error.message === 'string' && error.message.trim().length) {
+          payload.errorMessage = error.message;
+        }
+        if (typeof error.name === 'string' && error.name.trim().length) {
+          payload.errorName = error.name;
+        }
+        if (typeof error.code !== 'undefined') {
+          payload.errorCode = error.code;
+        }
+      }
+      if (runtimeScope && typeof runtimeScope.dispatchEvent === 'function') {
+        const EventCtor =
+          typeof runtimeScope.CustomEvent === 'function'
+            ? runtimeScope.CustomEvent
+            : typeof CustomEvent === 'function'
+              ? CustomEvent
+              : null;
+        if (EventCtor) {
+          try {
+            runtimeScope.dispatchEvent(new EventCtor('infinite-rails:audio-error', { detail: payload }));
+          } catch (eventError) {
+            if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+              console.debug('Unable to dispatch audio error event.', eventError);
+            }
+          }
+        }
+      }
+      const logDetail = {
+        requestedName: payload.requestedName,
+        resolvedName: payload.resolvedName,
+        code: payload.code,
+        missingSample: payload.missingSample,
+        fallbackActive: payload.fallbackActive,
+      };
+      if (payload.detail && typeof payload.detail === 'object') {
+        logDetail.detail = payload.detail;
+      }
+      notifyLiveDiagnostics('audio', message, logDetail, {
+        level: options.level || (payload.missingSample ? 'warning' : 'error'),
+        timestamp: now,
+      });
+      return payload;
+    }
+
+    presentAudioFallbackOverlay(message, detail = {}) {
+      displayAudioFallbackOverlay(message, detail);
+    }
+
+    triggerWelcomeCue() {
+      const audio = this.audio;
+      if (!audio || typeof audio !== 'object' || typeof audio.play !== 'function') {
         return;
       }
-      const themeTracks = Array.isArray(this.dimensionSettings?.ambientTracks)
-        ? this.dimensionSettings.ambientTracks
-            .map((name) => (typeof name === 'string' ? name.trim() : ''))
-            .filter(Boolean)
-        : null;
-      const candidates = themeTracks && themeTracks.length ? themeTracks : DEFAULT_AMBIENT_TRACKS;
-      const selectedTrack = candidates.find((name) => {
+      let welcomeAvailable = null;
+      if (typeof audio.has === 'function') {
         try {
-          return audio.has(name);
+          welcomeAvailable = Boolean(audio.has('welcome'));
         } catch (error) {
           if (typeof console !== 'undefined' && typeof console.debug === 'function') {
-            console.debug('Ambient audio availability check failed.', error);
+            console.debug('Welcome audio availability check failed.', error);
           }
-          return false;
         }
-      });
-      if (!selectedTrack) {
+      }
+      let resolvedName = null;
+      if (typeof audio._resolve === 'function') {
+        try {
+          const resolved = audio._resolve('welcome');
+          resolvedName = typeof resolved === 'string' && resolved.trim().length ? resolved : null;
+        } catch (error) {
+          if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+            console.debug('Welcome audio alias resolution failed.', error);
+          }
+        }
+      }
+      try {
+        audio.play('welcome', { volume: welcomeAvailable === false ? 0.7 : 0.55 });
+      } catch (error) {
+        const baseMessage =
+          typeof error?.message === 'string' && error.message.trim().length
+            ? error.message.trim()
+            : 'Welcome audio cue failed to play.';
+        const detail = {
+          requestedName: 'welcome',
+          resolvedName,
+          missingSample: welcomeAvailable === false,
+          fallbackActive: true,
+          code: 'welcome-playback-error',
+          error,
+          detail: {
+            code: 'welcome-playback-error',
+            requestedName: 'welcome',
+            resolvedName,
+            missingSample: welcomeAvailable === false,
+          },
+        };
+        const eventDetail = this.reportAudioError(detail, { message: baseMessage });
+        this.presentAudioFallbackOverlay(eventDetail.message, detail);
         return;
       }
-      this.activeAmbientTrack = selectedTrack;
-      try {
-        audio.play(selectedTrack, { loop: true, volume: 0.32 });
-      } catch (error) {
-        if (typeof console !== 'undefined' && typeof console.debug === 'function') {
-          console.debug('Unable to start ambient audio playback.', error);
-        }
+      if (welcomeAvailable === false) {
+        const baseMessage = resolvedName
+          ? `Welcome audio cue is unavailable — falling back to "${resolvedName}".`
+          : 'Missing audio sample "welcome" detected during startup.';
+        this.reportAudioError(
+          {
+            requestedName: 'welcome',
+            resolvedName,
+            missingSample: true,
+            fallbackActive: true,
+            code: 'missing-sample',
+            detail: {
+              code: 'missing-sample',
+              requestedName: 'welcome',
+              resolvedName,
+              missingSample: true,
+            },
+          },
+          { message: baseMessage, level: 'warning' },
+        );
       }
     }
 
@@ -9203,23 +9622,6 @@
       const fallbackAlertSample =
         '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';
       knownPlayableNames.add(fallbackAlertName);
-      const ensureAudioFallbackMessage = (text) => {
-        const trimmed = typeof text === 'string' ? text.trim() : '';
-        const suffix = 'Fallback alert tone active until audio assets are restored.';
-        if (!trimmed) {
-          return suffix;
-        }
-        if (/fallback alert tone/i.test(trimmed)) {
-          return trimmed;
-        }
-        if (/fallback/i.test(trimmed) && /(audio|tone)/i.test(trimmed)) {
-          return trimmed;
-        }
-        if (/[.!?]$/.test(trimmed)) {
-          return `${trimmed} ${suffix}`;
-        }
-        return `${trimmed}. ${suffix}`;
-      };
       const submitAudioFailure = (sampleKey, message, error) => {
         const fallbackMessage = ensureAudioFallbackMessage(message);
         if (typeof this.recordAssetFailure === 'function') {
@@ -9326,7 +9728,7 @@
           .map((issue) => `${issue.aliasName} → [${issue.candidates.join(', ')}]`)
           .join('; ');
         console.warn(
-          `One or more audio aliases do not resolve to an available sample. Missing mappings: ${detail}. A fallback alert tone will be used until the samples are restored.`,
+          `One or more audio aliases do not resolve to an available sample. Missing mappings: ${detail}. A fallback beep will be used until the samples are restored.`,
         );
       }
       const howlCache = useHowler ? new Map() : null;
@@ -9346,7 +9748,10 @@
         audio.volume = clampVolume(volume);
       };
       const getCaptionText = (requestedName, resolvedName) => {
-        const captions = scope?.INFINITE_RAILS_AUDIO_CAPTIONS;
+        const captions =
+          (runtimeScope && typeof runtimeScope.INFINITE_RAILS_AUDIO_CAPTIONS === 'object'
+            ? runtimeScope.INFINITE_RAILS_AUDIO_CAPTIONS
+            : scope?.INFINITE_RAILS_AUDIO_CAPTIONS) || null;
         if (!captions || typeof captions !== 'object') {
           return null;
         }
@@ -9361,7 +9766,15 @@
 
       const announceCaption = (requestedName, resolvedName) => {
         const caption = getCaptionText(requestedName, resolvedName);
-        if (!caption || typeof scope?.dispatchEvent !== 'function' || typeof CustomEvent !== 'function') {
+        const eventTarget =
+          (runtimeScope && typeof runtimeScope.dispatchEvent === 'function' && runtimeScope) ||
+          (scope && typeof scope.dispatchEvent === 'function' && scope) ||
+          null;
+        const EventCtor =
+          (runtimeScope && typeof runtimeScope.CustomEvent === 'function' && runtimeScope.CustomEvent) ||
+          (scope && typeof scope.CustomEvent === 'function' && scope.CustomEvent) ||
+          (typeof CustomEvent === 'function' ? CustomEvent : null);
+        if (!caption || !eventTarget || !EventCtor) {
           return;
         }
         const now = Date.now();
@@ -9371,8 +9784,8 @@
         lastCaptionText = caption;
         lastCaptionAt = now;
         try {
-          scope.dispatchEvent(
-            new CustomEvent('infinite-rails:audio-caption', {
+          eventTarget.dispatchEvent(
+            new EventCtor('infinite-rails:audio-caption', {
               detail: {
                 caption,
                 name: requestedName || resolvedName || null,
@@ -9403,7 +9816,15 @@
             console.error(message);
           }
         }
-        if (typeof scope?.dispatchEvent !== 'function' || typeof CustomEvent !== 'function') {
+        const eventTarget =
+          (runtimeScope && typeof runtimeScope.dispatchEvent === 'function' && runtimeScope) ||
+          (scope && typeof scope.dispatchEvent === 'function' && scope) ||
+          null;
+        const EventCtor =
+          (runtimeScope && typeof runtimeScope.CustomEvent === 'function' && runtimeScope.CustomEvent) ||
+          (scope && typeof scope.CustomEvent === 'function' && scope.CustomEvent) ||
+          (typeof CustomEvent === 'function' ? CustomEvent : null);
+        if (!eventTarget || !EventCtor) {
           return;
         }
         const detail = {
@@ -9413,6 +9834,15 @@
           code: typeof info?.code === 'string' ? info.code : 'playback-error',
           timestamp,
         };
+        const missingSampleFlag =
+          detail.code === 'missing-sample' || info?.missingSample === true;
+        if (missingSampleFlag) {
+          detail.missingSample = true;
+          detail.fallbackActive = true;
+        }
+        if (info?.fallbackActive === true) {
+          detail.fallbackActive = true;
+        }
         if (info && typeof info.detail !== 'undefined') {
           detail.detail = info.detail;
         }
@@ -9440,11 +9870,21 @@
           }
         }
         try {
-          scope.dispatchEvent(new CustomEvent('infinite-rails:audio-error', { detail }));
+          eventTarget.dispatchEvent(new EventCtor('infinite-rails:audio-error', { detail }));
         } catch (error) {
           if (typeof console !== 'undefined' && typeof console.debug === 'function') {
             console.debug('Unable to dispatch audio error event.', error);
           }
+        }
+        if (detail.code === 'missing-sample') {
+          displayAudioFallbackOverlay(message, {
+            code: detail.code,
+            requestedName: detail.requestedName,
+            resolvedName: detail.resolvedName,
+            missingSample: true,
+            fallbackActive: true,
+            detail: info?.detail,
+          });
         }
       };
       const bootMissingSampleList = Array.from(bootMissingSamples).sort();
@@ -9470,7 +9910,7 @@
             messageParts.push(`Affected cues: ${affectedAliasList.join(', ')}.`);
           }
         }
-        messageParts.push('A fallback alert tone will be used until the audio files are restored.');
+        messageParts.push('A fallback beep will be used until the audio files are restored.');
         const bootMessage = messageParts.join(' ');
         bootStatusMessage = ensureAudioFallbackMessage(bootMessage);
         logAudioPlaybackIssue(
@@ -9488,7 +9928,15 @@
       } else {
         bootStatusMessage = 'Audio initialised successfully.';
       }
-      if (typeof scope?.dispatchEvent === 'function' && typeof CustomEvent === 'function') {
+      const bootEventTarget =
+        (runtimeScope && typeof runtimeScope.dispatchEvent === 'function' && runtimeScope) ||
+        (scope && typeof scope.dispatchEvent === 'function' && scope) ||
+        null;
+      const BootEventCtor =
+        (runtimeScope && typeof runtimeScope.CustomEvent === 'function' && runtimeScope.CustomEvent) ||
+        (scope && typeof scope.CustomEvent === 'function' && scope.CustomEvent) ||
+        (typeof CustomEvent === 'function' ? CustomEvent : null);
+      if (bootEventTarget && BootEventCtor) {
         const detail = {
           missingSamples: bootMissingSampleList,
           affectedAliases: affectedAliasList,
@@ -9497,7 +9945,7 @@
           timestamp: Date.now(),
         };
         try {
-          scope.dispatchEvent(new CustomEvent('infinite-rails:audio-boot-status', { detail }));
+          bootEventTarget.dispatchEvent(new BootEventCtor('infinite-rails:audio-boot-status', { detail }));
         } catch (error) {
           if (typeof console !== 'undefined' && typeof console.debug === 'function') {
             console.debug('Unable to dispatch audio boot status event.', error);
@@ -9648,6 +10096,7 @@
               message: `Audio sample "${resolvedName}" could not be loaded.`,
               code: 'missing-sample',
             });
+            playFallbackAlert(requestedName, options);
           }
           return;
         }
@@ -9842,7 +10291,7 @@
         }
         if (nameForLog && !missingSampleNotified.has(nameForLog)) {
           logAudioPlaybackIssue(nameForLog, null, {
-            message: `Audio sample "${nameForLog}" is unavailable. Playing fallback alert tone instead.`,
+            message: `Audio sample "${nameForLog}" is unavailable. Playing fallback beep instead.`,
             code: 'missing-sample',
           });
           missingSampleNotified.add(nameForLog);
@@ -25446,11 +25895,37 @@
   }
 
   function createSimpleExperience(options) {
-    return new SimpleExperience(options);
+    const experience = new SimpleExperience(options);
+    activeSimpleExperiences.add(experience);
+    const originalDestroy =
+      typeof experience.destroy === 'function' ? experience.destroy.bind(experience) : null;
+    experience.destroy = (...args) => {
+      try {
+        return originalDestroy ? originalDestroy(...args) : undefined;
+      } finally {
+        activeSimpleExperiences.delete(experience);
+      }
+    };
+    applyControlMapToExperience(experience, simpleExperienceControlMap.get());
+    return experience;
   }
 
   window.SimpleExperience = {
     create: createSimpleExperience,
+    destroyAll() {
+      const instances = Array.from(activeSimpleExperiences);
+      instances.forEach((instance) => {
+        try {
+          instance.destroy?.();
+        } catch (error) {
+          if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+            console.debug('Failed to destroy SimpleExperience instance.', error);
+          }
+        }
+      });
+      activeSimpleExperiences.clear();
+    },
+    controlMap: simpleExperienceControlMap,
     dimensionManifest: DIMENSION_ASSET_MANIFEST,
     dimensionThemes: DIMENSION_THEME,
     dimensionLootTables: DIMENSION_LOOT_TABLES,
