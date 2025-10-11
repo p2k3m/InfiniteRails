@@ -5413,6 +5413,96 @@
     }
   }
 
+  const CRITICAL_ERROR_SCOPE_TITLES = Object.freeze({
+    assets: 'Asset load failure',
+    asset: 'Asset load failure',
+    api: 'Network error detected',
+    backend: 'Service unavailable',
+    render: 'Renderer unavailable',
+    renderer: 'Renderer unavailable',
+    script: 'Script error detected',
+    ui: 'Interface error detected',
+    interface: 'Interface error detected',
+    runtime: 'Runtime error detected',
+    startup: 'Startup error detected',
+    diagnostics: 'Diagnostics alert',
+    audio: 'Audio playback error',
+  });
+
+  const CRITICAL_ERROR_OVERLAY_COOLDOWN_MS = 2000;
+
+  const criticalErrorOverlayState = {
+    lastFingerprint: null,
+    lastDisplayedAt: 0,
+  };
+
+  function shouldMirrorCriticalError(level) {
+    if (typeof level !== 'string') {
+      return false;
+    }
+    const normalised = level.trim().toLowerCase();
+    return normalised === 'error' || normalised === 'critical' || normalised === 'fatal';
+  }
+
+  function resolveCriticalOverlayTitle(scope) {
+    const key = typeof scope === 'string' ? scope.trim().toLowerCase() : '';
+    if (key && CRITICAL_ERROR_SCOPE_TITLES[key]) {
+      return CRITICAL_ERROR_SCOPE_TITLES[key];
+    }
+    if (key.includes('asset')) {
+      return CRITICAL_ERROR_SCOPE_TITLES.assets;
+    }
+    if (key.includes('render')) {
+      return CRITICAL_ERROR_SCOPE_TITLES.render;
+    }
+    if (key.includes('audio')) {
+      return CRITICAL_ERROR_SCOPE_TITLES.audio;
+    }
+    if (key.includes('api') || key.includes('network')) {
+      return CRITICAL_ERROR_SCOPE_TITLES.api;
+    }
+    return 'System alert';
+  }
+
+  function mirrorCriticalErrorToOverlay(scope, message, options = {}) {
+    if (typeof presentCriticalErrorOverlay !== 'function') {
+      return;
+    }
+    const level = typeof options.level === 'string' ? options.level.trim().toLowerCase() : 'error';
+    if (!shouldMirrorCriticalError(level)) {
+      return;
+    }
+    const trimmedMessage =
+      typeof message === 'string' && message.trim().length ? message.trim() : 'An unexpected error occurred.';
+    const scopeLabel = typeof scope === 'string' && scope.trim().length ? scope.trim() : 'general';
+    const fingerprint = `${scopeLabel.toLowerCase()}::${trimmedMessage}`;
+    const now = Date.now();
+    if (
+      criticalErrorOverlayState.lastFingerprint === fingerprint &&
+      now - criticalErrorOverlayState.lastDisplayedAt < CRITICAL_ERROR_OVERLAY_COOLDOWN_MS
+    ) {
+      return;
+    }
+    criticalErrorOverlayState.lastFingerprint = fingerprint;
+    criticalErrorOverlayState.lastDisplayedAt = now;
+    const detail =
+      options.detail && typeof options.detail === 'object' ? { ...options.detail } : options.detail ?? null;
+    const timestamp = Number.isFinite(options.timestamp) ? options.timestamp : null;
+    presentCriticalErrorOverlay({
+      title: resolveCriticalOverlayTitle(scopeLabel),
+      message: trimmedMessage,
+      diagnosticScope: scopeLabel,
+      diagnosticStatus: 'error',
+      diagnosticMessage: trimmedMessage,
+      logScope: null,
+      logMessage: trimmedMessage,
+      logLevel: level || 'error',
+      detail,
+      timestamp,
+      logToConsole: false,
+    });
+  }
+
   function logDiagnosticsEvent(scope, message, { level = 'info', detail = null, timestamp = null } = {}) {
     const payload = {};
     if (typeof level === 'string') {
@@ -5431,6 +5521,11 @@
       detail: payload.detail ?? null,
       timestamp: Number.isFinite(payload.timestamp) ? payload.timestamp : Date.now(),
     };
+    mirrorCriticalErrorToOverlay(scope, message, {
+      level: entry.level,
+      detail: entry.detail,
+      timestamp: entry.timestamp,
+    });
     if (bootstrapOverlay && typeof bootstrapOverlay.logEvent === 'function') {
       bootstrapOverlay.logEvent(scope, message, payload);
     }
