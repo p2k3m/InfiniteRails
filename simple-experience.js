@@ -2789,6 +2789,7 @@
       }
       this.canvas = options.canvas;
       this.ui = options.ui || {};
+      this.lastAutoRespawnPlan = null;
       this.developerOverlayWarningIssued = false;
       this.victoryBannerEl = this.ui.victoryBanner || null;
       this.victoryCelebrationEl = this.ui.victoryCelebration || null;
@@ -15112,7 +15113,9 @@
         this.populateInitialMobs(mobOptions);
       });
 
-      const spawnOptions = typeof options.spawn === 'object' && options.spawn !== null ? options.spawn : null;
+      const initialSpawnOptions =
+        typeof options.spawn === 'object' && options.spawn !== null ? { ...options.spawn } : null;
+      const spawnOptions = this.resolveSpawnOptionsForPopulation(initialSpawnOptions, { reason });
       let spawnSummary = null;
       if (spawnOptions?.player && typeof this.applySpawnTarget === 'function') {
         try {
@@ -15141,6 +15144,8 @@
         }
       }
 
+      populationContext.spawnOptions = spawnOptions || null;
+      populationContext.spawnPlan = this.lastAutoRespawnPlan || null;
       populationContext.spawnSummary = spawnSummary;
       populationContext.rebindSummary = rebindSummary;
 
@@ -18423,6 +18428,25 @@
           }
         }
       }
+      let spawnSafetyBlockCreated = false;
+      if (typeof this.spawnSafetyBlockAtPlayerFeetIfNeeded === 'function') {
+        try {
+          spawnSafetyBlockCreated = this.spawnSafetyBlockAtPlayerFeetIfNeeded(worldX, worldZ) === true;
+        } catch (error) {
+          if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+            console.debug('Failed to ensure spawn safety block at target location.', error);
+          }
+        }
+      }
+      if (spawnSafetyBlockCreated) {
+        try {
+          baseY = this.sampleGroundHeight(worldX, worldZ);
+        } catch (error) {
+          if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+            console.debug('Failed to resample ground height after spawn safety block placement.', error);
+          }
+        }
+      }
       const targetY = baseY + PLAYER_EYE_HEIGHT;
       if (this.playerRig?.position?.set) {
         this.playerRig.position.set(worldX, targetY, worldZ);
@@ -18479,6 +18503,226 @@
       };
       this.lastPlayerSpawnSummary = summary;
       return summary;
+    }
+
+    shouldAutoAssignSpawn(reason = '') {
+      if (typeof reason !== 'string' || !reason) {
+        return false;
+      }
+      const key = reason.toLowerCase();
+      return key.includes('reload') || key.includes('dimension') || key.includes('portal');
+    }
+
+    normaliseSpawnTargetToGrid(target) {
+      if (!target || typeof target !== 'object') {
+        return null;
+      }
+      if (Number.isFinite(target.gridX) && Number.isFinite(target.gridZ)) {
+        const gridX = Math.max(0, Math.min(WORLD_SIZE - 1, Math.floor(target.gridX)));
+        const gridZ = Math.max(0, Math.min(WORLD_SIZE - 1, Math.floor(target.gridZ)));
+        return { gridX, gridZ };
+      }
+      const worldX = Number.isFinite(target.x) ? target.x : null;
+      const worldZ = Number.isFinite(target.z) ? target.z : null;
+      if (worldX === null || worldZ === null) {
+        return null;
+      }
+      const halfWorld = WORLD_SIZE / 2;
+      const gridX = Math.max(0, Math.min(WORLD_SIZE - 1, Math.round(worldX / BLOCK_SIZE + halfWorld)));
+      const gridZ = Math.max(0, Math.min(WORLD_SIZE - 1, Math.round(worldZ / BLOCK_SIZE + halfWorld)));
+      return { gridX, gridZ };
+    }
+
+    parseColumnKey(columnKey) {
+      if (typeof columnKey !== 'string' || !columnKey) {
+        return { gridX: null, gridZ: null, valid: false };
+      }
+      const [gridXRaw, gridZRaw] = columnKey.split('|');
+      const gridX = Number.parseInt(gridXRaw ?? '', 10);
+      const gridZ = Number.parseInt(gridZRaw ?? '', 10);
+      return { gridX, gridZ, valid: Number.isFinite(gridX) && Number.isFinite(gridZ) };
+    }
+
+    findNearestVisibleColumn(gridX, gridZ, options = {}) {
+      if (!Number.isFinite(gridX) || !Number.isFinite(gridZ)) {
+        return null;
+      }
+      if (!(this.columns instanceof Map) || this.columns.size === 0) {
+        return null;
+      }
+      const clampIndex = (value) => Math.max(0, Math.min(WORLD_SIZE - 1, value));
+      const visited = new Set();
+      const maxRadius = Number.isFinite(options.maxRadius)
+        ? Math.max(0, Math.floor(options.maxRadius))
+        : Math.max(4, Math.ceil(WORLD_SIZE / 4));
+      for (let radius = 0; radius <= maxRadius; radius += 1) {
+        for (let dx = -radius; dx <= radius; dx += 1) {
+          for (let dz = -radius; dz <= radius; dz += 1) {
+            if (radius > 0 && Math.abs(dx) !== radius && Math.abs(dz) !== radius) {
+              continue;
+            }
+            const candidateX = clampIndex(gridX + dx);
+            const candidateZ = clampIndex(gridZ + dz);
+            const candidateKey = `${candidateX}|${candidateZ}`;
+            if (visited.has(candidateKey)) {
+              continue;
+            }
+            visited.add(candidateKey);
+            const column = this.columns.get(candidateKey);
+            if (!Array.isArray(column) || column.length === 0) {
+              continue;
+            }
+            const anchor = column[column.length - 1];
+            if (!anchor?.position || !Number.isFinite(anchor.position.y)) {
+              continue;
+            }
+            return { gridX: candidateX, gridZ: candidateZ, columnKey: candidateKey, anchor };
+          }
+        }
+      }
+      return null;
+    }
+
+    findAutoRespawnTarget(preferredTarget = null, context = {}) {
+      if (!(this.columns instanceof Map) || this.columns.size === 0) {
+        return null;
+      }
+      const seeds = [];
+      const seen = new Set();
+      const addSeed = (target, source) => {
+        const grid = this.normaliseSpawnTargetToGrid(target);
+        if (!grid) {
+          return;
+        }
+        const key = `${grid.gridX}|${grid.gridZ}`;
+        if (seen.has(key)) {
+          return;
+        }
+        seen.add(key);
+        seeds.push({ gridX: grid.gridX, gridZ: grid.gridZ, source });
+      };
+
+      if (preferredTarget) {
+        addSeed(preferredTarget, 'preferred');
+      }
+
+      const contextColumnKey =
+        typeof context.columnKey === 'string' && context.columnKey.trim().length
+          ? context.columnKey.trim()
+          : this.lastPlayerSpawnSummary?.columnKey ?? null;
+      if (contextColumnKey) {
+        const parsed = this.parseColumnKey(contextColumnKey);
+        if (parsed.valid) {
+          addSeed({ gridX: parsed.gridX, gridZ: parsed.gridZ }, 'last-spawn-column');
+        }
+      }
+
+      if (this.lastPlayerSpawnSummary?.worldPosition) {
+        addSeed(this.lastPlayerSpawnSummary.worldPosition, 'last-spawn-world');
+      }
+
+      const portalAnchorTarget =
+        context.portalAnchor ?? this.portalAnchorGrid ?? this.lastPlayerSpawnSummary?.portalAnchor ?? null;
+      if (portalAnchorTarget) {
+        const anchorSeed =
+          Number.isFinite(portalAnchorTarget?.gridX) && Number.isFinite(portalAnchorTarget?.gridZ)
+            ? portalAnchorTarget
+            : {
+                gridX: Number.isFinite(portalAnchorTarget?.x) ? portalAnchorTarget.x : null,
+                gridZ: Number.isFinite(portalAnchorTarget?.z) ? portalAnchorTarget.z : null,
+              };
+        addSeed(anchorSeed, 'portal-anchor');
+      }
+
+      if (Array.isArray(context.additionalTargets)) {
+        context.additionalTargets.forEach((entry) => {
+          if (!entry) {
+            return;
+          }
+          const seedTarget = entry.target ?? entry;
+          const source = typeof entry.source === 'string' && entry.source.trim().length ? entry.source : 'context';
+          addSeed(seedTarget, source);
+        });
+      }
+
+      addSeed({ gridX: Math.floor(WORLD_SIZE / 2), gridZ: Math.floor(WORLD_SIZE / 2) }, 'world-center');
+
+      const maxSearchRadius = Number.isFinite(context.maxSearchRadius)
+        ? Math.max(0, Math.floor(context.maxSearchRadius))
+        : Math.max(4, Math.ceil(WORLD_SIZE / 4));
+
+      for (const seed of seeds) {
+        const match = this.findNearestVisibleColumn(seed.gridX, seed.gridZ, { maxRadius: maxSearchRadius });
+        if (match) {
+          return { ...match, source: seed.source };
+        }
+      }
+
+      for (const [columnKey, column] of this.columns) {
+        if (!Array.isArray(column) || column.length === 0) {
+          continue;
+        }
+        const anchor = column[column.length - 1];
+        if (!anchor?.position || !Number.isFinite(anchor.position.y)) {
+          continue;
+        }
+        const parsed = this.parseColumnKey(columnKey);
+        if (!parsed.valid) {
+          continue;
+        }
+        return { gridX: parsed.gridX, gridZ: parsed.gridZ, columnKey, anchor, source: 'column-scan' };
+      }
+
+      return null;
+    }
+
+    resolveSpawnOptionsForPopulation(spawnOptions, context = {}) {
+      this.lastAutoRespawnPlan = null;
+      const reason = typeof context.reason === 'string' ? context.reason.trim() : '';
+      const shouldAuto = context.force === true || this.shouldAutoAssignSpawn(reason);
+      if (!shouldAuto) {
+        return spawnOptions;
+      }
+      const baseOptions = spawnOptions && typeof spawnOptions === 'object' ? { ...spawnOptions } : spawnOptions;
+      const preferredTarget = baseOptions?.player ?? null;
+      const autoTarget = this.findAutoRespawnTarget(preferredTarget, {
+        reason,
+        maxSearchRadius: context.maxSearchRadius,
+      });
+      if (!autoTarget) {
+        return baseOptions;
+      }
+      const existingPlayer = baseOptions?.player && typeof baseOptions.player === 'object' ? { ...baseOptions.player } : {};
+      const spawnTarget = {
+        gridX: autoTarget.gridX,
+        gridZ: autoTarget.gridZ,
+      };
+      if (autoTarget.anchor?.position) {
+        spawnTarget.x = autoTarget.anchor.position.x;
+        spawnTarget.z = autoTarget.anchor.position.z;
+        if (Number.isFinite(autoTarget.anchor.position.y)) {
+          spawnTarget.y = autoTarget.anchor.position.y;
+        }
+      }
+      const resolvedOptions = { ...(baseOptions || {}), player: { ...existingPlayer, ...spawnTarget } };
+      const worldPosition = autoTarget.anchor?.position
+        ? {
+            x: Number.isFinite(autoTarget.anchor.position.x) ? autoTarget.anchor.position.x : null,
+            y: Number.isFinite(autoTarget.anchor.position.y) ? autoTarget.anchor.position.y : null,
+            z: Number.isFinite(autoTarget.anchor.position.z) ? autoTarget.anchor.position.z : null,
+          }
+        : null;
+      this.lastAutoRespawnPlan = {
+        reason: reason || 'auto-respawn',
+        source: autoTarget.source ?? 'auto',
+        columnKey: autoTarget.columnKey ?? null,
+        target: {
+          gridX: spawnTarget.gridX,
+          gridZ: spawnTarget.gridZ,
+          worldPosition,
+        },
+      };
+      return resolvedOptions;
     }
 
     positionPlayer() {
