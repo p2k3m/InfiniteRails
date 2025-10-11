@@ -9086,17 +9086,18 @@
         typeof detail?.message === 'string' && detail.message.trim().length
           ? detail.message.trim()
           : 'Asset fallback active — visual polish may be reduced.';
+      const finalMessage = networkCircuitBreaker.prefixOfflineMessage(message);
       bootstrapOverlay.setDiagnostic('assets', {
         status: 'warning',
-        message,
+        message: finalMessage,
       });
       showHudAlert({
         title: 'Asset fallback active',
-        message,
+        message: finalMessage,
         severity: 'warning',
       });
       if (typeof logDiagnosticsEvent === 'function') {
-        logDiagnosticsEvent('assets', message, {
+        logDiagnosticsEvent('assets', finalMessage, {
           level: 'warning',
           detail,
           timestamp: Number.isFinite(detail?.timestamp) ? detail.timestamp : undefined,
@@ -9142,17 +9143,25 @@
       if (errorMessage && errorMessage !== decoratedFriendly) {
         extraParts.push(errorMessage);
       }
-      const overlayMessage = extraParts.length
+      const overlayBase = extraParts.length
         ? `${decoratedFriendly} — ${extraParts.join(' — ')}`
         : decoratedFriendly;
+      networkCircuitBreaker.recordFailure('asset', {
+        source: keyLabel ?? 'asset',
+        key: keyLabel ?? undefined,
+        failureCount: failureCount ?? undefined,
+        message: decoratedFriendly,
+      });
+      const overlayMessage = networkCircuitBreaker.prefixOfflineMessage(overlayBase);
+      const diagnosticMessage = networkCircuitBreaker.prefixOfflineMessage(decoratedFriendly);
       presentCriticalErrorOverlay({
         title: 'Assets failed to load',
         message: overlayMessage,
         diagnosticScope: 'assets',
         diagnosticStatus: 'error',
-        diagnosticMessage: decoratedFriendly,
+        diagnosticMessage,
         logScope: 'assets',
-        logMessage: decoratedFriendly,
+        logMessage: diagnosticMessage,
         detail,
         timestamp: Number.isFinite(detail?.timestamp) ? detail.timestamp : undefined,
       });
@@ -9169,14 +9178,15 @@
         missingSummary && !/Missing files:/i.test(message)
           ? `${message}${message.trim().endsWith('.') ? '' : '.'} Missing files: ${missingSummary}.`
           : message;
+      const finalMessage = networkCircuitBreaker.prefixOfflineMessage(decoratedMessage);
       presentCriticalErrorOverlay({
         title: 'Restore missing assets',
-        message: decoratedMessage,
+        message: finalMessage,
         diagnosticScope: 'assets',
         diagnosticStatus: 'error',
-        diagnosticMessage: decoratedMessage,
+        diagnosticMessage: finalMessage,
         logScope: 'assets',
-        logMessage: decoratedMessage,
+        logMessage: finalMessage,
         detail,
         timestamp: Number.isFinite(detail?.timestamp) ? detail.timestamp : undefined,
       });
@@ -9192,31 +9202,33 @@
         missingSummary && !/Missing files:/i.test(message)
           ? `${message}${message.trim().endsWith('.') ? '' : '.'} Missing files: ${missingSummary}.`
           : message;
+      const finalMessage = networkCircuitBreaker.prefixOfflineMessage(decoratedMessage);
       presentCriticalErrorOverlay({
         title: 'Asset recovery in progress',
-        message: decoratedMessage,
+        message: finalMessage,
         diagnosticScope: 'assets',
         diagnosticStatus: 'error',
-        diagnosticMessage: decoratedMessage,
+        diagnosticMessage: finalMessage,
         logScope: 'assets',
-        logMessage: decoratedMessage,
+        logMessage: finalMessage,
         detail,
         timestamp: Number.isFinite(detail?.timestamp) ? detail.timestamp : undefined,
       });
     });
     globalScope.addEventListener('infinite-rails:asset-retry-requested', () => {
+      const retryMessage = networkCircuitBreaker.prefixOfflineMessage('Retrying missing assets…');
       bootstrapOverlay.setDiagnostic('assets', {
         status: 'pending',
-        message: 'Retrying missing assets…',
+        message: retryMessage,
       });
       showHudAlert({
         title: 'Retrying missing assets',
-        message: 'Retrying missing assets…',
+        message: retryMessage,
         severity: 'info',
         autoHideMs: 7000,
       });
       if (typeof logDiagnosticsEvent === 'function') {
-        logDiagnosticsEvent('assets', 'Retrying missing assets…', {
+        logDiagnosticsEvent('assets', retryMessage, {
           level: 'info',
         });
       }
@@ -9235,12 +9247,13 @@
       } else {
         message += '.';
       }
+      const finalMessage = networkCircuitBreaker.prefixOfflineMessage(message);
       bootstrapOverlay.setDiagnostic('assets', {
         status: 'pending',
-        message,
+        message: finalMessage,
       });
       if (typeof logDiagnosticsEvent === 'function') {
-        logDiagnosticsEvent('assets', message, {
+        logDiagnosticsEvent('assets', finalMessage, {
           level: 'info',
           detail,
           timestamp: Number.isFinite(detail?.timestamp) ? detail.timestamp : undefined,
@@ -9257,12 +9270,13 @@
       } else {
         message += '.';
       }
+      const finalMessage = networkCircuitBreaker.prefixOfflineMessage(message);
       bootstrapOverlay.setDiagnostic('assets', {
         status: 'pending',
-        message,
+        message: finalMessage,
       });
       if (typeof logDiagnosticsEvent === 'function') {
-        logDiagnosticsEvent('assets', message, {
+        logDiagnosticsEvent('assets', finalMessage, {
           level: 'info',
           detail,
           timestamp: Number.isFinite(detail?.timestamp) ? detail.timestamp : undefined,
@@ -9273,18 +9287,19 @@
       const detail = event?.detail && typeof event.detail === 'object' ? event.detail : {};
       const keys = Array.isArray(detail?.keys) ? detail.keys : [];
       const label = keys.length ? keys.join(', ') : 'assets';
+      const message = networkCircuitBreaker.prefixOfflineMessage(`Retry queued for ${label}.`);
       bootstrapOverlay.setDiagnostic('assets', {
         status: 'pending',
-        message: `Retry queued for ${label}.`,
+        message,
       });
       showHudAlert({
         title: 'Retry queued',
-        message: `Retry queued for ${label}.`,
+        message,
         severity: 'info',
         autoHideMs: 8000,
       });
       if (typeof logDiagnosticsEvent === 'function') {
-        logDiagnosticsEvent('assets', `Retry queued for ${label}.`, {
+        logDiagnosticsEvent('assets', message, {
           level: 'info',
           detail,
           timestamp: Number.isFinite(detail?.timestamp) ? detail.timestamp : undefined,
@@ -9298,18 +9313,26 @@
       const message = attempts && attempts > 1
         ? `Recovered ${keyLabel} after ${attempts} attempts.`
         : `Recovered ${keyLabel} successfully.`;
-      bootstrapOverlay.setDiagnostic('assets', {
-        status: 'ok',
+      networkCircuitBreaker.recordRecovery('asset', {
+        source: keyLabel,
+        key: keyLabel,
         message,
+        attempts: attempts ?? undefined,
+      });
+      const finalMessage = networkCircuitBreaker.prefixOfflineMessage(message);
+      const offline = networkCircuitBreaker.isTripped();
+      bootstrapOverlay.setDiagnostic('assets', {
+        status: offline ? 'warning' : 'ok',
+        message: finalMessage,
       });
       showHudAlert({
         title: 'Assets recovered',
-        message,
-        severity: 'success',
+        message: finalMessage,
+        severity: offline ? 'warning' : 'success',
         autoHideMs: 7000,
       });
       if (typeof logDiagnosticsEvent === 'function') {
-        logDiagnosticsEvent('assets', message, {
+        logDiagnosticsEvent('assets', finalMessage, {
           level: 'success',
           detail,
           timestamp: Number.isFinite(detail?.timestamp) ? detail.timestamp : undefined,
@@ -10559,6 +10582,10 @@
         detail: context,
       });
     }
+    networkCircuitBreaker.recordRecovery('api', {
+      source: 'live-check',
+      message: deriveOnlineScoreboardMessage(),
+    });
   }
 
   function markBackendLiveCheckFailure(context = null) {
@@ -10607,6 +10634,11 @@
         detail: context,
       });
     }
+    networkCircuitBreaker.recordFailure('api', {
+      source: 'live-check',
+      reason: context?.reason ?? 'unknown',
+      message,
+    });
     if (globalScope?.console?.warn) {
       globalScope.console.warn('Backend live-check failed; continuing in offline mode.', context);
     }
@@ -13898,6 +13930,228 @@
     scoreSyncWarningEl.removeAttribute('data-visible');
   }
 
+  const networkCircuitBreaker = (() => {
+    const FAILURE_THRESHOLD = 3;
+    const FAILURE_WINDOW_MS = 15000;
+    const MIN_RECOVERY_HOLD_MS = 12000;
+    const MAX_RECOVERY_HOLD_MS = 60000;
+    const state = {
+      failures: [],
+      tripped: false,
+      trippedAt: 0,
+      pendingRecovery: null,
+      releaseTimer: null,
+    };
+
+    function now() {
+      return Date.now();
+    }
+
+    function clearReleaseTimer() {
+      if (!state.releaseTimer) {
+        return;
+      }
+      if (typeof globalScope?.clearTimeout === 'function') {
+        globalScope.clearTimeout(state.releaseTimer);
+      }
+      state.releaseTimer = null;
+    }
+
+    function scheduleReleaseCheck(delayMs) {
+      clearReleaseTimer();
+      if (typeof globalScope?.setTimeout !== 'function') {
+        return;
+      }
+      const duration = Math.max(0, Number.isFinite(delayMs) ? Math.floor(delayMs) : 0);
+      state.releaseTimer = globalScope.setTimeout(() => {
+        state.releaseTimer = null;
+        maybeRelease(now());
+      }, duration);
+    }
+
+    function pruneFailures(referenceTime) {
+      const cutoff = referenceTime - FAILURE_WINDOW_MS;
+      state.failures = state.failures.filter((entry) => entry.timestamp >= cutoff);
+    }
+
+    function buildCircuitDetail(kind, detail = {}) {
+      const snapshot = { kind };
+      if (detail && typeof detail === 'object') {
+        const allowedKeys = [
+          'source',
+          'reason',
+          'status',
+          'endpoint',
+          'method',
+          'key',
+          'failureCount',
+          'message',
+        ];
+        allowedKeys.forEach((key) => {
+          if (detail[key] !== undefined && detail[key] !== null) {
+            snapshot[key] = detail[key];
+          }
+        });
+      }
+      snapshot.failuresInWindow = state.failures.length;
+      snapshot.trippedAt = state.trippedAt || null;
+      return snapshot;
+    }
+
+    function logCircuitEvent(level, message, detail) {
+      if (typeof logDiagnosticsEvent === 'function') {
+        try {
+          logDiagnosticsEvent('network', message, {
+            level,
+            detail,
+          });
+        } catch (error) {
+          if (globalScope?.console?.debug) {
+            globalScope.console.debug('Failed to record network circuit diagnostics.', error);
+          }
+        }
+      }
+    }
+
+    function getOfflineMessage() {
+      return 'Offline/Recovery Mode — waiting for services to stabilise.';
+    }
+
+    function applyTripEffects(kind, detail) {
+      const message = getOfflineMessage();
+      updateScoreboardStatus(message, { offline: true });
+      showGlobalScoreSyncWarning(message);
+      if (typeof bootstrapOverlay?.setDiagnostic === 'function') {
+        bootstrapOverlay.setDiagnostic('backend', {
+          status: 'error',
+          message,
+        });
+      }
+      logCircuitEvent('warning', 'Network circuit breaker tripped — entering Offline/Recovery Mode.', {
+        ...buildCircuitDetail(kind, detail),
+      });
+      scheduleReleaseCheck(Math.max(0, MAX_RECOVERY_HOLD_MS));
+    }
+
+    function applyResetEffects(kind, detail) {
+      logCircuitEvent('info', 'Network circuit breaker reset — monitoring resumed.', {
+        ...buildCircuitDetail(kind, detail),
+      });
+    }
+
+    function resetCircuit(kind, detail) {
+      state.tripped = false;
+      state.trippedAt = 0;
+      state.pendingRecovery = null;
+      state.failures = [];
+      clearReleaseTimer();
+      applyResetEffects(kind, detail);
+    }
+
+    function maybeRelease(referenceTime) {
+      if (!state.tripped) {
+        return;
+      }
+      const elapsed = referenceTime - state.trippedAt;
+      if (state.pendingRecovery && elapsed >= MIN_RECOVERY_HOLD_MS) {
+        const detail = state.pendingRecovery;
+        resetCircuit(detail.kind, detail.detail);
+        return;
+      }
+      if (elapsed >= MAX_RECOVERY_HOLD_MS) {
+        resetCircuit('timeout', { reason: 'cooldown-expired' });
+      } else if (state.pendingRecovery) {
+        const remaining = Math.max(0, MIN_RECOVERY_HOLD_MS - elapsed);
+        scheduleReleaseCheck(remaining);
+      } else {
+        const remaining = Math.max(0, MAX_RECOVERY_HOLD_MS - elapsed);
+        scheduleReleaseCheck(remaining);
+      }
+    }
+
+    function recordFailure(kind, detail = {}) {
+      const timestamp = now();
+      pruneFailures(timestamp);
+      maybeRelease(timestamp);
+      state.failures.push({ kind, timestamp });
+      pruneFailures(timestamp);
+      if (!state.tripped && state.failures.length >= FAILURE_THRESHOLD) {
+        state.tripped = true;
+        state.trippedAt = timestamp;
+        state.pendingRecovery = null;
+        applyTripEffects(kind, detail);
+        return { tripped: true, justTripped: true };
+      }
+      if (state.tripped) {
+        const remaining = Math.max(0, MAX_RECOVERY_HOLD_MS - (timestamp - state.trippedAt));
+        scheduleReleaseCheck(remaining);
+      }
+      return { tripped: state.tripped, justTripped: false };
+    }
+
+    function recordRecovery(kind, detail = {}) {
+      const timestamp = now();
+      pruneFailures(timestamp);
+      state.failures = [];
+      if (!state.tripped) {
+        applyResetEffects(kind, detail);
+        return { tripped: false, reset: true };
+      }
+      state.pendingRecovery = { kind, detail };
+      const elapsed = timestamp - state.trippedAt;
+      const remaining = Math.max(0, MIN_RECOVERY_HOLD_MS - elapsed);
+      if (remaining <= 0) {
+        maybeRelease(timestamp);
+      } else {
+        scheduleReleaseCheck(remaining);
+      }
+      return { tripped: state.tripped, reset: false };
+    }
+
+    function applyOfflineMessage(message) {
+      maybeRelease(now());
+      if (!state.tripped) {
+        return message;
+      }
+      const offlineMessage = getOfflineMessage();
+      if (typeof message !== 'string' || !message.trim().length) {
+        return offlineMessage;
+      }
+      if (message.includes('Offline/Recovery Mode')) {
+        return message;
+      }
+      return offlineMessage;
+    }
+
+    function prefixOfflineMessage(message) {
+      const offlineMessage = getOfflineMessage();
+      if (!state.tripped) {
+        return message;
+      }
+      if (typeof message === 'string' && message.includes('Offline/Recovery Mode')) {
+        return message;
+      }
+      if (typeof message === 'string' && message.trim().length) {
+        return `${offlineMessage} ${message}`;
+      }
+      return offlineMessage;
+    }
+
+    function isTripped() {
+      maybeRelease(now());
+      return state.tripped;
+    }
+
+    return {
+      recordFailure,
+      recordRecovery,
+      applyOfflineMessage,
+      prefixOfflineMessage,
+      isTripped,
+      getMessage: getOfflineMessage,
+    };
+  })();
+
   function formatBackendEndpointSummary(context = {}) {
     if (context && typeof context.summary === 'string' && context.summary.trim().length) {
       return context.summary.trim();
@@ -14085,11 +14339,19 @@
       const detail = event?.detail ?? {};
       const fallback = 'Leaderboard offline — runs stored locally until connection returns.';
       const message = deriveBackendMessageFromDetail(detail, fallback);
-      updateScoreboardStatus(message, { offline: true });
-      showGlobalScoreSyncWarning(message);
+      networkCircuitBreaker.recordFailure('api', {
+        source: detail.source ?? 'score-sync',
+        reason: detail.reason ?? null,
+        status: detail.status ?? null,
+        endpoint: detail.endpoint ?? null,
+        message,
+      });
+      const finalMessage = networkCircuitBreaker.applyOfflineMessage(message);
+      updateScoreboardStatus(finalMessage, { offline: true });
+      showGlobalScoreSyncWarning(finalMessage);
       bootstrapOverlay.setDiagnostic('backend', {
         status: 'error',
-        message,
+        message: finalMessage,
       });
     });
 
@@ -14099,11 +14361,23 @@
         ? deriveOnlineScoreboardMessage()
         : 'Leaderboard connection restored.';
       const message = deriveBackendMessageFromDetail(detail, fallback);
-      updateScoreboardStatus(message, { offline: false });
-      hideGlobalScoreSyncWarning(message);
-      bootstrapOverlay.setDiagnostic('backend', {
-        status: 'ok',
+      networkCircuitBreaker.recordRecovery('api', {
+        source: detail.source ?? 'score-sync',
+        status: detail.status ?? null,
+        endpoint: detail.endpoint ?? null,
         message,
+      });
+      const finalMessage = networkCircuitBreaker.applyOfflineMessage(message);
+      const offline = networkCircuitBreaker.isTripped();
+      updateScoreboardStatus(finalMessage, { offline });
+      if (offline) {
+        showGlobalScoreSyncWarning(finalMessage);
+      } else {
+        hideGlobalScoreSyncWarning(finalMessage);
+      }
+      bootstrapOverlay.setDiagnostic('backend', {
+        status: offline ? 'warning' : 'ok',
+        message: finalMessage,
       });
     });
   }
