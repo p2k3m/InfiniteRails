@@ -660,9 +660,20 @@
             aria-describedby="defeatMessage defeatCountdown"
           >
             <h3 id="defeatTitle">You Perished</h3>
-            <p class="defeat-overlay__message" id="defeatMessage"></p>
-            <div class="defeat-overlay__inventory" id="defeatInventory" aria-live="polite"></div>
-            <p class="defeat-overlay__countdown" id="defeatCountdown" role="status" aria-live="assertive"></p>
+            <p class="defeat-overlay__message" id="defeatMessage">
+              Respawn to recover your world snapshot and restore your gear.
+            </p>
+            <div
+              class="defeat-overlay__inventory"
+              id="defeatInventory"
+              aria-live="polite"
+              data-empty="true"
+            >
+              Recover world cache ready — inventory will be restored on respawn.
+            </div>
+            <p class="defeat-overlay__countdown" id="defeatCountdown" role="status" aria-live="assertive">
+              Recover world timer syncing…
+            </p>
             <div class="defeat-overlay__actions">
               <button type="button" class="defeat-overlay__respawn-button" id="defeatRespawn">
                 Respawn Now
