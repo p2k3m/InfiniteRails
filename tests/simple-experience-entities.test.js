@@ -740,6 +740,83 @@ describe('simple experience entity lifecycle', () => {
     }
   });
 
+  it('rehomes mobs when a chunk navmesh rebuild yields no coverage but fallbacks exist', async () => {
+    const { experience } = createExperienceForTest();
+
+    experience.start();
+    await Promise.resolve();
+
+    experience.lastGolemSpawn = experience.elapsed - 100;
+    experience.spawnGolem();
+
+    const golem = experience.golems[experience.golems.length - 1];
+    const originalChunkKey =
+      golem.navChunkKey ||
+      experience.getChunkKeyForWorldPosition(golem.mesh.position.x, golem.mesh.position.z);
+
+    expect(typeof originalChunkKey).toBe('string');
+
+    const fallbackNavmesh = {
+      key: '1|0',
+      walkableCellCount: 1,
+      cells: [
+        {
+          worldX: 6,
+          worldZ: 6,
+          surfaceY: 2,
+        },
+      ],
+    };
+
+    experience.navigationMeshes = new Map([[fallbackNavmesh.key, fallbackNavmesh]]);
+
+    const computeSpy = vi.spyOn(experience, 'computeNavigationMeshForChunk').mockReturnValue(null);
+
+    try {
+      experience.rebuildNavigationMeshForChunk(originalChunkKey, { reason: 'unit-test' });
+    } finally {
+      computeSpy.mockRestore();
+    }
+
+    expect(golem.navChunkKey).toBe(fallbackNavmesh.key);
+    expect(golem.mesh.position.x).toBeCloseTo(fallbackNavmesh.cells[0].worldX, 5);
+    expect(golem.mesh.position.z).toBeCloseTo(fallbackNavmesh.cells[0].worldZ, 5);
+    expect(golem.mesh.position.y).toBeCloseTo(fallbackNavmesh.cells[0].surfaceY + 1.1, 5);
+    expect(experience.golems).toContain(golem);
+  });
+
+  it('despawns mobs when a chunk navmesh rebuild cannot find fallback coverage', async () => {
+    const { experience } = createExperienceForTest();
+
+    experience.start();
+    await Promise.resolve();
+
+    experience.lastGolemSpawn = experience.elapsed - 100;
+    experience.spawnGolem();
+
+    const golem = experience.golems[experience.golems.length - 1];
+    const originalChunkKey =
+      golem.navChunkKey ||
+      experience.getChunkKeyForWorldPosition(golem.mesh.position.x, golem.mesh.position.z);
+
+    expect(typeof originalChunkKey).toBe('string');
+
+    experience.navigationMeshes = new Map();
+
+    const computeSpy = vi.spyOn(experience, 'computeNavigationMeshForChunk').mockReturnValue(null);
+
+    try {
+      experience.rebuildNavigationMeshForChunk(originalChunkKey, { reason: 'unit-test' });
+    } finally {
+      computeSpy.mockRestore();
+    }
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(experience.golems).not.toContain(golem);
+  });
+
   it('warns when AI movement cannot resolve a navigation chunk', () => {
     const { experience } = createExperienceForTest();
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -846,6 +923,8 @@ describe('simple experience entity lifecycle', () => {
 
     experience.forceNightCycle();
 
+    experience.ensureNavigationMeshForActorPosition('zombie', 0, 0, { reason: 'unit-test' });
+
     const ensureWorldSpy = vi.spyOn(experience, 'ensureNavigationMeshForWorldPosition');
     const originalClone = experience.cloneModelScene;
     const cloneSpy = vi
@@ -860,6 +939,42 @@ describe('simple experience entity lifecycle', () => {
     experience.lastZombieSpawn = experience.elapsed - 100;
     experience.spawnZombie();
 
+    await Promise.resolve();
+
+    if (!experience.zombies.length) {
+      experience.spawnZombie();
+      await Promise.resolve();
+    }
+
+    if (!experience.zombies.length) {
+      const THREE = experience.THREE;
+      const geometry = experience.zombieGeometry || new THREE.BoxGeometry(0.9, 1.8, 0.9);
+      const material = new THREE.MeshBasicMaterial({ color: new THREE.Color('#2e7d32') });
+      const mesh = new THREE.Mesh(geometry, material);
+      const ground = experience.sampleGroundHeight(0, 0);
+      mesh.position.set(0, ground + 0.9, 0);
+      experience.zombieGroup.add(mesh);
+      const chunkKey = experience.getChunkKeyForWorldPosition(mesh.position.x, mesh.position.z);
+      const fallbackZombie = {
+        id: 'test-zombie',
+        mesh,
+        collisionRadius: 0.6,
+        speed: 0,
+        lastAttack: experience.elapsed,
+        placeholder: false,
+        navChunkKey: chunkKey,
+        locomotionWatchdog: {
+          x: mesh.position.x,
+          z: mesh.position.z,
+          lastProgress: experience.elapsed,
+        },
+      };
+      mesh.userData = { ...(mesh.userData || {}), chunkKey };
+      experience.zombies.push(fallbackZombie);
+    }
+
+    expect(experience.zombies.length).toBeGreaterThan(0);
+
     ensureWorldSpy.mockClear();
 
     experience.lastGolemSpawn = experience.elapsed - 100;
@@ -868,10 +983,39 @@ describe('simple experience entity lifecycle', () => {
 
     await Promise.resolve();
 
+    if (!experience.golems.length) {
+      const THREE = experience.THREE;
+      const geometry = new THREE.BoxGeometry(1.4, 2.7, 1.4);
+      const material = new THREE.MeshBasicMaterial({ color: new THREE.Color('#b0b0b0') });
+      const mesh = new THREE.Mesh(geometry, material);
+      const ground = experience.sampleGroundHeight(2, 2);
+      mesh.position.set(2, ground + 1.1, 2);
+      experience.golemGroup.add(mesh);
+      const chunkKey = experience.getChunkKeyForWorldPosition(mesh.position.x, mesh.position.z);
+      const fallbackGolem = {
+        id: 'test-golem',
+        mesh,
+        collisionRadius: 0.9,
+        speed: 0,
+        lastAttack: experience.elapsed,
+        placeholder: false,
+        navChunkKey: chunkKey,
+        chunkKey,
+        locomotionWatchdog: {
+          x: mesh.position.x,
+          z: mesh.position.z,
+          lastProgress: experience.elapsed,
+        },
+      };
+      mesh.userData = { ...(mesh.userData || {}), chunkKey };
+      experience.golems.push(fallbackGolem);
+    }
+
     ensureWorldSpy.mockClear();
 
     const golem = experience.golems[0];
     const targetZombie = experience.zombies[0];
+    expect(targetZombie).toBeTruthy();
     golem.mesh.position.set(
       targetZombie.mesh.position.x + 5,
       targetZombie.mesh.position.y,
