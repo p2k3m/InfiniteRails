@@ -10136,11 +10136,17 @@
         const metrics = detail.metrics && typeof detail.metrics === 'object' ? detail.metrics : null;
         const label =
           typeof detail.event === 'string' && detail.event.trim().length ? detail.event.trim() : 'sample';
-        const message = `Performance metrics sample captured — ${label}`;
+        const summary =
+          typeof metrics?.summary === 'string' && metrics.summary.trim().length ? metrics.summary.trim() : null;
+        const message =
+          summary !== null
+            ? `Performance metrics sample captured — ${label}: ${summary}`
+            : `Performance metrics sample captured — ${label}`;
         const payload = {
           analytics: 'performance',
           event: label,
           metrics,
+          summary,
           timestamp: Number.isFinite(detail.timestamp) ? detail.timestamp : Date.now(),
         };
         if (typeof logThroughDiagnostics === 'function') {
