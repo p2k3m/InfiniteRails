@@ -501,6 +501,68 @@ describe('survival watchdog recovery', () => {
     );
   });
 
+  it('initialises global survival state when crashes occur before state bootstrap', () => {
+    const { sandbox, windowStub, consoleStub } = createSandbox();
+
+    evaluateBootstrapScript(sandbox);
+
+    const hooks = windowStub.__INFINITE_RAILS_TEST_HOOKS__;
+    expect(hooks).toBeTruthy();
+
+    const updateHud = vi.fn();
+    const publishStateSnapshot = vi.fn();
+    const emitGameEvent = vi.fn();
+    const experience = {
+      maxHealth: 30,
+      health: 2,
+      maxHunger: 28,
+      hunger: 1,
+      hungerPercent: 5,
+      playerBreathCapacity: 12,
+      playerBreath: 3,
+      playerBreathPercent: 25,
+      updateHud,
+      publishStateSnapshot,
+      emitGameEvent,
+    };
+
+    hooks.setActiveExperienceInstance(experience);
+
+    windowStub.__INFINITE_RAILS_STATE__ = undefined;
+
+    const result = hooks.triggerSurvivalWatchdog({
+      stage: 'window.error',
+      reason: 'global-error',
+      message: 'Physics crash prevented state hydration.',
+    });
+
+    expect(result).toBe(true);
+    expect(updateHud).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: 'survival-watchdog', stage: 'window.error' }),
+    );
+    expect(publishStateSnapshot).toHaveBeenCalledWith('survival-watchdog');
+    expect(emitGameEvent).toHaveBeenCalledWith(
+      'survival-watchdog-reset',
+      expect.objectContaining({ stage: 'window.error', reason: 'global-error', experienceUpdated: true }),
+    );
+
+    const state = windowStub.__INFINITE_RAILS_STATE__;
+    expect(state).toBeTruthy();
+    const playerState = state.player;
+    expect(playerState.health).toBe(30);
+    expect(playerState.maxHealth).toBe(30);
+    expect(playerState.hunger).toBe(28);
+    expect(playerState.maxHunger).toBe(28);
+    expect(playerState.hungerPercent).toBe(100);
+    expect(playerState.breath).toBe(12);
+    expect(playerState.maxBreath).toBe(12);
+    expect(playerState.breathPercent).toBe(100);
+    expect(consoleStub.warn).toHaveBeenCalledWith(
+      'Survival watchdog reset player vitals after crash.',
+      expect.objectContaining({ stage: 'window.error', reason: 'global-error' }),
+    );
+  });
+
   it('normalises crash descriptors before checking survival watchdog triggers', () => {
     const { sandbox, windowStub, consoleStub } = createSandbox();
 
