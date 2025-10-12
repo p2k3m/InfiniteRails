@@ -801,6 +801,11 @@
     reloadAttempted: false,
   };
 
+  const manifestIntegrityVerificationState = {
+    promise: null,
+    lastResult: null,
+  };
+
   manifestIntegrityState.reloadAttempted = (() => {
     const storage = globalScope?.sessionStorage ?? null;
     if (!storage) {
@@ -4611,6 +4616,156 @@
     return manifestAssetCheckState;
   }
 
+  function buildManifestRequestContext(scopeOverride) {
+    const scope =
+      scopeOverride ||
+      (typeof globalScope !== 'undefined'
+        ? globalScope
+        : typeof window !== 'undefined'
+          ? window
+          : globalThis);
+    const baseCandidates = [];
+    const configuredBase = scope?.APP_CONFIG?.assetBaseUrl ?? null;
+    if (configuredBase) {
+      baseCandidates.push(configuredBase);
+    }
+    const derivedBase = deriveProductionAssetRoot(scope, documentRef);
+    if (derivedBase) {
+      baseCandidates.push(derivedBase);
+    }
+    if (documentRef?.baseURI) {
+      baseCandidates.push(documentRef.baseURI);
+    }
+    if (scope?.location?.href) {
+      baseCandidates.push(scope.location.href);
+    }
+    const manifestUrlCandidate = resolveUrlWithBases('asset-manifest.json', baseCandidates);
+    const manifestUrl = manifestUrlCandidate ? manifestUrlCandidate.href : 'asset-manifest.json';
+    const manifestRequestUrl = applyAssetVersionTag(manifestUrl);
+    return {
+      scope,
+      baseCandidates,
+      manifestUrl,
+      manifestRequestUrl,
+    };
+  }
+
+  function startManifestIntegrityVerification(options = {}) {
+    if (manifestIntegrityVerificationState.promise && options.force !== true) {
+      return manifestIntegrityVerificationState.promise;
+    }
+    const context = buildManifestRequestContext(options.scope);
+    const scope = context.scope;
+    const resultContext = {
+      manifestUrl: context.manifestUrl,
+      manifestRequestUrl: context.manifestRequestUrl,
+      baseCandidates: Array.isArray(context.baseCandidates) ? [...context.baseCandidates] : [],
+    };
+    const fetchImpl =
+      (typeof scope?.fetch === 'function' && scope.fetch.bind(scope)) ||
+      (typeof fetch === 'function' ? fetch : null);
+    if (!fetchImpl) {
+      const skipped = Promise.resolve({
+        status: 'skipped',
+        reason: 'fetch-unavailable',
+        context: resultContext,
+      });
+      manifestIntegrityVerificationState.lastResult = {
+        status: 'skipped',
+        reason: 'fetch-unavailable',
+        context: resultContext,
+      };
+      manifestIntegrityVerificationState.promise = skipped;
+      skipped.finally(() => {
+        if (manifestIntegrityVerificationState.promise === skipped) {
+          manifestIntegrityVerificationState.promise = null;
+        }
+      });
+      return skipped;
+    }
+
+    const runPromise = (async () => {
+      try {
+        const response = await fetchImpl(context.manifestRequestUrl, {
+          method: 'GET',
+          cache: 'no-store',
+          redirect: 'follow',
+          mode: 'cors',
+        });
+        if (!response.ok) {
+          if (scope?.console?.debug) {
+            scope.console.debug('Manifest integrity verification request failed.', {
+              status: response.status ?? null,
+            });
+          }
+          return {
+            status: 'error',
+            reason: 'manifest-request-failed',
+            responseStatus: response.status ?? null,
+            context: resultContext,
+          };
+        }
+        let manifestJson;
+        try {
+          manifestJson = await response.json();
+        } catch (parseError) {
+          if (scope?.console?.debug) {
+            scope.console.debug('Manifest integrity verification parse failed.', parseError);
+          }
+          return {
+            status: 'error',
+            reason: 'manifest-parse-failed',
+            error: { message: parseError?.message ?? String(parseError) },
+            context: resultContext,
+          };
+        }
+        const integrityOk = await verifyManifestIntegrity(manifestJson, {
+          manifestUrl: context.manifestUrl,
+          manifestRequestUrl: context.manifestRequestUrl,
+          source: options.source || 'bootstrap',
+        });
+        if (!integrityOk) {
+          return {
+            status: 'reload-requested',
+            reason: 'manifest-integrity-mismatch',
+            manifest: manifestJson,
+            context: resultContext,
+          };
+        }
+        return {
+          status: 'ok',
+          manifest: manifestJson,
+          checkedAt: new Date().toISOString(),
+          context: resultContext,
+        };
+      } catch (error) {
+        if (scope?.console?.debug) {
+          scope.console.debug('Manifest integrity verification request threw.', error);
+        }
+        return {
+          status: 'error',
+          reason: 'manifest-request-error',
+          error: { message: error?.message ?? String(error) },
+          context: resultContext,
+        };
+      }
+    })();
+
+    const wrappedPromise = runPromise.then((result) => {
+      manifestIntegrityVerificationState.lastResult = result;
+      return result;
+    });
+
+    manifestIntegrityVerificationState.promise = wrappedPromise;
+    wrappedPromise.finally(() => {
+      if (manifestIntegrityVerificationState.promise === wrappedPromise) {
+        manifestIntegrityVerificationState.promise = null;
+      }
+    });
+
+    return wrappedPromise;
+  }
+
   function resolveManifestAssetUrl(path, baseCandidates) {
     if (typeof path !== 'string') {
       return null;
@@ -4674,25 +4829,10 @@
       total: 0,
     });
 
-    const baseCandidates = [];
-    const configuredBase = scope?.APP_CONFIG?.assetBaseUrl ?? null;
-    if (configuredBase) {
-      baseCandidates.push(configuredBase);
-    }
-    const derivedBase = deriveProductionAssetRoot(scope, documentRef);
-    if (derivedBase) {
-      baseCandidates.push(derivedBase);
-    }
-    if (documentRef?.baseURI) {
-      baseCandidates.push(documentRef.baseURI);
-    }
-    if (scope?.location?.href) {
-      baseCandidates.push(scope.location.href);
-    }
-
-    const manifestUrlCandidate = resolveUrlWithBases('asset-manifest.json', baseCandidates);
-    const manifestUrl = manifestUrlCandidate ? manifestUrlCandidate.href : 'asset-manifest.json';
-    const manifestRequestUrl = applyAssetVersionTag(manifestUrl);
+    const manifestRequestContext = buildManifestRequestContext(scope);
+    const baseCandidates = manifestRequestContext.baseCandidates;
+    const manifestUrl = manifestRequestContext.manifestUrl;
+    const manifestRequestUrl = manifestRequestContext.manifestRequestUrl;
 
     const fetchWithTimeout = async (url, init = {}) => {
       const optionsInit = {
@@ -4775,29 +4915,46 @@
         checkedAt: new Date().toISOString(),
         manifestUrl: manifestRequestUrl,
       };
-      try {
-        const response = await fetchImpl(manifestRequestUrl, {
-          method: 'GET',
-          cache: 'no-store',
-          redirect: 'follow',
-        });
-        if (!response.ok) {
-          summary.status = 'error';
-          summary.reason = 'manifest-request-failed';
-          summary.responseStatus = response.status ?? null;
-          return summary;
+      let manifestJson = null;
+      if (options.force !== true) {
+        const cachedVerification = manifestIntegrityVerificationState.lastResult;
+        if (
+          cachedVerification &&
+          cachedVerification.status === 'ok' &&
+          cachedVerification.manifest &&
+          cachedVerification.context &&
+          cachedVerification.context.manifestRequestUrl === manifestRequestUrl
+        ) {
+          manifestJson = cachedVerification.manifest;
         }
-        let manifestJson;
-        try {
-          manifestJson = await response.json();
-        } catch (parseError) {
-          summary.status = 'error';
-          summary.reason = 'manifest-parse-failed';
-          summary.error = { message: parseError?.message ?? String(parseError) };
-          return summary;
+      }
+      try {
+        if (!manifestJson) {
+          const response = await fetchImpl(manifestRequestUrl, {
+            method: 'GET',
+            cache: 'no-store',
+            redirect: 'follow',
+          });
+          if (!response.ok) {
+            summary.status = 'error';
+            summary.reason = 'manifest-request-failed';
+            summary.responseStatus = response.status ?? null;
+            return summary;
+          }
+          try {
+            manifestJson = await response.json();
+          } catch (parseError) {
+            summary.status = 'error';
+            summary.reason = 'manifest-parse-failed';
+            summary.error = { message: parseError?.message ?? String(parseError) };
+            return summary;
+          }
+        } else {
+          summary.manifestSource = 'cache';
         }
         const integrityOk = await verifyManifestIntegrity(manifestJson, {
-          manifestUrl: manifestRequestUrl,
+          manifestUrl,
+          manifestRequestUrl,
           source: 'manifest-asset-check',
         });
         if (!integrityOk) {
@@ -4808,6 +4965,16 @@
           };
           return summary;
         }
+        manifestIntegrityVerificationState.lastResult = {
+          status: 'ok',
+          manifest: manifestJson,
+          checkedAt: new Date().toISOString(),
+          context: {
+            manifestUrl,
+            manifestRequestUrl,
+            baseCandidates: Array.isArray(baseCandidates) ? [...baseCandidates] : [],
+          },
+        };
         const assets = Array.isArray(manifestJson?.assets) ? manifestJson.assets : [];
         const seen = new Set();
         const paths = [];
@@ -21622,6 +21789,13 @@
         const mode = startSimple ? 'simple' : 'advanced';
         setRendererModeIndicator(mode);
         scheduleRendererStartWatchdog(mode);
+        if (typeof startManifestIntegrityVerification === 'function') {
+          try {
+            await startManifestIntegrityVerification({ source: 'bootstrap' });
+          } catch (error) {
+            scope.console?.debug?.('Manifest integrity verification rejected during bootstrap.', error);
+          }
+        }
         let backendHealthCheckPromise = null;
         if (identityState.configuredApiBaseUrl) {
           backendHealthCheckPromise = initialBackendLiveCheckPromise || ensureBackendLiveCheck();

@@ -22,4 +22,9 @@ describe('Manifest asset availability diagnostics', () => {
       scriptSource.includes('Manifest integrity mismatch detected. Reloading to restore asset bundle.'),
     ).toBe(true);
   });
+
+  it('verifies manifest integrity during bootstrap', () => {
+    const bootstrapPattern = /await startManifestIntegrityVerification\(\{\s*source:\s*'bootstrap'/;
+    expect(bootstrapPattern.test(scriptSource)).toBe(true);
+  });
 });
