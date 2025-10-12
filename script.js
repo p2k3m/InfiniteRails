@@ -21813,12 +21813,21 @@
         const mode = startSimple ? 'simple' : 'advanced';
         setRendererModeIndicator(mode);
         scheduleRendererStartWatchdog(mode);
+        let manifestIntegrityResult = null;
         if (typeof startManifestIntegrityVerification === 'function') {
           try {
-            await startManifestIntegrityVerification({ source: 'bootstrap' });
+            manifestIntegrityResult = await startManifestIntegrityVerification({ source: 'bootstrap' });
           } catch (error) {
             scope.console?.debug?.('Manifest integrity verification rejected during bootstrap.', error);
           }
+        }
+        if (manifestIntegrityResult?.status === 'reload-requested') {
+          markBootPhaseError('assets', 'Asset manifest integrity mismatch detected. Reloading to refresh assets.');
+          return {
+            status: 'manifest-reload-requested',
+            reason: manifestIntegrityResult.reason ?? 'manifest-integrity-mismatch',
+            context: manifestIntegrityResult.context ?? null,
+          };
         }
         let backendHealthCheckPromise = null;
         if (identityState.configuredApiBaseUrl) {
