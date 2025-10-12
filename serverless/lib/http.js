@@ -2,7 +2,23 @@
 
 const { applyTraceHeaders, embedTraceInBody } = require('./trace');
 
+const CONTENT_SECURITY_POLICY = [
+  "default-src 'none'",
+  "base-uri 'none'",
+  "form-action 'none'",
+  "frame-ancestors 'none'",
+  "connect-src 'self'",
+].join('; ');
+
+const SECURITY_HEADERS = {
+  'Content-Security-Policy': CONTENT_SECURITY_POLICY,
+  'Referrer-Policy': 'same-origin',
+  'X-Content-Type-Options': 'nosniff',
+  'X-Frame-Options': 'DENY',
+};
+
 const DEFAULT_HEADERS = {
+  ...SECURITY_HEADERS,
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'Content-Type,Authorization,X-Requested-With',
   'Access-Control-Allow-Methods': 'OPTIONS,GET,POST',
@@ -77,4 +93,6 @@ module.exports = {
   parseJsonBody,
   handleOptions,
   DEFAULT_HEADERS,
+  SECURITY_HEADERS,
+  CONTENT_SECURITY_POLICY,
 };

@@ -142,6 +142,7 @@ jobs:
             --include "script.js" \
             --include "simple-experience.js" \
             --include "controls.config.js" \
+            --include "bootstrap-fallback.js" \
             --include "portal-mechanics.js" \
             --include "scoreboard-utils.js" \
             --include "assets/**" \
