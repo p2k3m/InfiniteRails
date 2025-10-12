@@ -416,6 +416,7 @@
     typeof Symbol === 'function' ? Symbol.for('infiniteRails.traceMetadata') : '__infiniteRailsTraceMetadata__';
   const TRACE_HEADER_TRACE_ID = 'X-Trace-Id';
   const TRACE_HEADER_SESSION_ID = 'X-Trace-Session';
+  const RATE_LIMIT_HEADER_GOOGLE_ID = 'X-Rate-Limit-Google-Id';
 
   function isMockFunction(fn) {
     if (!fn || typeof fn !== 'function') {
@@ -14631,9 +14632,13 @@
     if (!fetchFn) {
       return false;
     }
+    const headers = { 'Content-Type': 'application/json' };
+    if (activeGoogleId) {
+      headers[RATE_LIMIT_HEADER_GOOGLE_ID] = activeGoogleId;
+    }
     const init = {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body,
       keepalive: true,
       traceId: context.traceId,
@@ -18007,11 +18012,13 @@
     }
     const payload = buildIdentityPayload(identity);
     try {
+      const headers = { 'Content-Type': 'application/json' };
+      if (identity.googleId) {
+        headers[RATE_LIMIT_HEADER_GOOGLE_ID] = identity.googleId;
+      }
       const response = await globalScope.fetch(url, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers,
         body: JSON.stringify(payload),
       });
       if (response && response.status === 429) {

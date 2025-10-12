@@ -38,6 +38,8 @@ async function applyRateLimit(event, trace, logger, {
     googleId,
     sessionId: sessionIdOverride || trace?.sessionId || null,
     sourceIp: resolveSourceIp(event),
+    headers: event?.headers,
+    multiValueHeaders: event?.multiValueHeaders,
   });
 
   return enforceRateLimit({

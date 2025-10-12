@@ -39,6 +39,22 @@ describe('deriveRateLimitIdentity', () => {
     expect(deriveRateLimitIdentity({ sessionId: '', sourceIp: '1.2.3.4' })).toBe('ip:1.2.3.4');
     expect(deriveRateLimitIdentity({})).toBe('anonymous');
   });
+
+  it('allows rate limit headers to override other identifiers', () => {
+    expect(
+      deriveRateLimitIdentity({
+        googleId: 'body-user',
+        sessionId: 'session-override',
+        headers: { 'X-Rate-Limit-Google-Id': 'header-user' },
+      }),
+    ).toBe('user:header-user');
+    expect(
+      deriveRateLimitIdentity({
+        googleId: '',
+        multiValueHeaders: { 'X-Rate-Limit-Google-Id': ['  header-user  '] },
+      }),
+    ).toBe('user:header-user');
+  });
 });
 
 describe('enforceRateLimit', () => {
