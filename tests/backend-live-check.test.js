@@ -185,6 +185,110 @@ describe('backend live-check', () => {
     expect(scoreboardStatus.textContent).toContain('Users endpoint not configured');
   });
 
+  it('schedules uptime heartbeats when the health endpoint is configured', async () => {
+    const apiBaseUrl = 'https://api.example.invalid';
+    const healthEndpoint = 'https://status.example.invalid/heartbeat';
+    const { sandbox, windowStub, timers } = createBootstrapSandbox({
+      appConfig: {
+        apiBaseUrl,
+        healthEndpoint,
+        healthHeartbeatIntervalMs: 60000,
+      },
+    });
+
+    const overlay = {
+      setDiagnostic: vi.fn(),
+      hide: vi.fn(),
+      showLoading: vi.fn(),
+      showError: vi.fn(),
+    };
+    sandbox.window.bootstrapOverlay = overlay;
+
+    const fetchSpy = vi.fn((url, init = {}) => {
+      const method = (init?.method ?? 'GET').toUpperCase();
+      if (url === `${apiBaseUrl}/scores` && method === 'GET') {
+        return Promise.resolve({ ok: true, status: 200 });
+      }
+      if (url === `${apiBaseUrl}/scores` && method === 'POST') {
+        return Promise.resolve({ ok: true, status: 200 });
+      }
+      if (url === `${apiBaseUrl}/users` && method === 'POST') {
+        return Promise.resolve({ ok: true, status: 200 });
+      }
+      if (url === `${apiBaseUrl}/events` && method === 'POST') {
+        return Promise.resolve({ ok: true, status: 200 });
+      }
+      if (url === healthEndpoint && method === 'POST') {
+        return Promise.resolve({ ok: true, status: 204 });
+      }
+      return Promise.resolve({ ok: true, status: 200 });
+    });
+    sandbox.window.fetch = fetchSpy;
+    sandbox.fetch = fetchSpy;
+
+    evaluateBootstrapScript(sandbox);
+
+    await flushMicrotasks();
+    await flushMicrotasks();
+
+    const hooks = windowStub.__INFINITE_RAILS_TEST_HOOKS__;
+    expect(hooks).toBeTruthy();
+
+    const heartbeatState = hooks.getHeartbeatState();
+    expect(heartbeatState.endpoint).toBe(healthEndpoint);
+    expect(heartbeatState.intervalMs).toBe(60000);
+    expect(heartbeatState.online).toBe(true);
+
+    const heartbeatCalls = fetchSpy.mock.calls.filter(([url]) => url === healthEndpoint);
+    expect(heartbeatCalls.length).toBeGreaterThan(0);
+    const [, firstInit] = heartbeatCalls[0];
+    expect(firstInit?.method).toBe('POST');
+    expect(firstInit?.headers?.['Content-Type']).toBe('application/json');
+    const initialPayload = JSON.parse(firstInit?.body ?? '{}');
+    expect(initialPayload.mode).toBe('heartbeat');
+    expect(initialPayload.intervalMs).toBe(60000);
+    expect(initialPayload.status?.scoreboard?.offline).toBe(false);
+
+    const scheduledTimerId = heartbeatState.timerId;
+    expect(scheduledTimerId).not.toBeNull();
+    expect(timers.has(scheduledTimerId)).toBe(true);
+
+    windowStub.dispatchEvent(
+      new windowStub.CustomEvent('infinite-rails:score-sync-offline', { detail: { source: 'test' } }),
+    );
+
+    const offlineState = hooks.getHeartbeatState();
+    expect(offlineState.online).toBe(false);
+    expect(offlineState.timerId).toBeNull();
+    expect(timers.has(scheduledTimerId)).toBe(false);
+    expect(hooks.triggerHeartbeat()).toBe(false);
+
+    fetchSpy.mockClear();
+
+    windowStub.dispatchEvent(
+      new windowStub.CustomEvent('infinite-rails:score-sync-restored', { detail: { source: 'test' } }),
+    );
+
+    await flushMicrotasks();
+
+    const restoredState = hooks.getHeartbeatState();
+    expect(restoredState.online).toBe(true);
+    expect(restoredState.timerId).not.toBeNull();
+    const restoreTimerId = restoredState.timerId;
+    expect(timers.has(restoreTimerId)).toBe(true);
+
+    const resumePromise = hooks.triggerHeartbeat();
+    expect(resumePromise).not.toBe(false);
+    await resumePromise;
+    await flushMicrotasks();
+
+    const resumedCalls = fetchSpy.mock.calls.filter(([url]) => url === healthEndpoint);
+    expect(resumedCalls.length).toBe(1);
+    const [, resumedInit] = resumedCalls[0];
+    const resumedPayload = JSON.parse(resumedInit?.body ?? '{}');
+    expect(resumedPayload.sequence).toBeGreaterThan(initialPayload.sequence);
+  });
+
   it('enters Offline/Recovery Mode after repeated API failures', async () => {
     const { sandbox, windowStub, scoreboardStatus } = createBootstrapSandbox({
       appConfig: { apiBaseUrl: 'https://api.example.invalid' },
