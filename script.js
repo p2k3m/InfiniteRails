@@ -12058,6 +12058,7 @@
 
   const BACKEND_LIVE_CHECK_TIMEOUT_MS = 8000;
   const BACKEND_LIVE_CHECK_ALLOWED_POST_STATUSES = new Set([400, 401, 403, 409, 422, 429]);
+  const BACKEND_REQUIRED_ENDPOINT_KEYS = ['scores', 'users'];
   const backendLiveCheckState = {
     promise: null,
     performed: false,
@@ -12137,6 +12138,9 @@
     const label = formatBackendProbeLabel(result.method, result.url, result.label);
     if (Number.isFinite(result.status)) {
       return `${label} returned ${result.status}`;
+    }
+    if (result.reason === 'missing-endpoint') {
+      return `${label} not configured`;
     }
     if (result.reason === 'fetch-unavailable') {
       return `${label} failed — fetch API unavailable`;
@@ -12372,52 +12376,74 @@
         message: 'Validating leaderboard service…',
       });
     }
-    const probes = [];
-    if (configuredEndpoints.scores) {
-      probes.push(
-        probeBackendEndpoint({
-          url: configuredEndpoints.scores,
-          method: 'GET',
-          label: 'GET /scores',
-          allowStatuses: new Set(),
-        }),
-      );
-      probes.push(
-        probeBackendEndpoint({
-          url: configuredEndpoints.scores,
-          method: 'POST',
-          label: 'POST /scores',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Infinite-Rails-Live-Check': '1',
-          },
-          body: JSON.stringify({ mode: 'live-check', timestamp: new Date().toISOString() }),
-          allowStatuses: BACKEND_LIVE_CHECK_ALLOWED_POST_STATUSES,
-        }),
-      );
-    }
-    if (configuredEndpoints.users) {
-      probes.push(
-        probeBackendEndpoint({
-          url: configuredEndpoints.users,
-          method: 'POST',
-          label: 'POST /users',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Infinite-Rails-Live-Check': '1',
-          },
-          body: JSON.stringify({ mode: 'live-check', timestamp: new Date().toISOString() }),
-          allowStatuses: BACKEND_LIVE_CHECK_ALLOWED_POST_STATUSES,
-        }),
-      );
-    }
-    if (!probes.length) {
+    const normaliseEndpointUrl = (value) =>
+      typeof value === 'string' && value.trim().length ? value.trim() : null;
+
+    const configuredScoresUrl = normaliseEndpointUrl(configuredEndpoints.scores);
+    const configuredUsersUrl = normaliseEndpointUrl(configuredEndpoints.users);
+
+    const missingEndpointFailures = BACKEND_REQUIRED_ENDPOINT_KEYS.filter((key) => {
+      if (key === 'scores') {
+        return !configuredScoresUrl;
+      }
+      if (key === 'users') {
+        return !configuredUsersUrl;
+      }
+      return !(typeof configuredEndpoints[key] === 'string' && configuredEndpoints[key].trim().length);
+    }).map((key) => {
+      const label = `${key.charAt(0).toUpperCase()}${key.slice(1)} endpoint`;
+      const url = normaliseEndpointUrl(configuredEndpoints[key]);
+      return {
+        ok: false,
+        url,
+        method: 'VALIDATE',
+        label,
+        reason: 'missing-endpoint',
+      };
+    });
+
+    if (missingEndpointFailures.length) {
+      const summary = missingEndpointFailures.map((failure) => formatBackendProbeSummary(failure)).join('; ');
       markBackendLiveCheckFailure({
         reason: 'missing-endpoints',
-        message: 'no API endpoints configured for validation',
+        message: summary,
+        results: [],
+        failures: missingEndpointFailures,
       });
       return false;
     }
+
+    const buildLiveCheckHeaders = () => ({
+      'Content-Type': 'application/json',
+      'X-Infinite-Rails-Live-Check': '1',
+    });
+    const timestamp = new Date().toISOString();
+    const postBody = JSON.stringify({ mode: 'live-check', timestamp });
+
+    const probes = [
+      probeBackendEndpoint({
+        url: configuredScoresUrl,
+        method: 'GET',
+        label: 'GET /scores',
+        allowStatuses: new Set(),
+      }),
+      probeBackendEndpoint({
+        url: configuredScoresUrl,
+        method: 'POST',
+        label: 'POST /scores',
+        headers: buildLiveCheckHeaders(),
+        body: postBody,
+        allowStatuses: BACKEND_LIVE_CHECK_ALLOWED_POST_STATUSES,
+      }),
+      probeBackendEndpoint({
+        url: configuredUsersUrl,
+        method: 'POST',
+        label: 'POST /users',
+        headers: buildLiveCheckHeaders(),
+        body: postBody,
+        allowStatuses: BACKEND_LIVE_CHECK_ALLOWED_POST_STATUSES,
+      }),
+    ];
     let results;
     try {
       results = await Promise.all(probes);
