@@ -333,6 +333,28 @@ describe('deployment workflow asset coverage', () => {
     expect(invalid).toEqual([]);
   });
 
+  it('ensures asset prefixes do not contain files missing from the manifest', () => {
+    const prefixes = ['assets', 'textures', 'audio', 'vendor'];
+    const unexpected = [];
+
+    for (const prefix of prefixes) {
+      const directory = path.join(repoRoot, prefix);
+      if (!fs.existsSync(directory)) {
+        continue;
+      }
+
+      const files = listFilesRecursive(directory);
+      for (const filePath of files) {
+        const relative = path.relative(repoRoot, filePath).split(path.sep).join('/');
+        if (!manifestAssetSet.has(relative)) {
+          unexpected.push(relative);
+        }
+      }
+    }
+
+    expect(unexpected).toEqual([]);
+  });
+
   it('ensures asset prefixes only contain world-readable files', () => {
     const prefixes = ['assets', 'textures', 'audio'];
     const invalid = [];

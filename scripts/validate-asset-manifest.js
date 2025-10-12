@@ -12,6 +12,7 @@ const workflowPath = path.join(repoRoot, '.github', 'workflows', 'deploy.yml');
 const templatePath = path.join(repoRoot, 'serverless', 'template.yaml');
 const scriptPath = path.join(repoRoot, 'script.js');
 const ASSET_PERMISSION_PREFIXES = ['assets', 'textures', 'audio'];
+const DEFAULT_MANIFEST_DIRECTORIES = [...ASSET_PERMISSION_PREFIXES, 'vendor'];
 const HASH_ALGORITHM = 'sha256';
 const HASH_LENGTH = 12;
 
@@ -454,6 +455,33 @@ function listUncoveredAssets(assets, patterns) {
   return assets.filter((asset) => !patterns.some((pattern) => patternMatchesAsset(pattern, asset)));
 }
 
+function toPosixPath(value) {
+  return value.split(path.sep).join('/');
+}
+
+function listFilesUnderPrefixes(prefixes = DEFAULT_MANIFEST_DIRECTORIES) {
+  const files = [];
+  for (const prefix of prefixes) {
+    if (!prefix) {
+      continue;
+    }
+    const directory = path.join(repoRoot, prefix);
+    if (!fs.existsSync(directory)) {
+      continue;
+    }
+    const entries = listFilesRecursive(directory);
+    for (const entryPath of entries) {
+      files.push(toPosixPath(path.relative(repoRoot, entryPath)));
+    }
+  }
+  return files;
+}
+
+function listUnlistedAssetFiles(manifestPaths, prefixes = DEFAULT_MANIFEST_DIRECTORIES) {
+  const manifestSet = new Set((manifestPaths || []).filter(Boolean));
+  return listFilesUnderPrefixes(prefixes).filter((file) => !manifestSet.has(file));
+}
+
 function sanitizeCloudFormationYaml(contents) {
   return contents.replace(/!Ref\s+/g, '').replace(/!GetAtt\s+/g, '').replace(/!Sub\s+/g, '');
 }
@@ -619,6 +647,7 @@ async function main() {
     const missingFiles = listMissingFiles(assets);
     const permissionIssues = listPermissionIssues(assets);
     const directoryPermissionIssues = listAssetDirectoryPermissionIssues();
+    const unlistedAssetFiles = listUnlistedAssetFiles(assets);
     const templateDocument = loadTemplateDocument();
     const bucketPolicyIssues = describeBucketPolicyIssues(templateDocument);
 
@@ -668,6 +697,11 @@ async function main() {
         .map((issue) => `${issue.asset} (mode ${issue.mode}: ${issue.problems.join(', ')})`)
         .join('; ');
       issues.push(`Manifest assets with incorrect permissions detected: ${formatted}`);
+    }
+    if (unlistedAssetFiles.length > 0) {
+      issues.push(
+        `Static asset directories contain files that are missing from asset-manifest.json: ${unlistedAssetFiles.join(', ')}`,
+      );
     }
     if (uncoveredAssets.length > 0) {
       issues.push(
@@ -761,6 +795,9 @@ module.exports = {
   listMissingFiles,
   listPermissionIssues,
   listAssetDirectoryPermissionIssues,
+  listFilesUnderPrefixes,
+  listUnlistedAssetFiles,
+  DEFAULT_MANIFEST_DIRECTORIES,
   extractIncludePatterns,
   patternMatchesAsset,
   listUncoveredAssets,
