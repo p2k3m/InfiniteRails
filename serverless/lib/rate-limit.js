@@ -2,6 +2,7 @@
 
 const DEFAULT_WINDOW_SECONDS = 60;
 const DEFAULT_MAX_REQUESTS = 60;
+const RATE_LIMIT_HEADER_GOOGLE_ID = 'x-rate-limit-google-id';
 
 function safeString(value, fallback = '') {
   if (value === undefined || value === null) {
@@ -33,6 +34,52 @@ function buildBucketKey(scope, identity, windowId) {
   const safeScope = safeString(scope, 'global');
   const safeIdentity = safeString(identity, 'anonymous');
   return `${safeScope}#${safeIdentity}#${windowId}`;
+}
+
+function normaliseHeaderValue(headers, name) {
+  if (!headers || typeof headers !== 'object') {
+    return '';
+  }
+  const target = typeof name === 'string' ? name.trim().toLowerCase() : '';
+  if (!target) {
+    return '';
+  }
+
+  const entries = Array.isArray(headers)
+    ? headers
+    : headers instanceof Map
+      ? Array.from(headers.entries())
+      : Object.entries(headers);
+
+  for (const [key, value] of entries) {
+    if (typeof key !== 'string') {
+      continue;
+    }
+    if (key.trim().toLowerCase() !== target) {
+      continue;
+    }
+    if (Array.isArray(value)) {
+      for (const entry of value) {
+        if (entry === undefined || entry === null) {
+          continue;
+        }
+        const candidate = typeof entry === 'string' ? entry.trim() : String(entry).trim();
+        if (candidate) {
+          return candidate;
+        }
+      }
+      continue;
+    }
+    if (value === undefined || value === null) {
+      continue;
+    }
+    const stringValue = typeof value === 'string' ? value : String(value);
+    const trimmed = stringValue.trim();
+    if (trimmed) {
+      return trimmed;
+    }
+  }
+  return '';
 }
 
 async function enforceRateLimit({
@@ -117,8 +164,11 @@ async function enforceRateLimit({
   }
 }
 
-function deriveRateLimitIdentity({ googleId, sessionId, sourceIp } = {}) {
-  const trimmedGoogleId = safeString(googleId);
+function deriveRateLimitIdentity({ googleId, sessionId, sourceIp, headers, multiValueHeaders } = {}) {
+  const headerGoogleId =
+    normaliseHeaderValue(headers, RATE_LIMIT_HEADER_GOOGLE_ID) ||
+    normaliseHeaderValue(multiValueHeaders, RATE_LIMIT_HEADER_GOOGLE_ID);
+  const trimmedGoogleId = safeString(headerGoogleId || googleId);
   if (trimmedGoogleId) {
     return `user:${trimmedGoogleId}`;
   }
@@ -138,4 +188,5 @@ module.exports = {
   deriveRateLimitIdentity,
   DEFAULT_WINDOW_SECONDS,
   DEFAULT_MAX_REQUESTS,
+  RATE_LIMIT_HEADER_GOOGLE_ID,
 };

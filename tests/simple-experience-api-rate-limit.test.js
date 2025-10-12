@@ -85,6 +85,8 @@ describe('simple experience API rate limiting', () => {
     await experience.loadScoreboard({ force: true });
 
     expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+    const [, init] = globalThis.fetch.mock.calls[0];
+    expect(init.headers['X-Rate-Limit-Google-Id']).toBe('user-123');
     expect(applyPenaltySpy).toHaveBeenCalledWith('scores:get:user:user-123', {
       limit: experience.scoreFetchRateLimit,
       windowMs: experience.scoreFetchWindowSeconds * 1000,
@@ -122,6 +124,8 @@ describe('simple experience API rate limiting', () => {
     await experience.flushScoreSync(true);
 
     expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+    const [, init] = globalThis.fetch.mock.calls[0];
+    expect(init.headers['X-Rate-Limit-Google-Id']).toBe('user-456');
     expect(applyPenaltySpy).toHaveBeenCalledWith('scores:post:user:user-456', {
       limit: experience.scoreSyncRateLimit,
       windowMs: experience.scoreSyncWindowSeconds * 1000,

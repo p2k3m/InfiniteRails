@@ -27,6 +27,8 @@ async function applyRateLimit(event, trace, logger, { scope, googleId = null, li
     googleId,
     sessionId: trace?.sessionId || null,
     sourceIp: resolveSourceIp(event),
+    headers: event?.headers,
+    multiValueHeaders: event?.multiValueHeaders,
   });
 
   return enforceRateLimit({
