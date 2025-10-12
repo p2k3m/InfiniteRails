@@ -11423,6 +11423,63 @@
     return resolved.href;
   }
 
+  function normaliseEventsEndpoint(endpoint) {
+    if (!endpoint || typeof endpoint !== 'string') {
+      return null;
+    }
+    const trimmed = endpoint.trim();
+    if (!trimmed) {
+      return null;
+    }
+    let resolved;
+    try {
+      resolved = new URL(trimmed, globalScope?.location?.href ?? undefined);
+    } catch (error) {
+      logConfigWarning(
+        'Invalid APP_CONFIG.eventsEndpoint detected; gameplay event sourcing disabled. Update APP_CONFIG.eventsEndpoint to a valid absolute HTTP(S) URL to capture gameplay telemetry.',
+        {
+          eventsEndpoint: endpoint,
+          error: error?.message ?? String(error),
+        },
+      );
+      return null;
+    }
+    const hasExplicitProtocol = /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(trimmed);
+    if (!hasExplicitProtocol) {
+      logConfigWarning(
+        'APP_CONFIG.eventsEndpoint must be an absolute URL including the protocol. Set APP_CONFIG.eventsEndpoint to a fully-qualified HTTP(S) endpoint (for example, https://example.com/events).',
+        {
+          eventsEndpoint: endpoint,
+          resolved: resolved.href,
+        },
+      );
+      return null;
+    }
+    if (resolved.protocol !== 'https:' && resolved.protocol !== 'http:') {
+      logConfigWarning(
+        'APP_CONFIG.eventsEndpoint must use HTTP or HTTPS. Update the configuration to point at an HTTP(S) telemetry service.',
+        {
+          eventsEndpoint: endpoint,
+          protocol: resolved.protocol,
+        },
+      );
+      return null;
+    }
+    if (resolved.search || resolved.hash) {
+      logConfigWarning(
+        'APP_CONFIG.eventsEndpoint should not include query strings or fragments; ignoring extras. Remove trailing query parameters or hashes from APP_CONFIG.eventsEndpoint so gameplay events reach the API root.',
+        {
+          eventsEndpoint: endpoint,
+          search: resolved.search,
+          hash: resolved.hash,
+        },
+      );
+      resolved.search = '';
+      resolved.hash = '';
+    }
+    return resolved.href;
+  }
+
   function normaliseApiBaseUrl(base) {
     if (!base || typeof base !== 'string') {
       return null;
@@ -11485,6 +11542,13 @@
       return null;
     }
     return `${apiBaseUrl.replace(/\/$/, '')}/scores`;
+  }
+
+  function buildEventsUrl(apiBaseUrl) {
+    if (!apiBaseUrl || typeof apiBaseUrl !== 'string') {
+      return null;
+    }
+    return `${apiBaseUrl.replace(/\/$/, '')}/events`;
   }
 
   const audioAssetLiveTestState = {
@@ -12058,7 +12122,7 @@
 
   const BACKEND_LIVE_CHECK_TIMEOUT_MS = 8000;
   const BACKEND_LIVE_CHECK_ALLOWED_POST_STATUSES = new Set([400, 401, 403, 409, 422, 429]);
-  const BACKEND_REQUIRED_ENDPOINT_KEYS = ['scores', 'users'];
+  const BACKEND_REQUIRED_ENDPOINT_KEYS = ['scores', 'users', 'events'];
   const backendLiveCheckState = {
     promise: null,
     performed: false,
@@ -12262,11 +12326,13 @@
       identityState.endpoints = {
         scores: identityState.configuredEndpoints?.scores ?? null,
         users: identityState.configuredEndpoints?.users ?? null,
+        events: identityState.configuredEndpoints?.events ?? null,
       };
       if (activeExperienceInstance) {
         activeExperienceInstance.apiBaseUrl = identityState.apiBaseUrl;
       }
     }
+    refreshEventSourcingAvailability();
     if (typeof bootstrapOverlay?.setDiagnostic === 'function') {
       bootstrapOverlay.setDiagnostic('backend', {
         status: 'ok',
@@ -12327,7 +12393,8 @@
         : [],
     };
     identityState.apiBaseUrl = null;
-    identityState.endpoints = { scores: null, users: null };
+    identityState.endpoints = { scores: null, users: null, events: null };
+    refreshEventSourcingAvailability();
     if (activeExperienceInstance) {
       activeExperienceInstance.apiBaseUrl = null;
     }
@@ -12381,6 +12448,7 @@
 
     const configuredScoresUrl = normaliseEndpointUrl(configuredEndpoints.scores);
     const configuredUsersUrl = normaliseEndpointUrl(configuredEndpoints.users);
+    const configuredEventsUrl = normaliseEndpointUrl(configuredEndpoints.events);
 
     const missingEndpointFailures = BACKEND_REQUIRED_ENDPOINT_KEYS.filter((key) => {
       if (key === 'scores') {
@@ -12388,6 +12456,9 @@
       }
       if (key === 'users') {
         return !configuredUsersUrl;
+      }
+      if (key === 'events') {
+        return !configuredEventsUrl;
       }
       return !(typeof configuredEndpoints[key] === 'string' && configuredEndpoints[key].trim().length);
     }).map((key) => {
@@ -12444,6 +12515,18 @@
         allowStatuses: BACKEND_LIVE_CHECK_ALLOWED_POST_STATUSES,
       }),
     ];
+    if (configuredEventsUrl) {
+      probes.push(
+        probeBackendEndpoint({
+          url: configuredEventsUrl,
+          method: 'POST',
+          label: 'POST /events',
+          headers: buildLiveCheckHeaders(),
+          body: postBody,
+          allowStatuses: BACKEND_LIVE_CHECK_ALLOWED_POST_STATUSES,
+        }),
+      );
+    }
     let results;
     try {
       results = await Promise.all(probes);
@@ -12550,7 +12633,18 @@
   const configuredEndpoints = {
     scores: buildScoreboardUrl(apiBaseUrl),
     users: apiBaseUrl ? `${apiBaseUrl.replace(/\/$/, '')}/users` : null,
+    events: buildEventsUrl(apiBaseUrl),
   };
+
+  const originalEventsEndpoint =
+    typeof globalAppConfig?.eventsEndpoint === 'string' && globalAppConfig.eventsEndpoint.trim().length
+      ? globalAppConfig.eventsEndpoint
+      : null;
+  const normalisedEventsEndpoint = normaliseEventsEndpoint(originalEventsEndpoint) || configuredEndpoints.events;
+  if (globalAppConfig && typeof globalAppConfig === 'object') {
+    globalAppConfig.eventsEndpoint = normalisedEventsEndpoint;
+  }
+  configuredEndpoints.events = normalisedEventsEndpoint;
 
   const originalDiagnosticsEndpoint =
     globalAppConfig?.diagnosticsEndpoint ?? globalAppConfig?.logEndpoint ?? null;
@@ -12583,6 +12677,7 @@
     endpoints: {
       scores: null,
       users: null,
+      events: null,
     },
     backendValidation: {
       performed: false,
@@ -13047,7 +13142,9 @@
     }
     const register = (type) => {
       globalScope.addEventListener(`infinite-rails:${type}`, (event) => {
-        appendEventLogEntry(type, event?.detail ?? {});
+        const detail = event?.detail ?? {};
+        appendEventLogEntry(type, detail);
+        captureEventForSourcing(type, detail);
       });
     };
     [
@@ -13073,6 +13170,8 @@
     eventLogState.listenersBound = true;
   }
 
+  ensureEventLogListeners();
+
   function bindExperienceEventLog(ui) {
     if (ui?.eventLogEl) {
       setEventLogElement(ui.eventLogEl);
@@ -13080,6 +13179,717 @@
     ensureEventLogListeners();
     refreshEventLogDebugDetails();
   }
+
+  const EVENT_SOURCING_CAPTURE_TYPES = new Set([
+    'started',
+    'start-error',
+    'initialisation-error',
+    'dimension-advanced',
+    'dimension-transition-guard',
+    'portal-ready',
+    'portal-activated',
+    'victory',
+    'renderer-failure',
+    'asset-fallback',
+    'asset-load-failure',
+    'asset-retry-requested',
+    'asset-retry-success',
+    'loot-collected',
+    'recipe-crafted',
+    'score-updated',
+    'score-sync-offline',
+    'score-sync-restored',
+  ]);
+
+  const EVENT_SOURCING_MAX_QUEUE = 120;
+  const EVENT_SOURCING_BATCH_SIZE = 10;
+  const EVENT_SOURCING_FLUSH_INTERVAL_MS = 1500;
+  const EVENT_SOURCING_MAX_STRING_LENGTH = 500;
+
+  const eventSourcingState = {
+    enabled: false,
+    endpoint: null,
+    queue: [],
+    flushTimer: null,
+    flushPromise: null,
+    sending: false,
+    lastError: null,
+  };
+
+  function truncateEventString(value, maxLength = EVENT_SOURCING_MAX_STRING_LENGTH) {
+    if (value === undefined || value === null) {
+      return null;
+    }
+    const stringValue = typeof value === 'string' ? value : String(value);
+    const trimmed = stringValue.trim();
+    if (!trimmed) {
+      return null;
+    }
+    if (trimmed.length > maxLength) {
+      return `${trimmed.slice(0, maxLength - 1)}…`;
+    }
+    return trimmed;
+  }
+
+  function sanitiseTraceForSourcing(trace, fallbackTraceId, fallbackSessionId) {
+    const source = trace && typeof trace === 'object' ? trace : {};
+    const traceId = truncateEventString(source.traceId ?? fallbackTraceId, 256);
+    const sessionId = truncateEventString(source.sessionId ?? fallbackSessionId, 256);
+    const label = truncateEventString(source.label, 160);
+    const reason = truncateEventString(source.reason, 160);
+    const origin = truncateEventString(source.source, 64);
+    const output = {};
+    if (traceId) {
+      output.traceId = traceId;
+    }
+    if (sessionId) {
+      output.sessionId = sessionId;
+    }
+    if (label) {
+      output.label = label;
+    }
+    if (origin) {
+      output.source = origin;
+    }
+    if (reason) {
+      output.reason = reason;
+    }
+    return Object.keys(output).length ? output : null;
+  }
+
+  function sanitiseLocationForSourcing(location) {
+    if (!location || typeof location !== 'object') {
+      return null;
+    }
+    const output = {};
+    const latitude = Number(location.latitude);
+    if (Number.isFinite(latitude)) {
+      output.latitude = latitude;
+    }
+    const longitude = Number(location.longitude);
+    if (Number.isFinite(longitude)) {
+      output.longitude = longitude;
+    }
+    const accuracy = Number(location.accuracy);
+    if (Number.isFinite(accuracy)) {
+      output.accuracy = accuracy;
+    }
+    const label = truncateEventString(location.label, 160);
+    if (label) {
+      output.label = label;
+    }
+    if (typeof location.timestamp === 'string' && location.timestamp.trim().length) {
+      output.timestamp = location.timestamp.trim();
+    }
+    return Object.keys(output).length ? output : null;
+  }
+
+  function sanitiseBreakdownForSourcing(breakdown) {
+    if (!breakdown || typeof breakdown !== 'object') {
+      return null;
+    }
+    const output = {};
+    Object.entries(breakdown).forEach(([key, value]) => {
+      if (typeof key !== 'string') {
+        return;
+      }
+      const trimmedKey = key.trim();
+      if (!trimmedKey) {
+        return;
+      }
+      const numeric = Number(value);
+      if (!Number.isFinite(numeric)) {
+        return;
+      }
+      output[trimmedKey] = numeric;
+    });
+    return Object.keys(output).length ? output : null;
+  }
+
+  function sanitiseSummaryForSourcing(summary, context) {
+    if (!summary || typeof summary !== 'object') {
+      return null;
+    }
+    const output = {};
+    const assignString = (key, value, max = 160) => {
+      if (typeof value !== 'string') {
+        return;
+      }
+      const normalised = truncateEventString(value, max);
+      if (normalised) {
+        output[key] = normalised;
+      }
+    };
+    const assignNumber = (key, value, { min = null } = {}) => {
+      const numeric = Number(value);
+      if (!Number.isFinite(numeric)) {
+        return;
+      }
+      if (typeof min === 'number' && numeric < min) {
+        return;
+      }
+      output[key] = numeric;
+    };
+    assignString('id', summary.id);
+    assignString('googleId', summary.googleId, 160);
+    assignString('playerId', summary.playerId);
+    assignString('name', summary.name, 160);
+    assignString('dimensionLabel', summary.dimensionLabel, 160);
+    assignString('device', summary.device, 160);
+    assignString('locationLabel', summary.locationLabel, 160);
+    assignString('updatedAt', summary.updatedAt, 64);
+    assignString('reason', summary.reason, 160);
+    assignNumber('score', summary.score);
+    assignNumber('dimensionCount', summary.dimensionCount, { min: 0 });
+    assignNumber('dimensionTotal', summary.dimensionTotal, { min: 0 });
+    assignNumber('runTimeSeconds', summary.runTimeSeconds, { min: 0 });
+    assignNumber('inventoryCount', summary.inventoryCount, { min: 0 });
+    assignNumber('recipeCount', summary.recipeCount, { min: 0 });
+    assignNumber('portalEvents', summary.portalEvents, { min: 0 });
+    assignNumber('portalPoints', summary.portalPoints);
+    assignNumber('combatEvents', summary.combatEvents, { min: 0 });
+    assignNumber('combatPoints', summary.combatPoints);
+    assignNumber('lootEvents', summary.lootEvents, { min: 0 });
+    assignNumber('lootPoints', summary.lootPoints);
+    assignNumber('craftingEvents', summary.craftingEvents, { min: 0 });
+    assignNumber('dimensionEvents', summary.dimensionEvents, { min: 0 });
+    if (summary.eternalIngot !== undefined) {
+      output.eternalIngot = summary.eternalIngot === true;
+    }
+    const dimensions = Array.isArray(summary.dimensions)
+      ? summary.dimensions
+          .slice(0, 20)
+          .map((item) => truncateEventString(item, 160))
+          .filter(Boolean)
+      : [];
+    if (dimensions.length) {
+      output.dimensions = dimensions;
+    }
+    const recipes = Array.isArray(summary.recipes)
+      ? summary.recipes
+          .slice(0, 24)
+          .map((item) => truncateEventString(item, 160))
+          .filter(Boolean)
+      : [];
+    if (recipes.length) {
+      output.recipes = recipes;
+    }
+    const breakdown = sanitiseBreakdownForSourcing(summary.breakdown);
+    if (breakdown) {
+      output.breakdown = breakdown;
+    }
+    const location = sanitiseLocationForSourcing(summary.location);
+    if (location) {
+      output.location = location;
+    }
+    const trace = sanitiseTraceForSourcing(summary.trace, context.traceId, context.sessionId);
+    if (trace) {
+      output.trace = trace;
+    }
+    return Object.keys(output).length ? output : null;
+  }
+
+  function sanitiseIdentityForSourcing(identity) {
+    if (!identity || typeof identity !== 'object') {
+      return null;
+    }
+    const output = {};
+    const googleId = truncateEventString(identity.googleId, 160);
+    if (googleId) {
+      output.googleId = googleId;
+    }
+    const name = truncateEventString(identity.name, 160);
+    if (name) {
+      output.name = name;
+    }
+    const email = truncateEventString(identity.email, 200);
+    if (email) {
+      output.email = email;
+    }
+    const locationLabel = truncateEventString(identity.locationLabel, 160);
+    if (locationLabel) {
+      output.locationLabel = locationLabel;
+    }
+    const location = sanitiseLocationForSourcing(identity.location);
+    if (location) {
+      output.location = location;
+    }
+    return Object.keys(output).length ? output : null;
+  }
+
+  function sanitiseDetailExtras(value, depth = 0) {
+    if (value === undefined || value === null) {
+      return null;
+    }
+    if (typeof value === 'string') {
+      return truncateEventString(value);
+    }
+    if (typeof value === 'number') {
+      return Number.isFinite(value) ? value : null;
+    }
+    if (typeof value === 'boolean') {
+      return value;
+    }
+    if (depth >= 2) {
+      return null;
+    }
+    if (Array.isArray(value)) {
+      const items = value
+        .slice(0, 8)
+        .map((item) => sanitiseDetailExtras(item, depth + 1))
+        .filter((item) => item !== null);
+      return items.length ? items : null;
+    }
+    if (typeof value === 'object') {
+      const output = {};
+      Object.entries(value)
+        .slice(0, 12)
+        .forEach(([key, entry]) => {
+          if (typeof key !== 'string') {
+            return;
+          }
+          const trimmedKey = key.trim();
+          if (!trimmedKey) {
+            return;
+          }
+          if (depth === 0 && (trimmedKey === 'summary' || trimmedKey === 'trace')) {
+            return;
+          }
+          const sanitised = sanitiseDetailExtras(entry, depth + 1);
+          if (sanitised !== null) {
+            output[trimmedKey] = sanitised;
+          }
+        });
+      return Object.keys(output).length ? output : null;
+    }
+    return null;
+  }
+
+  function sanitiseDetailForSourcing(detail) {
+    if (!detail || typeof detail !== 'object') {
+      return null;
+    }
+    const output = {};
+    const assignString = (key, value, max = 500) => {
+      if (typeof value !== 'string') {
+        return;
+      }
+      const normalised = truncateEventString(value, max);
+      if (normalised) {
+        output[key] = normalised;
+      }
+    };
+    const assignNumber = (key, value) => {
+      const numeric = Number(value);
+      if (Number.isFinite(numeric)) {
+        output[key] = numeric;
+      }
+    };
+    const assignBoolean = (key, value) => {
+      if (value === undefined || value === null) {
+        return;
+      }
+      output[key] = Boolean(value);
+    };
+    const stringKeys = [
+      'message',
+      'reason',
+      'stage',
+      'source',
+      'statusText',
+      'endpoint',
+      'method',
+      'summary',
+      'dimension',
+      'device',
+      'portalStatus',
+    ];
+    stringKeys.forEach((key) => {
+      if (Object.prototype.hasOwnProperty.call(detail, key)) {
+        assignString(key, detail[key]);
+      }
+    });
+    assignNumber('status', detail.status);
+    assignNumber('elapsedMs', detail.elapsedMs);
+    assignBoolean('offline', detail.offline);
+    assignBoolean('success', detail.success);
+    if (typeof detail.errorName === 'string' || typeof detail.errorMessage === 'string') {
+      const errorInfo = {};
+      const name = truncateEventString(detail.errorName, 200);
+      const message = truncateEventString(detail.errorMessage, 500);
+      if (name) {
+        errorInfo.name = name;
+      }
+      if (message) {
+        errorInfo.message = message;
+      }
+      if (Object.keys(errorInfo).length) {
+        output.error = errorInfo;
+      }
+    } else if (typeof detail.error === 'string') {
+      assignString('error', detail.error, 500);
+    } else if (detail.error && typeof detail.error === 'object') {
+      const errorInfo = {};
+      const name = truncateEventString(detail.error.name, 200);
+      const message = truncateEventString(detail.error.message ?? detail.error.reason, 500);
+      if (name) {
+        errorInfo.name = name;
+      }
+      if (message) {
+        errorInfo.message = message;
+      }
+      const code = truncateEventString(detail.error.code, 120);
+      if (code) {
+        errorInfo.code = code;
+      }
+      const stack = truncateEventString(detail.error.stack, 500);
+      if (stack) {
+        errorInfo.stack = stack;
+      }
+      if (Object.keys(errorInfo).length) {
+        output.error = errorInfo;
+      }
+    }
+    const trace = sanitiseTraceForSourcing(detail.trace, null, null);
+    if (trace) {
+      output.trace = trace;
+    }
+    const allowedKeys = new Set([
+      'message',
+      'reason',
+      'stage',
+      'source',
+      'statusText',
+      'endpoint',
+      'method',
+      'summary',
+      'dimension',
+      'device',
+      'portalStatus',
+      'status',
+      'elapsedMs',
+      'offline',
+      'success',
+      'error',
+      'trace',
+    ]);
+    Object.keys(detail).forEach((key) => {
+      if (allowedKeys.has(key) || key === 'summary' || key === 'trace') {
+        return;
+      }
+      const sanitised = sanitiseDetailExtras(detail[key], 0);
+      if (sanitised !== null) {
+        output[key] = sanitised;
+      }
+    });
+    return Object.keys(output).length ? output : null;
+  }
+
+  function sanitiseEventEntry(type, detail = {}) {
+    if (typeof type !== 'string' || !type.trim()) {
+      return null;
+    }
+    const timestamp = Number.isFinite(detail?.timestamp) ? detail.timestamp : Date.now();
+    const slug = type.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-');
+    let providedTraceId = null;
+    if (detail?.summary?.trace?.traceId) {
+      providedTraceId = detail.summary.trace.traceId;
+    } else if (detail?.trace?.traceId) {
+      providedTraceId = detail.trace.traceId;
+    } else if (typeof detail?.traceId === 'string' && detail.traceId.trim().length) {
+      providedTraceId = detail.traceId.trim();
+    }
+    let context;
+    try {
+      context = traceManager.buildContext(providedTraceId, slug ? `event-${slug}` : 'event');
+    } catch (error) {
+      const fallbackTraceId =
+        typeof traceManager?.createTraceId === 'function'
+          ? traceManager.createTraceId(slug ? `event-${slug}` : 'event')
+          : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      context = { traceId: fallbackTraceId, sessionId: traceManager?.sessionId ?? fallbackTraceId };
+    }
+    const summary = sanitiseSummaryForSourcing(detail.summary, context);
+    const detailPayload = sanitiseDetailForSourcing(detail);
+    const identityPayload = sanitiseIdentityForSourcing(identityState.identity);
+    const sessionCandidate =
+      (summary?.trace?.sessionId) ||
+      (detailPayload?.trace?.sessionId) ||
+      (detail?.trace && typeof detail.trace.sessionId === 'string' ? detail.trace.sessionId : null) ||
+      (typeof detail?.sessionId === 'string' && detail.sessionId.trim().length ? detail.sessionId.trim() : null);
+    const sessionId = sessionCandidate || context.sessionId || traceManager?.sessionId || 'anonymous';
+    const traceId = context.traceId;
+    const entry = { type, timestamp, sessionId, traceId };
+    const googleId = summary?.googleId || identityPayload?.googleId || null;
+    if (googleId) {
+      entry.googleId = googleId;
+    }
+    const playerName = summary?.name || identityPayload?.name || null;
+    if (playerName) {
+      entry.playerName = playerName;
+    }
+    if (summary) {
+      const enrichedTrace = sanitiseTraceForSourcing(summary.trace, traceId, sessionId);
+      if (enrichedTrace) {
+        summary.trace = enrichedTrace;
+      } else {
+        summary.trace = { traceId, sessionId };
+      }
+      entry.summary = summary;
+    }
+    if (detailPayload) {
+      if (detailPayload.trace) {
+        const enrichedDetailTrace = sanitiseTraceForSourcing(detailPayload.trace, traceId, sessionId);
+        if (enrichedDetailTrace) {
+          detailPayload.trace = enrichedDetailTrace;
+        }
+      }
+      entry.detail = detailPayload;
+    }
+    if (identityPayload) {
+      entry.identity = identityPayload;
+    }
+    return entry;
+  }
+
+  function pushEventSourcingEntry(entry) {
+    eventSourcingState.queue.push(entry);
+    if (eventSourcingState.queue.length > EVENT_SOURCING_MAX_QUEUE) {
+      eventSourcingState.queue.splice(0, eventSourcingState.queue.length - EVENT_SOURCING_MAX_QUEUE);
+    }
+    if (eventSourcingState.enabled) {
+      scheduleEventSourcingFlush({ immediate: false });
+    }
+  }
+
+  function scheduleEventSourcingFlush({ immediate = false } = {}) {
+    if (!eventSourcingState.enabled || !eventSourcingState.queue.length) {
+      return;
+    }
+    const scope = typeof globalScope !== 'undefined' ? globalScope : globalThis;
+    const setFn =
+      typeof scope?.setTimeout === 'function'
+        ? scope.setTimeout.bind(scope)
+        : typeof setTimeout === 'function'
+          ? setTimeout
+          : null;
+    const clearFn =
+      typeof scope?.clearTimeout === 'function'
+        ? scope.clearTimeout.bind(scope)
+        : typeof clearTimeout === 'function'
+          ? clearTimeout
+          : null;
+    if (!setFn) {
+      return;
+    }
+    if (eventSourcingState.flushTimer && clearFn) {
+      if (immediate) {
+        try {
+          clearFn(eventSourcingState.flushTimer);
+        } catch (error) {}
+        eventSourcingState.flushTimer = null;
+      } else {
+        return;
+      }
+    }
+    const delay = immediate ? 0 : EVENT_SOURCING_FLUSH_INTERVAL_MS;
+    eventSourcingState.flushTimer = setFn(() => {
+      eventSourcingState.flushTimer = null;
+      flushEventSourcingQueue().catch((error) => {
+        scope?.console?.debug?.('Gameplay event flush failed.', error);
+      });
+    }, delay);
+  }
+
+  async function deliverEventBatch(batch, context) {
+    if (!batch.length || !eventSourcingState.endpoint) {
+      return true;
+    }
+    let body;
+    try {
+      body = JSON.stringify({ events: batch });
+    } catch (error) {
+      globalScope?.console?.debug?.('Unable to serialise gameplay events for delivery.', error);
+      return false;
+    }
+    const scope = typeof globalScope !== 'undefined' ? globalScope : globalThis;
+    const navigatorRef = scope?.navigator ?? null;
+    if (typeof navigatorRef?.sendBeacon === 'function') {
+      try {
+        const delivered = navigatorRef.sendBeacon(eventSourcingState.endpoint, body);
+        if (delivered) {
+          return true;
+        }
+      } catch (error) {
+        scope?.console?.debug?.('Gameplay event beacon send failed', error);
+      }
+    }
+    const fetchFn =
+      typeof scope?.fetch === 'function'
+        ? scope.fetch.bind(scope)
+        : typeof fetch === 'function'
+          ? fetch
+          : null;
+    if (!fetchFn) {
+      return false;
+    }
+    const init = {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body,
+      keepalive: true,
+      traceId: context.traceId,
+      sessionId: context.sessionId,
+    };
+    const tracedArgs = applyTraceHeadersToFetchArgs(eventSourcingState.endpoint, init, context);
+    try {
+      const response = await fetchFn(tracedArgs.resource, tracedArgs.init);
+      return Boolean(response?.ok);
+    } catch (error) {
+      scope?.console?.debug?.('Gameplay event batch fetch failed', error);
+      return false;
+    }
+  }
+
+  async function flushEventSourcingQueue() {
+    if (!eventSourcingState.enabled || !eventSourcingState.endpoint || !eventSourcingState.queue.length) {
+      return false;
+    }
+    if (eventSourcingState.sending && eventSourcingState.flushPromise) {
+      return eventSourcingState.flushPromise;
+    }
+    const batch = eventSourcingState.queue.slice(0, EVENT_SOURCING_BATCH_SIZE);
+    eventSourcingState.sending = true;
+    const flushPromise = (async () => {
+      const firstType = batch[0]?.type ?? 'batch';
+      const label = typeof firstType === 'string' && firstType.trim().length ? `events-${firstType}` : 'events-batch';
+      let context;
+      try {
+        context = traceManager.buildContext(batch[0]?.traceId ?? null, label);
+      } catch (error) {
+        const fallbackTraceId =
+          typeof traceManager?.createTraceId === 'function'
+            ? traceManager.createTraceId(label)
+            : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        context = { traceId: fallbackTraceId, sessionId: traceManager?.sessionId ?? fallbackTraceId };
+      }
+      const delivered = await deliverEventBatch(batch, context);
+      if (delivered) {
+        eventSourcingState.queue.splice(0, batch.length);
+      } else {
+        eventSourcingState.lastError = { timestamp: Date.now(), reason: 'delivery-failed' };
+      }
+      return delivered;
+    })()
+      .catch((error) => {
+        eventSourcingState.lastError = { timestamp: Date.now(), reason: 'exception', error };
+        throw error;
+      })
+      .finally(() => {
+        eventSourcingState.sending = false;
+        eventSourcingState.flushPromise = null;
+        if (eventSourcingState.queue.length) {
+          scheduleEventSourcingFlush({ immediate: false });
+        }
+      });
+    eventSourcingState.flushPromise = flushPromise;
+    return flushPromise;
+  }
+
+  function drainEventQueueViaBeacon(reason = 'unload') {
+    if (!eventSourcingState.enabled || !eventSourcingState.endpoint || !eventSourcingState.queue.length) {
+      return;
+    }
+    const scope = typeof globalScope !== 'undefined' ? globalScope : globalThis;
+    const navigatorRef = scope?.navigator ?? null;
+    if (typeof navigatorRef?.sendBeacon !== 'function') {
+      return;
+    }
+    const clearFn =
+      typeof scope?.clearTimeout === 'function'
+        ? scope.clearTimeout.bind(scope)
+        : typeof clearTimeout === 'function'
+          ? clearTimeout
+          : null;
+    if (eventSourcingState.flushTimer && clearFn) {
+      try {
+        clearFn(eventSourcingState.flushTimer);
+      } catch (error) {}
+      eventSourcingState.flushTimer = null;
+    }
+    const queueCopy = eventSourcingState.queue.slice();
+    while (queueCopy.length) {
+      const batch = queueCopy.splice(0, EVENT_SOURCING_BATCH_SIZE);
+      let body;
+      try {
+        body = JSON.stringify({ events: batch, reason });
+      } catch (error) {
+        scope?.console?.debug?.('Unable to serialise gameplay events for beacon drain.', error);
+        return;
+      }
+      try {
+        const delivered = navigatorRef.sendBeacon(eventSourcingState.endpoint, body);
+        if (!delivered) {
+          return;
+        }
+        eventSourcingState.queue.splice(0, batch.length);
+      } catch (error) {
+        scope?.console?.debug?.('Gameplay event beacon drain failed', error);
+        return;
+      }
+    }
+  }
+
+  function captureEventForSourcing(type, detail = {}) {
+    if (!EVENT_SOURCING_CAPTURE_TYPES.has(type)) {
+      return;
+    }
+    try {
+      const entry = sanitiseEventEntry(type, detail);
+      if (!entry) {
+        return;
+      }
+      pushEventSourcingEntry(entry);
+    } catch (error) {
+      globalScope?.console?.debug?.('Failed to queue gameplay event for sourcing.', error);
+    }
+  }
+
+  function refreshEventSourcingAvailability() {
+    const scope = typeof globalScope !== 'undefined' ? globalScope : globalThis;
+    const endpointCandidate =
+      identityState.endpoints &&
+      typeof identityState.endpoints === 'object' &&
+      typeof identityState.endpoints.events === 'string' &&
+      identityState.endpoints.events.trim().length
+        ? identityState.endpoints.events.trim()
+        : null;
+    const hasFetch = typeof scope?.fetch === 'function' || typeof fetch === 'function';
+    const hasBeacon = typeof scope?.navigator?.sendBeacon === 'function';
+    const enabled = Boolean(endpointCandidate && (hasFetch || hasBeacon));
+    eventSourcingState.enabled = enabled;
+    eventSourcingState.endpoint = enabled ? endpointCandidate : null;
+    if (!enabled) {
+      const clearFn =
+        typeof scope?.clearTimeout === 'function'
+          ? scope.clearTimeout.bind(scope)
+          : typeof clearTimeout === 'function'
+            ? clearTimeout
+            : null;
+      if (eventSourcingState.flushTimer && clearFn) {
+        try {
+          clearFn(eventSourcingState.flushTimer);
+        } catch (error) {}
+      }
+      eventSourcingState.flushTimer = null;
+      return;
+    }
+    if (eventSourcingState.queue.length) {
+      scheduleEventSourcingFlush({ immediate: true });
+    }
+  }
+
+  refreshEventSourcingAvailability();
 
   const eventOverlayState = {
     container: null,
@@ -13580,6 +14390,10 @@
               typeof identityState.endpoints.users === 'string'
                 ? identityState.endpoints.users
                 : identityState.endpoints.users ?? null,
+            events:
+              typeof identityState.endpoints.events === 'string'
+                ? identityState.endpoints.events
+                : identityState.endpoints.events ?? null,
           }
         : null;
     const configuredEndpointsSnapshot =
@@ -13593,6 +14407,10 @@
               typeof identityState.configuredEndpoints.users === 'string'
                 ? identityState.configuredEndpoints.users
                 : identityState.configuredEndpoints.users ?? null,
+            events:
+              typeof identityState.configuredEndpoints.events === 'string'
+                ? identityState.configuredEndpoints.events
+                : identityState.configuredEndpoints.events ?? null,
           }
         : null;
     const backendValidationSnapshot = identityState.backendValidation
@@ -15620,8 +16438,12 @@
                 typeof identityState.endpoints.users === 'string'
                   ? identityState.endpoints.users
                   : identityState.endpoints.users ?? null,
+              events:
+                typeof identityState.endpoints.events === 'string'
+                  ? identityState.endpoints.events
+                  : identityState.endpoints.events ?? null,
             }
-          : { scores: null, users: null },
+          : { scores: null, users: null, events: null },
       googleReady: identityState.googleReady === true,
       googleButtonsRendered: identityState.googleButtonsRendered === true,
       googleInitialized: identityState.googleInitialized === true,
@@ -15645,7 +16467,8 @@
     identityState.liveFeaturesHoldDetail = { kind, detail };
 
     identityState.apiBaseUrl = null;
-    identityState.endpoints = { scores: null, users: null };
+    identityState.endpoints = { scores: null, users: null, events: null };
+    refreshEventSourcingAvailability();
     if (activeExperienceInstance) {
       activeExperienceInstance.apiBaseUrl = null;
     }
@@ -15703,12 +16526,17 @@
           typeof configuredEndpoints.users === 'string'
             ? configuredEndpoints.users
             : configuredEndpoints.users ?? snapshot?.endpoints?.users ?? null,
+        events:
+          typeof configuredEndpoints.events === 'string'
+            ? configuredEndpoints.events
+            : configuredEndpoints.events ?? snapshot?.endpoints?.events ?? null,
       };
     } else if (snapshot?.endpoints) {
       identityState.endpoints = { ...snapshot.endpoints };
     } else {
-      identityState.endpoints = { scores: null, users: null };
+      identityState.endpoints = { scores: null, users: null, events: null };
     }
+    refreshEventSourcingAvailability();
 
     if (activeExperienceInstance) {
       activeExperienceInstance.apiBaseUrl = identityState.apiBaseUrl;
@@ -19758,6 +20586,9 @@
     documentRef.addEventListener('visibilitychange', () => {
       if (documentRef.visibilityState === 'hidden') {
         persistIdentitySnapshot(identityState.identity);
+        drainEventQueueViaBeacon('visibilitychange');
+      } else if (documentRef.visibilityState === 'visible') {
+        scheduleEventSourcingFlush({ immediate: true });
       }
     });
   }
@@ -19765,6 +20596,10 @@
   if (typeof globalScope.addEventListener === 'function') {
     globalScope.addEventListener('beforeunload', () => {
       persistIdentitySnapshot(identityState.identity);
+      drainEventQueueViaBeacon('beforeunload');
+    });
+    globalScope.addEventListener('pagehide', () => {
+      drainEventQueueViaBeacon('pagehide');
     });
   }
 
