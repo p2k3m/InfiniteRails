@@ -12577,6 +12577,8 @@
     scoreboardMessage: '',
     scoreboardOffline: false,
     discoverabilityOffline: false,
+    liveFeaturesSuspended: false,
+    liveFeaturesHoldDetail: null,
     configuredEndpoints,
     endpoints: {
       scores: null,
@@ -15598,6 +15600,169 @@
   let googleInitPromise = null;
   let googleIdentityScriptPromise = null;
 
+  const liveFeatureHoldState = {
+    suspended: false,
+    snapshot: null,
+    detail: null,
+  };
+
+  function captureLiveFeatureSnapshot() {
+    const snapshot = {
+      apiBaseUrl: identityState.apiBaseUrl ?? null,
+      endpoints:
+        identityState.endpoints && typeof identityState.endpoints === 'object'
+          ? {
+              scores:
+                typeof identityState.endpoints.scores === 'string'
+                  ? identityState.endpoints.scores
+                  : identityState.endpoints.scores ?? null,
+              users:
+                typeof identityState.endpoints.users === 'string'
+                  ? identityState.endpoints.users
+                  : identityState.endpoints.users ?? null,
+            }
+          : { scores: null, users: null },
+      googleReady: identityState.googleReady === true,
+      googleButtonsRendered: identityState.googleButtonsRendered === true,
+      googleInitialized: identityState.googleInitialized === true,
+    };
+    if (activeExperienceInstance) {
+      snapshot.experienceApiBaseUrl = activeExperienceInstance.apiBaseUrl ?? null;
+    }
+    return snapshot;
+  }
+
+  function suspendLiveFeatures(kind, detail = {}) {
+    if (liveFeatureHoldState.suspended) {
+      liveFeatureHoldState.detail = { kind, detail };
+      return;
+    }
+    liveFeatureHoldState.snapshot = captureLiveFeatureSnapshot();
+    liveFeatureHoldState.suspended = true;
+    liveFeatureHoldState.detail = { kind, detail };
+
+    identityState.liveFeaturesSuspended = true;
+    identityState.liveFeaturesHoldDetail = { kind, detail };
+
+    identityState.apiBaseUrl = null;
+    identityState.endpoints = { scores: null, users: null };
+    if (activeExperienceInstance) {
+      activeExperienceInstance.apiBaseUrl = null;
+    }
+
+    const googleAccounts = globalScope.google?.accounts?.id;
+    if (googleAccounts) {
+      try {
+        if (typeof googleAccounts.cancel === 'function') {
+          googleAccounts.cancel();
+        }
+      } catch (error) {
+        globalScope?.console?.debug?.('Failed to cancel Google Sign-In prompt during circuit trip.', error);
+      }
+      try {
+        if (typeof googleAccounts.disableAutoSelect === 'function') {
+          googleAccounts.disableAutoSelect();
+        }
+      } catch (error) {
+        globalScope?.console?.debug?.('Failed to disable Google auto select during circuit trip.', error);
+      }
+    }
+
+    try {
+      showFallbackSignin({ keepGoogleVisible: false });
+    } catch (error) {
+      globalScope?.console?.debug?.('Failed to present fallback sign-in during circuit trip.', error);
+    }
+  }
+
+  function resumeLiveFeatures(kind, detail = {}) {
+    if (!liveFeatureHoldState.suspended) {
+      return;
+    }
+    const snapshot = liveFeatureHoldState.snapshot || null;
+    liveFeatureHoldState.suspended = false;
+    liveFeatureHoldState.snapshot = null;
+    liveFeatureHoldState.detail = null;
+
+    identityState.liveFeaturesSuspended = false;
+    identityState.liveFeaturesHoldDetail = null;
+
+    const configuredBase = identityState.configuredApiBaseUrl ?? null;
+    const backendHealthy = identityState.backendValidation?.ok !== false;
+    const restoredBase = snapshot?.apiBaseUrl || (backendHealthy ? configuredBase : null);
+    identityState.apiBaseUrl = restoredBase ?? null;
+
+    if (identityState.apiBaseUrl) {
+      const configuredEndpoints = identityState.configuredEndpoints ?? {};
+      identityState.endpoints = {
+        scores:
+          typeof configuredEndpoints.scores === 'string'
+            ? configuredEndpoints.scores
+            : configuredEndpoints.scores ?? snapshot?.endpoints?.scores ?? null,
+        users:
+          typeof configuredEndpoints.users === 'string'
+            ? configuredEndpoints.users
+            : configuredEndpoints.users ?? snapshot?.endpoints?.users ?? null,
+      };
+    } else if (snapshot?.endpoints) {
+      identityState.endpoints = { ...snapshot.endpoints };
+    } else {
+      identityState.endpoints = { scores: null, users: null };
+    }
+
+    if (activeExperienceInstance) {
+      activeExperienceInstance.apiBaseUrl = identityState.apiBaseUrl;
+      if (identityState.apiBaseUrl && typeof activeExperienceInstance.loadScoreboard === 'function') {
+        try {
+          activeExperienceInstance.loadScoreboard({ force: true });
+        } catch (error) {
+          globalScope?.console?.debug?.('Failed to trigger scoreboard reload after circuit reset.', error);
+        }
+      }
+    }
+
+    if (identityState.googleError) {
+      try {
+        showFallbackSignin({ keepGoogleVisible: false });
+      } catch (error) {
+        globalScope?.console?.debug?.('Failed to restore fallback sign-in after circuit reset.', error);
+      }
+      return;
+    }
+
+    if (snapshot) {
+      identityState.googleReady = snapshot.googleReady && !identityState.googleError;
+      identityState.googleButtonsRendered = snapshot.googleButtonsRendered && !identityState.googleError;
+      if (snapshot.googleInitialized && identityState.googleClientId) {
+        identityState.googleInitialized = true;
+      } else if (!snapshot.googleInitialized) {
+        identityState.googleInitialized = false;
+      }
+    }
+
+    if (identityState.googleReady) {
+      try {
+        showGoogleSigninUi();
+      } catch (error) {
+        globalScope?.console?.debug?.('Failed to restore Google Sign-In UI after circuit reset.', error);
+      }
+    } else if (identityState.googleClientId) {
+      identityState.googleInitialized = false;
+      googleInitPromise = null;
+      try {
+        initialiseGoogleSignIn();
+      } catch (error) {
+        globalScope?.console?.debug?.('Failed to reinitialise Google Sign-In after circuit reset.', error);
+      }
+    } else {
+      try {
+        showFallbackSignin({ keepGoogleVisible: false });
+      } catch (error) {
+        globalScope?.console?.debug?.('Failed to restore fallback sign-in after circuit reset.', error);
+      }
+    }
+  }
+
   function updateScoreboardStatus(message, options = {}) {
     const hasOfflineOption = Object.prototype.hasOwnProperty.call(options, 'offline');
     const circuitTripped =
@@ -15775,6 +15940,7 @@
       const message = getOfflineMessage();
       updateScoreboardStatus(message, { offline: true });
       showGlobalScoreSyncWarning(message);
+      suspendLiveFeatures(kind, detail);
       if (typeof bootstrapOverlay?.setDiagnostic === 'function') {
         bootstrapOverlay.setDiagnostic('backend', {
           status: 'error',
@@ -15788,6 +15954,7 @@
     }
 
     function applyResetEffects(kind, detail) {
+      resumeLiveFeatures(kind, detail);
       logCircuitEvent('info', 'Network circuit breaker reset — monitoring resumed.', {
         ...buildCircuitDetail(kind, detail),
       });
