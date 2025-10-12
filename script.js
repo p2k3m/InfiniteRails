@@ -3352,6 +3352,44 @@
       reason: 'bootstrap',
     };
   }
+  const localGameplayState = (() => {
+    if (globalScope && typeof globalScope === 'object') {
+      const existing = globalScope.__INFINITE_RAILS_LOCAL_STATE__;
+      if (existing && typeof existing === 'object') {
+        if (!existing.player || typeof existing.player !== 'object') {
+          existing.player = {};
+        }
+        if (!Array.isArray(existing.world)) {
+          existing.world = Array.isArray(existing.world) ? existing.world.slice() : [];
+        }
+        if (typeof existing.isRunning !== 'boolean') {
+          existing.isRunning = false;
+        }
+        if (!Number.isFinite(existing.updatedAt)) {
+          existing.updatedAt = Date.now();
+        }
+        if (typeof existing.reason !== 'string') {
+          existing.reason = 'bootstrap';
+        }
+        return existing;
+      }
+    }
+    const state = {
+      isRunning: false,
+      world: [],
+      updatedAt: Date.now(),
+      reason: 'bootstrap',
+      player: {},
+    };
+    if (globalScope && typeof globalScope === 'object') {
+      try {
+        globalScope.__INFINITE_RAILS_LOCAL_STATE__ = state;
+      } catch (error) {
+        globalScope?.console?.debug?.('Failed to expose local gameplay state container.', error);
+      }
+    }
+    return state;
+  })();
   if (!Object.prototype.hasOwnProperty.call(globalScope, '__INFINITE_RAILS_RENDERER_MODE__')) {
     globalScope.__INFINITE_RAILS_RENDERER_MODE__ = null;
   }
@@ -7982,11 +8020,32 @@
         : typeof descriptor.scope === 'string' && descriptor.scope.trim().length
           ? descriptor.scope.trim()
           : '';
+    const stateScopeRaw =
+      typeof descriptor.stateScope === 'string' && descriptor.stateScope.trim().length
+        ? descriptor.stateScope.trim()
+        : typeof descriptor.stateTarget === 'string' && descriptor.stateTarget.trim().length
+          ? descriptor.stateTarget.trim()
+          : '';
     const stageKey = normaliseSurvivalWatchdogKey(stageRaw);
     const reasonKey = normaliseSurvivalWatchdogKey(reasonRaw);
     const codeKey = normaliseSurvivalWatchdogKey(codeRaw);
     const boundaryKey = normaliseSurvivalWatchdogKey(boundaryRaw);
+    const stateScopeKey = normaliseSurvivalWatchdogKey(stateScopeRaw);
     const fallbackStageKey = normaliseSurvivalWatchdogKey(fallbackStageRaw);
+    const syncRequested = Boolean(
+      descriptor.sync === true ||
+        descriptor.syncAll === true ||
+        descriptor.syncState === true ||
+        descriptor.syncScope === true ||
+        descriptor.stateSync === true ||
+        descriptor.broadcast === true ||
+        descriptor.global === true ||
+        descriptor.synchronise === true ||
+        descriptor.synchronize === true ||
+        stateScopeKey === 'global' ||
+        stateScopeKey === 'shared' ||
+        stateScopeKey === 'sync',
+    );
     const candidateKeys = new Set();
     [stageKey, reasonKey, codeKey, boundaryKey, fallbackStageKey].forEach((key) => {
       if (key) {
@@ -8050,6 +8109,10 @@
       boundaryKey,
       fallbackStageKey,
       candidateKeys: Array.from(candidateKeys),
+      stateScope: stateScopeRaw,
+      stateScopeKey,
+      syncRequested,
+      sync: syncRequested,
     };
   }
 
@@ -8069,6 +8132,28 @@
     return candidates.some((candidate) =>
       SURVIVAL_WATCHDOG_STAGE_TOKENS.some((token) => candidate.includes(token)),
     );
+  }
+
+  function shouldSynchroniseGameplayState(descriptor, context = {}) {
+    if (context && context.sync === true) {
+      return true;
+    }
+    if (!descriptor || typeof descriptor !== 'object') {
+      return false;
+    }
+    if (descriptor.sync === true || descriptor.syncRequested === true) {
+      return true;
+    }
+    const scopeKey =
+      typeof descriptor.stateScopeKey === 'string' && descriptor.stateScopeKey.length
+        ? descriptor.stateScopeKey
+        : typeof descriptor.stateScope === 'string' && descriptor.stateScope.trim().length
+          ? normaliseSurvivalWatchdogKey(descriptor.stateScope)
+          : '';
+    if (scopeKey === 'global' || scopeKey === 'shared' || scopeKey === 'sync') {
+      return true;
+    }
+    return false;
   }
 
   function resolveMaxValue(source, keys, fallback) {
@@ -8168,25 +8253,15 @@
     return changed;
   }
 
-  function resetGlobalSurvivalVitals(instance, descriptor) {
-    let state = globalScope?.__INFINITE_RAILS_STATE__;
+  function resetSurvivalVitalsInState(state, instance, descriptor, options = {}) {
     if (!state || typeof state !== 'object') {
-      if (!globalScope || typeof globalScope !== 'object') {
-        return false;
-      }
-      state = { player: {} };
-      try {
-        globalScope.__INFINITE_RAILS_STATE__ = state;
-      } catch (stateAssignmentError) {
-        globalScope?.console?.debug?.(
-          'Survival watchdog could not initialise global state container.',
-          stateAssignmentError,
-        );
-        return false;
-      }
+      return false;
     }
+    const targetState = state;
     const player =
-      state.player && typeof state.player === 'object' ? state.player : (state.player = {});
+      targetState.player && typeof targetState.player === 'object'
+        ? targetState.player
+        : (targetState.player = {});
     if (!Object.prototype.hasOwnProperty.call(player, 'breathPercent')) {
       player.breathPercent = 0;
     }
@@ -8207,13 +8282,20 @@
           breathSource[key] = Number(instance[key]);
         }
       });
-      ['maxHunger', 'playerMaxHunger', 'maxFood', 'maxFoodLevel', 'hungerCapacity', 'foodCapacity', 'maxSatiety', 'maxStamina'].forEach(
-        (key) => {
-          if (Number.isFinite(instance[key])) {
-            hungerSource[key] = Number(instance[key]);
-          }
-        },
-      );
+      [
+        'maxHunger',
+        'playerMaxHunger',
+        'maxFood',
+        'maxFoodLevel',
+        'hungerCapacity',
+        'foodCapacity',
+        'maxSatiety',
+        'maxStamina',
+      ].forEach((key) => {
+        if (Number.isFinite(instance[key])) {
+          hungerSource[key] = Number(instance[key]);
+        }
+      });
     }
     let healthMax = resolveMaxValue(
       healthSource,
@@ -8227,7 +8309,16 @@
     );
     let hungerMax = resolveMaxValue(
       hungerSource,
-      ['maxHunger', 'playerMaxHunger', 'maxFood', 'maxFoodLevel', 'hungerCapacity', 'foodCapacity', 'maxSatiety', 'maxStamina'],
+      [
+        'maxHunger',
+        'playerMaxHunger',
+        'maxFood',
+        'maxFoodLevel',
+        'hungerCapacity',
+        'foodCapacity',
+        'maxSatiety',
+        'maxStamina',
+      ],
       player.maxHunger,
     );
     if (!Number.isFinite(healthMax)) {
@@ -8252,35 +8343,54 @@
       player.maxHunger = hungerMax;
       changed = true;
     }
-    const healthResult = resetMeter(
-      player,
-      ['health'],
-      ['maxHealth'],
-      healthMax,
-    );
-    const breathResult = resetMeter(
-      player,
-      ['breath'],
-      ['maxBreath'],
-      breathMax,
-      ['breathPercent'],
-    );
-    const hungerResult = resetMeter(
-      player,
-      ['hunger'],
-      ['maxHunger'],
-      hungerMax,
-      ['hungerPercent'],
-    );
+    const healthResult = resetMeter(player, ['health'], ['maxHealth'], healthMax);
+    const breathResult = resetMeter(player, ['breath'], ['maxBreath'], breathMax, ['breathPercent']);
+    const hungerResult = resetMeter(player, ['hunger'], ['maxHunger'], hungerMax, ['hungerPercent']);
     changed = Boolean(healthResult.changed || breathResult.changed || hungerResult.changed || changed);
+    if (typeof options.scopeLabel === 'string' && options.scopeLabel) {
+      targetState.stateScope = options.scopeLabel;
+    }
+    if (options.stateSyncRequested !== undefined) {
+      targetState.stateSyncRequested = Boolean(options.stateSyncRequested);
+    }
     if (changed) {
-      state.updatedAt = Date.now();
-      state.signature = `survival-watchdog:${state.updatedAt}`;
-      state.reason = 'survival-watchdog';
-      state.failureStage = descriptor?.stage || null;
-      state.failureReason = descriptor?.reason || null;
+      targetState.updatedAt = Date.now();
+      targetState.signature = `survival-watchdog:${targetState.updatedAt}`;
+      targetState.reason = 'survival-watchdog';
+      targetState.failureStage = descriptor?.stage || null;
+      targetState.failureReason = descriptor?.reason || null;
     }
     return changed;
+  }
+
+  function resetGlobalSurvivalVitals(instance, descriptor) {
+    let state = globalScope?.__INFINITE_RAILS_STATE__;
+    if (!state || typeof state !== 'object') {
+      if (!globalScope || typeof globalScope !== 'object') {
+        return false;
+      }
+      state = { player: {} };
+      try {
+        globalScope.__INFINITE_RAILS_STATE__ = state;
+      } catch (stateAssignmentError) {
+        globalScope?.console?.debug?.(
+          'Survival watchdog could not initialise global state container.',
+          stateAssignmentError,
+        );
+        return false;
+      }
+    }
+    return resetSurvivalVitalsInState(state, instance, descriptor, {
+      scopeLabel: 'global',
+      stateSyncRequested: true,
+    });
+  }
+
+  function resetLocalSurvivalVitals(instance, descriptor, options = {}) {
+    return resetSurvivalVitalsInState(localGameplayState, instance, descriptor, {
+      scopeLabel: 'local',
+      stateSyncRequested: Boolean(options.syncRequested),
+    });
   }
 
   function attachSurvivalWatchdogHooksToExperience(experience) {
@@ -8344,9 +8454,16 @@
     if (survivalWatchdogState.lastSignature === signatureBase && now - survivalWatchdogState.lastResetAt < 200) {
       return false;
     }
+    const syncState = shouldSynchroniseGameplayState(descriptor, context);
     const experienceReset = resetExperienceSurvivalVitals(activeExperienceInstance, descriptor);
-    const stateReset = resetGlobalSurvivalVitals(activeExperienceInstance, descriptor);
-    if (!experienceReset && !stateReset) {
+    const localStateReset = resetLocalSurvivalVitals(activeExperienceInstance, descriptor, {
+      syncRequested: syncState,
+    });
+    let syncedStateReset = false;
+    if (syncState) {
+      syncedStateReset = resetGlobalSurvivalVitals(activeExperienceInstance, descriptor);
+    }
+    if (!experienceReset && !localStateReset && !syncedStateReset) {
       return false;
     }
     survivalWatchdogState.lastSignature = signatureBase;
@@ -8357,7 +8474,11 @@
       code: descriptor.code || null,
       boundary: context.boundary || null,
       experienceUpdated: experienceReset,
-      stateUpdated: stateReset,
+      stateUpdated: Boolean(localStateReset || syncedStateReset),
+      localStateUpdated: localStateReset,
+      syncedStateUpdated: syncedStateReset,
+      stateScope: syncState ? 'local+global' : 'local',
+      stateSyncRequested: syncState,
     };
     if (activeExperienceInstance && typeof activeExperienceInstance.emitGameEvent === 'function') {
       try {
@@ -19681,6 +19802,7 @@
       hooks.ensureAudioAssetLiveTest = ensureAudioAssetLiveTest;
       hooks.getAudioAssetLiveTestState = () => audioAssetLiveTestState;
       hooks.getAudioSettingsState = () => createAudioSettingsSnapshot();
+      hooks.getLocalGameplayState = () => localGameplayState;
       hooks.setAudioMuted = (value, options = {}) =>
         setAudioMuted(value, { ...options, source: options.source ?? 'test-hook', persist: options.persist });
       hooks.setAudioChannelVolume = (channel, value, options = {}) =>
@@ -19731,8 +19853,18 @@
           detail,
           options.stage || detail.stage || null,
         );
-        if (options.force === true || shouldTriggerSurvivalWatchdog(descriptor)) {
-          return applySurvivalWatchdog(descriptor, { boundary: options.boundary ?? 'test-hook' });
+        if (options.sync === true) {
+          descriptor.sync = true;
+        } else if (options.sync === false) {
+          descriptor.sync = false;
+        }
+        const shouldTrigger = options.force === true || shouldTriggerSurvivalWatchdog(descriptor);
+        if (shouldTrigger) {
+          const context = { boundary: options.boundary ?? 'test-hook' };
+          if (options.sync === true) {
+            context.sync = true;
+          }
+          return applySurvivalWatchdog(descriptor, context);
         }
         return false;
       };

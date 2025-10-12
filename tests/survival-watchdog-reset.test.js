@@ -206,6 +206,19 @@ function evaluateBootstrapScript(sandbox) {
   vm.runInContext(source, sandbox);
 }
 
+function primeLocalGameplayState(windowStub, values = {}) {
+  const state = windowStub.__INFINITE_RAILS_LOCAL_STATE__;
+  if (!state || typeof state !== 'object') {
+    throw new Error('Local gameplay state container is not initialised.');
+  }
+  state.player = { ...values };
+  return state;
+}
+
+function snapshotState(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
 describe('survival watchdog recovery', () => {
   it('resets player vitals after a simulation crash is reported', () => {
     const { sandbox, windowStub, consoleStub } = createSandbox();
@@ -248,6 +261,18 @@ describe('survival watchdog recovery', () => {
       updatedAt: 0,
     };
 
+    const initialGlobalState = snapshotState(windowStub.__INFINITE_RAILS_STATE__);
+    primeLocalGameplayState(windowStub, {
+      maxHealth: 10,
+      health: 4,
+      maxBreath: 12,
+      breath: 6,
+      breathPercent: 50,
+      maxHunger: 8,
+      hunger: 1,
+      hungerPercent: 10,
+    });
+
     const result = hooks.triggerSurvivalWatchdog({ stage: 'simulation', reason: 'physics-crash' });
 
     expect(result).toBe(true);
@@ -265,7 +290,7 @@ describe('survival watchdog recovery', () => {
       expect.objectContaining({ stage: 'simulation', reason: 'physics-crash', experienceUpdated: true }),
     );
 
-    const playerState = windowStub.__INFINITE_RAILS_STATE__.player;
+    const playerState = windowStub.__INFINITE_RAILS_LOCAL_STATE__.player;
     expect(playerState.health).toBe(16);
     expect(playerState.maxHealth).toBe(16);
     expect(playerState.breath).toBe(18);
@@ -274,6 +299,7 @@ describe('survival watchdog recovery', () => {
     expect(playerState.hunger).toBe(14);
     expect(playerState.maxHunger).toBe(14);
     expect(playerState.hungerPercent).toBe(100);
+    expect(windowStub.__INFINITE_RAILS_STATE__).toEqual(initialGlobalState);
     expect(consoleStub.warn).toHaveBeenCalledWith(
       'Survival watchdog reset player vitals after crash.',
       expect.objectContaining({ stage: 'simulation', reason: 'physics-crash' }),
@@ -315,6 +341,15 @@ describe('survival watchdog recovery', () => {
       updatedAt: 0,
     };
 
+    const initialGlobalState = snapshotState(windowStub.__INFINITE_RAILS_STATE__);
+    primeLocalGameplayState(windowStub, {
+      health: 0,
+      hunger: 0,
+      hungerPercent: 0,
+      breath: 0,
+      breathPercent: 0,
+    });
+
     const result = hooks.triggerSurvivalWatchdog({ stage: 'game-logic', reason: 'engine-crash' });
 
     expect(result).toBe(true);
@@ -332,7 +367,7 @@ describe('survival watchdog recovery', () => {
       expect.objectContaining({ stage: 'game-logic', reason: 'engine-crash', experienceUpdated: true }),
     );
 
-    const playerState = windowStub.__INFINITE_RAILS_STATE__.player;
+    const playerState = windowStub.__INFINITE_RAILS_LOCAL_STATE__.player;
     expect(playerState.health).toBe(20);
     expect(playerState.maxHealth).toBe(20);
     expect(playerState.hunger).toBe(20);
@@ -341,6 +376,7 @@ describe('survival watchdog recovery', () => {
     expect(playerState.breath).toBe(10);
     expect(playerState.maxBreath).toBe(10);
     expect(playerState.breathPercent).toBe(100);
+    expect(windowStub.__INFINITE_RAILS_STATE__).toEqual(initialGlobalState);
     expect(consoleStub.warn).toHaveBeenCalledWith(
       'Survival watchdog reset player vitals after crash.',
       expect.objectContaining({ stage: 'game-logic', reason: 'engine-crash' }),
@@ -388,6 +424,18 @@ describe('survival watchdog recovery', () => {
       updatedAt: 0,
     };
 
+    const initialGlobalState = snapshotState(windowStub.__INFINITE_RAILS_STATE__);
+    primeLocalGameplayState(windowStub, {
+      health: 6,
+      maxHealth: 24,
+      hunger: 7,
+      maxHunger: 18,
+      hungerPercent: 45,
+      breath: 6,
+      maxBreath: 14,
+      breathPercent: 50,
+    });
+
     const result = hooks.triggerSurvivalWatchdog({
       stage: 'window.error',
       reason: 'global-error',
@@ -409,7 +457,7 @@ describe('survival watchdog recovery', () => {
       expect.objectContaining({ stage: 'window.error', reason: 'global-error', experienceUpdated: true }),
     );
 
-    const playerState = windowStub.__INFINITE_RAILS_STATE__.player;
+    const playerState = windowStub.__INFINITE_RAILS_LOCAL_STATE__.player;
     expect(playerState.health).toBe(24);
     expect(playerState.maxHealth).toBe(24);
     expect(playerState.hunger).toBe(18);
@@ -418,6 +466,7 @@ describe('survival watchdog recovery', () => {
     expect(playerState.breath).toBe(14);
     expect(playerState.maxBreath).toBe(14);
     expect(playerState.breathPercent).toBe(100);
+    expect(windowStub.__INFINITE_RAILS_STATE__).toEqual(initialGlobalState);
     expect(consoleStub.warn).toHaveBeenCalledWith(
       'Survival watchdog reset player vitals after crash.',
       expect.objectContaining({ stage: 'window.error', reason: 'global-error' }),
@@ -465,6 +514,18 @@ describe('survival watchdog recovery', () => {
       updatedAt: 0,
     };
 
+    const initialGlobalState = snapshotState(windowStub.__INFINITE_RAILS_STATE__);
+    primeLocalGameplayState(windowStub, {
+      health: 7,
+      maxHealth: 26,
+      hunger: 8,
+      maxHunger: 19,
+      hungerPercent: 55,
+      breath: 7,
+      maxBreath: 16,
+      breathPercent: 60,
+    });
+
     const result = hooks.triggerSurvivalWatchdog({
       stage: 'window.error',
       reason: 'global-error',
@@ -486,7 +547,7 @@ describe('survival watchdog recovery', () => {
       expect.objectContaining({ stage: 'window.error', reason: 'global-error', experienceUpdated: true }),
     );
 
-    const playerState = windowStub.__INFINITE_RAILS_STATE__.player;
+    const playerState = windowStub.__INFINITE_RAILS_LOCAL_STATE__.player;
     expect(playerState.health).toBe(26);
     expect(playerState.maxHealth).toBe(26);
     expect(playerState.hunger).toBe(19);
@@ -495,6 +556,7 @@ describe('survival watchdog recovery', () => {
     expect(playerState.breath).toBe(16);
     expect(playerState.maxBreath).toBe(16);
     expect(playerState.breathPercent).toBe(100);
+    expect(windowStub.__INFINITE_RAILS_STATE__).toEqual(initialGlobalState);
     expect(consoleStub.warn).toHaveBeenCalledWith(
       'Survival watchdog reset player vitals after crash.',
       expect.objectContaining({ stage: 'window.error', reason: 'global-error' }),
@@ -530,11 +592,22 @@ describe('survival watchdog recovery', () => {
 
     windowStub.__INFINITE_RAILS_STATE__ = undefined;
 
+    primeLocalGameplayState(windowStub, {
+      health: 2,
+      maxHealth: 30,
+      hunger: 1,
+      maxHunger: 28,
+      hungerPercent: 5,
+      breath: 3,
+      maxBreath: 12,
+      breathPercent: 25,
+    });
+
     const result = hooks.triggerSurvivalWatchdog({
       stage: 'window.error',
       reason: 'global-error',
       message: 'Physics crash prevented state hydration.',
-    });
+    }, { sync: true });
 
     expect(result).toBe(true);
     expect(updateHud).toHaveBeenCalledWith(
@@ -548,7 +621,7 @@ describe('survival watchdog recovery', () => {
 
     const state = windowStub.__INFINITE_RAILS_STATE__;
     expect(state).toBeTruthy();
-    const playerState = state.player;
+    const playerState = windowStub.__INFINITE_RAILS_LOCAL_STATE__.player;
     expect(playerState.health).toBe(30);
     expect(playerState.maxHealth).toBe(30);
     expect(playerState.hunger).toBe(28);
@@ -557,6 +630,7 @@ describe('survival watchdog recovery', () => {
     expect(playerState.breath).toBe(12);
     expect(playerState.maxBreath).toBe(12);
     expect(playerState.breathPercent).toBe(100);
+    expect(state.player).toEqual(playerState);
     expect(consoleStub.warn).toHaveBeenCalledWith(
       'Survival watchdog reset player vitals after crash.',
       expect.objectContaining({ stage: 'window.error', reason: 'global-error' }),
@@ -604,6 +678,18 @@ describe('survival watchdog recovery', () => {
       updatedAt: 0,
     };
 
+    const initialGlobalState = snapshotState(windowStub.__INFINITE_RAILS_STATE__);
+    primeLocalGameplayState(windowStub, {
+      health: 3,
+      maxHealth: 16,
+      hunger: 4,
+      maxHunger: 16,
+      hungerPercent: 20,
+      breath: 2,
+      maxBreath: 12,
+      breathPercent: 15,
+    });
+
     const result = hooks.triggerSurvivalWatchdog({ stage: '  Game Logic  ', reason: 'Physics Crash ' });
 
     expect(result).toBe(true);
@@ -621,7 +707,7 @@ describe('survival watchdog recovery', () => {
       expect.objectContaining({ stage: 'Game Logic', reason: 'Physics Crash', experienceUpdated: true }),
     );
 
-    const playerState = windowStub.__INFINITE_RAILS_STATE__.player;
+    const playerState = windowStub.__INFINITE_RAILS_LOCAL_STATE__.player;
     expect(playerState.health).toBe(16);
     expect(playerState.maxHealth).toBe(16);
     expect(playerState.hunger).toBe(16);
@@ -630,6 +716,7 @@ describe('survival watchdog recovery', () => {
     expect(playerState.breath).toBe(12);
     expect(playerState.maxBreath).toBe(12);
     expect(playerState.breathPercent).toBe(100);
+    expect(windowStub.__INFINITE_RAILS_STATE__).toEqual(initialGlobalState);
     expect(consoleStub.warn).toHaveBeenCalledWith(
       'Survival watchdog reset player vitals after crash.',
       expect.objectContaining({ stage: 'Game Logic', reason: 'Physics Crash' }),
@@ -680,6 +767,18 @@ describe('survival watchdog recovery', () => {
       updatedAt: 0,
     };
 
+    const initialGlobalState = snapshotState(windowStub.__INFINITE_RAILS_STATE__);
+    primeLocalGameplayState(windowStub, {
+      maxHealth: 18,
+      health: 2,
+      maxHunger: 16,
+      hunger: 1,
+      hungerPercent: 5,
+      maxBreath: 12,
+      breath: 3,
+      breathPercent: 25,
+    });
+
     hooks.setActiveExperienceInstance(experience);
 
     const wrappedFailureHandler = experience.presentRendererFailure;
@@ -706,13 +805,14 @@ describe('survival watchdog recovery', () => {
       expect.objectContaining({ stage: 'simulation', reason: 'physics-crash', experienceUpdated: true }),
     );
 
-    const playerState = windowStub.__INFINITE_RAILS_STATE__.player;
+    const playerState = windowStub.__INFINITE_RAILS_LOCAL_STATE__.player;
     expect(playerState.health).toBe(18);
     expect(playerState.maxHealth).toBe(18);
     expect(playerState.hunger).toBe(16);
     expect(playerState.hungerPercent).toBe(100);
     expect(playerState.breath).toBe(12);
     expect(playerState.breathPercent).toBe(100);
+    expect(windowStub.__INFINITE_RAILS_STATE__).toEqual(initialGlobalState);
     expect(consoleStub.warn).toHaveBeenCalledWith(
       'Survival watchdog reset player vitals after crash.',
       expect.objectContaining({ stage: 'simulation', reason: 'physics-crash' }),
