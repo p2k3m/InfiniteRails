@@ -22,6 +22,20 @@ describe('simple experience API rate limiting', () => {
     }
   });
 
+  it('derives rate limit identities from google ids or sessions', () => {
+    const { experience } = createExperience();
+
+    experience.playerGoogleId = 'user-xyz';
+    expect(experience.getRateLimitIdentity()).toBe('user:user-xyz');
+
+    experience.playerGoogleId = '';
+    experience.sessionId = 'session-123';
+    expect(experience.getRateLimitIdentity()).toBe('session:session-123');
+
+    experience.sessionId = '  ';
+    expect(experience.getRateLimitIdentity()).toBe('anonymous');
+  });
+
   it('applies penalties that block consumption until the retry window elapses', () => {
     const { experience } = createExperience();
     const limiter = experience.apiRateLimiter;

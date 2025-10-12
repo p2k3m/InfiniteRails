@@ -398,6 +398,18 @@
     return { consume, reset, applyPenalty };
   }
 
+  function deriveRateLimitIdentity({ googleId, sessionId } = {}) {
+    const trimmedGoogleId = typeof googleId === 'string' ? googleId.trim() : '';
+    if (trimmedGoogleId) {
+      return `user:${trimmedGoogleId}`;
+    }
+    const trimmedSessionId = typeof sessionId === 'string' ? sessionId.trim() : '';
+    if (trimmedSessionId) {
+      return `session:${trimmedSessionId}`;
+    }
+    return 'anonymous';
+  }
+
   const outboundRateLimiter = createSessionRateLimiter();
 
   const TRACE_METADATA_SYMBOL =
@@ -14576,7 +14588,7 @@
       (typeof traceUtilities?.sessionId === 'string' && traceUtilities.sessionId.trim()) ||
       (typeof batch[0]?.sessionId === 'string' && batch[0].sessionId.trim()) ||
       null;
-    const identityKey = activeGoogleId ? `user:${activeGoogleId.trim()}` : sessionIdentifier ? `session:${sessionIdentifier}` : 'session:anonymous';
+    const identityKey = deriveRateLimitIdentity({ googleId: activeGoogleId, sessionId: sessionIdentifier });
     const rateResult = outboundRateLimiter.consume(`events:post:${identityKey}`, {
       limit: eventSourcingState.rateLimit,
       windowMs: eventSourcingState.rateLimitWindowMs,
@@ -17960,10 +17972,10 @@
       return;
     }
     const url = identityState.endpoints.users;
-    const rateIdentity =
-      (typeof identity.googleId === 'string' && identity.googleId.trim()) ||
-      (typeof traceUtilities?.sessionId === 'string' && traceUtilities.sessionId.trim()) ||
-      'anonymous';
+    const rateIdentity = deriveRateLimitIdentity({
+      googleId: identity.googleId,
+      sessionId: traceUtilities?.sessionId,
+    });
     const rateKey = `users:post:${rateIdentity}`;
     const rateResult = outboundRateLimiter.consume(rateKey, { limit: 6, windowMs: 60_000 });
     if (!rateResult.ok) {
