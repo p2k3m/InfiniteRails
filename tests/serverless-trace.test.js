@@ -73,6 +73,20 @@ describe('createTraceLogger', () => {
     logger.error('Something happened');
 
     expect(baseLogger.error).toHaveBeenCalledTimes(1);
-    expect(baseLogger.error).toHaveBeenCalledWith('[traceId=trace-123 sessionId=session-456]', 'Something happened');
+    expect(baseLogger.error).toHaveBeenCalledWith(
+      '[traceId=trace-123 sessionId=session-456]',
+      'Something happened',
+      expect.objectContaining({
+        traceId: 'trace-123',
+        sessionId: 'session-456',
+        requestId: null,
+        trace: expect.objectContaining({
+          traceId: 'trace-123',
+          sessionId: 'session-456',
+          requestId: null,
+          source: 'serverless',
+        }),
+      }),
+    );
   });
 });
