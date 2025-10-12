@@ -248,6 +248,9 @@ describe('backend live-check', () => {
     expect(initialPayload.mode).toBe('heartbeat');
     expect(initialPayload.intervalMs).toBe(60000);
     expect(initialPayload.status?.scoreboard?.offline).toBe(false);
+    expect(initialPayload.status?.gameClient).toBeTruthy();
+    expect(initialPayload.status.gameClient.running).toBe(false);
+    expect(typeof initialPayload.status.gameClient.available).toBe('boolean');
 
     const scheduledTimerId = heartbeatState.timerId;
     expect(scheduledTimerId).not.toBeNull();
@@ -287,6 +290,7 @@ describe('backend live-check', () => {
     const [, resumedInit] = resumedCalls[0];
     const resumedPayload = JSON.parse(resumedInit?.body ?? '{}');
     expect(resumedPayload.sequence).toBeGreaterThan(initialPayload.sequence);
+    expect(resumedPayload.status?.gameClient).toBeTruthy();
   });
 
   it('enters Offline/Recovery Mode after repeated API failures', async () => {

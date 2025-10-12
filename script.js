@@ -13733,6 +13733,148 @@
     }
   }
 
+  function cloneHeartbeatDetail(value) {
+    if (value === undefined) {
+      return undefined;
+    }
+    if (value === null) {
+      return null;
+    }
+    if (typeof value === 'number') {
+      return Number.isFinite(value) ? value : null;
+    }
+    if (typeof value === 'string' || typeof value === 'boolean') {
+      return value;
+    }
+    if (typeof value === 'object') {
+      try {
+        return JSON.parse(JSON.stringify(value));
+      } catch (error) {
+        globalScope?.console?.debug?.('Failed to serialise heartbeat detail.', error);
+        return null;
+      }
+    }
+    return undefined;
+  }
+
+  function safelyInvokeSnapshot(instance, methodName, label) {
+    if (!instance || typeof instance[methodName] !== 'function') {
+      return null;
+    }
+    try {
+      const result = instance[methodName]();
+      const clone = cloneHeartbeatDetail(result);
+      return clone === undefined ? null : clone;
+    } catch (error) {
+      globalScope?.console?.debug?.(`Failed to gather ${label} for heartbeat payload.`, error);
+    }
+    return null;
+  }
+
+  function buildPublishedGameClientSnapshot() {
+    const state =
+      (typeof globalScope !== 'undefined' &&
+        globalScope &&
+        typeof globalScope.__INFINITE_RAILS_STATE__ === 'object'
+        ? globalScope.__INFINITE_RAILS_STATE__
+        : null) ||
+      null;
+    if (!state || typeof state !== 'object') {
+      return null;
+    }
+    const snapshot = {
+      source: 'published-state',
+      available: true,
+    };
+    snapshot.running = Boolean(state.isRunning);
+    if (typeof state.rendererMode === 'string' && state.rendererMode.trim().length) {
+      snapshot.rendererMode = state.rendererMode.trim();
+    }
+    if (typeof state.reason === 'string' && state.reason.trim().length) {
+      snapshot.reason = state.reason.trim();
+    }
+    if (Number.isFinite(state.updatedAt)) {
+      try {
+        snapshot.updatedAt = new Date(state.updatedAt).toISOString();
+      } catch (error) {
+        globalScope?.console?.debug?.('Failed to normalise published state timestamp.', error);
+      }
+    }
+    const candidateKeys = ['score', 'player', 'portal', 'dimension'];
+    candidateKeys.forEach((key) => {
+      const clone = cloneHeartbeatDetail(state[key]);
+      if (clone !== undefined) {
+        snapshot[key] = clone;
+      }
+    });
+    if (state.daylight !== undefined) {
+      const daylight = cloneHeartbeatDetail(state.daylight);
+      if (daylight !== undefined) {
+        snapshot.daylight = daylight;
+      }
+    }
+    return snapshot;
+  }
+
+  function buildGameClientStatusSnapshot(experience = activeExperienceInstance ?? null) {
+    const snapshot = {
+      source: experience ? 'active-experience' : 'none',
+      available: Boolean(experience),
+      running: false,
+    };
+    const assign = (key, value) => {
+      const cloned = cloneHeartbeatDetail(value);
+      if (cloned !== undefined) {
+        snapshot[key] = cloned;
+      }
+    };
+    if (experience) {
+      try {
+        snapshot.running = Boolean(experience.started && !experience.rendererUnavailable);
+      } catch (error) {
+        globalScope?.console?.debug?.('Failed to resolve experience running state for heartbeat.', error);
+      }
+      if (typeof experience.isPaused === 'function') {
+        try {
+          assign('paused', Boolean(experience.isPaused()));
+        } catch (error) {
+          globalScope?.console?.debug?.('Failed to resolve experience pause state for heartbeat.', error);
+        }
+      } else if (typeof experience.paused === 'boolean') {
+        assign('paused', experience.paused);
+      }
+      const score = safelyInvokeSnapshot(experience, 'getScoreSnapshot', 'score snapshot');
+      if (score !== null) {
+        assign('score', score);
+      }
+      const player = safelyInvokeSnapshot(experience, 'getPlayerStatusSnapshot', 'player status snapshot');
+      if (player !== null) {
+        assign('player', player);
+      }
+      const portal = safelyInvokeSnapshot(experience, 'getPortalStatusSnapshot', 'portal status snapshot');
+      if (portal !== null) {
+        assign('portal', portal);
+      }
+      const dimension = safelyInvokeSnapshot(experience, 'getDimensionInfoSnapshot', 'dimension info snapshot');
+      if (dimension !== null) {
+        assign('dimension', dimension);
+      }
+    }
+    const hasDetail = Object.keys(snapshot).some((key) =>
+      key !== 'source' && key !== 'available' && (key !== 'running' || snapshot.running !== false),
+    );
+    if (!snapshot.available && !hasDetail) {
+      const published = buildPublishedGameClientSnapshot();
+      if (published) {
+        return published;
+      }
+    }
+    if (!snapshot.available) {
+      snapshot.source = 'none';
+    }
+    return snapshot;
+  }
+
   function buildHeartbeatStatusSnapshot() {
     const identity = identityState.identity ?? null;
     const experience = activeExperienceInstance ?? null;
@@ -13775,6 +13917,10 @@
     }
     if (performanceSummary) {
       snapshot.performance = performanceSummary;
+    }
+    const gameClient = buildGameClientStatusSnapshot(experience);
+    if (gameClient) {
+      snapshot.gameClient = gameClient;
     }
     if (typeof traceManager?.sessionId === 'string' && traceManager.sessionId) {
       snapshot.sessionId = traceManager.sessionId;
