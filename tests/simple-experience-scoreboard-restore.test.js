@@ -109,6 +109,24 @@ describe('simple experience scoreboard restore', () => {
     expect(localStorageStub.removeItem.mock.calls.length).toBeGreaterThan(removeCallCount);
   });
 
+  it('quarantines corrupted leaderboard cache entries and requests a reload', () => {
+    const scoreboardStorageKey = 'vitest-scoreboard-corrupted';
+    const windowStub = getWindowStub();
+    windowStub.dispatchEvent = vi.fn();
+
+    localStorageStub.setItem(scoreboardStorageKey, '{"entries":[');
+
+    createExperience({ scoreboardStorageKey });
+
+    expect(localStorageStub.removeItem).toHaveBeenCalledWith(scoreboardStorageKey);
+    const quarantineEventCall = windowStub.dispatchEvent.mock.calls.find(
+      ([event]) => event?.type === 'infinite-rails:storage-quarantine-requested',
+    );
+    expect(quarantineEventCall).toBeDefined();
+    expect(quarantineEventCall[0].detail.storageKey).toBe(scoreboardStorageKey);
+    expect(quarantineEventCall[0].detail.context).toBe('leaderboard cache');
+  });
+
   it('flushes queued offline runs to the backend once login succeeds', async () => {
     const scoreboardStorageKey = 'vitest-scoreboard-sync';
     const scoreSyncQueueKey = 'vitest-scoreboard-sync-queue';
