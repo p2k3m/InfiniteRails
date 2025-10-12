@@ -14,6 +14,7 @@ Globals:
         SCORES_TABLE: !Ref ScoresTable
         SCORES_INDEX_NAME: ScoreIndex
         EVENTS_TABLE: !Ref EventsTable
+        RATE_LIMITS_TABLE: !Ref RateLimitsTable
 
 Resources:
   AssetsBucket:
@@ -225,6 +226,22 @@ Resources:
       SSESpecification:
         SSEEnabled: true
 
+  RateLimitsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: bucket
+          AttributeType: S
+      KeySchema:
+        - AttributeName: bucket
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+      SSESpecification:
+        SSEEnabled: true
+
   UsersFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -233,6 +250,8 @@ Resources:
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref UsersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref RateLimitsTable
       Events:
         PostUser:
           Type: Api
@@ -261,6 +280,8 @@ Resources:
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref ScoresTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref RateLimitsTable
       Events:
         GetScores:
           Type: Api
@@ -289,6 +310,8 @@ Resources:
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref EventsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref RateLimitsTable
       Events:
         GetEvents:
           Type: Api
@@ -331,3 +354,6 @@ Outputs:
   EventsTableName:
     Description: DynamoDB table storing gameplay event logs for replay and diagnostics.
     Value: !Ref EventsTable
+  RateLimitsTableName:
+    Description: DynamoDB table storing per-identity rate limit counters.
+    Value: !Ref RateLimitsTable

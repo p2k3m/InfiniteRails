@@ -3,11 +3,52 @@
 const AWS = require('aws-sdk');
 const { createResponse, parseJsonBody, handleOptions } = require('../lib/http');
 const { createTraceContext, createTraceLogger } = require('../lib/trace');
+const { enforceRateLimit, deriveRateLimitIdentity } = require('../lib/rate-limit');
 
 const dynamo = new AWS.DynamoDB.DocumentClient();
 const SCORES_TABLE = process.env.SCORES_TABLE;
 const SCORE_INDEX = process.env.SCORES_INDEX_NAME || 'ScoreIndex';
 const SCORE_BUCKET = 'all';
+const RATE_LIMITS_TABLE = process.env.RATE_LIMITS_TABLE;
+
+function resolveSourceIp(event) {
+  const ipCandidate = event?.requestContext?.identity?.sourceIp;
+  if (typeof ipCandidate === 'string') {
+    const trimmed = ipCandidate.trim();
+    return trimmed || null;
+  }
+  return null;
+}
+
+async function applyRateLimit(event, trace, logger, { scope, googleId = null, sessionIdOverride = null, limit = 60, windowSeconds = 60 }) {
+  if (!RATE_LIMITS_TABLE) {
+    return { ok: true, skipped: true };
+  }
+
+  const identity = deriveRateLimitIdentity({
+    googleId,
+    sessionId: sessionIdOverride || trace?.sessionId || null,
+    sourceIp: resolveSourceIp(event),
+  });
+
+  return enforceRateLimit({
+    dynamo,
+    tableName: RATE_LIMITS_TABLE,
+    identity,
+    scope,
+    limit,
+    windowSeconds,
+    logger,
+  });
+}
+
+function createRateLimitResponse(trace, message, retryAfterSeconds) {
+  const headers = {};
+  if (Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0) {
+    headers['Retry-After'] = String(Math.max(1, Math.round(retryAfterSeconds)));
+  }
+  return createResponse(429, { message }, { trace, headers });
+}
 
 function sanitizeNumber(value, defaultValue = 0) {
   if (value === null || value === undefined || value === '') {
@@ -55,6 +96,26 @@ async function getScores(event, trace, logger) {
   if (!SCORES_TABLE) {
     logger.error('SCORES_TABLE environment variable is not configured.');
     return createResponse(500, { message: 'SCORES_TABLE environment variable is not configured.' }, { trace });
+  }
+
+  let rateLimitResult;
+  try {
+    rateLimitResult = await applyRateLimit(event, trace, logger, {
+      scope: 'scores:get',
+      limit: 60,
+      windowSeconds: 60,
+    });
+  } catch (error) {
+    logger.error('Failed to evaluate scoreboard GET rate limit.', error);
+    return createResponse(500, { message: 'Unable to evaluate request quota.' }, { trace });
+  }
+
+  if (rateLimitResult?.ok === false) {
+    return createRateLimitResponse(
+      trace,
+      'Too many leaderboard requests. Please try again shortly.',
+      rateLimitResult.retryAfterSeconds,
+    );
   }
 
   const limitParam = event?.queryStringParameters?.limit;
@@ -134,6 +195,27 @@ async function upsertScore(event, trace, logger) {
   if (submittedScore === undefined) {
     logger.warn('Score submission missing numeric score value.', { googleId });
     return createResponse(400, { message: 'score must be a number.' }, { trace });
+  }
+
+  let rateLimitResult;
+  try {
+    rateLimitResult = await applyRateLimit(event, trace, logger, {
+      scope: 'scores:post',
+      googleId,
+      limit: 20,
+      windowSeconds: 60,
+    });
+  } catch (error) {
+    logger.error('Failed to evaluate scoreboard POST rate limit.', error);
+    return createResponse(500, { message: 'Unable to evaluate request quota.' }, { trace });
+  }
+
+  if (rateLimitResult?.ok === false) {
+    return createRateLimitResponse(
+      trace,
+      'Too many score submissions. Please retry later.',
+      rateLimitResult.retryAfterSeconds,
+    );
   }
 
   let existing;
