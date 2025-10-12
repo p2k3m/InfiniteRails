@@ -16,4 +16,10 @@ describe('Manifest asset availability diagnostics', () => {
     expect(scriptSource.includes('Manifest check missing')).toBe(true);
     expect(indexHtml.includes('bootDiagnosticsAssetsList')).toBe(true);
   });
+
+  it('reloads when manifest integrity mismatches are detected', () => {
+    expect(
+      scriptSource.includes('Manifest integrity mismatch detected. Reloading to restore asset bundle.'),
+    ).toBe(true);
+  });
 });

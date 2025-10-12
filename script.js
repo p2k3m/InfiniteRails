@@ -726,6 +726,207 @@
   const assetBaseConsistencyState = { mismatchLogged: false, enforcementError: null };
 
   const DEFAULT_ASSET_VERSION_TAG = '1';
+  const EXPECTED_ASSET_MANIFEST_VERSION = '1';
+  const EXPECTED_ASSET_MANIFEST_SIGNATURE =
+    '8386c8fc6e4d99397143ed1c01b9220aad6c4c87f799bccb9ffdf1bd36398c47';
+  const MANIFEST_INTEGRITY_RELOAD_STORAGE_KEY =
+    'infinite-rails.manifest-integrity.reload-attempted';
+  const manifestIntegrityState = {
+    expectedVersion: EXPECTED_ASSET_MANIFEST_VERSION,
+    expectedSignature: EXPECTED_ASSET_MANIFEST_SIGNATURE,
+    reloadAttempted: false,
+  };
+
+  manifestIntegrityState.reloadAttempted = (() => {
+    const storage = globalScope?.sessionStorage ?? null;
+    if (!storage) {
+      return false;
+    }
+    try {
+      return storage.getItem(MANIFEST_INTEGRITY_RELOAD_STORAGE_KEY) === '1';
+    } catch (error) {
+      return false;
+    }
+  })();
+
+  function serialiseManifestForSignature(manifest) {
+    if (!manifest || typeof manifest !== 'object') {
+      return null;
+    }
+    const assetBaseUrl =
+      typeof manifest.assetBaseUrl === 'string' && manifest.assetBaseUrl.trim().length
+        ? manifest.assetBaseUrl.trim()
+        : null;
+    const assets = Array.isArray(manifest.assets)
+      ? manifest.assets
+          .map((entry) => (typeof entry === 'string' ? entry.trim() : ''))
+          .filter((entry) => entry.length > 0)
+          .sort()
+      : [];
+    const payload = {
+      version: manifest.version ?? null,
+      assetBaseUrl,
+      assets,
+    };
+    try {
+      return JSON.stringify(payload);
+    } catch (error) {
+      return null;
+    }
+  }
+
+  async function computeManifestSignature(manifest) {
+    const payload = serialiseManifestForSignature(manifest);
+    if (!payload) {
+      return null;
+    }
+    const cryptoScope =
+      (globalScope?.crypto && typeof globalScope.crypto.subtle?.digest === 'function'
+        ? globalScope.crypto
+        : typeof crypto !== 'undefined' && crypto && typeof crypto.subtle?.digest === 'function'
+          ? crypto
+          : null);
+    if (cryptoScope && typeof TextEncoder !== 'undefined') {
+      try {
+        const encoder = new TextEncoder();
+        const bytes = encoder.encode(payload);
+        const digestBuffer = await cryptoScope.subtle.digest('SHA-256', bytes);
+        const hashBytes = new Uint8Array(digestBuffer);
+        let hex = '';
+        for (let index = 0; index < hashBytes.length; index += 1) {
+          hex += hashBytes[index].toString(16).padStart(2, '0');
+        }
+        return hex;
+      } catch (error) {
+        if (globalScope?.console?.debug) {
+          globalScope.console.debug('SubtleCrypto digest failed while computing manifest signature.', error);
+        }
+      }
+    }
+    let hash = 5381;
+    for (let index = 0; index < payload.length; index += 1) {
+      hash = ((hash << 5) + hash) ^ payload.charCodeAt(index);
+    }
+    return `fallback-${(hash >>> 0).toString(16)}`;
+  }
+
+  function hasManifestReloadBeenAttempted() {
+    if (manifestIntegrityState.reloadAttempted) {
+      return true;
+    }
+    const storage = globalScope?.sessionStorage ?? null;
+    if (!storage) {
+      return false;
+    }
+    try {
+      const attempted = storage.getItem(MANIFEST_INTEGRITY_RELOAD_STORAGE_KEY) === '1';
+      if (attempted) {
+        manifestIntegrityState.reloadAttempted = true;
+      }
+      return attempted;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  function markManifestReloadAttempted() {
+    manifestIntegrityState.reloadAttempted = true;
+    const storage = globalScope?.sessionStorage ?? null;
+    if (!storage) {
+      return;
+    }
+    try {
+      storage.setItem(MANIFEST_INTEGRITY_RELOAD_STORAGE_KEY, '1');
+    } catch (error) {}
+  }
+
+  function clearManifestReloadAttempted() {
+    manifestIntegrityState.reloadAttempted = false;
+    const storage = globalScope?.sessionStorage ?? null;
+    if (!storage) {
+      return;
+    }
+    try {
+      storage.removeItem(MANIFEST_INTEGRITY_RELOAD_STORAGE_KEY);
+    } catch (error) {}
+  }
+
+  function triggerManifestReload(reason, detail = {}) {
+    const scope = globalScope || (typeof window !== 'undefined' ? window : globalThis);
+    if (hasManifestReloadBeenAttempted()) {
+      scope?.console?.error?.('Manifest integrity mismatch detected repeatedly; reload already attempted.', {
+        reason,
+        detail,
+      });
+      return false;
+    }
+    markManifestReloadAttempted();
+    scope?.console?.warn?.('Manifest integrity mismatch detected. Reloading to restore asset bundle.', {
+      reason,
+      detail,
+    });
+    try {
+      scope?.location?.reload?.();
+      return true;
+    } catch (error) {
+      if (scope?.location?.href) {
+        try {
+          scope.location.href = scope.location.href;
+          return true;
+        } catch (navigationError) {}
+      }
+    }
+    return false;
+  }
+
+  async function verifyManifestIntegrity(manifest, context = {}) {
+    if (!manifest || typeof manifest !== 'object') {
+      return true;
+    }
+    const expectedVersion =
+      typeof manifestIntegrityState.expectedVersion === 'string'
+        ? manifestIntegrityState.expectedVersion
+        : manifestIntegrityState.expectedVersion != null
+          ? String(manifestIntegrityState.expectedVersion)
+          : '';
+    const actualVersion =
+      manifest.version !== undefined && manifest.version !== null ? String(manifest.version).trim() : '';
+    if (expectedVersion && actualVersion && actualVersion !== expectedVersion) {
+      triggerManifestReload('version-mismatch', {
+        expectedVersion,
+        actualVersion,
+        context,
+      });
+      return false;
+    }
+    const expectedSignature =
+      typeof manifestIntegrityState.expectedSignature === 'string'
+        ? manifestIntegrityState.expectedSignature.trim()
+        : '';
+    if (!expectedSignature) {
+      clearManifestReloadAttempted();
+      return true;
+    }
+    let computedSignature = null;
+    try {
+      computedSignature = await computeManifestSignature(manifest);
+    } catch (error) {
+      if (globalScope?.console?.debug) {
+        globalScope.console.debug('Failed to compute manifest signature.', error);
+      }
+      return true;
+    }
+    if (computedSignature && computedSignature !== expectedSignature) {
+      triggerManifestReload('hash-mismatch', {
+        expectedSignature,
+        actualSignature: computedSignature,
+        context,
+      });
+      return false;
+    }
+    clearManifestReloadAttempted();
+    return true;
+  }
 
   const SIGNED_URL_ALERT_EVENT = 'infinite-rails:signed-url-expiry';
   const DEFAULT_SIGNED_URL_WARNING_WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -4529,6 +4730,18 @@
           summary.status = 'error';
           summary.reason = 'manifest-parse-failed';
           summary.error = { message: parseError?.message ?? String(parseError) };
+          return summary;
+        }
+        const integrityOk = await verifyManifestIntegrity(manifestJson, {
+          manifestUrl: manifestRequestUrl,
+          source: 'manifest-asset-check',
+        });
+        if (!integrityOk) {
+          summary.status = 'error';
+          summary.reason = 'manifest-integrity-mismatch';
+          summary.error = {
+            message: 'Manifest integrity mismatch detected; reload requested.',
+          };
           return summary;
         }
         const assets = Array.isArray(manifestJson?.assets) ? manifestJson.assets : [];
