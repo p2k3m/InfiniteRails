@@ -20710,6 +20710,175 @@
     }
   }
 
+  const microFrontendLoaderState = {
+    lastSummary: null,
+  };
+
+  function createMicroFrontendLoader(options = {}) {
+    const {
+      console: consoleRef = globalScope?.console ?? (typeof console !== 'undefined' ? console : null),
+      onSegmentFailure,
+      onSegmentSuccess,
+    } = options || {};
+    const segments = [];
+    const statusMap = new Map();
+
+    function normaliseName(name, index) {
+      if (typeof name === 'string' && name.trim()) {
+        return name.trim();
+      }
+      return `segment-${index + 1}`;
+    }
+
+    function safeInvoke(callback, ...args) {
+      if (typeof callback !== 'function') {
+        return;
+      }
+      try {
+        callback(...args);
+      } catch (callbackError) {
+        consoleRef?.debug?.('Micro frontend loader callback failed.', callbackError);
+      }
+    }
+
+    function registerSegment(name, initializer, segmentOptions = {}) {
+      if (typeof initializer !== 'function') {
+        throw new TypeError('Micro frontend loader segment initialiser must be a function.');
+      }
+      const segmentName = normaliseName(name, segments.length);
+      segments.push({
+        name: segmentName,
+        initializer,
+        guard: typeof segmentOptions.guard === 'function' ? segmentOptions.guard : null,
+        onError: typeof segmentOptions.onError === 'function' ? segmentOptions.onError : null,
+        onSuccess: typeof segmentOptions.onSuccess === 'function' ? segmentOptions.onSuccess : null,
+        metadata:
+          segmentOptions && typeof segmentOptions.metadata === 'object' && !Array.isArray(segmentOptions.metadata)
+            ? { ...segmentOptions.metadata }
+            : null,
+        critical: segmentOptions.critical === true,
+      });
+      return registerApi;
+    }
+
+    function runSegments(context = {}) {
+      const loaderContext = context && typeof context === 'object' ? context : {};
+      const statuses = [];
+      const failures = [];
+      const successes = [];
+      const skipped = [];
+      let hasCriticalFailure = false;
+      statusMap.clear();
+
+      segments.forEach((segment, index) => {
+        const statusEntry = {
+          name: segment.name,
+          index,
+          status: 'pending',
+          value: undefined,
+          error: null,
+          metadata: segment.metadata,
+        };
+        statuses.push(statusEntry);
+        statusMap.set(segment.name, statusEntry);
+        if (segment.guard && segment.guard(loaderContext) === false) {
+          statusEntry.status = 'skipped';
+          skipped.push(statusEntry);
+          return;
+        }
+        try {
+          const result = segment.initializer(loaderContext);
+          statusEntry.status = 'ok';
+          statusEntry.value = result;
+          successes.push(statusEntry);
+          safeInvoke(segment.onSuccess, result, statusEntry, loaderContext);
+          safeInvoke(onSegmentSuccess, statusEntry, loaderContext);
+        } catch (rawError) {
+          const error = rawError instanceof Error ? rawError : new Error(String(rawError));
+          statusEntry.status = 'failed';
+          statusEntry.error = error;
+          failures.push(statusEntry);
+          if (segment.critical) {
+            hasCriticalFailure = true;
+          }
+          if (consoleRef?.error) {
+            consoleRef.error(`Micro frontend segment "${segment.name}" failed.`, error);
+          }
+          safeInvoke(onSegmentFailure, statusEntry, loaderContext);
+          safeInvoke(segment.onError, error, statusEntry, loaderContext);
+        }
+      });
+
+      const summary = {
+        context: loaderContext,
+        statuses,
+        failures,
+        successes,
+        skipped,
+        hasFailures: failures.length > 0,
+        hasCriticalFailure,
+      };
+      return summary;
+    }
+
+    function getSegmentStatus(name) {
+      return statusMap.get(name) || null;
+    }
+
+    function getRegisteredSegments() {
+      return segments.map((segment) => ({
+        name: segment.name,
+        metadata: segment.metadata,
+        critical: segment.critical === true,
+      }));
+    }
+
+    const registerApi = {
+      register: registerSegment,
+      run: runSegments,
+      getStatus: getSegmentStatus,
+      getSegments: getRegisteredSegments,
+    };
+
+    return registerApi;
+  }
+
+  function cloneMicroFrontendLoaderSummary(summary) {
+    if (!summary || typeof summary !== 'object') {
+      return null;
+    }
+    const statuses = Array.isArray(summary.statuses)
+      ? summary.statuses.map((entry) => ({
+          name: entry.name,
+          index: Number.isFinite(entry?.index) ? entry.index : null,
+          status: entry.status,
+          metadata: entry?.metadata ?? null,
+          hasError: Boolean(entry?.error),
+          errorName: entry?.error?.name ?? null,
+          errorMessage: entry?.error?.message ?? null,
+        }))
+      : [];
+    const mapEntries = (list) =>
+      Array.isArray(list)
+        ? list.map((entry) => ({
+            name: entry.name,
+            index: Number.isFinite(entry?.index) ? entry.index : null,
+            status: entry.status,
+            metadata: entry?.metadata ?? null,
+            errorName: entry?.error?.name ?? null,
+            errorMessage: entry?.error?.message ?? null,
+          }))
+        : [];
+    return {
+      hasFailures: summary.hasFailures === true,
+      hasCriticalFailure: summary.hasCriticalFailure === true,
+      statuses,
+      failures: mapEntries(summary.failures),
+      successes: mapEntries(summary.successes),
+      skipped: mapEntries(summary.skipped),
+    };
+  }
+
   function collectSimpleExperienceUi(doc) {
     if (!doc) {
       return {};
@@ -21033,22 +21202,66 @@
       return null;
     }
     markBootPhaseActive('ui', 'Binding renderer UI…');
-    let ui;
-    try {
-      ensureHudDefaults(doc);
-      ui = collectSimpleExperienceUi(doc);
-      bindAudioSettingsControls(ui);
-      ensureHudStateBinding(ui);
-      bindDebugModeControls(ui);
-      bindDeveloperStatsControls(ui);
-      bindBootDiagnosticsUi(ui);
-      bindLiveDiagnosticsControls(ui);
-      bindExperienceEventLog(ui);
-      bindExperienceEventOverlays(ui);
+    const uiLoader = createMicroFrontendLoader({
+      onSegmentFailure(statusEntry) {
+        if (statusEntry?.error && globalScope.console?.warn) {
+          globalScope.console.warn(
+            `SimpleExperience UI segment "${statusEntry.name}" failed to initialise.`,
+            statusEntry.error,
+          );
+        }
+      },
+    });
+    const loaderContext = { doc, ui: null };
+    uiLoader.register('hud-defaults', (context) => ensureHudDefaults(context.doc), { critical: true });
+    uiLoader.register(
+      'collect-ui',
+      (context) => {
+        const collectedUi = collectSimpleExperienceUi(context.doc);
+        context.ui = collectedUi;
+        return collectedUi;
+      },
+      {
+        critical: true,
+        onError: () => {
+          loaderContext.ui = loaderContext.ui || {};
+        },
+      },
+    );
+    uiLoader.register('audio-settings-controls', (context) => bindAudioSettingsControls(context.ui || {}), {
+      guard: (context) => Boolean(context.ui),
+    });
+    uiLoader.register('hud-state-binding', (context) => ensureHudStateBinding(context.ui || {}), {
+      guard: (context) => Boolean(context.ui),
+    });
+    uiLoader.register('debug-mode-controls', (context) => bindDebugModeControls(context.ui || {}), {
+      guard: (context) => Boolean(context.ui),
+    });
+    uiLoader.register('developer-stats-controls', (context) => bindDeveloperStatsControls(context.ui || {}), {
+      guard: (context) => Boolean(context.ui),
+    });
+    uiLoader.register('boot-diagnostics-ui', (context) => bindBootDiagnosticsUi(context.ui || {}), {
+      guard: (context) => Boolean(context.ui),
+    });
+    uiLoader.register('live-diagnostics-controls', (context) => bindLiveDiagnosticsControls(context.ui || {}), {
+      guard: (context) => Boolean(context.ui),
+    });
+    uiLoader.register('experience-event-log', (context) => bindExperienceEventLog(context.ui || {}), {
+      guard: (context) => Boolean(context.ui),
+    });
+    uiLoader.register('experience-event-overlays', (context) => bindExperienceEventOverlays(context.ui || {}), {
+      guard: (context) => Boolean(context.ui),
+    });
+    const uiLoadSummary = uiLoader.run(loaderContext);
+    microFrontendLoaderState.lastSummary = uiLoadSummary;
+    let ui = uiLoadSummary?.context?.ui;
+    if (!ui || typeof ui !== 'object') {
+      ui = {};
+    }
+    if (uiLoadSummary?.hasFailures) {
+      markBootPhaseWarning('ui', 'HUD interfaces initialised with reduced functionality.');
+    } else {
       markBootPhaseOk('ui', 'HUD interfaces ready.');
-    } catch (uiBootstrapError) {
-      markBootPhaseError('ui', 'Failed to prepare HUD interfaces.');
-      throw uiBootstrapError;
     }
     let experience;
     try {
@@ -21862,6 +22075,9 @@
       hooks.ensureAudioAssetLiveTest = ensureAudioAssetLiveTest;
       hooks.getAudioAssetLiveTestState = () => audioAssetLiveTestState;
       hooks.getAudioSettingsState = () => createAudioSettingsSnapshot();
+      hooks.createMicroFrontendLoader = (options = {}) => createMicroFrontendLoader(options);
+      hooks.getSimpleExperienceUiLoaderSummary = () =>
+        cloneMicroFrontendLoaderSummary(microFrontendLoaderState.lastSummary);
       hooks.getLocalGameplayState = () => localGameplayState;
       hooks.setAudioMuted = (value, options = {}) =>
         setAudioMuted(value, { ...options, source: options.source ?? 'test-hook', persist: options.persist });
