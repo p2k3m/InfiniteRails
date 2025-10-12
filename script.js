@@ -12779,6 +12779,23 @@
       ? globalAppConfig.googleClientId.trim()
       : null;
 
+  const identityStorageKey = 'infinite-rails-simple-identity';
+  const identitySessionStorageKey = 'infinite-rails-simple-session';
+  const sessionAutoRefreshMarginMs = 60 * 1000;
+  const sessionRefreshPromptTimeoutMs = 12 * 1000;
+
+  const identitySessionState = {
+    idToken: null,
+    googleId: null,
+    refreshToken: null,
+    expiresAt: null,
+    issuedAt: null,
+    lastRefreshedAt: null,
+    refreshTimeoutId: null,
+    pendingRenewal: null,
+    refreshPromise: null,
+  };
+
   const identityState = {
     originalApiBaseUrl,
     configuredApiBaseUrl: apiBaseUrl,
@@ -12800,6 +12817,7 @@
       users: null,
       events: null,
     },
+    session: identitySessionState,
     backendValidation: {
       performed: false,
       ok: null,
@@ -12829,7 +12847,6 @@
     });
   }
 
-  const identityStorageKey = 'infinite-rails-simple-identity';
   const GOOGLE_ACCOUNTS_ID_NAMESPACE = 'google.accounts.id';
   const GOOGLE_IDENTITY_SCRIPT_URLS = (() => {
     const urls = [];
@@ -17356,6 +17373,185 @@
     }
   }
 
+  function generateSessionToken() {
+    const cryptoRef =
+      globalScope?.crypto ?? (typeof globalThis !== 'undefined' ? globalThis.crypto ?? null : null);
+    if (cryptoRef?.randomUUID) {
+      try {
+        return cryptoRef.randomUUID();
+      } catch (error) {
+        // Ignore and fall back to Math.random below.
+      }
+    }
+    return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  }
+
+  function clearIdentitySessionTimers() {
+    if (identitySessionState.refreshTimeoutId && typeof globalScope.clearTimeout === 'function') {
+      try {
+        globalScope.clearTimeout(identitySessionState.refreshTimeoutId);
+      } catch (error) {
+        globalScope?.console?.debug?.('Failed to clear identity session refresh timer.', error);
+      }
+    }
+    identitySessionState.refreshTimeoutId = null;
+  }
+
+  function persistIdentitySessionSnapshot(session) {
+    if (!globalScope.localStorage) {
+      return;
+    }
+    if (!session || typeof session !== 'object' || !session.refreshToken) {
+      try {
+        globalScope.localStorage.removeItem(identitySessionStorageKey);
+      } catch (error) {
+        console.warn('Failed to clear identity session snapshot', error);
+      }
+      return;
+    }
+    const payload = {
+      refreshToken: session.refreshToken,
+      googleId: session.googleId ?? null,
+      expiresAt: Number.isFinite(session.expiresAt) ? Number(session.expiresAt) : null,
+      issuedAt: Number.isFinite(session.issuedAt) ? Number(session.issuedAt) : null,
+      lastRefreshedAt: Number.isFinite(session.lastRefreshedAt) ? Number(session.lastRefreshedAt) : null,
+    };
+    try {
+      globalScope.localStorage.setItem(identitySessionStorageKey, JSON.stringify(payload));
+    } catch (error) {
+      console.warn('Failed to persist identity session snapshot', error);
+    }
+  }
+
+  function loadStoredIdentitySessionSnapshot() {
+    if (!globalScope.localStorage) {
+      return null;
+    }
+    let raw;
+    try {
+      raw = globalScope.localStorage.getItem(identitySessionStorageKey);
+    } catch (error) {
+      dispatchStorageQuarantineRequest(identitySessionStorageKey, {
+        context: 'identity session',
+        reason: 'Session storage inaccessible; clearing persisted session.',
+        message: 'Failed to access stored identity session. Clearing saved session data.',
+        error,
+      });
+      console.warn('Failed to restore identity session snapshot', error);
+      return null;
+    }
+    if (raw === null || raw === undefined || raw === '') {
+      return null;
+    }
+    let payload;
+    try {
+      payload = JSON.parse(raw);
+    } catch (error) {
+      dispatchStorageQuarantineRequest(identitySessionStorageKey, {
+        context: 'identity session',
+        reason: 'Session snapshot corrupted; clearing persisted session.',
+        message: 'Corrupted identity session snapshot removed. Reload to continue.',
+        error,
+      });
+      console.warn('Failed to parse identity session snapshot', error);
+      return null;
+    }
+    if (!payload || typeof payload !== 'object') {
+      dispatchStorageQuarantineRequest(identitySessionStorageKey, {
+        context: 'identity session',
+        reason: 'Invalid session snapshot removed.',
+        message: 'Invalid identity session snapshot removed. Reload to continue.',
+      });
+      return null;
+    }
+    return payload;
+  }
+
+  function clearIdentitySession(options = {}) {
+    clearIdentitySessionTimers();
+    identitySessionState.idToken = null;
+    identitySessionState.googleId = null;
+    identitySessionState.refreshToken = null;
+    identitySessionState.expiresAt = null;
+    identitySessionState.issuedAt = null;
+    identitySessionState.lastRefreshedAt = null;
+    if (identitySessionState.pendingRenewal?.timeoutId && typeof globalScope.clearTimeout === 'function') {
+      try {
+        globalScope.clearTimeout(identitySessionState.pendingRenewal.timeoutId);
+      } catch (error) {
+        globalScope?.console?.debug?.('Failed to clear identity session renewal timeout.', error);
+      }
+    }
+    identitySessionState.pendingRenewal = null;
+    identitySessionState.refreshPromise = null;
+    if (options.persist !== false) {
+      persistIdentitySessionSnapshot(identitySessionState);
+    }
+  }
+
+  function scheduleIdentitySessionAutoRefresh() {
+    clearIdentitySessionTimers();
+    if (!identitySessionState.refreshToken || !Number.isFinite(identitySessionState.expiresAt)) {
+      return null;
+    }
+    const now = Date.now();
+    const refreshAt = Math.max(now, identitySessionState.expiresAt - sessionAutoRefreshMarginMs);
+    const delay = Math.max(0, refreshAt - now);
+    if (typeof globalScope.setTimeout !== 'function') {
+      return null;
+    }
+    identitySessionState.refreshTimeoutId = globalScope.setTimeout(() => {
+      renewIdentitySession({ reason: 'auto-refresh' }).catch((error) => {
+        console.warn('Automatic session refresh failed', error);
+        expireIdentitySession({
+          message: 'Session expired — Google Sign-In required to continue.',
+        });
+      });
+    }, delay);
+    return identitySessionState.refreshTimeoutId;
+  }
+
+  function installIdentitySessionSnapshot(snapshot, options = {}) {
+    if (!snapshot || typeof snapshot !== 'object') {
+      clearIdentitySession(options);
+      return null;
+    }
+    const refreshToken =
+      typeof snapshot.refreshToken === 'string' && snapshot.refreshToken.trim().length
+        ? snapshot.refreshToken.trim()
+        : null;
+    if (!refreshToken) {
+      clearIdentitySession(options);
+      return null;
+    }
+    const expiresAt = Number.isFinite(snapshot.expiresAt) ? Number(snapshot.expiresAt) : null;
+    const issuedAt = Number.isFinite(snapshot.issuedAt) ? Number(snapshot.issuedAt) : null;
+    const lastRefreshedAt = Number.isFinite(snapshot.lastRefreshedAt)
+      ? Number(snapshot.lastRefreshedAt)
+      : issuedAt ?? Date.now();
+    identitySessionState.refreshToken = refreshToken;
+    identitySessionState.googleId = snapshot.googleId ?? null;
+    identitySessionState.idToken =
+      typeof snapshot.idToken === 'string' && snapshot.idToken.trim().length ? snapshot.idToken.trim() : null;
+    identitySessionState.expiresAt = expiresAt;
+    identitySessionState.issuedAt = issuedAt;
+    identitySessionState.lastRefreshedAt = lastRefreshedAt;
+    if (identitySessionState.pendingRenewal?.timeoutId && typeof globalScope.clearTimeout === 'function') {
+      try {
+        globalScope.clearTimeout(identitySessionState.pendingRenewal.timeoutId);
+      } catch (error) {
+        globalScope?.console?.debug?.('Failed to clear identity session pending renewal timeout during install.', error);
+      }
+    }
+    identitySessionState.pendingRenewal = null;
+    if (options.persist !== false) {
+      persistIdentitySessionSnapshot(identitySessionState);
+    }
+    scheduleIdentitySessionAutoRefresh();
+    finaliseIdentitySessionRenewal(null);
+    return { ...identitySessionState };
+  }
+
   function notifyIdentityConsumers(identity) {
     const payload = {
       name: identity.name,
@@ -17393,6 +17589,187 @@
     }
   }
 
+  function deriveSessionExpiry(payload) {
+    const now = Date.now();
+    const expirySeconds = Number(payload?.exp);
+    if (Number.isFinite(expirySeconds)) {
+      const expiryMs = Math.max(expirySeconds * 1000, now + 30 * 1000);
+      return expiryMs;
+    }
+    const defaultLifetimeMs = 45 * 60 * 1000;
+    return now + defaultLifetimeMs;
+  }
+
+  function buildSessionSnapshotFromCredential(credential, payload) {
+    if (typeof credential !== 'string' || !credential.trim()) {
+      return null;
+    }
+    const refreshTokenCandidate =
+      typeof payload?.refresh_token === 'string' && payload.refresh_token.trim().length
+        ? payload.refresh_token.trim()
+        : null;
+    const refreshToken = refreshTokenCandidate || generateSessionToken();
+    const issuedAt = Number.isFinite(payload?.iat) ? Number(payload.iat) * 1000 : Date.now();
+    return {
+      idToken: credential,
+      googleId: typeof payload?.sub === 'string' && payload.sub.trim().length ? payload.sub.trim() : null,
+      refreshToken,
+      expiresAt: deriveSessionExpiry(payload),
+      issuedAt,
+      lastRefreshedAt: Date.now(),
+    };
+  }
+
+  function cloneIdentitySessionState() {
+    return {
+      idToken: identitySessionState.idToken,
+      googleId: identitySessionState.googleId,
+      refreshToken: identitySessionState.refreshToken,
+      expiresAt: identitySessionState.expiresAt,
+      issuedAt: identitySessionState.issuedAt,
+      lastRefreshedAt: identitySessionState.lastRefreshedAt,
+    };
+  }
+
+  function finaliseIdentitySessionRenewal(error) {
+    const pending = identitySessionState.pendingRenewal;
+    if (pending?.timeoutId && typeof globalScope.clearTimeout === 'function') {
+      try {
+        globalScope.clearTimeout(pending.timeoutId);
+      } catch (timeoutError) {
+        globalScope?.console?.debug?.('Failed to clear session renewal timeout.', timeoutError);
+      }
+    }
+    identitySessionState.pendingRenewal = null;
+    const promiseState = identitySessionState.refreshPromise;
+    identitySessionState.refreshPromise = null;
+    if (!promiseState) {
+      return;
+    }
+    if (error) {
+      try {
+        promiseState.reject?.(error);
+      } catch (rejectionError) {
+        globalScope?.console?.debug?.('Session refresh rejection handler failed.', rejectionError);
+      }
+      return;
+    }
+    try {
+      promiseState.resolve?.(cloneIdentitySessionState());
+    } catch (resolveError) {
+      globalScope?.console?.debug?.('Session refresh resolve handler failed.', resolveError);
+    }
+  }
+
+  function renewIdentitySession(options = {}) {
+    if (!identitySessionState.refreshToken) {
+      return Promise.reject(new Error('Session refresh unavailable — missing refresh token.'));
+    }
+    try {
+      if (!identityState.googleInitialized && !identityState.googleError) {
+        initialiseGoogleSignIn();
+      }
+    } catch (error) {
+      globalScope?.console?.debug?.('Failed to reinitialise Google Sign-In before session refresh.', error);
+    }
+    if (identitySessionState.pendingRenewal && identitySessionState.refreshPromise) {
+      return new Promise((resolve, reject) => {
+        const existing = identitySessionState.refreshPromise;
+        const wrappedResolve = (value) => {
+          try {
+            resolve(value);
+          } catch (error) {
+            globalScope?.console?.debug?.('Session refresh listener resolve failed.', error);
+          }
+        };
+        const wrappedReject = (error) => {
+          try {
+            reject(error);
+          } catch (listenerError) {
+            globalScope?.console?.debug?.('Session refresh listener reject failed.', listenerError);
+          }
+        };
+        const previousResolve = existing.resolve;
+        const previousReject = existing.reject;
+        existing.resolve = (value) => {
+          previousResolve?.(value);
+          wrappedResolve(value);
+        };
+        existing.reject = (error) => {
+          previousReject?.(error);
+          wrappedReject(error);
+        };
+      });
+    }
+    const refreshPromise = {};
+    const promise = new Promise((resolve, reject) => {
+      refreshPromise.resolve = resolve;
+      refreshPromise.reject = reject;
+    });
+    identitySessionState.refreshPromise = refreshPromise;
+    const timeoutId =
+      typeof globalScope.setTimeout === 'function'
+        ? globalScope.setTimeout(() => {
+            finaliseIdentitySessionRenewal(new Error('Session refresh timed out.'));
+          }, sessionRefreshPromptTimeoutMs)
+        : null;
+    identitySessionState.pendingRenewal = {
+      reason: options.reason ?? 'manual',
+      requestedAt: Date.now(),
+      timeoutId,
+    };
+    ensureGoogleIdentityScript()
+      .then(() => waitForGoogleIdentityServices(8000))
+      .then((googleAccounts) => {
+        if (!googleAccounts || typeof googleAccounts.prompt !== 'function') {
+          throw new Error('Google Identity Services unavailable for session refresh.');
+        }
+        try {
+          googleAccounts.prompt((notification) => {
+            if (!identitySessionState.pendingRenewal) {
+              return;
+            }
+            const dismissed =
+              typeof notification?.isDismissedMoment === 'function' ? notification.isDismissedMoment() : false;
+            const skipped =
+              typeof notification?.isSkippedMoment === 'function' ? notification.isSkippedMoment() : false;
+            const notDisplayed =
+              typeof notification?.isNotDisplayed === 'function' ? notification.isNotDisplayed() : false;
+            if (dismissed || skipped || notDisplayed) {
+              const reason =
+                (typeof notification?.getDismissedReason === 'function' && notification.getDismissedReason()) ||
+                (typeof notification?.getNotDisplayedReason === 'function' && notification.getNotDisplayedReason()) ||
+                (typeof notification?.getSkippedReason === 'function' && notification.getSkippedReason()) ||
+                null;
+              const baseMessage = 'Session refresh prompt dismissed';
+              const finalMessage = reason ? `${baseMessage}: ${reason}` : baseMessage;
+              finaliseIdentitySessionRenewal(new Error(finalMessage));
+            }
+          });
+        } catch (error) {
+          finaliseIdentitySessionRenewal(error);
+        }
+      })
+      .catch((error) => {
+        finaliseIdentitySessionRenewal(error instanceof Error ? error : new Error(String(error)));
+      });
+    return promise;
+  }
+
+  function expireIdentitySession(options = {}) {
+    clearIdentitySession({ persist: true });
+    const message =
+      typeof options?.message === 'string' && options.message.trim().length
+        ? options.message.trim()
+        : 'Session expired — continuing as Guest Explorer.';
+    applyIdentity(createAnonymousIdentity(identityState.identity), {
+      reason: 'session-expired',
+      message,
+      offline: true,
+    });
+    showFallbackSignin({ keepGoogleVisible: false });
+  }
+
   function applyIdentity(identity, options = {}) {
     const base = identityState.identity || null;
     const fallback = createAnonymousIdentity(base);
@@ -17419,6 +17796,10 @@
     merged.locationLabel = locationLabel;
 
     identityState.identity = merged;
+
+    if (!merged.googleId || (identitySessionState.googleId && identitySessionState.googleId !== merged.googleId)) {
+      clearIdentitySession({ persist: true });
+    }
 
     if (nameDisplayEl) {
       nameDisplayEl.textContent = merged.name;
@@ -17591,6 +17972,7 @@
       offline: true,
     });
     showFallbackSignin({ keepGoogleVisible: false });
+    finaliseIdentitySessionRenewal(new Error(trimmedMessage || 'Google Sign-In failed.'));
   }
 
   function handleGoogleCredential(response) {
@@ -17623,6 +18005,9 @@
       }
       const canSyncIdentity = Boolean(identityState.apiBaseUrl && identityState.endpoints.users);
       applyIdentity(identity, { reason: 'google-sign-in', offline: !canSyncIdentity });
+      const sessionSnapshot = buildSessionSnapshotFromCredential(credential, payload);
+      installIdentitySessionSnapshot(sessionSnapshot);
+      finaliseIdentitySessionRenewal(null);
     } catch (error) {
       console.warn('Google Sign-In credential handling failed', error);
       handleGoogleSignInFailure('Google Sign-In failed — see console for details. Scores stay on this device.');
@@ -19813,6 +20198,8 @@
         integrateAudioSettingsWithExperience(experience, { ...options, source: options.source ?? 'test-hook' });
       hooks.bindAudioSettingsControls = (ui) => bindAudioSettingsControls(ui);
       hooks.getIdentityState = () => identityState;
+      hooks.getIdentitySessionState = () => cloneIdentitySessionState();
+      hooks.handleGoogleCredential = (response) => handleGoogleCredential(response);
       hooks.getBackendLiveCheckState = () => backendLiveCheckState;
       hooks.activateMissionBriefingFallback = activateMissionBriefingFallback;
       hooks.offerMissionBriefingFallback = offerMissionBriefingFallback;
@@ -20659,10 +21046,46 @@
   }
 
   const storedSnapshot = loadStoredIdentitySnapshot();
-  const initialIdentity = storedSnapshot ? mapSnapshotToIdentity(storedSnapshot) : createAnonymousIdentity(null);
+  let initialIdentity = storedSnapshot ? mapSnapshotToIdentity(storedSnapshot) : createAnonymousIdentity(null);
   identityState.identity = initialIdentity;
 
+  let bootstrapSessionExpired = false;
+  const storedSessionSnapshot = loadStoredIdentitySessionSnapshot();
+  if (
+    storedSessionSnapshot &&
+    storedSessionSnapshot.googleId &&
+    initialIdentity?.googleId &&
+    storedSessionSnapshot.googleId !== initialIdentity.googleId
+  ) {
+    clearIdentitySession({ persist: true });
+  } else if (storedSessionSnapshot) {
+    installIdentitySessionSnapshot({ ...storedSessionSnapshot, idToken: null }, { persist: false });
+    const now = Date.now();
+    if (Number.isFinite(identitySessionState.expiresAt)) {
+      const timeUntilExpiry = identitySessionState.expiresAt - now;
+      if (timeUntilExpiry <= 0) {
+        bootstrapSessionExpired = true;
+        expireIdentitySession({ message: 'Session expired — sign in again to sync scores.' });
+        initialIdentity = identityState.identity;
+      } else if (timeUntilExpiry <= sessionAutoRefreshMarginMs) {
+        if (typeof globalScope.setTimeout === 'function') {
+          globalScope.setTimeout(() => {
+            renewIdentitySession({ reason: 'startup-refresh' }).catch((error) => {
+              console.warn('Failed to refresh session on startup', error);
+              expireIdentitySession({ message: 'Session expired — sign in again to sync scores.' });
+              initialIdentity = identityState.identity;
+              bootstrapSessionExpired = true;
+            });
+          }, 0);
+        }
+      }
+    }
+  }
+
   const initialScoreboardMessage = (() => {
+    if (bootstrapSessionExpired) {
+      return identityState.scoreboardMessage || 'Session expired — sign in again to sync scores.';
+    }
     if (apiBaseInvalid) {
       return 'Configured API endpoint is invalid. Using local leaderboard entries until it is updated.';
     }
@@ -20686,7 +21109,11 @@
     globalScope.bootstrap = bootstrap;
     return;
   }
-  updateScoreboardStatus(initialScoreboardMessage);
+  if (bootstrapSessionExpired) {
+    updateScoreboardStatus(identityState.scoreboardMessage || initialScoreboardMessage, { offline: true });
+  } else {
+    updateScoreboardStatus(initialScoreboardMessage);
+  }
   applyIdentity(initialIdentity, { persist: false, silent: true });
 
   ensureAudioAssetLiveTest().catch((error) => {
@@ -20751,11 +21178,20 @@
     getIdentity() {
       return { ...identityState.identity };
     },
+    getSession() {
+      return cloneIdentitySessionState();
+    },
     setIdentity(value, options = {}) {
       applyIdentity(value || {}, { ...options, reason: options.reason ?? 'external-set' });
     },
     clearIdentity() {
       applyIdentity(createAnonymousIdentity(identityState.identity), { reason: 'sign-out' });
+    },
+    clearSession(options = {}) {
+      clearIdentitySession({ persist: options.persist !== false });
+    },
+    refreshSession(options = {}) {
+      return renewIdentitySession({ ...options, reason: options.reason ?? 'api' });
     },
     refreshGoogleSignIn() {
       identityState.googleError = null;
