@@ -4,6 +4,7 @@
 
   function createTraceUtilities(scope) {
     const runtimeScope = scope || (typeof globalThis !== 'undefined' ? globalThis : null);
+    const SESSION_STORAGE_KEY = 'infinite-rails.session-id';
 
     function generateRandomUUID() {
       const cryptoRef = runtimeScope?.crypto ?? (typeof crypto !== 'undefined' ? crypto : null);
@@ -30,7 +31,45 @@
         .join('')}-${hex.slice(10, 16).join('')}`;
     }
 
-    const sessionId = generateRandomUUID();
+    function normaliseSessionId(value) {
+      if (typeof value !== 'string') {
+        return '';
+      }
+      const trimmed = value.trim();
+      if (!trimmed) {
+        return '';
+      }
+      return trimmed.length > 256 ? trimmed.slice(0, 256) : trimmed;
+    }
+
+    function readStoredSessionId() {
+      const storage = runtimeScope?.localStorage;
+      if (!storage || typeof storage.getItem !== 'function') {
+        return '';
+      }
+      try {
+        const rawValue = storage.getItem(SESSION_STORAGE_KEY);
+        return normaliseSessionId(typeof rawValue === 'string' ? rawValue : '');
+      } catch (error) {
+        return '';
+      }
+    }
+
+    function persistSessionId(value) {
+      const storage = runtimeScope?.localStorage;
+      if (!storage || typeof storage.setItem !== 'function') {
+        return;
+      }
+      try {
+        storage.setItem(SESSION_STORAGE_KEY, value);
+      } catch (error) {}
+    }
+
+    let sessionId = readStoredSessionId();
+    if (!sessionId) {
+      sessionId = generateRandomUUID();
+      persistSessionId(sessionId);
+    }
     let counter = 0;
 
     function resolveTraceId(provided, label = 'trace') {
@@ -40,6 +79,18 @@
       counter += 1;
       const suffix = generateRandomUUID();
       return `${sessionId}-${label}-${counter}-${suffix}`;
+    }
+
+    function updateSessionId(nextId) {
+      const normalised = normaliseSessionId(nextId);
+      if (!normalised) {
+        return sessionId;
+      }
+      if (normalised !== sessionId) {
+        sessionId = normalised;
+        persistSessionId(sessionId);
+      }
+      return sessionId;
     }
 
     function enrichDetail(detail, traceId, session = sessionId) {
@@ -57,8 +108,13 @@
       };
     }
 
-    return {
-      sessionId,
+    const manager = {
+      get sessionId() {
+        return sessionId;
+      },
+      set sessionId(value) {
+        updateSessionId(value);
+      },
       resolveTraceId,
       createTraceId(label = 'trace') {
         return resolveTraceId(null, label);
@@ -68,7 +124,12 @@
         return { traceId, sessionId };
       },
       enrichDetail,
+      setSessionId(nextId) {
+        return updateSessionId(nextId);
+      },
     };
+
+    return manager;
   }
 
   const traceUtilities = (() => {

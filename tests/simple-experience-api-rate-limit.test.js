@@ -20,6 +20,12 @@ describe('simple experience API rate limiting', () => {
     } else {
       delete globalThis.fetch;
     }
+    if (globalThis.window && 'localStorage' in globalThis.window) {
+      delete globalThis.window.localStorage;
+    }
+    if ('localStorage' in globalThis) {
+      delete globalThis.localStorage;
+    }
   });
 
   it('derives rate limit identities from google ids or sessions', () => {
@@ -61,6 +67,36 @@ describe('simple experience API rate limiting', () => {
     expect(afterCooldown.ok).toBe(true);
 
     vi.useRealTimers();
+  });
+
+  it('shares API rate limit buckets across experience instances when storage is available', () => {
+    const store = new Map();
+    const storageStub = {
+      getItem(key) {
+        return store.has(key) ? store.get(key) : null;
+      },
+      setItem(key, value) {
+        store.set(key, value);
+      },
+      removeItem(key) {
+        store.delete(key);
+      },
+    };
+    globalThis.localStorage = storageStub;
+    if (globalThis.window) {
+      globalThis.window.localStorage = storageStub;
+    }
+
+    const { experience: first } = createExperience();
+    const options = { limit: 1, windowMs: 60_000 };
+    const firstResult = first.consumeApiRateLimit('scores:post', options);
+    expect(firstResult.ok).toBe(true);
+    const secondResult = first.consumeApiRateLimit('scores:post', options);
+    expect(secondResult.ok).toBe(false);
+
+    const { experience: second } = createExperience();
+    const thirdResult = second.consumeApiRateLimit('scores:post', options);
+    expect(thirdResult.ok).toBe(false);
   });
 
   it('penalises the local limiter when the leaderboard GET is rate limited', async () => {
