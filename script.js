@@ -504,6 +504,91 @@
     pendingHandle: null,
   };
   let activeExperienceInstance = null;
+  let synchronisingActiveExperience = false;
+
+  function attachRuntimeHooksToActiveExperience(instance) {
+    if (!instance || typeof instance !== 'object') {
+      return;
+    }
+    try {
+      attachPerformanceSamplerToExperience(instance);
+    } catch (error) {
+      globalScope?.console?.debug?.('Failed to attach performance sampler to experience.', error);
+    }
+    try {
+      attachSurvivalWatchdogHooksToExperience(instance);
+    } catch (error) {
+      globalScope?.console?.debug?.('Failed to attach survival watchdog hooks to experience.', error);
+    }
+  }
+
+  function updateActiveExperienceInstance(instance, options = {}) {
+    const nextInstance = instance ?? null;
+    activeExperienceInstance = nextInstance;
+    if (nextInstance) {
+      attachRuntimeHooksToActiveExperience(nextInstance);
+      if (options.markBoot !== false) {
+        markBootCompleted();
+      }
+    } else if (options.resetPerformanceSampler !== false) {
+      stopPerformanceSampling({ reset: true });
+    }
+    if (options.skipGlobalSync) {
+      return activeExperienceInstance;
+    }
+    synchronisingActiveExperience = true;
+    try {
+      globalScope.__INFINITE_RAILS_ACTIVE_EXPERIENCE__ = nextInstance;
+    } catch (error) {
+      globalScope?.console?.debug?.('Failed to synchronise active experience state.', error);
+    } finally {
+      synchronisingActiveExperience = false;
+    }
+    return activeExperienceInstance;
+  }
+
+  function installActiveExperienceObserver(scope = globalScope) {
+    if (!scope || typeof scope !== 'object') {
+      return;
+    }
+    const descriptor = Object.getOwnPropertyDescriptor(scope, '__INFINITE_RAILS_ACTIVE_EXPERIENCE__');
+    const initialValue =
+      descriptor && typeof descriptor.get === 'function'
+        ? descriptor.get.call(scope)
+        : descriptor && Object.prototype.hasOwnProperty.call(descriptor, 'value')
+          ? descriptor.value
+          : scope.__INFINITE_RAILS_ACTIVE_EXPERIENCE__ ?? null;
+    try {
+      Object.defineProperty(scope, '__INFINITE_RAILS_ACTIVE_EXPERIENCE__', {
+        configurable: true,
+        enumerable: false,
+        get() {
+          return activeExperienceInstance;
+        },
+        set(value) {
+          if (synchronisingActiveExperience) {
+            activeExperienceInstance = value ?? null;
+            return;
+          }
+          updateActiveExperienceInstance(value ?? null, {
+            skipGlobalSync: true,
+          });
+        },
+      });
+    } catch (error) {
+      scope?.console?.debug?.('Failed to install active experience observer.', error);
+      return;
+    }
+    if (typeof initialValue !== 'undefined') {
+      updateActiveExperienceInstance(initialValue ?? null, {
+        skipGlobalSync: true,
+        markBoot: false,
+        resetPerformanceSampler: false,
+      });
+    }
+  }
+
+  installActiveExperienceObserver();
   let audioFallbackBeepContext = null;
   let lastAudioFallbackBeepTimestamp = 0;
   const signedUrlExpiryChecks = new Set();
@@ -6128,8 +6213,12 @@
         parts.push(`world ${worldCounts}`);
       }
     }
-    if (Number.isFinite(metrics.inputLatency?.averageMs) && metrics.inputLatency.sampleCount > 0) {
-      parts.push(`input ${metrics.inputLatency.averageMs.toFixed(1)}ms`);
+    if (metrics.inputLatency) {
+      if (Number.isFinite(metrics.inputLatency.averageMs) && metrics.inputLatency.sampleCount > 0) {
+        parts.push(`input ${metrics.inputLatency.averageMs.toFixed(1)}ms`);
+      } else if (metrics.inputLatency.sampleCount === 0) {
+        parts.push('input n/a');
+      }
     }
     return parts.length ? parts.join(' · ') : 'Performance metrics captured';
   }
@@ -17551,9 +17640,7 @@
       }
     }
     result.destroyed = cleanupApplied;
-    stopPerformanceSampling({ reset: true });
-    activeExperienceInstance = null;
-    globalScope.__INFINITE_RAILS_ACTIVE_EXPERIENCE__ = null;
+    updateActiveExperienceInstance(null);
     resetAmbientMusicRecoveryState();
     return result;
   }
@@ -17656,8 +17743,6 @@
         identityStorageKey,
       });
       integrateAudioSettingsWithExperience(experience, { source: 'bootstrap' });
-      attachPerformanceSamplerToExperience(experience);
-      attachSurvivalWatchdogHooksToExperience(experience);
     } catch (error) {
       markBootPhaseError('ui', 'Simplified renderer initialisation failed.');
       if (globalScope.console?.error) {
@@ -17672,10 +17757,7 @@
       });
       throw error;
     }
-    activeExperienceInstance = experience;
-    globalScope.__INFINITE_RAILS_ACTIVE_EXPERIENCE__ = experience;
-    markBootCompleted();
-    attachSurvivalWatchdogHooksToExperience(experience);
+    updateActiveExperienceInstance(experience);
     resetAmbientMusicRecoveryState();
     const scopeLocation = globalScope?.location || (typeof window !== 'undefined' ? window.location : null);
     const locationProtocol = typeof scopeLocation?.protocol === 'string' ? scopeLocation.protocol.toLowerCase() : '';
@@ -18523,12 +18605,11 @@
         survivalWatchdogState.lastResetAt = 0;
         survivalWatchdogState.lastSignature = null;
       };
-      hooks.setActiveExperienceInstance = (instance) => {
-        activeExperienceInstance = instance || null;
-        globalScope.__INFINITE_RAILS_ACTIVE_EXPERIENCE__ = instance || null;
-        if (activeExperienceInstance) {
-          attachSurvivalWatchdogHooksToExperience(activeExperienceInstance);
-        }
+      hooks.setActiveExperienceInstance = (instance, options = {}) => {
+        updateActiveExperienceInstance(instance || null, {
+          resetPerformanceSampler: options.resetPerformanceSampler !== false,
+          markBoot: options.markBoot !== false,
+        });
         return activeExperienceInstance;
       };
       hooks.recordNetworkFailure = (kind, detail) => networkCircuitBreaker.recordFailure(kind, detail || {});
