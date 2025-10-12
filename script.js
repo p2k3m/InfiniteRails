@@ -18002,6 +18002,30 @@
         },
         body: JSON.stringify(payload),
       });
+      if (response && response.status === 429) {
+        const retryAfterHeader = typeof response.headers?.get === 'function'
+          ? response.headers.get('Retry-After')
+          : null;
+        const retryAfterSeconds = parseRetryAfterSeconds(retryAfterHeader);
+        const penalty = outboundRateLimiter.applyPenalty(rateKey, {
+          limit: 6,
+          windowMs: 60_000,
+          retryAfterSeconds,
+        });
+        const penaltyMs = Number.isFinite(penalty?.retryAfterMs) ? penalty.retryAfterMs : 0;
+        const headerMs = Number.isFinite(retryAfterSeconds) ? retryAfterSeconds * 1000 : 0;
+        const waitMs = Math.max(penaltyMs, headerMs, 60_000, 0);
+        const waitSeconds = Math.max(1, Math.ceil(waitMs / 1000));
+        const cooldownMessage = `Signed in as ${identity.name}. Sync cooling down — retrying in ${waitSeconds}s.`;
+        updateScoreboardStatus(cooldownMessage, { offline: false });
+        dispatchScoreSyncEvent('score-sync-throttled', {
+          source: 'identity',
+          message: cooldownMessage,
+          retryAfterSeconds: waitSeconds,
+        });
+        scheduleIdentitySyncRetry(identity, waitMs);
+        return;
+      }
       if (!response.ok) {
         const failure = new Error(`Request failed with status ${response.status}`);
         failure.status = response.status;
