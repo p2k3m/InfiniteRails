@@ -3,9 +3,50 @@
 const AWS = require('aws-sdk');
 const { createResponse, parseJsonBody, handleOptions } = require('../lib/http');
 const { createTraceContext, createTraceLogger } = require('../lib/trace');
+const { enforceRateLimit, deriveRateLimitIdentity } = require('../lib/rate-limit');
 
 const dynamo = new AWS.DynamoDB.DocumentClient();
 const USERS_TABLE = process.env.USERS_TABLE;
+const RATE_LIMITS_TABLE = process.env.RATE_LIMITS_TABLE;
+
+function resolveSourceIp(event) {
+  const ipCandidate = event?.requestContext?.identity?.sourceIp;
+  if (typeof ipCandidate === 'string') {
+    const trimmed = ipCandidate.trim();
+    return trimmed || null;
+  }
+  return null;
+}
+
+async function applyRateLimit(event, trace, logger, { scope, googleId = null, limit = 30, windowSeconds = 60 }) {
+  if (!RATE_LIMITS_TABLE) {
+    return { ok: true, skipped: true };
+  }
+
+  const identity = deriveRateLimitIdentity({
+    googleId,
+    sessionId: trace?.sessionId || null,
+    sourceIp: resolveSourceIp(event),
+  });
+
+  return enforceRateLimit({
+    dynamo,
+    tableName: RATE_LIMITS_TABLE,
+    identity,
+    scope,
+    limit,
+    windowSeconds,
+    logger,
+  });
+}
+
+function createRateLimitResponse(trace, message, retryAfterSeconds) {
+  const headers = {};
+  if (Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0) {
+    headers['Retry-After'] = String(Math.max(1, Math.round(retryAfterSeconds)));
+  }
+  return createResponse(429, { message }, { trace, headers });
+}
 
 function sanitizeDevice(device) {
   if (!device || typeof device !== 'object') {
@@ -247,6 +288,28 @@ exports.handler = async (event, awsContext = {}) => {
       logger.warn('User profile fetch missing googleId parameter.');
       return createResponse(400, { message: 'googleId query parameter is required.' }, { trace });
     }
+
+    let rateLimitResult;
+    try {
+      rateLimitResult = await applyRateLimit(event, trace, logger, {
+        scope: 'users:get',
+        googleId,
+        limit: 30,
+        windowSeconds: 60,
+      });
+    } catch (error) {
+      logger.error('Failed to evaluate user GET rate limit.', error);
+      return createResponse(500, { message: 'Unable to evaluate request quota.' }, { trace });
+    }
+
+    if (rateLimitResult?.ok === false) {
+      return createRateLimitResponse(
+        trace,
+        'Too many profile lookups. Please try again later.',
+        rateLimitResult.retryAfterSeconds,
+      );
+    }
+
     try {
       const result = await dynamo
         .get({
@@ -285,6 +348,27 @@ exports.handler = async (event, awsContext = {}) => {
   if (!googleId || !name) {
     logger.warn('User profile update missing required identity fields.', { hasGoogleId: Boolean(googleId), hasName: Boolean(name) });
     return createResponse(400, { message: 'googleId and name are required fields.' }, { trace });
+  }
+
+  let rateLimitResult;
+  try {
+    rateLimitResult = await applyRateLimit(event, trace, logger, {
+      scope: 'users:post',
+      googleId,
+      limit: 30,
+      windowSeconds: 60,
+    });
+  } catch (error) {
+    logger.error('Failed to evaluate user POST rate limit.', error);
+    return createResponse(500, { message: 'Unable to evaluate request quota.' }, { trace });
+  }
+
+  if (rateLimitResult?.ok === false) {
+    return createRateLimitResponse(
+      trace,
+      'Too many profile updates. Please retry later.',
+      rateLimitResult.retryAfterSeconds,
+    );
   }
 
   const timestamp = new Date().toISOString();

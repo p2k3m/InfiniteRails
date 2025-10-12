@@ -4,13 +4,60 @@ const AWS = require('aws-sdk');
 const crypto = require('crypto');
 const { createResponse, parseJsonBody, handleOptions } = require('../lib/http');
 const { createTraceContext, createTraceLogger } = require('../lib/trace');
+const { enforceRateLimit, deriveRateLimitIdentity } = require('../lib/rate-limit');
 
 const dynamo = new AWS.DynamoDB.DocumentClient();
 const EVENTS_TABLE = process.env.EVENTS_TABLE;
+const RATE_LIMITS_TABLE = process.env.RATE_LIMITS_TABLE;
 
 const MAX_BATCH_WRITE = 25;
 const MAX_RETRY_ATTEMPTS = 5;
 const RETRY_BASE_DELAY_MS = 25;
+
+function resolveSourceIp(event) {
+  const ipCandidate = event?.requestContext?.identity?.sourceIp;
+  if (typeof ipCandidate === 'string') {
+    const trimmed = ipCandidate.trim();
+    return trimmed || null;
+  }
+  return null;
+}
+
+async function applyRateLimit(event, trace, logger, {
+  scope,
+  googleId = null,
+  sessionIdOverride = null,
+  limit = 120,
+  windowSeconds = 60,
+}) {
+  if (!RATE_LIMITS_TABLE) {
+    return { ok: true, skipped: true };
+  }
+
+  const identity = deriveRateLimitIdentity({
+    googleId,
+    sessionId: sessionIdOverride || trace?.sessionId || null,
+    sourceIp: resolveSourceIp(event),
+  });
+
+  return enforceRateLimit({
+    dynamo,
+    tableName: RATE_LIMITS_TABLE,
+    identity,
+    scope,
+    limit,
+    windowSeconds,
+    logger,
+  });
+}
+
+function createRateLimitResponse(trace, message, retryAfterSeconds) {
+  const headers = {};
+  if (Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0) {
+    headers['Retry-After'] = String(Math.max(1, Math.round(retryAfterSeconds)));
+  }
+  return createResponse(429, { message }, { trace, headers });
+}
 
 function sanitiseString(value, { maxLength = 256, allowEmpty = false } = {}) {
   if (value === undefined || value === null) {
@@ -450,6 +497,29 @@ async function ingestEvents(event, trace, logger) {
     return createResponse(400, { message: 'No valid events provided.' }, { trace });
   }
 
+  const representativeGoogleId = sanitised.find((entry) => entry.googleId)?.googleId || null;
+
+  let rateLimitResult;
+  try {
+    rateLimitResult = await applyRateLimit(event, trace, logger, {
+      scope: 'events:post',
+      googleId: representativeGoogleId,
+      limit: 180,
+      windowSeconds: 60,
+    });
+  } catch (error) {
+    logger.error('Failed to evaluate events POST rate limit.', error);
+    return createResponse(500, { message: 'Unable to evaluate request quota.' }, { trace });
+  }
+
+  if (rateLimitResult?.ok === false) {
+    return createRateLimitResponse(
+      trace,
+      'Too many gameplay event batches. Please retry later.',
+      rateLimitResult.retryAfterSeconds,
+    );
+  }
+
   const items = buildEventItems(sanitised);
 
   try {
@@ -471,6 +541,27 @@ async function queryEvents(event, trace, logger) {
   const sessionId = sanitiseString(event?.queryStringParameters?.sessionId, { maxLength: 256 });
   if (!sessionId) {
     return createResponse(400, { message: 'sessionId query parameter is required.' }, { trace });
+  }
+
+  let rateLimitResult;
+  try {
+    rateLimitResult = await applyRateLimit(event, trace, logger, {
+      scope: 'events:get',
+      sessionIdOverride: sessionId,
+      limit: 60,
+      windowSeconds: 60,
+    });
+  } catch (error) {
+    logger.error('Failed to evaluate events GET rate limit.', error);
+    return createResponse(500, { message: 'Unable to evaluate request quota.' }, { trace });
+  }
+
+  if (rateLimitResult?.ok === false) {
+    return createRateLimitResponse(
+      trace,
+      'Too many gameplay event queries. Please retry later.',
+      rateLimitResult.retryAfterSeconds,
+    );
   }
 
   const limitParam = event?.queryStringParameters?.limit;
