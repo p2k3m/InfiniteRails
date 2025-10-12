@@ -18,7 +18,7 @@ describe('createTraceContext', () => {
     const context = createTraceContext({
       headers: {
         [TRACE_HEADER_TRACE_ID]: 'trace-from-header',
-        'x-trace-session': 'session-from-header',
+        [TRACE_HEADER_SESSION_ID]: 'session-from-header',
       },
     });
 
