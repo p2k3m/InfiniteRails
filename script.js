@@ -6160,6 +6160,31 @@
     }
   }
 
+  function logDiagnosticsPerformanceSample(event, summary, detailPayload) {
+    if (!devOrCiEnvironmentActive) {
+      return;
+    }
+    const label = typeof event === 'string' && event.trim().length ? event.trim() : 'sample';
+    const diagnosticsMessage = `Performance metrics sample captured — ${label}: ${summary}`;
+    try {
+      if (typeof logThroughDiagnostics === 'function') {
+        logThroughDiagnostics('performance', diagnosticsMessage, {
+          level: 'info',
+          detail: detailPayload,
+          timestamp: detailPayload?.timestamp ?? Date.now(),
+        });
+      } else if (typeof logDiagnosticsEvent === 'function') {
+        logDiagnosticsEvent('performance', diagnosticsMessage, {
+          level: 'info',
+          detail: detailPayload,
+          timestamp: detailPayload?.timestamp ?? Date.now(),
+        });
+      }
+    } catch (error) {
+      globalScope?.console?.debug?.('Failed to log performance metrics sample for diagnostics.', error);
+    }
+  }
+
   function emitPerformanceMetrics(event, metrics) {
     if (!metrics || typeof metrics !== 'object') {
       return;
@@ -6194,26 +6219,8 @@
       }
     }
     const dispatched = dispatchPerformanceMetrics(event, metrics);
-    if (!dispatched && devOrCiEnvironmentActive) {
-      const label = typeof event === 'string' && event.trim().length ? event.trim() : 'sample';
-      const diagnosticsMessage = `Performance metrics sample captured — ${label}: ${summary}`;
-      try {
-        if (typeof logThroughDiagnostics === 'function') {
-          logThroughDiagnostics('performance', diagnosticsMessage, {
-            level: 'info',
-            detail: detailPayload,
-            timestamp,
-          });
-        } else if (typeof logDiagnosticsEvent === 'function') {
-          logDiagnosticsEvent('performance', diagnosticsMessage, {
-            level: 'info',
-            detail: detailPayload,
-            timestamp,
-          });
-        }
-      } catch (error) {
-        globalScope?.console?.debug?.('Failed to log performance metrics sample for diagnostics.', error);
-      }
+    if (!dispatched || devOrCiEnvironmentActive) {
+      logDiagnosticsPerformanceSample(event, summary, detailPayload);
     }
   }
 
