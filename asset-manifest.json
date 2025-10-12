@@ -5,6 +5,7 @@
     "index.html?v=19c0feebc7c2",
     "styles.css?v=bbee480ac2bf",
     "assets/controls.config.js?v=8bf6d55ccfb2",
+    "downlevel-polyfills.js?v=8e6707c8e13b",
     "bootstrap-fallback.js?v=507486ca1198",
     "script.js?v=2c6c094e1408",
     "test-driver.js?v=0074c367d97c",
