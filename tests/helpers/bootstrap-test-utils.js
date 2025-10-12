@@ -301,6 +301,43 @@ export function createBootstrapSandbox(options = {}) {
     debug: vi.fn(),
   };
 
+  const windowEventListeners = new Map();
+  const addWindowEventListener = vi.fn((type, listener) => {
+    const eventType = String(type);
+    if (typeof listener !== 'function') {
+      return;
+    }
+    if (!windowEventListeners.has(eventType)) {
+      windowEventListeners.set(eventType, new Set());
+    }
+    windowEventListeners.get(eventType).add(listener);
+  });
+  const removeWindowEventListener = vi.fn((type, listener) => {
+    const eventType = String(type);
+    const listeners = windowEventListeners.get(eventType);
+    if (!listeners) {
+      return;
+    }
+    if (typeof listener === 'function') {
+      listeners.delete(listener);
+    } else {
+      listeners.clear();
+    }
+  });
+  const dispatchWindowEvent = vi.fn((event) => {
+    if (!event || typeof event.type !== 'string') {
+      return false;
+    }
+    const listeners = windowEventListeners.get(event.type);
+    if (!listeners || listeners.size === 0) {
+      return true;
+    }
+    listeners.forEach((handler) => {
+      handler.call(windowStub, event);
+    });
+    return true;
+  });
+
   const windowStub = {
     document: documentStub,
     location: { href: 'https://example.com/index.html', protocol: 'https:' },
@@ -313,8 +350,9 @@ export function createBootstrapSandbox(options = {}) {
       removeListener: vi.fn(),
     })),
     visualViewport: null,
-    addEventListener: vi.fn(),
-    removeEventListener: vi.fn(),
+    addEventListener: addWindowEventListener,
+    removeEventListener: removeWindowEventListener,
+    dispatchEvent: dispatchWindowEvent,
     setTimeout: setTimeoutStub,
     clearTimeout: clearTimeoutStub,
     requestAnimationFrame: vi.fn((cb) => {

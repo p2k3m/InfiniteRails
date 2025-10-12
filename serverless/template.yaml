@@ -13,6 +13,7 @@ Globals:
         USERS_TABLE: !Ref UsersTable
         SCORES_TABLE: !Ref ScoresTable
         SCORES_INDEX_NAME: ScoreIndex
+        EVENTS_TABLE: !Ref EventsTable
 
 Resources:
   AssetsBucket:
@@ -207,6 +208,23 @@ Resources:
       SSESpecification:
         SSEEnabled: true
 
+  EventsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: sessionId
+          AttributeType: S
+        - AttributeName: eventId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: sessionId
+          KeyType: HASH
+        - AttributeName: eventId
+          KeyType: RANGE
+      SSESpecification:
+        SSEEnabled: true
+
   UsersFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -263,6 +281,34 @@ Resources:
             Path: /scores
             Method: options
 
+  EventsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./
+      Handler: handlers/events.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref EventsTable
+      Events:
+        GetEvents:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGateway
+            Path: /events
+            Method: get
+        PostEvents:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGateway
+            Path: /events
+            Method: post
+        OptionsEvents:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGateway
+            Path: /events
+            Method: options
+
 Outputs:
   AssetsBucketName:
     Description: S3 bucket that stores Infinite Rails static assets.
@@ -282,3 +328,6 @@ Outputs:
   ScoresTableName:
     Description: DynamoDB table storing multiverse scoreboard entries.
     Value: !Ref ScoresTable
+  EventsTableName:
+    Description: DynamoDB table storing gameplay event logs for replay and diagnostics.
+    Value: !Ref EventsTable

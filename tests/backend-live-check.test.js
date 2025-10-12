@@ -122,6 +122,7 @@ describe('backend live-check', () => {
         `GET ${apiBaseUrl}/scores`,
         `POST ${apiBaseUrl}/scores`,
         `POST ${apiBaseUrl}/users`,
+        `POST ${apiBaseUrl}/events`,
       ]),
     );
 
