@@ -13706,6 +13706,7 @@
     timerId: null,
     online: false,
     pendingPromise: null,
+    pendingPromiseStale: false,
     sequence: 0,
     failureCount: 0,
     lastSuccessfulAt: null,
@@ -13841,19 +13842,25 @@
       return null;
     }
     if (uptimeHeartbeatState.pendingPromise) {
-      return uptimeHeartbeatState.pendingPromise;
+      if (uptimeHeartbeatState.pendingPromiseStale) {
+        uptimeHeartbeatState.pendingPromise = null;
+      } else {
+        return uptimeHeartbeatState.pendingPromise;
+      }
     }
     const promise = Promise.resolve().then(() => executeHeartbeat());
     uptimeHeartbeatState.pendingPromise = promise;
+    uptimeHeartbeatState.pendingPromiseStale = false;
     promise
       .catch((error) => {
         globalScope?.console?.debug?.('Uptime heartbeat execution failed.', error);
       })
       .finally(() => {
-        if (uptimeHeartbeatState.pendingPromise === promise) {
+        const isCurrentPromise = uptimeHeartbeatState.pendingPromise === promise;
+        if (isCurrentPromise) {
           uptimeHeartbeatState.pendingPromise = null;
         }
-        if (uptimeHeartbeatState.online) {
+        if (uptimeHeartbeatState.online && isCurrentPromise) {
           scheduleHeartbeat(uptimeHeartbeatState.intervalMs);
         }
       });
@@ -14021,6 +14028,9 @@
     const wasOnline = uptimeHeartbeatState.online;
     uptimeHeartbeatState.online = false;
     uptimeHeartbeatState.lastStopReason = reason ?? uptimeHeartbeatState.lastStopReason ?? null;
+    if (uptimeHeartbeatState.pendingPromise) {
+      uptimeHeartbeatState.pendingPromiseStale = true;
+    }
     clearHeartbeatTimer();
     if (wasOnline) {
       reportHeartbeatEvent('info', 'Uptime heartbeat monitoring paused.', {
