@@ -140,6 +140,50 @@ describe('backend live-check', () => {
     expect(scoreboardStatus.textContent).toContain('POST /users returned 500');
   });
 
+  it('fails backend validation when required endpoints are missing', async () => {
+    const apiBaseUrl = 'https://api.example.invalid';
+    const { sandbox, windowStub, scoreboardStatus } = createBootstrapSandbox({
+      appConfig: { apiBaseUrl },
+    });
+
+    const overlay = {
+      setDiagnostic: vi.fn(),
+      hide: vi.fn(),
+      showLoading: vi.fn(),
+      showError: vi.fn(),
+    };
+    sandbox.window.bootstrapOverlay = overlay;
+
+    const fetchSpy = vi.fn(() => Promise.resolve({ ok: true, status: 200 }));
+    sandbox.window.fetch = fetchSpy;
+    sandbox.fetch = fetchSpy;
+
+    evaluateBootstrapScript(sandbox);
+
+    await flushMicrotasks();
+    await flushMicrotasks();
+
+    const hooks = windowStub.__INFINITE_RAILS_TEST_HOOKS__;
+    expect(hooks).toBeTruthy();
+
+    const identityState = hooks.getIdentityState();
+    identityState.configuredEndpoints.users = null;
+    identityState.endpoints.users = null;
+
+    const backendState = hooks.getBackendLiveCheckState();
+    backendState.promise = null;
+    backendState.performed = false;
+    backendState.success = null;
+    backendState.detail = null;
+
+    const result = await hooks.ensureBackendLiveCheck();
+    expect(result).toBe(false);
+
+    expect(scoreboardStatus.dataset.offline).toBe('true');
+    expect(scoreboardStatus.textContent).toContain('Leaderboard offline');
+    expect(scoreboardStatus.textContent).toContain('Users endpoint not configured');
+  });
+
   it('enters Offline/Recovery Mode after repeated API failures', async () => {
     const { sandbox, windowStub, scoreboardStatus } = createBootstrapSandbox({
       appConfig: { apiBaseUrl: 'https://api.example.invalid' },
