@@ -43,6 +43,28 @@ describe('trace instrumentation', () => {
     sandbox.window.console = instrumentedConsole;
     sandbox.console = instrumentedConsole;
 
+    class MockXMLHttpRequest {
+      constructor() {
+        this.headers = {};
+      }
+
+      open(...args) {
+        this.openArgs = args;
+      }
+
+      setRequestHeader(name, value) {
+        this.headers[name] = value;
+      }
+
+      send(body) {
+        this.body = body;
+        return undefined;
+      }
+    }
+
+    sandbox.window.XMLHttpRequest = MockXMLHttpRequest;
+    sandbox.XMLHttpRequest = MockXMLHttpRequest;
+
     const fetchCalls = [];
     const fetchStub = (resource, init = {}) => {
       fetchCalls.push([resource, init]);
@@ -69,11 +91,27 @@ describe('trace instrumentation', () => {
     expect(fetchCalls.length).toBeGreaterThan(0);
     const [, requestInit] = fetchCalls.at(-1);
     const headers = requestInit?.headers;
-    const traceId = typeof headers?.get === 'function' ? headers.get('x-trace-id') : headers?.['x-trace-id'];
-    const sessionId = typeof headers?.get === 'function' ? headers.get('x-trace-session') : headers?.['x-trace-session'];
+    const traceId =
+      typeof headers?.get === 'function'
+        ? headers.get('x-trace-id')
+        : headers?.['x-trace-id'] ?? headers?.['X-Trace-Id'];
+    const sessionId =
+      typeof headers?.get === 'function'
+        ? headers.get('x-trace-session')
+        : headers?.['x-trace-session'] ?? headers?.['X-Trace-Session'];
     expect(typeof traceId).toBe('string');
     expect(traceId?.length ?? 0).toBeGreaterThan(0);
     expect(typeof sessionId).toBe('string');
     expect(sessionId?.length ?? 0).toBeGreaterThan(0);
+
+    const xhr = new sandbox.window.XMLHttpRequest();
+    xhr.open('POST', 'https://example.invalid/xhr');
+    xhr.send('payload');
+    const xhrTraceId = xhr.headers['X-Trace-Id'] ?? xhr.headers['x-trace-id'];
+    const xhrSessionId = xhr.headers['X-Trace-Session'] ?? xhr.headers['x-trace-session'];
+    expect(typeof xhrTraceId).toBe('string');
+    expect(xhrTraceId?.length ?? 0).toBeGreaterThan(0);
+    expect(typeof xhrSessionId).toBe('string');
+    expect(xhrSessionId?.length ?? 0).toBeGreaterThan(0);
   });
 });
