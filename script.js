@@ -4023,6 +4023,7 @@
     movement: { label: 'Movement', icon: '🏃' },
     system: { label: 'System', icon: '🛰️' },
     performance: { label: 'Performance', icon: '⏱️' },
+    uptime: { label: 'Uptime', icon: '🛡️' },
   });
 
   const liveDiagnosticsState = {
@@ -12366,6 +12367,87 @@
     return resolved.href;
   }
 
+  const DEFAULT_HEALTH_HEARTBEAT_INTERVAL_MS = 5 * 60 * 1000;
+  const MIN_HEALTH_HEARTBEAT_INTERVAL_MS = 60 * 1000;
+
+  function normaliseHealthEndpoint(endpoint) {
+    if (!endpoint || typeof endpoint !== 'string') {
+      return null;
+    }
+    const trimmed = endpoint.trim();
+    if (!trimmed) {
+      return null;
+    }
+    let resolved;
+    try {
+      resolved = new URL(trimmed, globalScope?.location?.href ?? undefined);
+    } catch (error) {
+      logConfigWarning(
+        'Invalid APP_CONFIG.healthEndpoint detected; uptime heartbeats disabled. Update APP_CONFIG.healthEndpoint to a valid absolute HTTP(S) URL.',
+        {
+          healthEndpoint: endpoint,
+          error: error?.message ?? String(error),
+        },
+      );
+      return null;
+    }
+    const hasExplicitProtocol = /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(trimmed);
+    if (!hasExplicitProtocol) {
+      logConfigWarning(
+        'APP_CONFIG.healthEndpoint must be an absolute URL including the protocol. Update APP_CONFIG.healthEndpoint to a fully-qualified HTTP(S) endpoint for uptime monitoring.',
+        {
+          healthEndpoint: endpoint,
+          resolved: resolved.href,
+        },
+      );
+      return null;
+    }
+    if (resolved.protocol !== 'https:' && resolved.protocol !== 'http:') {
+      logConfigWarning(
+        'APP_CONFIG.healthEndpoint must use HTTP or HTTPS. Update the configuration so uptime heartbeats can be delivered.',
+        {
+          healthEndpoint: endpoint,
+          protocol: resolved.protocol,
+        },
+      );
+      return null;
+    }
+    return resolved.href;
+  }
+
+  function resolveHealthHeartbeatIntervalMs(config) {
+    const source = config && typeof config === 'object' ? config : null;
+    if (source && source.healthHeartbeatIntervalMs !== undefined) {
+      const numeric = Number(source.healthHeartbeatIntervalMs);
+      if (Number.isFinite(numeric) && numeric >= MIN_HEALTH_HEARTBEAT_INTERVAL_MS) {
+        return numeric;
+      }
+      logConfigWarning(
+        'APP_CONFIG.healthHeartbeatIntervalMs must be a positive duration of at least 60000 milliseconds. Using default heartbeat interval (5 minutes).',
+        { healthHeartbeatIntervalMs: source.healthHeartbeatIntervalMs },
+      );
+    }
+    if (source && source.healthHeartbeatMinutes !== undefined) {
+      const minutes = Number(source.healthHeartbeatMinutes);
+      if (Number.isFinite(minutes) && minutes > 0) {
+        const intervalMs = minutes * 60 * 1000;
+        if (intervalMs >= MIN_HEALTH_HEARTBEAT_INTERVAL_MS) {
+          return intervalMs;
+        }
+        logConfigWarning(
+          'APP_CONFIG.healthHeartbeatMinutes must resolve to at least one minute. Using default heartbeat interval (5 minutes).',
+          { healthHeartbeatMinutes: source.healthHeartbeatMinutes },
+        );
+      } else {
+        logConfigWarning(
+          'APP_CONFIG.healthHeartbeatMinutes must be a positive number. Using default heartbeat interval (5 minutes).',
+          { healthHeartbeatMinutes: source.healthHeartbeatMinutes },
+        );
+      }
+    }
+    return DEFAULT_HEALTH_HEARTBEAT_INTERVAL_MS;
+  }
+
   function normaliseApiBaseUrl(base) {
     if (!base || typeof base !== 'string') {
       return null;
@@ -13248,6 +13330,7 @@
       source: 'live-check',
       message: deriveOnlineScoreboardMessage(),
     });
+    startUptimeHeartbeat({ reason: 'backend-live-check', immediate: true });
   }
 
   function markBackendLiveCheckFailure(context = null) {
@@ -13305,6 +13388,7 @@
     if (globalScope?.console?.warn) {
       globalScope.console.warn('Backend live-check failed; continuing in offline mode.', context);
     }
+    stopUptimeHeartbeat('backend-live-check-failed');
   }
 
   async function performBackendLiveCheck() {
@@ -13611,6 +13695,340 @@
       status: 'pending',
       message: 'Validating leaderboard service…',
     });
+  }
+
+  const configuredHealthEndpoint = normaliseHealthEndpoint(globalAppConfig?.healthEndpoint ?? null);
+  const healthHeartbeatIntervalMs = resolveHealthHeartbeatIntervalMs(globalAppConfig ?? null);
+
+  const uptimeHeartbeatState = {
+    endpoint: configuredHealthEndpoint,
+    intervalMs: healthHeartbeatIntervalMs,
+    timerId: null,
+    online: false,
+    pendingPromise: null,
+    sequence: 0,
+    failureCount: 0,
+    lastSuccessfulAt: null,
+    lastResult: null,
+    fetchUnavailableLogged: false,
+    lastStartReason: null,
+    lastStopReason: null,
+  };
+
+  function reportHeartbeatEvent(level, message, detail = {}, timestamp = Date.now()) {
+    try {
+      if (typeof recordLiveDiagnostic === 'function') {
+        recordLiveDiagnostic('uptime', message, detail, { level, timestamp });
+      }
+    } catch (error) {
+      globalScope?.console?.debug?.('Failed to record uptime heartbeat diagnostic entry.', error);
+    }
+    if (typeof logDiagnosticsEvent === 'function') {
+      try {
+        logDiagnosticsEvent('uptime', message, { level, detail, timestamp });
+      } catch (error) {
+        globalScope?.console?.debug?.('Failed to log uptime heartbeat event.', error);
+      }
+    }
+  }
+
+  function buildHeartbeatStatusSnapshot() {
+    const identity = identityState.identity ?? null;
+    const experience = activeExperienceInstance ?? null;
+    let performanceSummary = null;
+    if (experience && typeof experience.getPerformanceMetricsSummary === 'function') {
+      try {
+        performanceSummary = experience.getPerformanceMetricsSummary();
+      } catch (error) {
+        globalScope?.console?.debug?.('Failed to gather performance summary for heartbeat payload.', error);
+      }
+    }
+    const message =
+      typeof identityState.scoreboardMessage === 'string' && identityState.scoreboardMessage.trim().length
+        ? identityState.scoreboardMessage.trim()
+        : null;
+    const snapshot = {
+      rendererMode: globalScope?.InfiniteRails?.rendererMode ?? null,
+      scoreboard: {
+        offline: identityState.scoreboardOffline === true,
+      },
+      liveFeatures: {
+        suspended: identityState.liveFeaturesSuspended === true,
+      },
+      identity: {
+        googleSignedIn: Boolean(identity?.googleId),
+      },
+      network: {
+        circuitTripped:
+          typeof networkCircuitBreaker?.isTripped === 'function'
+            ? Boolean(networkCircuitBreaker.isTripped())
+            : null,
+      },
+      debugMode: typeof isDebugModeEnabled === 'function' ? isDebugModeEnabled() : null,
+    };
+    if (message) {
+      snapshot.scoreboard.message = message;
+    }
+    if (identityState.apiBaseUrl) {
+      snapshot.scoreboard.apiBaseUrl = identityState.apiBaseUrl;
+    }
+    if (performanceSummary) {
+      snapshot.performance = performanceSummary;
+    }
+    if (typeof traceManager?.sessionId === 'string' && traceManager.sessionId) {
+      snapshot.sessionId = traceManager.sessionId;
+    }
+    return snapshot;
+  }
+
+  function resolveHeartbeatFetch() {
+    const scope = typeof globalScope !== 'undefined' ? globalScope : globalThis;
+    if (scope && typeof scope.fetch === 'function') {
+      return scope.fetch.bind(scope);
+    }
+    if (typeof fetch === 'function') {
+      return fetch;
+    }
+    return null;
+  }
+
+  function clearHeartbeatTimer() {
+    if (uptimeHeartbeatState.timerId === null) {
+      return;
+    }
+    const clearFn =
+      (typeof globalScope?.clearTimeout === 'function' && globalScope.clearTimeout.bind(globalScope)) ||
+      (typeof clearTimeout === 'function' ? clearTimeout : null);
+    if (clearFn) {
+      try {
+        clearFn(uptimeHeartbeatState.timerId);
+      } catch (error) {
+        globalScope?.console?.debug?.('Failed to clear uptime heartbeat timer.', error);
+      }
+    }
+    uptimeHeartbeatState.timerId = null;
+  }
+
+  function scheduleHeartbeat(delayMs) {
+    if (!uptimeHeartbeatState.online || !uptimeHeartbeatState.endpoint) {
+      return null;
+    }
+    const setFn =
+      (typeof globalScope?.setTimeout === 'function' && globalScope.setTimeout.bind(globalScope)) ||
+      (typeof setTimeout === 'function' ? setTimeout : null);
+    if (!setFn) {
+      return null;
+    }
+    clearHeartbeatTimer();
+    const clampedDelay = Math.max(
+      0,
+      Number.isFinite(delayMs) ? Math.floor(delayMs) : uptimeHeartbeatState.intervalMs,
+    );
+    if (clampedDelay === 0) {
+      runHeartbeat();
+      return null;
+    }
+    const timerId = setFn(() => {
+      uptimeHeartbeatState.timerId = null;
+      runHeartbeat();
+    }, clampedDelay);
+    uptimeHeartbeatState.timerId = timerId;
+    return timerId;
+  }
+
+  function runHeartbeat() {
+    if (!uptimeHeartbeatState.endpoint || !uptimeHeartbeatState.online) {
+      return null;
+    }
+    if (uptimeHeartbeatState.pendingPromise) {
+      return uptimeHeartbeatState.pendingPromise;
+    }
+    const promise = Promise.resolve().then(() => executeHeartbeat());
+    uptimeHeartbeatState.pendingPromise = promise;
+    promise
+      .catch((error) => {
+        globalScope?.console?.debug?.('Uptime heartbeat execution failed.', error);
+      })
+      .finally(() => {
+        if (uptimeHeartbeatState.pendingPromise === promise) {
+          uptimeHeartbeatState.pendingPromise = null;
+        }
+        if (uptimeHeartbeatState.online) {
+          scheduleHeartbeat(uptimeHeartbeatState.intervalMs);
+        }
+      });
+    return promise;
+  }
+
+  async function executeHeartbeat() {
+    const fetchFn = resolveHeartbeatFetch();
+    const now = Date.now();
+    uptimeHeartbeatState.sequence += 1;
+    const sequence = uptimeHeartbeatState.sequence;
+    const snapshot = buildHeartbeatStatusSnapshot();
+    const payload = {
+      mode: 'heartbeat',
+      timestamp: new Date(now).toISOString(),
+      intervalMs: uptimeHeartbeatState.intervalMs,
+      sequence,
+      status: snapshot,
+    };
+    const detail = {
+      endpoint: uptimeHeartbeatState.endpoint,
+      intervalMs: uptimeHeartbeatState.intervalMs,
+      sequence,
+      snapshot,
+      timestamp: payload.timestamp,
+    };
+    if (!fetchFn) {
+      if (!uptimeHeartbeatState.fetchUnavailableLogged) {
+        uptimeHeartbeatState.fetchUnavailableLogged = true;
+        reportHeartbeatEvent(
+          'warning',
+          'Heartbeat unavailable — fetch API not available.',
+          detail,
+          now,
+        );
+      }
+      return;
+    }
+    let body;
+    try {
+      body = JSON.stringify(payload);
+    } catch (error) {
+      detail.error = { message: error?.message ?? String(error) };
+      reportHeartbeatEvent('error', 'Heartbeat payload serialisation failed.', detail, now);
+      return;
+    }
+    const controller = typeof AbortController === 'function' ? new AbortController() : null;
+    const timeoutMs = Math.min(Math.max(5000, Math.floor(uptimeHeartbeatState.intervalMs / 2)), 15000);
+    let timeoutId = null;
+    if (controller) {
+      const setFn =
+        (typeof globalScope?.setTimeout === 'function' && globalScope.setTimeout.bind(globalScope)) ||
+        (typeof setTimeout === 'function' ? setTimeout : null);
+      if (setFn) {
+        timeoutId = setFn(() => {
+          timeoutId = null;
+          try {
+            controller.abort();
+          } catch (error) {
+            globalScope?.console?.debug?.('Failed to abort heartbeat fetch.', error);
+          }
+        }, timeoutMs);
+      }
+    }
+    const requestInit = {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Infinite-Rails-Heartbeat': '1',
+      },
+      body,
+      keepalive: true,
+    };
+    if (controller) {
+      requestInit.signal = controller.signal;
+    }
+    const startedAt = Date.now();
+    let ok = false;
+    let statusCode = null;
+    let errorDetail = null;
+    try {
+      const response = await fetchFn(uptimeHeartbeatState.endpoint, requestInit);
+      statusCode = Number.isFinite(response?.status) ? response.status : null;
+      ok = response?.ok === true;
+    } catch (error) {
+      errorDetail = {
+        name: typeof error?.name === 'string' ? error.name : 'Error',
+        message: typeof error?.message === 'string' ? error.message : String(error),
+      };
+    } finally {
+      if (timeoutId !== null) {
+        const clearFn =
+          (typeof globalScope?.clearTimeout === 'function' && globalScope.clearTimeout.bind(globalScope)) ||
+          (typeof clearTimeout === 'function' ? clearTimeout : null);
+        if (clearFn) {
+          try {
+            clearFn(timeoutId);
+          } catch (error) {
+            globalScope?.console?.debug?.('Failed to clear heartbeat timeout.', error);
+          }
+        }
+        timeoutId = null;
+      }
+    }
+    const durationMs = Date.now() - startedAt;
+    detail.durationMs = durationMs;
+    if (statusCode !== null) {
+      detail.httpStatus = statusCode;
+    }
+    if (errorDetail) {
+      detail.error = errorDetail;
+    }
+    uptimeHeartbeatState.lastResult = {
+      ok,
+      httpStatus: statusCode,
+      durationMs,
+      timestamp: payload.timestamp,
+      sequence,
+    };
+    if (ok) {
+      uptimeHeartbeatState.failureCount = 0;
+      uptimeHeartbeatState.lastSuccessfulAt = startedAt;
+    } else {
+      uptimeHeartbeatState.failureCount += 1;
+    }
+    const message = ok
+      ? statusCode
+        ? `Heartbeat succeeded — status ${statusCode}.`
+        : 'Heartbeat succeeded.'
+      : statusCode
+        ? `Heartbeat failed — status ${statusCode}.`
+        : 'Heartbeat failed — request error.';
+    const level = ok ? 'info' : 'warning';
+    reportHeartbeatEvent(level, message, detail, startedAt);
+  }
+
+  function startUptimeHeartbeat(options = {}) {
+    if (!uptimeHeartbeatState.endpoint || !Number.isFinite(uptimeHeartbeatState.intervalMs)) {
+      return false;
+    }
+    const wasOnline = uptimeHeartbeatState.online;
+    uptimeHeartbeatState.online = true;
+    uptimeHeartbeatState.lastStartReason = options.reason ?? uptimeHeartbeatState.lastStartReason ?? null;
+    if (!wasOnline) {
+      reportHeartbeatEvent('info', 'Uptime heartbeat monitoring enabled.', {
+        endpoint: uptimeHeartbeatState.endpoint,
+        intervalMs: uptimeHeartbeatState.intervalMs,
+        reason: uptimeHeartbeatState.lastStartReason,
+      });
+    }
+    if (options.immediate === false) {
+      scheduleHeartbeat(uptimeHeartbeatState.intervalMs);
+    } else {
+      runHeartbeat();
+    }
+    return true;
+  }
+
+  function stopUptimeHeartbeat(reason = 'unspecified') {
+    if (!uptimeHeartbeatState.endpoint) {
+      uptimeHeartbeatState.online = false;
+      clearHeartbeatTimer();
+      return false;
+    }
+    const wasOnline = uptimeHeartbeatState.online;
+    uptimeHeartbeatState.online = false;
+    uptimeHeartbeatState.lastStopReason = reason ?? uptimeHeartbeatState.lastStopReason ?? null;
+    clearHeartbeatTimer();
+    if (wasOnline) {
+      reportHeartbeatEvent('info', 'Uptime heartbeat monitoring paused.', {
+        endpoint: uptimeHeartbeatState.endpoint,
+        reason: uptimeHeartbeatState.lastStopReason,
+      });
+    }
+    return wasOnline;
   }
 
   const GOOGLE_ACCOUNTS_ID_NAMESPACE = 'google.accounts.id';
@@ -17775,6 +18193,7 @@
       logCircuitEvent('warning', 'Network circuit breaker tripped — entering Offline/Recovery Mode.', {
         ...buildCircuitDetail(kind, detail),
       });
+      stopUptimeHeartbeat('network-circuit-tripped');
       scheduleReleaseCheck(Math.max(0, MAX_RECOVERY_HOLD_MS));
     }
 
@@ -17783,6 +18202,7 @@
       logCircuitEvent('info', 'Network circuit breaker reset — monitoring resumed.', {
         ...buildCircuitDetail(kind, detail),
       });
+      startUptimeHeartbeat({ reason: 'network-circuit-reset', immediate: false });
     }
 
     function resetCircuit(kind, detail) {
@@ -18188,6 +18608,7 @@
         status: 'error',
         message: finalMessage,
       });
+      stopUptimeHeartbeat('score-sync-offline');
     });
 
     globalScope.addEventListener('infinite-rails:score-sync-restored', (event) => {
@@ -18214,6 +18635,9 @@
         status: offline ? 'warning' : 'ok',
         message: finalMessage,
       });
+      if (!offline) {
+        startUptimeHeartbeat({ reason: 'score-sync-restored', immediate: false });
+      }
     });
   }
 
@@ -21221,6 +21645,31 @@
         tripped: networkCircuitBreaker.isTripped(),
         message: networkCircuitBreaker.getMessage(),
       });
+      hooks.getHeartbeatState = () => ({
+        endpoint: uptimeHeartbeatState.endpoint,
+        intervalMs: uptimeHeartbeatState.intervalMs,
+        online: uptimeHeartbeatState.online,
+        timerId: uptimeHeartbeatState.timerId,
+        sequence: uptimeHeartbeatState.sequence,
+        failureCount: uptimeHeartbeatState.failureCount,
+        lastResult: uptimeHeartbeatState.lastResult,
+      });
+      hooks.triggerHeartbeat = (options = {}) => {
+        if (!uptimeHeartbeatState.endpoint) {
+          return false;
+        }
+        if (!uptimeHeartbeatState.online) {
+          if (options.force !== true) {
+            return false;
+          }
+          const previousOnline = uptimeHeartbeatState.online;
+          uptimeHeartbeatState.online = true;
+          const result = runHeartbeat();
+          uptimeHeartbeatState.online = previousOnline;
+          return result || false;
+        }
+        return runHeartbeat() || false;
+      };
     } catch (hookError) {
       if (globalScope.console?.debug) {
         globalScope.console.debug('Failed to expose ensureSimpleExperience to test hooks.', hookError);
