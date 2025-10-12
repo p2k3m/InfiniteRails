@@ -150,10 +150,21 @@ function createTraceLogger(trace, baseLogger = console) {
     const fallback = typeof target.log === 'function' ? target.log.bind(target) : () => {};
     const handler = typeof target[method] === 'function' ? target[method].bind(target) : fallback;
     return (...args) => {
+      const metadata = {
+        traceId: trace?.traceId ?? null,
+        sessionId: trace?.sessionId ?? null,
+        requestId: trace?.requestId ?? null,
+        trace: {
+          traceId: trace?.traceId ?? null,
+          sessionId: trace?.sessionId ?? null,
+          requestId: trace?.requestId ?? null,
+          source: 'serverless',
+        },
+      };
       if (prefix) {
-        handler(prefix, ...args);
+        handler(prefix, ...args, metadata);
       } else {
-        handler(...args);
+        handler(...args, metadata);
       }
     };
   };
