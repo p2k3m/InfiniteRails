@@ -1009,7 +1009,7 @@
     if (!storageKey || !globalScope?.localStorage) {
       return false;
     }
-    const { context = null, reason = null, error = null } = options;
+    const { context = null, reason = null, error = null, log = true } = options;
     const consoleRef = globalScope.console ?? null;
     let entryLabel = `"${storageKey}"`;
     if (context) {
@@ -1021,6 +1021,9 @@
       consoleRef?.warn?.(`Failed to quarantine localStorage entry ${entryLabel}.`, removeError);
       return false;
     }
+    if (!log) {
+      return true;
+    }
     let message = `Quarantined corrupted localStorage entry ${entryLabel}.`;
     if (reason) {
       message = `${message} ${reason}`;
@@ -1031,6 +1034,105 @@
       consoleRef?.warn?.(message);
     }
     return true;
+  }
+
+  function dispatchStorageQuarantineRequest(storageKeyOrKeys, options = {}) {
+    const keys = [];
+    const addKey = (value) => {
+      if (typeof value !== 'string') {
+        return;
+      }
+      const trimmed = value.trim();
+      if (!trimmed) {
+        return;
+      }
+      if (!keys.includes(trimmed)) {
+        keys.push(trimmed);
+      }
+    };
+    addKey(storageKeyOrKeys);
+    if (Array.isArray(options.storageKeys)) {
+      options.storageKeys.forEach(addKey);
+    }
+    if (typeof options.storageKey === 'string') {
+      addKey(options.storageKey);
+    }
+    if (!keys.length) {
+      return false;
+    }
+
+    const logRemoval = options.logRemoval !== false;
+    let quarantined = false;
+    keys.forEach((key) => {
+      const removed = quarantineLocalStorageKey(key, {
+        context: options.context ?? null,
+        reason: logRemoval ? options.reason ?? null : null,
+        error: logRemoval ? options.error ?? null : null,
+        log: logRemoval,
+      });
+      quarantined = quarantined || removed;
+    });
+
+    const scope = globalScope ?? (typeof window !== 'undefined' ? window : null);
+    const EventCtor = scope?.CustomEvent || (typeof CustomEvent === 'function' ? CustomEvent : null);
+    if (!scope || typeof scope.dispatchEvent !== 'function' || typeof EventCtor !== 'function') {
+      return quarantined;
+    }
+
+    const contextLabel =
+      typeof options.context === 'string' && options.context.trim().length
+        ? options.context.trim()
+        : 'game state';
+    const reasonLabel =
+      typeof options.reason === 'string' && options.reason.trim().length
+        ? options.reason.trim()
+        : 'Reload the page to continue with a fresh session.';
+    const messageLabel =
+      typeof options.message === 'string' && options.message.trim().length
+        ? options.message.trim()
+        : `Corrupted ${contextLabel} removed. Reload the page to continue with a fresh session.`;
+
+    const detail = {
+      storageKey: keys[0],
+      storageKeys: keys.slice(),
+      context: contextLabel,
+      reason: reasonLabel,
+      message: messageLabel,
+    };
+
+    if (logRemoval && quarantined) {
+      detail.skipQuarantineLog = true;
+    }
+
+    if (options.reload === 'page' || options.reload === 'renderer' || options.reload === false) {
+      detail.reload = options.reload;
+    }
+    if (typeof options.reloadReason === 'string' && options.reloadReason.trim().length) {
+      detail.reloadReason = options.reloadReason.trim();
+    }
+    if (options.autoReload === true) {
+      detail.autoReload = true;
+    }
+    if (options.ensurePlugins !== undefined) {
+      detail.ensurePlugins = options.ensurePlugins;
+    }
+    if (options.mode !== undefined) {
+      detail.mode = options.mode;
+    }
+    if (options.restart !== undefined) {
+      detail.restart = options.restart;
+    }
+    if (options.error instanceof Error || (options.error && typeof options.error === 'object')) {
+      detail.error = options.error;
+    }
+
+    try {
+      scope.dispatchEvent(new EventCtor('infinite-rails:storage-quarantine-requested', { detail }));
+    } catch (dispatchError) {
+      scope?.console?.debug?.('Failed to dispatch storage quarantine request.', dispatchError);
+    }
+
+    return quarantined;
   }
   const AUDIO_SETTINGS_CHANNELS = Object.freeze(['master', 'music', 'effects', 'ui']);
   const AUDIO_SETTINGS_DEFAULTS = Object.freeze({
@@ -10785,7 +10887,11 @@
         typeof detail.message === 'string' && detail.message.trim().length
           ? detail.message.trim()
           : `Corrupted ${contextLabel} removed. Reload the page to continue with a fresh session.`;
-      const reportedError = detail.error instanceof Error ? detail.error : null;
+      const reportedError =
+        detail.error instanceof Error || (detail.error && typeof detail.error === 'object')
+          ? detail.error
+          : null;
+      const skipQuarantineLog = detail.skipQuarantineLog === true;
 
       let quarantined = false;
       rawKeys.forEach((storageKey) => {
@@ -10794,6 +10900,7 @@
             context: contextLabel,
             reason: reloadReason,
             error: reportedError,
+            log: !skipQuarantineLog,
           });
           quarantined = quarantined || result;
         } catch (quarantineError) {
@@ -16052,6 +16159,12 @@
       raw = globalScope.localStorage.getItem(identityStorageKey);
     } catch (error) {
       console.warn('Failed to restore identity snapshot from localStorage', error);
+      dispatchStorageQuarantineRequest(identityStorageKey, {
+        context: 'identity snapshot',
+        reason: 'Reloading will start a fresh session.',
+        message: 'Corrupted identity snapshot removed. Reload to continue.',
+        error,
+      });
       return null;
     }
     if (!raw) {
@@ -16061,18 +16174,20 @@
     try {
       payload = JSON.parse(raw);
     } catch (error) {
-      quarantineLocalStorageKey(identityStorageKey, {
+      dispatchStorageQuarantineRequest(identityStorageKey, {
         context: 'identity snapshot',
         reason: 'Reloading will start a fresh session.',
+        message: 'Corrupted identity snapshot removed. Reload to continue.',
         error,
       });
       console.warn('Failed to restore identity snapshot from localStorage', error);
       return null;
     }
     if (!payload || typeof payload !== 'object') {
-      quarantineLocalStorageKey(identityStorageKey, {
+      dispatchStorageQuarantineRequest(identityStorageKey, {
         context: 'identity snapshot',
         reason: 'Reloading will start a fresh session.',
+        message: 'Invalid identity snapshot removed. Reload to continue.',
       });
       return null;
     }
