@@ -866,7 +866,7 @@
   const DEFAULT_ASSET_VERSION_TAG = '1';
   const EXPECTED_ASSET_MANIFEST_VERSION = '1';
   const EXPECTED_ASSET_MANIFEST_SIGNATURE =
-    '8386c8fc6e4d99397143ed1c01b9220aad6c4c87f799bccb9ffdf1bd36398c47';
+    'a46f44589f88d1dc7ecf3eacfd80984dad049ea6d13ac9bd061d67ed630364a5';
   const MANIFEST_INTEGRITY_RELOAD_STORAGE_KEY =
     'infinite-rails.manifest-integrity.reload-attempted';
   const manifestIntegrityState = {
@@ -21894,12 +21894,20 @@
         setRendererModeIndicator(mode);
         scheduleRendererStartWatchdog(mode);
         let manifestIntegrityResult = null;
+        let manifestIntegrityCheckInitiated = false;
         if (typeof startManifestIntegrityVerification === 'function') {
+          manifestIntegrityCheckInitiated = true;
+          markBootPhaseActive('assets', 'Verifying asset manifest integrity…');
           try {
             manifestIntegrityResult = await startManifestIntegrityVerification({ source: 'bootstrap' });
           } catch (error) {
             scope.console?.debug?.('Manifest integrity verification rejected during bootstrap.', error);
           }
+        } else {
+          markBootPhaseWarning(
+            'assets',
+            'Manifest integrity check unavailable. Continuing with cached assets.',
+          );
         }
         if (manifestIntegrityResult?.status === 'reload-requested') {
           markBootPhaseError('assets', 'Asset manifest integrity mismatch detected. Reloading to refresh assets.');
@@ -21908,6 +21916,18 @@
             reason: manifestIntegrityResult.reason ?? 'manifest-integrity-mismatch',
             context: manifestIntegrityResult.context ?? null,
           };
+        }
+        if (manifestIntegrityResult?.status === 'ok') {
+          markBootPhaseActive('assets', 'Asset manifest integrity verified. Continuing checks…');
+        } else if (manifestIntegrityResult?.status === 'skipped') {
+          markBootPhaseWarning('assets', 'Manifest integrity check skipped — fetch unavailable.');
+        } else if (manifestIntegrityResult?.status === 'error') {
+          markBootPhaseWarning(
+            'assets',
+            'Manifest integrity check failed. Continuing with cached assets.',
+          );
+        } else if (manifestIntegrityCheckInitiated && !manifestIntegrityResult) {
+          markBootPhaseWarning('assets', 'Manifest integrity check could not determine status.');
         }
         let backendHealthCheckPromise = null;
         if (identityState.configuredApiBaseUrl) {
