@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
-import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
 
 const DefaultWebGL2RenderingContextStub = function WebGL2RenderingContextStub() {};
@@ -111,6 +111,8 @@ describe('simple experience render loop resilience', () => {
         throw error;
       }),
     };
+    experience.started = true;
+    experience.rendererUnavailable = false;
 
     const failureSpy = vi.spyOn(experience, 'presentRendererFailure');
 
@@ -135,6 +137,8 @@ describe('simple experience render loop resilience', () => {
     });
     experience.scheduleNextFrame = vi.fn();
     experience.renderer = { render: vi.fn() };
+    experience.started = true;
+    experience.rendererUnavailable = false;
 
     const failureSpy = vi.spyOn(experience, 'presentRendererFailure');
 
@@ -227,6 +231,59 @@ describe('simple experience render loop resilience', () => {
         expect.stringContaining('WebGL output appears blocked'),
         expect.objectContaining({ stage: 'blank-frame' }),
       );
+    });
+  });
+
+  describe('renderer watchdog recovery', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('invokes a renderer reset when the watchdog timer fires', () => {
+      const experience = createExperience();
+      experience.started = true;
+      experience.rendererUnavailable = false;
+      experience.renderer = {};
+      const resetSpy = vi.spyOn(experience, 'resetRendererSceneGraph').mockReturnValue(true);
+
+      experience.armRendererWatchdog(0);
+
+      vi.advanceTimersByTime(experience.getRendererWatchdogTimeoutMs() + 10);
+
+      expect(resetSpy).toHaveBeenCalledWith(
+        'renderer-watchdog',
+        expect.objectContaining({ reason: 'stall' }),
+      );
+    });
+
+    it('stops, disposes, and restarts the renderer during a watchdog reset', () => {
+      const experience = createExperience();
+      experience.started = true;
+      experience.rendererUnavailable = false;
+      const stopSpy = vi.spyOn(experience, 'stop').mockImplementation(() => {});
+      const disposeSpy = vi
+        .spyOn(experience, 'disposeRendererSceneGraph')
+        .mockImplementation(() => {});
+      const startSpy = vi.spyOn(experience, 'start').mockImplementation(() => {});
+      const eventSpy = vi.spyOn(experience, 'emitGameEvent').mockImplementation(() => {});
+      const publishSpy = vi.spyOn(experience, 'publishStateSnapshot').mockImplementation(() => {});
+
+      const result = experience.resetRendererSceneGraph('renderer-watchdog', { timeoutMs: 5000 });
+
+      expect(result).toBe(true);
+      expect(stopSpy).toHaveBeenCalled();
+      expect(disposeSpy).toHaveBeenCalled();
+      expect(startSpy).toHaveBeenCalled();
+      expect(eventSpy).toHaveBeenCalledWith(
+        'renderer-watchdog-reset',
+        expect.objectContaining({ reason: 'renderer-watchdog', success: true }),
+      );
+      expect(publishSpy).toHaveBeenCalledWith('renderer-watchdog-reset');
+      expect(experience.rendererWatchdogState.recovering).toBe(false);
     });
   });
 
