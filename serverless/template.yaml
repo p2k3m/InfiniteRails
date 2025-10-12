@@ -15,6 +15,11 @@ Globals:
         SCORES_INDEX_NAME: ScoreIndex
         EVENTS_TABLE: !Ref EventsTable
         RATE_LIMITS_TABLE: !Ref RateLimitsTable
+        INCIDENTS_TABLE: !Ref IncidentCountersTable
+        INCIDENT_NOTIFICATION_TOPIC_ARN: !Ref IncidentNotificationsTopic
+        INCIDENT_NOTIFICATION_THRESHOLD: 5
+        INCIDENT_NOTIFICATION_WINDOW_SECONDS: 900
+        INCIDENT_NOTIFICATION_COOLDOWN_SECONDS: 1800
 
 Resources:
   AssetsBucket:
@@ -242,6 +247,30 @@ Resources:
       SSESpecification:
         SSEEnabled: true
 
+  IncidentCountersTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: incidentKey
+          AttributeType: S
+      KeySchema:
+        - AttributeName: incidentKey
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+      SSESpecification:
+        SSEEnabled: true
+
+  IncidentNotificationsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      DisplayName: IncidentNotifications
+      Subscription:
+        - Protocol: email
+          Endpoint: pushkar.mishra.in@gmail.com
+
   UsersFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -332,6 +361,30 @@ Resources:
             Path: /events
             Method: options
 
+  DiagnosticsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./
+      Handler: handlers/diagnostics.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref IncidentCountersTable
+        - SNSPublishMessagePolicy:
+            TopicArn: !Ref IncidentNotificationsTopic
+      Events:
+        PostDiagnostics:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGateway
+            Path: /diagnostics
+            Method: post
+        OptionsDiagnostics:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGateway
+            Path: /diagnostics
+            Method: options
+
 Outputs:
   AssetsBucketName:
     Description: S3 bucket that stores Infinite Rails static assets.
@@ -357,3 +410,6 @@ Outputs:
   RateLimitsTableName:
     Description: DynamoDB table storing per-identity rate limit counters.
     Value: !Ref RateLimitsTable
+  IncidentCountersTableName:
+    Description: DynamoDB table storing critical incident aggregation state.
+    Value: !Ref IncidentCountersTable
