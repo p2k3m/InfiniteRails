@@ -15,6 +15,7 @@ describe('identity storage quarantine', () => {
       removeItem: vi.fn(),
     };
     windowStub.localStorage = storage;
+    windowStub.dispatchEvent = vi.fn();
 
     evaluateBootstrapScript(sandbox);
 
@@ -33,5 +34,38 @@ describe('identity storage quarantine', () => {
     expect(warnCall).toBeDefined();
     expect(warnCall[1]).toBeTruthy();
     expect(warnCall[1].name).toBe('SyntaxError');
+
+    const quarantineEventCall = windowStub.dispatchEvent.mock.calls.find(
+      ([event]) => event?.type === 'infinite-rails:storage-quarantine-requested',
+    );
+    expect(quarantineEventCall).toBeDefined();
+    expect(quarantineEventCall[0].detail.storageKey).toBe('infinite-rails-simple-identity');
+    expect(quarantineEventCall[0].detail.context).toBe('identity snapshot');
+  });
+
+  it('requests a storage quarantine when identity snapshot access throws', () => {
+    const { sandbox, windowStub } = createBootstrapSandbox();
+    const accessError = new Error('storage access denied');
+    const storage = {
+      getItem: vi.fn(() => {
+        throw accessError;
+      }),
+      setItem: vi.fn(),
+      removeItem: vi.fn(),
+    };
+    windowStub.localStorage = storage;
+    windowStub.dispatchEvent = vi.fn();
+
+    evaluateBootstrapScript(sandbox);
+
+    expect(storage.removeItem).toHaveBeenCalledWith('infinite-rails-simple-identity');
+
+    const eventCall = windowStub.dispatchEvent.mock.calls.find(
+      ([event]) => event?.type === 'infinite-rails:storage-quarantine-requested',
+    );
+    expect(eventCall).toBeDefined();
+    expect(eventCall[0].detail.storageKey).toBe('infinite-rails-simple-identity');
+    expect(eventCall[0].detail.context).toBe('identity snapshot');
+    expect(eventCall[0].detail.error).toBe(accessError);
   });
 });
