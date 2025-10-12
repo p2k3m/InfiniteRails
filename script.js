@@ -16217,6 +16217,139 @@
     return copied;
   }
 
+  function performDiagnosticsEmergencyReloadAll({
+    control = null,
+    source = 'support-action',
+    reason = 'support-reload-all',
+    showHud = true,
+  } = {}) {
+    const scope = typeof globalScope !== 'undefined' ? globalScope : globalThis;
+    const controlElement = control && typeof control === 'object' ? control : null;
+    if (controlElement) {
+      try {
+        controlElement.dataset.originalLabel = controlElement.textContent || '';
+        controlElement.disabled = true;
+        controlElement.setAttribute('aria-busy', 'true');
+      } catch (error) {
+        scope?.console?.debug?.('Unable to mark reload control as busy.', error);
+      }
+    }
+    const logDetail = { source, reason };
+    if (typeof logDiagnosticsEvent === 'function') {
+      logDiagnosticsEvent('ui', 'Player requested full asset and logic reload.', {
+        level: 'warning',
+        detail: { ...logDetail },
+      });
+    } else if (typeof centralLogStore?.record === 'function') {
+      centralLogStore.record({
+        category: 'ui',
+        scope: 'support-controls',
+        level: 'warning',
+        origin: 'reload-all',
+        message: 'Player requested full asset and logic reload.',
+        detail: { ...logDetail },
+      });
+    }
+    if (showHud && typeof showHudAlert === 'function') {
+      showHudAlert({
+        title: 'Reloading experience',
+        message: 'Restarting renderer and refreshing assets…',
+        severity: 'info',
+        autoHideMs: 7000,
+      });
+    }
+    try {
+      bootstrapOverlay?.setDiagnostic?.('assets', {
+        status: 'warning',
+        message: 'Restarting asset streams…',
+      });
+      bootstrapOverlay?.setDiagnostic?.('renderer', {
+        status: 'warning',
+        message: 'Restarting renderer logic…',
+      });
+    } catch (error) {
+      scope?.console?.debug?.('Unable to update diagnostics before reload.', error);
+    }
+    if (typeof scope?.dispatchEvent === 'function' && typeof scope?.CustomEvent === 'function') {
+      try {
+        scope.dispatchEvent(
+          new scope.CustomEvent('infinite-rails:asset-recovery-reload-requested', {
+            detail: { source, reason },
+          }),
+        );
+      } catch (error) {
+        scope?.console?.debug?.('Failed to dispatch asset reload request event.', error);
+      }
+    }
+    const complete = () => {
+      if (!controlElement) {
+        return;
+      }
+      try {
+        controlElement.disabled = false;
+        controlElement.removeAttribute('aria-busy');
+        if (Object.prototype.hasOwnProperty.call(controlElement.dataset, 'originalLabel')) {
+          controlElement.textContent = controlElement.dataset.originalLabel;
+          delete controlElement.dataset.originalLabel;
+        }
+      } catch (error) {
+        scope?.console?.debug?.('Unable to restore reload control state after reload.', error);
+      }
+    };
+    if (typeof reloadActiveRenderer === 'function') {
+      return Promise.resolve()
+        .then(() =>
+          reloadActiveRenderer({
+            reason,
+            reloadPlugins: true,
+            ensurePlugins: true,
+            restart: true,
+          }),
+        )
+        .catch((error) => {
+          scope?.console?.warn?.('Emergency reload failed; attempting hard page reload.', error);
+          const pageReload = scope?.location?.reload;
+          if (typeof pageReload === 'function') {
+            try {
+              pageReload.call(scope.location);
+              return null;
+            } catch (reloadError) {
+              scope?.console?.error?.('Fallback hard reload failed.', reloadError);
+            }
+          }
+          if (typeof showHudAlert === 'function') {
+            showHudAlert({
+              title: 'Reload unavailable',
+              message: 'Reload the page manually to restore the experience.',
+              severity: 'error',
+              autoHideMs: 7000,
+            });
+          }
+          return null;
+        })
+        .finally(() => {
+          complete();
+        });
+    }
+    complete();
+    const hardReload = scope?.location?.reload;
+    if (typeof hardReload === 'function') {
+      try {
+        hardReload.call(scope.location);
+      } catch (error) {
+        scope?.console?.error?.('Unable to trigger hard reload after emergency request.', error);
+      }
+    } else if (typeof showHudAlert === 'function') {
+      showHudAlert({
+        title: 'Reload unavailable',
+        message: 'Reload the page manually to restore the experience.',
+        severity: 'error',
+        autoHideMs: 7000,
+      });
+    }
+    return Promise.resolve(null);
+  }
+
   function bindDiagnosticsActions() {
     const scope = typeof globalScope !== 'undefined' ? globalScope : globalThis;
     const doc = documentRef || scope.document || null;
@@ -16245,6 +16378,20 @@
         });
       });
       reportButton.dataset.diagnosticsBound = 'true';
+    }
+    const reloadAllButton = doc.getElementById('globalOverlayReloadAll');
+    if (reloadAllButton && !reloadAllButton.dataset.diagnosticsBound) {
+      reloadAllButton.addEventListener('click', (event) => {
+        if (event?.preventDefault) {
+          event.preventDefault();
+        }
+        performDiagnosticsEmergencyReloadAll({
+          control: reloadAllButton,
+          source: 'support-action',
+          reason: 'support-reload-all',
+        });
+      });
+      reloadAllButton.dataset.diagnosticsBound = 'true';
     }
   }
 
@@ -22870,6 +23017,22 @@
   bootDiagnosticsApi.startManifestAssetAvailabilityCheck = (options = {}) =>
     startManifestAssetAvailabilityCheck(options);
   globalScope.InfiniteRails.bootDiagnostics = bootDiagnosticsApi;
+
+  const supportApi = globalScope.InfiniteRails.support || {};
+  supportApi.reloadAll = (options = {}) =>
+    performDiagnosticsEmergencyReloadAll({
+      control: options.control ?? null,
+      source: typeof options.source === 'string' && options.source.trim().length ? options.source.trim() : 'api',
+      reason:
+        typeof options.reason === 'string' && options.reason.trim().length
+          ? options.reason.trim()
+          : 'api-reload-all',
+      showHud: options.showHud !== false,
+    });
+  globalScope.InfiniteRails.support = supportApi;
+  if (typeof globalScope.InfiniteRails.reloadAll !== 'function') {
+    globalScope.InfiniteRails.reloadAll = (options = {}) => supportApi.reloadAll(options);
+  }
 
   const assetsApi = globalScope.InfiniteRails.assets || {};
   assetsApi.refreshTextures = (options = {}) => {
