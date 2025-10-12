@@ -89,6 +89,31 @@
     return manager;
   })();
 
+  function parseRetryAfterSeconds(value, now = Date.now()) {
+    if (value === undefined || value === null) {
+      return null;
+    }
+    const stringValue = typeof value === 'string' ? value : String(value);
+    const trimmed = stringValue.trim();
+    if (!trimmed) {
+      return null;
+    }
+    const numeric = Number(trimmed);
+    if (Number.isFinite(numeric)) {
+      return numeric < 0 ? 0 : numeric;
+    }
+    const parsedDate = Date.parse(trimmed);
+    if (Number.isFinite(parsedDate)) {
+      const nowMs = Number.isFinite(now) ? now : Date.now();
+      const deltaMs = parsedDate - nowMs;
+      if (deltaMs <= 0) {
+        return 0;
+      }
+      return deltaMs / 1000;
+    }
+    return null;
+  }
+
   function createSessionRateLimiter({
     defaultLimit = 60,
     defaultWindowMs = 60_000,
@@ -324,6 +349,45 @@
       };
     }
 
+    function applyPenalty(key, options = {}) {
+      if (!key) {
+        return { ok: false, skipped: true };
+      }
+      const limit = Math.max(1, Math.floor(options.limit ?? defaultLimit));
+      const windowMs = Math.max(1, Math.floor(options.windowMs ?? defaultWindowMs));
+      const now = Date.now();
+      let bucket = memoryBuckets.get(key);
+      if (!bucket) {
+        bucket = loadBucketFromStorage(key, { limit, windowMs, now });
+      }
+      const existingRemainingMs = bucket ? Math.max(0, bucket.resetAt - now) : 0;
+      const retryAfterMs = (() => {
+        const providedMs = Number.isFinite(options.retryAfterMs)
+          ? Math.max(0, Math.floor(options.retryAfterMs))
+          : 0;
+        const providedSeconds = Number.isFinite(options.retryAfterSeconds)
+          ? Math.max(0, Math.floor(options.retryAfterSeconds * 1000))
+          : 0;
+        const candidate = Math.max(providedMs, providedSeconds, existingRemainingMs);
+        if (candidate > 0) {
+          return candidate;
+        }
+        return windowMs;
+      })();
+      const resetAt = now + retryAfterMs;
+      const penalisedBucket = { count: limit, resetAt };
+      persistBucketState(key, penalisedBucket, { limit, windowMs, now });
+      const finalRetryAfterMs = Math.max(0, resetAt - now);
+      return {
+        ok: false,
+        remaining: 0,
+        limit,
+        windowMs,
+        retryAfterMs: finalRetryAfterMs,
+        retryAfterSeconds: finalRetryAfterMs > 0 ? Math.max(1, Math.ceil(finalRetryAfterMs / 1000)) : 0,
+      };
+    }
+
     function reset(key) {
       if (!key) {
         return;
@@ -331,7 +395,7 @@
       removeBucketState(key);
     }
 
-    return { consume, reset };
+    return { consume, reset, applyPenalty };
   }
 
   const outboundRateLimiter = createSessionRateLimiter();
@@ -14399,6 +14463,33 @@
     const tracedArgs = applyTraceHeadersToFetchArgs(eventSourcingState.endpoint, init, context);
     try {
       const response = await fetchFn(tracedArgs.resource, tracedArgs.init);
+      if (response?.status === 429) {
+        const retryAfterHeader = typeof response?.headers?.get === 'function' ? response.headers.get('Retry-After') : null;
+        const retryAfterSeconds = parseRetryAfterSeconds(retryAfterHeader);
+        const penalty = outboundRateLimiter.applyPenalty(`events:post:${identityKey}`, {
+          limit: eventSourcingState.rateLimit,
+          windowMs: eventSourcingState.rateLimitWindowMs,
+          retryAfterSeconds,
+        });
+        const penaltyMs = Number.isFinite(penalty?.retryAfterMs)
+          ? penalty.retryAfterMs
+          : Number.isFinite(penalty?.retryAfterSeconds)
+            ? penalty.retryAfterSeconds * 1000
+            : 0;
+        const retryMs = Math.max(
+          eventSourcingState.rateLimitWindowMs,
+          Number.isFinite(retryAfterSeconds) ? retryAfterSeconds * 1000 : 0,
+          penaltyMs,
+          0,
+        );
+        eventSourcingState.lastError = {
+          timestamp: Date.now(),
+          reason: 'rate-limit',
+          retryAfterMs: retryMs,
+        };
+        scheduleEventSourcingRetry(retryMs || eventSourcingState.rateLimitWindowMs);
+        return false;
+      }
       return Boolean(response?.ok);
     } catch (error) {
       scope?.console?.debug?.('Gameplay event batch fetch failed', error);
