@@ -369,6 +369,47 @@ describe('simple experience render loop resilience', () => {
 
       renderFrameSpy.mockRestore();
     });
+
+    it('resets the renderer when progress timestamps exceed the watchdog budget despite limited samples', () => {
+      const experience = createExperience({
+        rendererWatchdogFrameBudget: 3,
+        rendererWatchdogTargetFps: 60,
+      });
+      experience.scene = {};
+      experience.camera = {};
+      experience.started = true;
+      experience.rendererUnavailable = false;
+      experience.rendererWatchdogState.frameBudget = 3;
+      experience.stepSimulation = vi.fn();
+      experience.scheduleNextFrame = vi.fn();
+      experience.evaluateRendererVisibility = vi.fn();
+      experience.publishStateSnapshot = vi.fn();
+      experience.processInputLatencySamples = vi.fn();
+      const rendererInfo = { render: { frame: 1 } };
+      experience.renderer = {
+        render: vi.fn(),
+        info: rendererInfo,
+        domElement: null,
+        getContext: vi.fn(() => null),
+      };
+      const resetSpy = vi.spyOn(experience, 'resetRendererSceneGraph').mockReturnValue(true);
+
+      experience.renderAccumulator = experience.renderActiveInterval;
+      experience.renderFrame(0);
+
+      experience.renderAccumulator = experience.renderActiveInterval;
+      experience.renderFrame(1000);
+
+      expect(resetSpy).toHaveBeenCalledWith(
+        'renderer-watchdog',
+        expect.objectContaining({
+          reason: 'unresponsive',
+          stalledFrames: expect.any(Number),
+          elapsedMs: expect.any(Number),
+        }),
+      );
+      expect(resetSpy).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe('runtime WebGL2 detection', () => {
