@@ -20712,7 +20712,150 @@
 
   const microFrontendLoaderState = {
     lastSummary: null,
+    lastDiagnostics: null,
   };
+
+  function buildUiDiagnosticsEntriesFromSummary(summary) {
+    const statuses = Array.isArray(summary?.statuses) ? summary.statuses : [];
+    const entries = [];
+
+    statuses.forEach((entry) => {
+      if (!entry || typeof entry !== 'object') {
+        return;
+      }
+      const status = typeof entry.status === 'string' ? entry.status.trim().toLowerCase() : '';
+      let severity = 'pending';
+      let message = '';
+      if (status === 'failed') {
+        severity = 'error';
+        message = `UI segment "${entry.name}" failed to initialise.`;
+      } else if (status === 'skipped') {
+        severity = 'warning';
+        message = `UI segment "${entry.name}" skipped during bootstrap.`;
+      } else if (status === 'ok') {
+        severity = 'ok';
+        message = `UI segment "${entry.name}" initialised successfully.`;
+      } else {
+        severity = 'pending';
+        message = `UI segment "${entry.name}" is pending initialisation.`;
+      }
+      if (severity === 'ok' && summary?.hasFailures !== true) {
+        return;
+      }
+      const detail = {
+        name: entry.name ?? null,
+        status,
+        index: Number.isFinite(entry?.index) ? entry.index : null,
+        critical: entry?.critical === true,
+      };
+      if (entry?.metadata !== undefined) {
+        detail.metadata = entry.metadata;
+      }
+      if (entry?.error) {
+        detail.errorName = entry.error?.name ?? null;
+        detail.errorMessage = entry.error?.message ?? null;
+      }
+      entries.push({ severity, message, detail });
+    });
+
+    if (!entries.length) {
+      const segmentCount = statuses.length;
+      entries.push({
+        severity: 'ok',
+        message:
+          segmentCount > 0
+            ? `All ${segmentCount} UI segment${segmentCount === 1 ? '' : 's'} initialised successfully.`
+            : 'No UI segments were registered for bootstrap.',
+        detail: {
+          segments: segmentCount,
+          hasFailures: false,
+        },
+      });
+    } else {
+      const okCount = statuses.filter((statusEntry) => statusEntry?.status === 'ok').length;
+      if (okCount > 0) {
+        entries.push({
+          severity: 'ok',
+          message: `${okCount} UI segment${okCount === 1 ? '' : 's'} initialised successfully.`,
+          detail: {
+            segments: statuses.length,
+            successes: okCount,
+            hasFailures: summary?.hasFailures === true,
+          },
+        });
+      }
+      const skippedCount = statuses.filter((statusEntry) => statusEntry?.status === 'skipped').length;
+      if (skippedCount > 0) {
+        entries.push({
+          severity: 'warning',
+          message: `${skippedCount} UI segment${skippedCount === 1 ? '' : 's'} skipped during bootstrap.`,
+          detail: {
+            segments: statuses.length,
+            skipped: skippedCount,
+            hasFailures: summary?.hasFailures === true,
+          },
+        });
+      }
+    }
+
+    return entries;
+  }
+
+  function computeBootDiagnosticsHighestSeverity(sections) {
+    const rank = (value) => BOOT_DIAGNOSTICS_SEVERITY_RANK[value] ?? 0;
+    let highest = 'pending';
+    BOOT_DIAGNOSTIC_SCOPES.forEach((scope) => {
+      const entries = Array.isArray(sections?.[scope]) ? sections[scope] : [];
+      entries.forEach((entry) => {
+        const severity = normaliseBootDiagnosticsSeverity(entry?.severity, { allowPending: true });
+        if (rank(severity) > rank(highest)) {
+          highest = severity;
+        }
+      });
+    });
+    return highest;
+  }
+
+  function updateUiBootDiagnosticsFromSummary(summary) {
+    const entries = buildUiDiagnosticsEntriesFromSummary(summary);
+    const timestamp = new Date().toISOString();
+    const existingSnapshot = bootDiagnosticsState.lastSnapshot;
+    const sections = {
+      engine: Array.isArray(existingSnapshot?.sections?.engine)
+        ? [...existingSnapshot.sections.engine]
+        : [],
+      assets: Array.isArray(existingSnapshot?.sections?.assets)
+        ? [...existingSnapshot.sections.assets]
+        : [],
+      models: Array.isArray(existingSnapshot?.sections?.models)
+        ? [...existingSnapshot.sections.models]
+        : [],
+      ui: entries.map((entry) => ({ ...entry })),
+    };
+    const severity = computeBootDiagnosticsHighestSeverity(sections);
+    const snapshot = {
+      timestamp,
+      status: severity,
+      phase: 'ui',
+      sections,
+    };
+    updateBootDiagnosticsPanel(snapshot);
+    microFrontendLoaderState.lastDiagnostics = {
+      timestamp,
+      severity,
+      entries: entries.map((entry) => ({
+        severity: entry.severity,
+        message: entry.message,
+        detail: entry.detail ? { ...entry.detail } : null,
+      })),
+      summary: {
+        total: Array.isArray(summary?.statuses) ? summary.statuses.length : 0,
+        failures: Array.isArray(summary?.failures) ? summary.failures.length : 0,
+        skipped: Array.isArray(summary?.skipped) ? summary.skipped.length : 0,
+      },
+    };
+    return snapshot;
+  }
 
   function createMicroFrontendLoader(options = {}) {
     const {
@@ -20778,6 +20921,7 @@
           value: undefined,
           error: null,
           metadata: segment.metadata,
+          critical: segment.critical === true,
         };
         statuses.push(statusEntry);
         statusMap.set(segment.name, statusEntry);
@@ -20853,6 +20997,7 @@
           index: Number.isFinite(entry?.index) ? entry.index : null,
           status: entry.status,
           metadata: entry?.metadata ?? null,
+          critical: entry?.critical === true,
           hasError: Boolean(entry?.error),
           errorName: entry?.error?.name ?? null,
           errorMessage: entry?.error?.message ?? null,
@@ -20865,6 +21010,7 @@
             index: Number.isFinite(entry?.index) ? entry.index : null,
             status: entry.status,
             metadata: entry?.metadata ?? null,
+            critical: entry?.critical === true,
             errorName: entry?.error?.name ?? null,
             errorMessage: entry?.error?.message ?? null,
           }))
@@ -20876,6 +21022,37 @@
       failures: mapEntries(summary.failures),
       successes: mapEntries(summary.successes),
       skipped: mapEntries(summary.skipped),
+    };
+  }
+
+  function cloneMicroFrontendLoaderDiagnostics(diagnostics) {
+    if (!diagnostics || typeof diagnostics !== 'object') {
+      return null;
+    }
+    const entries = Array.isArray(diagnostics.entries)
+      ? diagnostics.entries.map((entry) => ({
+          severity: entry?.severity ?? null,
+          message: entry?.message ?? '',
+          detail:
+            entry?.detail && typeof entry.detail === 'object' && !Array.isArray(entry.detail)
+              ? { ...entry.detail }
+              : entry?.detail ?? null,
+        }))
+      : [];
+    return {
+      timestamp: diagnostics.timestamp ?? null,
+      severity: diagnostics.severity ?? null,
+      entries,
+      summary:
+        diagnostics.summary && typeof diagnostics.summary === 'object'
+          ? {
+              total: Number.isFinite(diagnostics.summary.total) ? diagnostics.summary.total : 0,
+              failures: Number.isFinite(diagnostics.summary.failures)
+                ? diagnostics.summary.failures
+                : 0,
+              skipped: Number.isFinite(diagnostics.summary.skipped) ? diagnostics.summary.skipped : 0,
+            }
+          : { total: 0, failures: 0, skipped: 0 },
     };
   }
 
@@ -21254,6 +21431,7 @@
     });
     const uiLoadSummary = uiLoader.run(loaderContext);
     microFrontendLoaderState.lastSummary = uiLoadSummary;
+    updateUiBootDiagnosticsFromSummary(uiLoadSummary);
     let ui = uiLoadSummary?.context?.ui;
     if (!ui || typeof ui !== 'object') {
       ui = {};
@@ -22078,6 +22256,8 @@
       hooks.createMicroFrontendLoader = (options = {}) => createMicroFrontendLoader(options);
       hooks.getSimpleExperienceUiLoaderSummary = () =>
         cloneMicroFrontendLoaderSummary(microFrontendLoaderState.lastSummary);
+      hooks.getSimpleExperienceUiLoaderDiagnostics = () =>
+        cloneMicroFrontendLoaderDiagnostics(microFrontendLoaderState.lastDiagnostics);
       hooks.getLocalGameplayState = () => localGameplayState;
       hooks.setAudioMuted = (value, options = {}) =>
         setAudioMuted(value, { ...options, source: options.source ?? 'test-hook', persist: options.persist });
