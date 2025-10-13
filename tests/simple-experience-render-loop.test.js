@@ -327,6 +327,48 @@ describe('simple experience render loop resilience', () => {
       );
       expect(resetSpy).toHaveBeenCalledTimes(1);
     });
+
+    it('resets the WebGL scene when scheduled frames stop presenting output', () => {
+      const canvas = createCanvasStub();
+      const experience = createExperience({ rendererWatchdogFrameBudget: 3, canvas });
+      experience.scene = {};
+      experience.camera = {};
+      experience.started = true;
+      experience.rendererUnavailable = false;
+      experience.rendererWatchdogState.frameBudget = 3;
+      experience.stepSimulation = vi.fn();
+      experience.isRenderIdle = vi.fn(() => false);
+      experience.evaluateRendererVisibility = vi.fn();
+      experience.publishStateSnapshot = vi.fn();
+      experience.processInputLatencySamples = vi.fn();
+      const rendererInfo = { render: { frame: 1 } };
+      experience.renderer = {
+        render: vi.fn(),
+        info: rendererInfo,
+        domElement: canvas,
+        getContext: canvas.getContext,
+      };
+      const resetSpy = vi.spyOn(experience, 'resetRendererSceneGraph').mockReturnValue(true);
+      const originalRenderFrame = experience.renderFrame.bind(experience);
+      const renderFrameSpy = vi.spyOn(experience, 'renderFrame').mockImplementation(function (timestamp) {
+        this.renderAccumulator = this.renderActiveInterval;
+        return originalRenderFrame(timestamp);
+      });
+
+      experience.scheduleNextFrame();
+
+      for (let i = 0; i < 6; i += 1) {
+        vi.advanceTimersByTime(16);
+      }
+
+      expect(resetSpy).toHaveBeenCalledWith(
+        'renderer-watchdog',
+        expect.objectContaining({ reason: 'unresponsive', stalledFrames: expect.any(Number) }),
+      );
+      expect(resetSpy).toHaveBeenCalledTimes(1);
+
+      renderFrameSpy.mockRestore();
+    });
   });
 
   describe('runtime WebGL2 detection', () => {
