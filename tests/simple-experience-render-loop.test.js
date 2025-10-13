@@ -94,8 +94,15 @@ beforeAll(() => {
 });
 
 describe('simple experience render loop resilience', () => {
-  function createExperience() {
-    return window.SimpleExperience.create({ canvas: createCanvasStub(), ui: {} });
+  function createExperience(overrides = {}) {
+    const options = { canvas: createCanvasStub(), ui: {}, ...overrides };
+    if (!options.canvas) {
+      options.canvas = createCanvasStub();
+    }
+    if (!options.ui) {
+      options.ui = {};
+    }
+    return window.SimpleExperience.create(options);
   }
 
   it('flags the renderer as unavailable when the draw call throws', () => {
@@ -284,6 +291,41 @@ describe('simple experience render loop resilience', () => {
       );
       expect(publishSpy).toHaveBeenCalledWith('renderer-watchdog-reset');
       expect(experience.rendererWatchdogState.recovering).toBe(false);
+    });
+
+    it('resets the renderer when frames stop advancing for the watchdog budget', () => {
+      const experience = createExperience({ rendererWatchdogFrameBudget: 3 });
+      experience.scene = {};
+      experience.camera = {};
+      experience.started = true;
+      experience.rendererUnavailable = false;
+      experience.rendererWatchdogState.frameBudget = 3;
+      experience.stepSimulation = vi.fn();
+      experience.scheduleNextFrame = vi.fn();
+      const resetSpy = vi
+        .spyOn(experience, 'resetRendererSceneGraph')
+        .mockReturnValue(true);
+
+      const rendererInfo = { render: { frame: 1 } };
+      experience.renderer = {
+        render: vi.fn(),
+        info: rendererInfo,
+        domElement: null,
+        getContext: vi.fn(() => null),
+      };
+
+      const startTimestamp = 1000;
+      const frameIntervalMs = experience.renderActiveInterval * 1000;
+      for (let i = 0; i < 5; i += 1) {
+        experience.renderAccumulator = experience.renderActiveInterval;
+        experience.renderFrame(startTimestamp + i * frameIntervalMs);
+      }
+
+      expect(resetSpy).toHaveBeenCalledWith(
+        'renderer-watchdog',
+        expect.objectContaining({ reason: 'unresponsive', stalledFrames: expect.any(Number) }),
+      );
+      expect(resetSpy).toHaveBeenCalledTimes(1);
     });
   });
 
