@@ -135,7 +135,7 @@ Capturing console logs and the exact build SHA alongside these steps will accele
 
 | Platform | Input |
 | --- | --- |
-| Desktop | `WASD` / arrow keys to move, `Space` to jump, `F` interact/use, `Q` place blocks, `R` ignite portal, `E` crafting, `I` inventory, `T` reset position, `V` toggle view, `F1` How to Play, Game Guide via HUD, `F2` settings, `F3` leaderboard, `1–0` hotbar slots |
+| Desktop | `WASD` / arrow keys to move, `Space` to jump, `F` interact/use, `Q` place blocks, `R` ignite portal, `E` crafting, `I` inventory, `T` reset position, `V` toggle view, `F1` How to Play, Game Guide via HUD, `F2` settings, `F3` leaderboard, `F7` tutorial rescue, `F9` safe mode briefing, `F10` force simple renderer, `1–0` hotbar slots |
 | Mobile | Swipe to move between rails, tap/hold to mine or place, tap the action buttons for crafting and portals |
 
 Desktop key bindings now live in the declarative `assets/controls.config.js` file. Edit that config to change the defaults that ship with your build—every action is listed in one place with the same WASD/arrow conventions. Players can still remap controls from the in-game **Settings → Key bindings** panel, and you can override or update the map via configuration or at runtime:

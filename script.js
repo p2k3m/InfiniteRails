@@ -14210,6 +14210,8 @@
   })();
   const HOTBAR_SLOT_COUNT = 10;
   const CONTROL_MAP_GLOBAL_KEY = '__INFINITE_RAILS_CONTROL_MAP__';
+  const CONTROL_MAP_READY_EVENT = 'infinite-rails:control-map-ready';
+  const CONTROL_MAP_CHANGED_EVENT = 'infinite-rails:control-map-changed';
 
   const eventLogState = {
     element: null,
@@ -17249,6 +17251,9 @@
         toggleCameraPerspective: ['KeyV'],
         toggleCrafting: ['KeyE'],
         toggleInventory: ['KeyI'],
+        activateBriefingFallback: ['F9'],
+        startSimpleFallbackRenderer: ['F10'],
+        triggerTutorialRescue: ['F7'],
         openGuide: [],
         toggleTutorial: ['F1', 'Slash'],
         toggleDeveloperOverlay: ['Backquote', 'F8'],
@@ -17372,6 +17377,9 @@
       toggleCameraPerspective: ['KeyV'],
       toggleCrafting: ['KeyE'],
       toggleInventory: ['KeyI'],
+      activateBriefingFallback: ['F9'],
+      startSimpleFallbackRenderer: ['F10'],
+      triggerTutorialRescue: ['F7'],
       openGuide: [],
       toggleTutorial: ['F1', 'Slash'],
       toggleDeveloperOverlay: ['Backquote', 'F8'],
@@ -17403,6 +17411,390 @@
       return declarative;
     }
     return normaliseKeyBindingMap(config.keyBindings);
+  }
+
+  const FALLBACK_SHORTCUT_ACTIONS = Object.freeze({
+    activateBriefingFallback: {
+      label: 'Mission briefing safe mode',
+      handler(context = {}) {
+        const key = typeof context.code === 'string' ? context.code : null;
+        if (typeof activateMissionBriefingFallback !== 'function') {
+          logFallbackShortcutEvent('warning', 'Mission briefing fallback shortcut unavailable.', {
+            action: 'activateBriefingFallback',
+            key,
+            reason: 'unavailable',
+          });
+          return false;
+        }
+        const activated = Boolean(
+          activateMissionBriefingFallback({
+            reason: 'user-shortcut',
+            diagnosticMessage: 'Renderer bypassed via safe mode shortcut — mission briefing mode enabled.',
+            context: {
+              source: 'fallback-shortcut',
+              key,
+            },
+          }),
+        );
+        if (activated) {
+          logFallbackShortcutEvent('info', 'Mission briefing safe mode activated via keyboard shortcut.', {
+            action: 'activateBriefingFallback',
+            key,
+          });
+        } else {
+          logFallbackShortcutEvent('warning', 'Mission briefing fallback shortcut did not activate the safe mode overlay.', {
+            action: 'activateBriefingFallback',
+            key,
+            reason: 'activation-rejected',
+          });
+        }
+        return activated;
+      },
+    },
+    startSimpleFallbackRenderer: {
+      label: 'Simple renderer fallback',
+      handler(context = {}) {
+        const key = typeof context.code === 'string' ? context.code : null;
+        if (typeof tryStartSimpleFallback !== 'function') {
+          logFallbackShortcutEvent('warning', 'Simple renderer fallback shortcut unavailable.', {
+            action: 'startSimpleFallbackRenderer',
+            key,
+            reason: 'unavailable',
+          });
+          return false;
+        }
+        let started = false;
+        try {
+          started = Boolean(
+            tryStartSimpleFallback(null, {
+              reason: 'user-shortcut',
+              mode: 'advanced',
+              source: 'fallback-shortcut',
+              key,
+            }),
+          );
+        } catch (error) {
+          logFallbackShortcutEvent('error', 'Simple renderer fallback shortcut failed.', {
+            action: 'startSimpleFallbackRenderer',
+            key,
+            error: serializeErrorForLogging(error),
+          });
+          return false;
+        }
+        if (started) {
+          logFallbackShortcutEvent('info', 'Simple renderer fallback boot requested via keyboard shortcut.', {
+            action: 'startSimpleFallbackRenderer',
+            key,
+          });
+        } else {
+          logFallbackShortcutEvent('warning', 'Simple renderer fallback shortcut ignored — fallback already attempted.', {
+            action: 'startSimpleFallbackRenderer',
+            key,
+            reason: 'already-attempted',
+          });
+        }
+        return started;
+      },
+    },
+    triggerTutorialRescue: {
+      label: 'Tutorial rescue overlay',
+      handler(context = {}) {
+        const key = typeof context.code === 'string' ? context.code : null;
+        const experience = globalScope?.__INFINITE_RAILS_ACTIVE_EXPERIENCE__ ?? null;
+        if (!experience || typeof experience.showFirstRunTutorial !== 'function') {
+          logFallbackShortcutEvent('warning', 'Tutorial rescue shortcut unavailable — renderer inactive.', {
+            action: 'triggerTutorialRescue',
+            key,
+            reason: 'experience-unavailable',
+          });
+          return false;
+        }
+        const triggerTutorial = () => {
+          const result = experience.showFirstRunTutorial({
+            markSeenOnDismiss: false,
+            autoFocus: true,
+            force: true,
+            reason: 'fallback-shortcut',
+          });
+          if (result && typeof result.then === 'function') {
+            result.catch((error) => {
+              logFallbackShortcutEvent('error', 'Tutorial rescue shortcut promise rejected.', {
+                action: 'triggerTutorialRescue',
+                key,
+                error: serializeErrorForLogging(error),
+              });
+            });
+          }
+          return result;
+        };
+        try {
+          if (typeof invokeWithErrorBoundary === 'function') {
+            invokeWithErrorBoundary(triggerTutorial, {
+              boundary: 'fallback-shortcut',
+              stage: 'fallback-shortcut.tutorial-rescue',
+              detail: {
+                action: 'triggerTutorialRescue',
+                key,
+                reason: 'fallback-shortcut',
+              },
+              rethrow: false,
+            });
+          } else {
+            triggerTutorial();
+          }
+        } catch (error) {
+          logFallbackShortcutEvent('error', 'Tutorial rescue shortcut failed to launch the overlay.', {
+            action: 'triggerTutorialRescue',
+            key,
+            error: serializeErrorForLogging(error),
+          });
+          return false;
+        }
+        logFallbackShortcutEvent('info', 'Tutorial rescue overlay launched via keyboard shortcut.', {
+          action: 'triggerTutorialRescue',
+          key,
+        });
+        return true;
+      },
+    },
+  });
+
+  const fallbackShortcutState = {
+    active: false,
+    scope: null,
+    doc: null,
+    keydownListener: null,
+    keyToAction: new Map(),
+    controlMap: null,
+    unsubscribeControlMap: null,
+    controlMapReadyListener: null,
+    controlMapChangedListener: null,
+  };
+
+  function serializeErrorForLogging(error) {
+    if (!error) {
+      return null;
+    }
+    if (error instanceof Error) {
+      return { name: error.name, message: error.message };
+    }
+    if (typeof error === 'object') {
+      try {
+        return JSON.parse(JSON.stringify(error));
+      } catch (serializationError) {
+        return { message: String(error) };
+      }
+    }
+    return { message: String(error) };
+  }
+
+  function logFallbackShortcutEvent(level, message, detail = null) {
+    const normalisedLevel = level === 'error' ? 'error' : level === 'warning' ? 'warning' : 'info';
+    if (typeof recordLiveDiagnostic === 'function') {
+      try {
+        recordLiveDiagnostic('hotkey', message, detail, { level: normalisedLevel });
+        return;
+      } catch (error) {
+        globalScope?.console?.debug?.('Failed to record fallback shortcut diagnostic entry.', error);
+      }
+    }
+    const consoleRef = globalScope?.console;
+    if (!consoleRef) {
+      return;
+    }
+    const payload = detail ? { detail } : undefined;
+    if (normalisedLevel === 'error' && typeof consoleRef.error === 'function') {
+      consoleRef.error(message, payload);
+    } else if (normalisedLevel === 'warning' && typeof consoleRef.warn === 'function') {
+      consoleRef.warn(message, payload);
+    } else if (typeof consoleRef.info === 'function') {
+      consoleRef.info(message, payload);
+    }
+  }
+
+  function cloneFallbackShortcutState() {
+    const bindings = {};
+    fallbackShortcutState.keyToAction.forEach((action, key) => {
+      bindings[key] = action;
+    });
+    return {
+      active: fallbackShortcutState.active,
+      bindings,
+      controlMap: fallbackShortcutState.controlMap ? { ...fallbackShortcutState.controlMap } : null,
+    };
+  }
+
+  function updateFallbackShortcutBindings(map) {
+    fallbackShortcutState.keyToAction.clear();
+    if (!map || typeof map !== 'object') {
+      return;
+    }
+    Object.keys(FALLBACK_SHORTCUT_ACTIONS).forEach((action) => {
+      const keys = Array.isArray(map[action]) ? map[action] : [];
+      keys.forEach((key) => {
+        if (typeof key === 'string' && key.trim().length) {
+          fallbackShortcutState.keyToAction.set(key.trim(), action);
+        }
+      });
+    });
+  }
+
+  function handleFallbackControlMapUpdate(map) {
+    const normalised = normaliseKeyBindingMap(map);
+    fallbackShortcutState.controlMap = normalised;
+    updateFallbackShortcutBindings(normalised || {});
+  }
+
+  function ensureFallbackControlApiSubscription() {
+    if (fallbackShortcutState.unsubscribeControlMap || !fallbackShortcutState.scope) {
+      return;
+    }
+    const controlApi = fallbackShortcutState.scope.InfiniteRailsControls;
+    if (!controlApi || typeof controlApi.subscribe !== 'function') {
+      return;
+    }
+    try {
+      const unsubscribe = controlApi.subscribe((map) => {
+        handleFallbackControlMapUpdate(map);
+      });
+      fallbackShortcutState.unsubscribeControlMap = typeof unsubscribe === 'function' ? unsubscribe : () => {};
+    } catch (error) {
+      fallbackShortcutState.scope?.console?.debug?.('Failed to subscribe to control map updates for fallback shortcuts.', error);
+    }
+  }
+
+  function shouldIgnoreFallbackShortcutTarget(target) {
+    if (!target) {
+      return false;
+    }
+    if (target.isContentEditable) {
+      return true;
+    }
+    const tagName = typeof target.tagName === 'string' ? target.tagName.toLowerCase() : '';
+    return tagName === 'input' || tagName === 'textarea' || tagName === 'select';
+  }
+
+  function handleFallbackShortcutAction(action, context = {}) {
+    const descriptor = FALLBACK_SHORTCUT_ACTIONS[action];
+    if (!descriptor || typeof descriptor.handler !== 'function') {
+      return false;
+    }
+    try {
+      return Boolean(descriptor.handler(context));
+    } catch (error) {
+      logFallbackShortcutEvent('error', 'Fallback shortcut handler threw an exception.', {
+        action,
+        code: typeof context.code === 'string' ? context.code : null,
+        error: serializeErrorForLogging(error),
+      });
+      return false;
+    }
+  }
+
+  function handleFallbackShortcutKeydown(event) {
+    if (!event || typeof event.type !== 'string' || event.type !== 'keydown') {
+      return;
+    }
+    if (event.repeat || event.altKey || event.ctrlKey || event.metaKey) {
+      return;
+    }
+    if (shouldIgnoreFallbackShortcutTarget(event.target)) {
+      return;
+    }
+    const code = typeof event.code === 'string' ? event.code.trim() : '';
+    if (!code) {
+      return;
+    }
+    const action = fallbackShortcutState.keyToAction.get(code);
+    if (!action) {
+      return;
+    }
+    if (typeof event.preventDefault === 'function') {
+      try {
+        event.preventDefault();
+      } catch (error) {}
+    }
+    if (typeof event.stopPropagation === 'function') {
+      try {
+        event.stopPropagation();
+      } catch (error) {}
+    }
+    handleFallbackShortcutAction(action, { code, event });
+  }
+
+  function bindFallbackShortcutListeners(scope) {
+    if (!scope || typeof scope.addEventListener !== 'function') {
+      return false;
+    }
+    if (!fallbackShortcutState.keydownListener) {
+      const listener = (event) => handleFallbackShortcutKeydown(event);
+      try {
+        scope.addEventListener('keydown', listener, { capture: true });
+        fallbackShortcutState.keydownListener = listener;
+      } catch (error) {
+        scope.console?.debug?.('Failed to bind fallback shortcut listener.', error);
+        return false;
+      }
+    }
+    if (!fallbackShortcutState.controlMapReadyListener) {
+      const readyListener = (event) => {
+        ensureFallbackControlApiSubscription();
+        if (event?.detail?.map) {
+          handleFallbackControlMapUpdate(event.detail.map);
+        } else if (scope.InfiniteRailsControls && typeof scope.InfiniteRailsControls.get === 'function') {
+          try {
+            handleFallbackControlMapUpdate(scope.InfiniteRailsControls.get());
+          } catch (error) {}
+        }
+      };
+      const changeListener = (event) => {
+        ensureFallbackControlApiSubscription();
+        if (event?.detail?.map) {
+          handleFallbackControlMapUpdate(event.detail.map);
+        }
+      };
+      try {
+        scope.addEventListener(CONTROL_MAP_READY_EVENT, readyListener);
+        scope.addEventListener(CONTROL_MAP_CHANGED_EVENT, changeListener);
+        fallbackShortcutState.controlMapReadyListener = readyListener;
+        fallbackShortcutState.controlMapChangedListener = changeListener;
+      } catch (error) {
+        scope.console?.debug?.('Failed to bind control map event listeners for fallback shortcuts.', error);
+      }
+    }
+    return true;
+  }
+
+  function resolveInitialFallbackControlMap(scope) {
+    const controlApi = scope?.InfiniteRailsControls;
+    if (controlApi && typeof controlApi.get === 'function') {
+      try {
+        return controlApi.get();
+      } catch (error) {}
+    }
+    return readDeclarativeControlMap(scope);
+  }
+
+  function initialiseFallbackShortcutControls(scope = globalScope, doc = documentRef) {
+    const targetScope = scope || globalScope || (typeof window !== 'undefined' ? window : globalThis);
+    if (!targetScope) {
+      return false;
+    }
+    const bound = bindFallbackShortcutListeners(targetScope);
+    if (!bound) {
+      return false;
+    }
+    fallbackShortcutState.scope = targetScope;
+    fallbackShortcutState.doc = doc || targetScope.document || null;
+    fallbackShortcutState.active = true;
+    ensureFallbackControlApiSubscription();
+    if (!fallbackShortcutState.controlMap) {
+      const initial = resolveInitialFallbackControlMap(targetScope);
+      if (initial) {
+        handleFallbackControlMapUpdate(initial);
+      }
+    }
+    return true;
   }
 
   function queueBootstrapFallbackNotice(key, message) {
@@ -22258,6 +22650,9 @@
         cloneMicroFrontendLoaderSummary(microFrontendLoaderState.lastSummary);
       hooks.getSimpleExperienceUiLoaderDiagnostics = () =>
         cloneMicroFrontendLoaderDiagnostics(microFrontendLoaderState.lastDiagnostics);
+      hooks.initialiseFallbackShortcuts = (options = {}) =>
+        initialiseFallbackShortcutControls(options.scope ?? globalScope, options.doc ?? documentRef);
+      hooks.getFallbackShortcutState = () => cloneFallbackShortcutState();
       hooks.getLocalGameplayState = () => localGameplayState;
       hooks.setAudioMuted = (value, options = {}) =>
         setAudioMuted(value, { ...options, source: options.source ?? 'test-hook', persist: options.persist });
@@ -23037,6 +23432,7 @@
             : typeof window !== 'undefined'
               ? window
               : globalThis;
+        initialiseFallbackShortcutControls(scope, scope.document ?? documentRef);
         const startSimple = shouldStartSimpleMode();
         const mode = startSimple ? 'simple' : 'advanced';
         setRendererModeIndicator(mode);

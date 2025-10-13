@@ -228,6 +228,9 @@ describe('key binding defaults', () => {
     expect(defaults.toggleCameraPerspective).toEqual(['KeyV']);
     expect(defaults.toggleCrafting).toEqual(['KeyE']);
     expect(defaults.toggleInventory).toEqual(['KeyI']);
+    expect(defaults.activateBriefingFallback).toEqual(['F9']);
+    expect(defaults.startSimpleFallbackRenderer).toEqual(['F10']);
+    expect(defaults.triggerTutorialRescue).toEqual(['F7']);
     expect(defaults.openGuide).toEqual([]);
     expect(defaults.toggleTutorial).toEqual(['F1', 'Slash']);
     expect(defaults.toggleDeveloperOverlay).toEqual(['Backquote', 'F8']);
@@ -255,6 +258,9 @@ describe('key binding defaults', () => {
     expect(defaults.toggleCameraPerspective).toEqual(['KeyV']);
     expect(defaults.toggleCrafting).toEqual(['KeyE']);
     expect(defaults.toggleInventory).toEqual(['KeyI']);
+    expect(defaults.activateBriefingFallback).toEqual(['F9']);
+    expect(defaults.startSimpleFallbackRenderer).toEqual(['F10']);
+    expect(defaults.triggerTutorialRescue).toEqual(['F7']);
     expect(defaults.openGuide).toEqual([]);
     expect(defaults.toggleTutorial).toEqual(['F1', 'Slash']);
     expect(defaults.toggleDeveloperOverlay).toEqual(['Backquote', 'F8']);
@@ -280,6 +286,9 @@ describe('declarative control map configuration', () => {
     expect(map.toggleCameraPerspective).toEqual(['KeyV']);
     expect(map.toggleCrafting).toEqual(['KeyE']);
     expect(map.toggleInventory).toEqual(['KeyI']);
+    expect(map.activateBriefingFallback).toEqual(['F9']);
+    expect(map.startSimpleFallbackRenderer).toEqual(['F10']);
+    expect(map.triggerTutorialRescue).toEqual(['F7']);
     expect(map.openGuide).toEqual([]);
     expect(map.toggleTutorial).toEqual(['F1', 'Slash']);
     expect(map.toggleDeveloperOverlay).toEqual(['Backquote', 'F8']);
