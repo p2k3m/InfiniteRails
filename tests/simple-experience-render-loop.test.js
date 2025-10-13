@@ -328,6 +328,38 @@ describe('simple experience render loop resilience', () => {
       expect(resetSpy).toHaveBeenCalledTimes(1);
     });
 
+    it('resets the renderer after a single stalled frame when configured with a minimal budget', () => {
+      const experience = createExperience({ rendererWatchdogFrameBudget: 1 });
+      experience.scene = {};
+      experience.camera = {};
+      experience.started = true;
+      experience.rendererUnavailable = false;
+      experience.rendererWatchdogState.frameBudget = 1;
+      experience.stepSimulation = vi.fn();
+      experience.scheduleNextFrame = vi.fn();
+      const resetSpy = vi.spyOn(experience, 'resetRendererSceneGraph').mockReturnValue(true);
+
+      const rendererInfo = { render: { frame: 5 } };
+      experience.renderer = {
+        render: vi.fn(),
+        info: rendererInfo,
+        domElement: null,
+        getContext: vi.fn(() => null),
+      };
+
+      experience.renderAccumulator = experience.renderActiveInterval;
+      experience.renderFrame(0);
+
+      experience.renderAccumulator = experience.renderActiveInterval;
+      experience.renderFrame(16);
+
+      expect(resetSpy).toHaveBeenCalledWith(
+        'renderer-watchdog',
+        expect.objectContaining({ reason: 'unresponsive', stalledFrames: expect.any(Number) }),
+      );
+      expect(resetSpy).toHaveBeenCalledTimes(1);
+    });
+
     it('resets the WebGL scene when scheduled frames stop presenting output', () => {
       const canvas = createCanvasStub();
       const experience = createExperience({ rendererWatchdogFrameBudget: 3, canvas });
