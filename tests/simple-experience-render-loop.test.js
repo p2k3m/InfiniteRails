@@ -263,7 +263,7 @@ describe('simple experience render loop resilience', () => {
 
       expect(resetSpy).toHaveBeenCalledWith(
         'renderer-watchdog',
-        expect.objectContaining({ reason: 'stall' }),
+        expect.objectContaining({ reason: 'unresponsive', trigger: 'timer' }),
       );
     });
 
@@ -323,7 +323,11 @@ describe('simple experience render loop resilience', () => {
 
       expect(resetSpy).toHaveBeenCalledWith(
         'renderer-watchdog',
-        expect.objectContaining({ reason: 'unresponsive', stalledFrames: expect.any(Number) }),
+        expect.objectContaining({
+          reason: 'unresponsive',
+          stalledFrames: expect.any(Number),
+          trigger: 'progress',
+        }),
       );
       expect(resetSpy).toHaveBeenCalledTimes(1);
     });
@@ -357,7 +361,11 @@ describe('simple experience render loop resilience', () => {
 
       expect(resetSpy).toHaveBeenCalledWith(
         'renderer-watchdog',
-        expect.objectContaining({ reason: 'unresponsive', stalledFrames: expect.any(Number) }),
+        expect.objectContaining({
+          reason: 'unresponsive',
+          stalledFrames: expect.any(Number),
+          trigger: 'progress',
+        }),
       );
       expect(resetSpy).toHaveBeenCalledTimes(1);
     });
@@ -397,7 +405,11 @@ describe('simple experience render loop resilience', () => {
 
       expect(resetSpy).toHaveBeenCalledWith(
         'renderer-watchdog',
-        expect.objectContaining({ reason: 'unresponsive', stalledFrames: expect.any(Number) }),
+        expect.objectContaining({
+          reason: 'unresponsive',
+          stalledFrames: expect.any(Number),
+          trigger: 'progress',
+        }),
       );
       expect(resetSpy).toHaveBeenCalledTimes(1);
 
@@ -440,6 +452,7 @@ describe('simple experience render loop resilience', () => {
           reason: 'unresponsive',
           stalledFrames: expect.any(Number),
           elapsedMs: expect.any(Number),
+          trigger: 'progress',
         }),
       );
       expect(resetSpy).toHaveBeenCalledTimes(1);
