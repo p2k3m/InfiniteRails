@@ -458,6 +458,57 @@ describe('simple experience render loop resilience', () => {
       expect(resetSpy).toHaveBeenCalledTimes(1);
     });
 
+    it('includes watchdog trigger metadata in reset events', () => {
+      const experience = createExperience();
+      experience.started = true;
+      experience.rendererUnavailable = false;
+      const stopSpy = vi.spyOn(experience, 'stop').mockImplementation(() => {
+        experience.started = false;
+      });
+      const disposeSpy = vi
+        .spyOn(experience, 'disposeRendererSceneGraph')
+        .mockImplementation(() => {});
+      const startSpy = vi.spyOn(experience, 'start').mockImplementation(() => {
+        experience.started = true;
+      });
+      const eventSpy = vi.spyOn(experience, 'emitGameEvent').mockImplementation(() => {});
+      const publishSpy = vi.spyOn(experience, 'publishStateSnapshot').mockImplementation(() => {});
+
+      experience.rendererWatchdogState.frameBudget = 4;
+      experience.rendererWatchdogState.recovering = true;
+
+      const context = {
+        trigger: 'progress',
+        stalledFrames: 4,
+        elapsedMs: 1250,
+        armedAt: 250,
+        triggeredAt: 1500,
+        timeoutMs: 1600,
+      };
+
+      const result = experience.resetRendererSceneGraph('renderer-watchdog', context);
+
+      expect(result).toBe(true);
+      expect(eventSpy).toHaveBeenCalledWith(
+        'renderer-watchdog-reset',
+        expect.objectContaining({
+          reason: 'renderer-watchdog',
+          success: true,
+          trigger: 'progress',
+          stalledFrames: 4,
+          elapsedMs: 1250,
+          armedAt: 250,
+          triggeredAt: 1500,
+        }),
+      );
+
+      stopSpy.mockRestore();
+      disposeSpy.mockRestore();
+      startSpy.mockRestore();
+      eventSpy.mockRestore();
+      publishSpy.mockRestore();
+    });
+
     it('derives watchdog thresholds from APP_CONFIG when no option overrides are provided', () => {
       const originalConfig = { ...window.APP_CONFIG };
       window.APP_CONFIG.rendererWatchdogFrameBudget = '2';
