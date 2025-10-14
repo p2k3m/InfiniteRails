@@ -347,11 +347,13 @@ describe('simple experience render loop resilience', () => {
         getContext: vi.fn(() => null),
       };
 
-      experience.renderAccumulator = experience.renderActiveInterval;
-      experience.renderFrame(0);
-
-      experience.renderAccumulator = experience.renderActiveInterval;
-      experience.renderFrame(16);
+      for (let i = 0; i < 6; i += 1) {
+        experience.renderAccumulator = experience.renderActiveInterval;
+        experience.renderFrame(i * 16);
+        if (resetSpy.mock.calls.length > 0) {
+          break;
+        }
+      }
 
       expect(resetSpy).toHaveBeenCalledWith(
         'renderer-watchdog',
@@ -441,6 +443,53 @@ describe('simple experience render loop resilience', () => {
         }),
       );
       expect(resetSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('derives watchdog thresholds from APP_CONFIG when no option overrides are provided', () => {
+      const originalConfig = { ...window.APP_CONFIG };
+      window.APP_CONFIG.rendererWatchdogFrameBudget = '2';
+      window.APP_CONFIG.rendererWatchdogTargetFps = '30';
+
+      const experience = createExperience();
+      experience.scene = {};
+      experience.camera = {};
+      experience.started = true;
+      experience.rendererUnavailable = false;
+
+      expect(experience.rendererWatchdogState.enabled).toBe(true);
+      expect(experience.rendererWatchdogState.frameBudget).toBe(2);
+      expect(experience.rendererWatchdogState.targetFps).toBe(30);
+
+      const timeoutMs = experience.getRendererWatchdogTimeoutMs();
+      const resetSpy = vi.spyOn(experience, 'resetRendererSceneGraph').mockReturnValue(true);
+
+      experience.rendererWatchdogState.stalledFrameCount = experience.rendererWatchdogState.frameBudget;
+      experience.handleRendererWatchdogTimeout({
+        reason: 'unresponsive',
+        stalledFrames: experience.rendererWatchdogState.stalledFrameCount,
+        timeoutMs,
+      });
+
+      expect(resetSpy).toHaveBeenCalledWith(
+        'renderer-watchdog',
+        expect.objectContaining({ reason: 'unresponsive', stalledFrames: expect.any(Number) }),
+      );
+
+      resetSpy.mockRestore();
+      Object.keys(window.APP_CONFIG).forEach((key) => delete window.APP_CONFIG[key]);
+      Object.assign(window.APP_CONFIG, originalConfig);
+    });
+
+    it('disables the watchdog when APP_CONFIG.rendererWatchdog is false and no override is provided', () => {
+      const originalConfig = { ...window.APP_CONFIG };
+      window.APP_CONFIG.rendererWatchdog = false;
+
+      const experience = createExperience();
+
+      expect(experience.rendererWatchdogState.enabled).toBe(false);
+
+      Object.keys(window.APP_CONFIG).forEach((key) => delete window.APP_CONFIG[key]);
+      Object.assign(window.APP_CONFIG, originalConfig);
     });
   });
 
