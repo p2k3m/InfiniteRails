@@ -21116,6 +21116,13 @@
         return;
       }
       const status = typeof entry.status === 'string' ? entry.status.trim().toLowerCase() : '';
+      const skipReasonRaw =
+        typeof entry.skipReason === 'string' && entry.skipReason.trim().length
+          ? entry.skipReason.trim()
+          : '';
+      const skipReason = skipReasonRaw ? skipReasonRaw.toLowerCase() : '';
+      const circuitId =
+        typeof entry.circuit === 'string' && entry.circuit.trim().length ? entry.circuit.trim() : null;
       let severity = 'pending';
       let message = '';
       if (status === 'failed') {
@@ -21123,7 +21130,13 @@
         message = `UI segment "${entry.name}" failed to initialise.`;
       } else if (status === 'skipped') {
         severity = 'warning';
-        message = `UI segment "${entry.name}" skipped during bootstrap.`;
+        if (skipReason === 'circuit-open' && circuitId) {
+          message = `UI segment "${entry.name}" skipped after circuit "${circuitId}" opened.`;
+        } else if (skipReason === 'guard') {
+          message = `UI segment "${entry.name}" skipped because prerequisites were not met.`;
+        } else {
+          message = `UI segment "${entry.name}" skipped during bootstrap.`;
+        }
       } else if (status === 'ok') {
         severity = 'ok';
         message = `UI segment "${entry.name}" initialised successfully.`;
@@ -21139,6 +21152,14 @@
         status,
         index: Number.isFinite(entry?.index) ? entry.index : null,
         critical: entry?.critical === true,
+        circuit: circuitId,
+        skipReason: skipReason || null,
+        skippedByCircuit:
+          entry?.skippedByCircuit === true || (skipReason === 'circuit-open' && Boolean(circuitId)),
+        circuitOpened:
+          typeof entry?.circuitOpened === 'string' && entry.circuitOpened.trim().length
+            ? entry.circuitOpened.trim()
+            : null,
       };
       if (entry?.metadata !== undefined) {
         detail.metadata = entry.metadata;
@@ -21185,6 +21206,10 @@
             segments: statuses.length,
             skipped: skippedCount,
             hasFailures: summary?.hasFailures === true,
+            openCircuits:
+              Array.isArray(summary?.openCircuits) && summary.openCircuits.length
+                ? [...summary.openCircuits]
+                : [],
           },
         });
       }
@@ -21254,6 +21279,8 @@
       console: consoleRef = globalScope?.console ?? (typeof console !== 'undefined' ? console : null),
       onSegmentFailure,
       onSegmentSuccess,
+      onSegmentSkipped,
+      onCircuitOpen,
     } = options || {};
     const segments = [];
     const statusMap = new Map();
@@ -21263,6 +21290,17 @@
         return name.trim();
       }
       return `segment-${index + 1}`;
+    }
+
+    function normaliseCircuitId(value) {
+      if (typeof value !== 'string') {
+        return null;
+      }
+      const trimmed = value.trim();
+      if (!trimmed) {
+        return null;
+      }
+      return trimmed;
     }
 
     function safeInvoke(callback, ...args) {
@@ -21281,17 +21319,23 @@
         throw new TypeError('Micro frontend loader segment initialiser must be a function.');
       }
       const segmentName = normaliseName(name, segments.length);
+      const circuitId = normaliseCircuitId(
+        segmentOptions.circuitBreaker ?? segmentOptions.circuit ?? segmentOptions.circuitId,
+      );
       segments.push({
         name: segmentName,
         initializer,
         guard: typeof segmentOptions.guard === 'function' ? segmentOptions.guard : null,
         onError: typeof segmentOptions.onError === 'function' ? segmentOptions.onError : null,
         onSuccess: typeof segmentOptions.onSuccess === 'function' ? segmentOptions.onSuccess : null,
+        onSkip: typeof segmentOptions.onSkip === 'function' ? segmentOptions.onSkip : null,
+        onCircuitOpen: typeof segmentOptions.onCircuitOpen === 'function' ? segmentOptions.onCircuitOpen : null,
         metadata:
           segmentOptions && typeof segmentOptions.metadata === 'object' && !Array.isArray(segmentOptions.metadata)
             ? { ...segmentOptions.metadata }
             : null,
         critical: segmentOptions.critical === true,
+        circuit: circuitId,
       });
       return registerApi;
     }
@@ -21303,6 +21347,7 @@
       const successes = [];
       const skipped = [];
       let hasCriticalFailure = false;
+      const openCircuits = new Set();
       statusMap.clear();
 
       segments.forEach((segment, index) => {
@@ -21314,12 +21359,28 @@
           error: null,
           metadata: segment.metadata,
           critical: segment.critical === true,
+          circuit: segment.circuit,
+          skipReason: null,
+          skippedByCircuit: false,
+          circuitOpened: null,
         };
         statuses.push(statusEntry);
         statusMap.set(segment.name, statusEntry);
+        if (segment.circuit && openCircuits.has(segment.circuit)) {
+          statusEntry.status = 'skipped';
+          statusEntry.skipReason = 'circuit-open';
+          statusEntry.skippedByCircuit = true;
+          skipped.push(statusEntry);
+          safeInvoke(onSegmentSkipped, statusEntry, loaderContext);
+          safeInvoke(segment.onSkip, statusEntry, loaderContext);
+          return;
+        }
         if (segment.guard && segment.guard(loaderContext) === false) {
           statusEntry.status = 'skipped';
+          statusEntry.skipReason = 'guard';
           skipped.push(statusEntry);
+          safeInvoke(onSegmentSkipped, statusEntry, loaderContext);
+          safeInvoke(segment.onSkip, statusEntry, loaderContext);
           return;
         }
         try {
@@ -21333,12 +21394,18 @@
           const error = rawError instanceof Error ? rawError : new Error(String(rawError));
           statusEntry.status = 'failed';
           statusEntry.error = error;
+          statusEntry.circuitOpened = segment.circuit ?? null;
           failures.push(statusEntry);
           if (segment.critical) {
             hasCriticalFailure = true;
           }
           if (consoleRef?.error) {
             consoleRef.error(`Micro frontend segment "${segment.name}" failed.`, error);
+          }
+          if (segment.circuit) {
+            openCircuits.add(segment.circuit);
+            safeInvoke(onCircuitOpen, segment.circuit, statusEntry, loaderContext);
+            safeInvoke(segment.onCircuitOpen, segment.circuit, statusEntry, loaderContext);
           }
           safeInvoke(onSegmentFailure, statusEntry, loaderContext);
           safeInvoke(segment.onError, error, statusEntry, loaderContext);
@@ -21353,6 +21420,7 @@
         skipped,
         hasFailures: failures.length > 0,
         hasCriticalFailure,
+        openCircuits: Array.from(openCircuits),
       };
       return summary;
     }
@@ -21366,6 +21434,7 @@
         name: segment.name,
         metadata: segment.metadata,
         critical: segment.critical === true,
+        circuit: segment.circuit ?? null,
       }));
     }
 
@@ -21383,30 +21452,50 @@
     if (!summary || typeof summary !== 'object') {
       return null;
     }
-    const statuses = Array.isArray(summary.statuses)
-      ? summary.statuses.map((entry) => ({
-          name: entry.name,
-          index: Number.isFinite(entry?.index) ? entry.index : null,
-          status: entry.status,
-          metadata: entry?.metadata ?? null,
-          critical: entry?.critical === true,
-          hasError: Boolean(entry?.error),
-          errorName: entry?.error?.name ?? null,
-          errorMessage: entry?.error?.message ?? null,
-        }))
-      : [];
-    const mapEntries = (list) =>
-      Array.isArray(list)
-        ? list.map((entry) => ({
-            name: entry.name,
-            index: Number.isFinite(entry?.index) ? entry.index : null,
-            status: entry.status,
-            metadata: entry?.metadata ?? null,
-            critical: entry?.critical === true,
-            errorName: entry?.error?.name ?? null,
-            errorMessage: entry?.error?.message ?? null,
-          }))
-        : [];
+    const cloneStatusEntry = (entry) => {
+      if (!entry || typeof entry !== 'object') {
+        return {
+          name: null,
+          index: null,
+          status: null,
+          metadata: null,
+          critical: false,
+          hasError: false,
+          errorName: null,
+          errorMessage: null,
+          skipReason: null,
+          skippedByCircuit: false,
+          circuit: null,
+          circuitOpened: null,
+        };
+      }
+      const skipReason =
+        typeof entry.skipReason === 'string' && entry.skipReason.trim().length
+          ? entry.skipReason.trim()
+          : null;
+      const circuitId =
+        typeof entry.circuit === 'string' && entry.circuit.trim().length ? entry.circuit.trim() : null;
+      const circuitOpened =
+        typeof entry.circuitOpened === 'string' && entry.circuitOpened.trim().length
+          ? entry.circuitOpened.trim()
+          : null;
+      return {
+        name: entry.name,
+        index: Number.isFinite(entry?.index) ? entry.index : null,
+        status: entry.status,
+        metadata: entry?.metadata ?? null,
+        critical: entry?.critical === true,
+        hasError: Boolean(entry?.error),
+        errorName: entry?.error?.name ?? null,
+        errorMessage: entry?.error?.message ?? null,
+        skipReason,
+        skippedByCircuit: entry?.skippedByCircuit === true,
+        circuit: circuitId,
+        circuitOpened,
+      };
+    };
+    const statuses = Array.isArray(summary.statuses) ? summary.statuses.map(cloneStatusEntry) : [];
+    const mapEntries = (list) => (Array.isArray(list) ? list.map(cloneStatusEntry) : []);
     return {
       hasFailures: summary.hasFailures === true,
       hasCriticalFailure: summary.hasCriticalFailure === true,
@@ -21414,6 +21503,7 @@
       failures: mapEntries(summary.failures),
       successes: mapEntries(summary.successes),
       skipped: mapEntries(summary.skipped),
+      openCircuits: Array.isArray(summary.openCircuits) ? [...summary.openCircuits] : [],
     };
   }
 
@@ -21780,46 +21870,137 @@
           );
         }
       },
+      onSegmentSkipped(statusEntry) {
+        if (statusEntry?.skipReason === 'circuit-open' && globalScope.console?.info) {
+          const circuitLabel =
+            typeof statusEntry.circuit === 'string' && statusEntry.circuit.trim().length
+              ? statusEntry.circuit.trim()
+              : 'unknown';
+          globalScope.console.info(
+            `UI circuit "${circuitLabel}" remains open — skipping segment "${statusEntry.name}".`,
+          );
+        }
+      },
+      onCircuitOpen(circuitId, statusEntry) {
+        if (globalScope.console?.warn) {
+          const circuitLabel = circuitId || 'unknown';
+          const source = statusEntry?.name ? ` after "${statusEntry.name}" failure` : '';
+          globalScope.console.warn(`UI circuit "${circuitLabel}" opened${source}.`);
+        }
+      },
     });
-    const loaderContext = { doc, ui: null };
-    uiLoader.register('hud-defaults', (context) => ensureHudDefaults(context.doc), { critical: true });
+    const loaderContext = { doc, ui: null, uiReady: null, uiFailure: null };
+    const CIRCUITS = {
+      CORE_DEFAULTS: 'ui-core-defaults',
+      CORE_COLLECTION: 'ui-core-collection',
+      AUDIO: 'ui-audio-controls',
+      HUD_STATE: 'ui-hud-state',
+      DEBUG: 'ui-debug-controls',
+      DEV_STATS: 'ui-developer-stats',
+      DIAGNOSTICS: 'ui-diagnostics',
+      EVENT_LOG: 'ui-event-log',
+      EVENT_OVERLAYS: 'ui-event-overlays',
+    };
+
+    const hasUiRequirement = (ui, key) => {
+      if (!ui || typeof ui !== 'object' || typeof key !== 'string') {
+        return false;
+      }
+      const value = ui[key];
+      if (Array.isArray(value)) {
+        return value.length > 0;
+      }
+      return Boolean(value);
+    };
+
+    const createUiGuard = (...requirements) => (context) => {
+      const ctx = context && typeof context === 'object' ? context : {};
+      if (ctx.uiReady === false) {
+        return false;
+      }
+      const ui = ctx.ui;
+      if (!ui || typeof ui !== 'object') {
+        return false;
+      }
+      if (!requirements.length) {
+        return true;
+      }
+      return requirements.every((requirement) => {
+        if (Array.isArray(requirement)) {
+          return requirement.some((candidate) => hasUiRequirement(ui, candidate));
+        }
+        if (typeof requirement === 'string') {
+          return hasUiRequirement(ui, requirement);
+        }
+        return false;
+      });
+    };
+
+    uiLoader.register('hud-defaults', (context) => ensureHudDefaults(context.doc), {
+      critical: true,
+      circuitBreaker: CIRCUITS.CORE_DEFAULTS,
+    });
     uiLoader.register(
       'collect-ui',
       (context) => {
         const collectedUi = collectSimpleExperienceUi(context.doc);
         context.ui = collectedUi;
+        context.uiReady = true;
+        context.uiFailure = null;
         return collectedUi;
       },
       {
         critical: true,
-        onError: () => {
-          loaderContext.ui = loaderContext.ui || {};
+        circuitBreaker: CIRCUITS.CORE_COLLECTION,
+        onSuccess: (_, __, context) => {
+          if (context && typeof context === 'object') {
+            context.uiReady = true;
+            context.uiFailure = null;
+          }
+        },
+        onError: (error, statusEntry, context) => {
+          if (context && typeof context === 'object') {
+            context.ui = null;
+            context.uiReady = false;
+            context.uiFailure = {
+              error: error instanceof Error ? error : new Error(String(error)),
+              status: statusEntry ?? null,
+            };
+          }
         },
       },
     );
     uiLoader.register('audio-settings-controls', (context) => bindAudioSettingsControls(context.ui || {}), {
-      guard: (context) => Boolean(context.ui),
+      guard: createUiGuard('settingsForm'),
+      circuitBreaker: CIRCUITS.AUDIO,
     });
     uiLoader.register('hud-state-binding', (context) => ensureHudStateBinding(context.ui || {}), {
-      guard: (context) => Boolean(context.ui),
+      guard: createUiGuard(),
+      circuitBreaker: CIRCUITS.HUD_STATE,
     });
     uiLoader.register('debug-mode-controls', (context) => bindDebugModeControls(context.ui || {}), {
-      guard: (context) => Boolean(context.ui),
+      guard: createUiGuard(['debugModeToggle', 'debugModeStatus']),
+      circuitBreaker: CIRCUITS.DEBUG,
     });
     uiLoader.register('developer-stats-controls', (context) => bindDeveloperStatsControls(context.ui || {}), {
-      guard: (context) => Boolean(context.ui),
+      guard: createUiGuard('developerStatsPanel'),
+      circuitBreaker: CIRCUITS.DEV_STATS,
     });
     uiLoader.register('boot-diagnostics-ui', (context) => bindBootDiagnosticsUi(context.ui || {}), {
-      guard: (context) => Boolean(context.ui),
+      guard: createUiGuard('bootDiagnosticsPanel'),
+      circuitBreaker: CIRCUITS.DIAGNOSTICS,
     });
     uiLoader.register('live-diagnostics-controls', (context) => bindLiveDiagnosticsControls(context.ui || {}), {
-      guard: (context) => Boolean(context.ui),
+      guard: createUiGuard('liveDiagnosticsPanel'),
+      circuitBreaker: CIRCUITS.DIAGNOSTICS,
     });
     uiLoader.register('experience-event-log', (context) => bindExperienceEventLog(context.ui || {}), {
-      guard: (context) => Boolean(context.ui),
+      guard: createUiGuard('eventLogEl'),
+      circuitBreaker: CIRCUITS.EVENT_LOG,
     });
     uiLoader.register('experience-event-overlays', (context) => bindExperienceEventOverlays(context.ui || {}), {
-      guard: (context) => Boolean(context.ui),
+      guard: createUiGuard('eventOverlayStack'),
+      circuitBreaker: CIRCUITS.EVENT_OVERLAYS,
     });
     const uiLoadSummary = uiLoader.run(loaderContext);
     microFrontendLoaderState.lastSummary = uiLoadSummary;
