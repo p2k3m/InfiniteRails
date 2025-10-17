@@ -2760,6 +2760,10 @@
       return;
     }
     const root = doc.documentElement;
+    const style = root.style;
+    if (!style || typeof style.setProperty !== 'function') {
+      return;
+    }
     const viewport = scope?.visualViewport;
     const widthCandidate = viewport?.width ?? scope?.innerWidth ?? root.clientWidth ?? 0;
     const heightCandidate = viewport?.height ?? scope?.innerHeight ?? root.clientHeight ?? 0;
@@ -2775,10 +2779,10 @@
     const hudSpacing = clampNumber(0.55 + hudScale * (pointerCoarse ? 0.9 : 0.7), pointerCoarse ? 0.75 : 0.6, pointerCoarse ? 1.35 : 1.1);
     const hudMargin = clampNumber(0.78 + hudScale * (pointerCoarse ? 1.15 : 0.85), pointerCoarse ? 1 : 0.8, pointerCoarse ? 1.95 : 1.5);
     const hudBottomGap = clampNumber(0.45 + hudScale * (pointerCoarse ? 0.85 : 0.6), pointerCoarse ? 0.6 : 0.45, pointerCoarse ? 1.2 : 0.9);
-    root.style.setProperty('--hud-scale', hudScale.toFixed(3));
-    root.style.setProperty('--hud-spacing', `${hudSpacing.toFixed(3)}rem`);
-    root.style.setProperty('--hud-margin', `${hudMargin.toFixed(3)}rem`);
-    root.style.setProperty('--hud-bottom-gap', `${hudBottomGap.toFixed(3)}rem`);
+    style.setProperty('--hud-scale', hudScale.toFixed(3));
+    style.setProperty('--hud-spacing', `${hudSpacing.toFixed(3)}rem`);
+    style.setProperty('--hud-margin', `${hudMargin.toFixed(3)}rem`);
+    style.setProperty('--hud-bottom-gap', `${hudBottomGap.toFixed(3)}rem`);
 
     const baseFontSize = clampNumber(getRootFontSize(doc), 12, 24);
     const tutorialWidth = clampNumber(width * (pointerCoarse ? 0.9 : 0.88), 320, pointerCoarse ? 720 : 640);
@@ -2787,21 +2791,21 @@
     const tutorialGap = clampNumber(0.72 + hudScale * (pointerCoarse ? 0.7 : 0.55), pointerCoarse ? 0.9 : 0.75, pointerCoarse ? 1.6 : 1.25);
     const tutorialCloseSize = clampNumber(tutorialPadding * 1.35, pointerCoarse ? 34 : 30, pointerCoarse ? 48 : 40);
     const tutorialCloseOffset = clampNumber(tutorialPadding * 0.55, 10, pointerCoarse ? 20 : 16);
-    root.style.setProperty('--tutorial-panel-max-width', `${Math.round(tutorialWidth)}px`);
-    root.style.setProperty('--tutorial-panel-max-height', `${Math.round(tutorialHeight)}px`);
-    root.style.setProperty('--tutorial-panel-padding', `${tutorialPadding.toFixed(1)}px`);
-    root.style.setProperty('--tutorial-panel-gap', `${tutorialGap.toFixed(3)}rem`);
-    root.style.setProperty('--tutorial-close-size', `${tutorialCloseSize.toFixed(1)}px`);
-    root.style.setProperty('--tutorial-close-offset', `${tutorialCloseOffset.toFixed(1)}px`);
+    style.setProperty('--tutorial-panel-max-width', `${Math.round(tutorialWidth)}px`);
+    style.setProperty('--tutorial-panel-max-height', `${Math.round(tutorialHeight)}px`);
+    style.setProperty('--tutorial-panel-padding', `${tutorialPadding.toFixed(1)}px`);
+    style.setProperty('--tutorial-panel-gap', `${tutorialGap.toFixed(3)}rem`);
+    style.setProperty('--tutorial-close-size', `${tutorialCloseSize.toFixed(1)}px`);
+    style.setProperty('--tutorial-close-offset', `${tutorialCloseOffset.toFixed(1)}px`);
 
     const stackTutorialActions = height < 620 || width < 540;
     const tutorialActionsGap = stackTutorialActions
       ? clampNumber(0.65 + hudScale * 0.55, pointerCoarse ? 0.75 : 0.6, pointerCoarse ? 1.25 : 0.95)
       : clampNumber(0.45 + hudScale * 0.35, pointerCoarse ? 0.6 : 0.45, pointerCoarse ? 0.95 : 0.75);
-    root.style.setProperty('--tutorial-actions-direction', stackTutorialActions ? 'column' : 'row');
-    root.style.setProperty('--tutorial-actions-justify', stackTutorialActions || pointerCoarse ? 'center' : 'flex-end');
-    root.style.setProperty('--tutorial-actions-gap', `${tutorialActionsGap.toFixed(3)}rem`);
-    root.style.setProperty('--tutorial-primary-width', stackTutorialActions ? '100%' : 'auto');
+    style.setProperty('--tutorial-actions-direction', stackTutorialActions ? 'column' : 'row');
+    style.setProperty('--tutorial-actions-justify', stackTutorialActions || pointerCoarse ? 'center' : 'flex-end');
+    style.setProperty('--tutorial-actions-gap', `${tutorialActionsGap.toFixed(3)}rem`);
+    style.setProperty('--tutorial-primary-width', stackTutorialActions ? '100%' : 'auto');
 
     const mobileControlsWidth = clampNumber(width * (pointerCoarse ? 0.95 : 0.92), 280, pointerCoarse ? 640 : 520);
     const mobileControlsGap = clampNumber(
@@ -2823,28 +2827,28 @@
     const mobileClusterGap = clampNumber(mobileControlsGap * 0.92, pointerCoarse ? 0.7 : 0.6, pointerCoarse ? 1.2 : 1.05);
     const mobileActionGap = clampNumber(mobileClusterGap * 0.95, pointerCoarse ? 0.7 : 0.6, pointerCoarse ? 1.15 : 1);
 
-    root.style.setProperty('--mobile-controls-max-width', `${mobileControlsWidth.toFixed(1)}px`);
-    root.style.setProperty('--mobile-controls-gap', `${mobileControlsGap.toFixed(3)}rem`);
-    root.style.setProperty('--mobile-controls-padding-y', `${mobileControlsPaddingY.toFixed(1)}px`);
-    root.style.setProperty('--mobile-controls-padding-x', `${mobileControlsPaddingX.toFixed(1)}px`);
-    root.style.setProperty('--mobile-controls-dpad-cell', `${dpadCell.toFixed(1)}px`);
-    root.style.setProperty('--mobile-controls-button-size', `${mobileButtonSize.toFixed(1)}px`);
-    root.style.setProperty('--mobile-controls-button-primary-size', `${mobilePrimaryButtonSize.toFixed(1)}px`);
-    root.style.setProperty('--mobile-controls-button-font', `${(mobileButtonFont / baseFontSize).toFixed(3)}rem`);
-    root.style.setProperty(
+    style.setProperty('--mobile-controls-max-width', `${mobileControlsWidth.toFixed(1)}px`);
+    style.setProperty('--mobile-controls-gap', `${mobileControlsGap.toFixed(3)}rem`);
+    style.setProperty('--mobile-controls-padding-y', `${mobileControlsPaddingY.toFixed(1)}px`);
+    style.setProperty('--mobile-controls-padding-x', `${mobileControlsPaddingX.toFixed(1)}px`);
+    style.setProperty('--mobile-controls-dpad-cell', `${dpadCell.toFixed(1)}px`);
+    style.setProperty('--mobile-controls-button-size', `${mobileButtonSize.toFixed(1)}px`);
+    style.setProperty('--mobile-controls-button-primary-size', `${mobilePrimaryButtonSize.toFixed(1)}px`);
+    style.setProperty('--mobile-controls-button-font', `${(mobileButtonFont / baseFontSize).toFixed(3)}rem`);
+    style.setProperty(
       '--mobile-controls-button-primary-font',
       `${(mobilePrimaryButtonFont / baseFontSize).toFixed(3)}rem`,
     );
-    root.style.setProperty('--mobile-controls-cluster-gap', `${mobileClusterGap.toFixed(3)}rem`);
-    root.style.setProperty('--mobile-controls-action-gap', `${mobileActionGap.toFixed(3)}rem`);
+    style.setProperty('--mobile-controls-cluster-gap', `${mobileClusterGap.toFixed(3)}rem`);
+    style.setProperty('--mobile-controls-action-gap', `${mobileActionGap.toFixed(3)}rem`);
 
     const stackMobileControls = width < 560 || height < 620;
     const controlsDirection = stackMobileControls ? 'column' : 'row';
     const controlsAlign = stackMobileControls ? 'stretch' : pointerCoarse ? 'center' : 'flex-end';
     const controlsJustify = stackMobileControls ? 'center' : pointerCoarse ? 'center' : 'space-between';
-    root.style.setProperty('--mobile-controls-direction', controlsDirection);
-    root.style.setProperty('--mobile-controls-align', controlsAlign);
-    root.style.setProperty('--mobile-controls-justify', controlsJustify);
+    style.setProperty('--mobile-controls-direction', controlsDirection);
+    style.setProperty('--mobile-controls-align', controlsAlign);
+    style.setProperty('--mobile-controls-justify', controlsJustify);
   }
 
   function setupResponsiveUi(scope, doc) {
@@ -19014,6 +19018,495 @@
     };
   })();
 
+  const FEATURE_FLAG_DEFAULTS = Object.freeze({
+    forceSimpleRenderer: false,
+    disableScoreSync: false,
+  });
+
+  const featureFlagState = {
+    flags: { ...FEATURE_FLAG_DEFAULTS },
+    messages: { scoreboard: null },
+    metadata: {
+      source: 'defaults',
+      version: null,
+      updatedAt: null,
+      fetchedAt: null,
+      url: null,
+    },
+    ready: false,
+    listeners: new Set(),
+    effects: {
+      simpleRendererForced: false,
+      rendererSnapshot: null,
+      liveFeaturesSuspended: false,
+      scoreboardSnapshot: null,
+    },
+    lastError: null,
+  };
+
+  function normaliseFeatureFlagBoolean(value) {
+    if (value === true || value === false) {
+      return value;
+    }
+    if (typeof value === 'string') {
+      const trimmed = value.trim().toLowerCase();
+      if (!trimmed) {
+        return null;
+      }
+      if (['true', '1', 'yes', 'on', 'enable', 'enabled'].includes(trimmed)) {
+        return true;
+      }
+      if (['false', '0', 'no', 'off', 'disable', 'disabled'].includes(trimmed)) {
+        return false;
+      }
+      return null;
+    }
+    if (typeof value === 'number') {
+      if (!Number.isFinite(value)) {
+        return null;
+      }
+      if (value === 0) {
+        return false;
+      }
+      if (value === 1) {
+        return true;
+      }
+    }
+    return null;
+  }
+
+  function normaliseFeatureFlagMessage(value, maxLength = 512) {
+    if (value === undefined || value === null) {
+      return null;
+    }
+    const stringValue = typeof value === 'string' ? value : String(value);
+    const trimmed = stringValue.trim();
+    if (!trimmed) {
+      return null;
+    }
+    if (maxLength && trimmed.length > maxLength) {
+      return trimmed.slice(0, maxLength);
+    }
+    return trimmed;
+  }
+
+  function normaliseFeatureFlagTimestamp(value) {
+    if (value === undefined || value === null || value === '') {
+      return null;
+    }
+    if (value instanceof Date && !Number.isNaN(value.getTime())) {
+      return value.toISOString();
+    }
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      const millis = value > 1e12 ? value : value * 1000;
+      const date = new Date(millis);
+      return Number.isNaN(date.getTime()) ? null : date.toISOString();
+    }
+    const stringValue = String(value);
+    const date = new Date(stringValue);
+    return Number.isNaN(date.getTime()) ? null : date.toISOString();
+  }
+
+  function cloneFeatureFlagSnapshot() {
+    return {
+      flags: { ...featureFlagState.flags },
+      messages: { ...(featureFlagState.messages || {}) },
+      metadata: { ...(featureFlagState.metadata || {}) },
+      ready: featureFlagState.ready === true,
+      lastError: featureFlagState.lastError || null,
+    };
+  }
+
+  function notifyFeatureFlagListeners() {
+    if (!featureFlagState.listeners || !featureFlagState.listeners.size) {
+      return;
+    }
+    const snapshot = cloneFeatureFlagSnapshot();
+    featureFlagState.listeners.forEach((listener) => {
+      if (typeof listener !== 'function') {
+        return;
+      }
+      try {
+        listener(snapshot);
+      } catch (error) {
+        if (globalScope?.console?.debug) {
+          globalScope.console.debug('Feature flag listener failed.', error);
+        }
+      }
+    });
+  }
+
+  function resolveFeatureFlagUrl(config = globalScope?.APP_CONFIG) {
+    const source = config && typeof config === 'object' ? config : {};
+    const candidates = [
+      source.featureConfigUrl,
+      source.remoteConfigUrl,
+      source.featureFlagsUrl,
+    ];
+    for (const candidate of candidates) {
+      const normalised = normaliseFeatureFlagMessage(candidate, 2048);
+      if (normalised) {
+        return normalised;
+      }
+    }
+    return null;
+  }
+
+  function normaliseFeatureFlagPayload(payload = {}) {
+    const base =
+      payload && typeof payload === 'object'
+        ? payload.config && typeof payload.config === 'object'
+          ? payload.config
+          : payload
+        : {};
+    const featuresCandidate =
+      typeof base.features === 'object' && base.features !== null
+        ? base.features
+        : typeof base.flags === 'object' && base.flags !== null
+          ? base.flags
+          : base;
+
+    const safeMode = normaliseFeatureFlagBoolean(featuresCandidate.safeMode ?? base.safeMode);
+
+    const resolvedForceSimple =
+      safeMode === true
+        ? true
+        : normaliseFeatureFlagBoolean(
+            featuresCandidate.forceSimpleRenderer ??
+              featuresCandidate.forceSimpleMode ??
+              featuresCandidate.simpleMode ??
+              base.forceSimpleRenderer ??
+              base.forceSimpleMode,
+          );
+
+    const resolvedDisableScoreSync =
+      safeMode === true
+        ? true
+        : normaliseFeatureFlagBoolean(
+            featuresCandidate.disableScoreSync ??
+              featuresCandidate.suspendLiveFeatures ??
+              featuresCandidate.disableLeaderboard ??
+              base.disableScoreSync ??
+              base.suspendLiveFeatures,
+          );
+
+    const scoreboardMessage = normaliseFeatureFlagMessage(
+      (base.messages && (base.messages.scoreboard ?? base.messages.leaderboard)) ??
+        featuresCandidate.scoreboardMessage ??
+        featuresCandidate.leaderboardMessage ??
+        base.scoreboardMessage,
+    );
+
+    return {
+      flags: {
+        forceSimpleRenderer:
+          resolvedForceSimple === null
+            ? FEATURE_FLAG_DEFAULTS.forceSimpleRenderer
+            : resolvedForceSimple,
+        disableScoreSync:
+          resolvedDisableScoreSync === null
+            ? FEATURE_FLAG_DEFAULTS.disableScoreSync
+            : resolvedDisableScoreSync,
+      },
+      messages: {
+        scoreboard: scoreboardMessage,
+      },
+      metadata: {
+        version: normaliseFeatureFlagMessage(base.version ?? base.revision ?? null, 64),
+        updatedAt: normaliseFeatureFlagTimestamp(base.updatedAt ?? base.timestamp ?? null),
+      },
+    };
+  }
+
+  function applyFeatureFlagEffects({ source = 'runtime' } = {}) {
+    const config = globalScope.APP_CONFIG || (globalScope.APP_CONFIG = {});
+    const flags = featureFlagState.flags || FEATURE_FLAG_DEFAULTS;
+    const messages = featureFlagState.messages || {};
+
+    const shouldForceSimple = flags.forceSimpleRenderer === true;
+    if (shouldForceSimple) {
+      if (!featureFlagState.effects.simpleRendererForced) {
+        featureFlagState.effects.rendererSnapshot = {
+          forceSimpleMode: config.forceSimpleMode,
+          enableAdvancedExperience: config.enableAdvancedExperience,
+          preferAdvanced: config.preferAdvanced,
+          forceAdvanced: config.forceAdvanced,
+          defaultMode: config.defaultMode,
+        };
+      }
+      applySimpleFallbackConfig(config);
+      featureFlagState.effects.simpleRendererForced = true;
+    } else if (featureFlagState.effects.simpleRendererForced) {
+      const snapshot = featureFlagState.effects.rendererSnapshot || {};
+      if (snapshot.forceSimpleMode === undefined) {
+        delete config.forceSimpleMode;
+      } else {
+        config.forceSimpleMode = snapshot.forceSimpleMode;
+      }
+      if (snapshot.enableAdvancedExperience === undefined) {
+        delete config.enableAdvancedExperience;
+      } else {
+        config.enableAdvancedExperience = snapshot.enableAdvancedExperience;
+      }
+      if (snapshot.preferAdvanced === undefined) {
+        delete config.preferAdvanced;
+      } else {
+        config.preferAdvanced = snapshot.preferAdvanced;
+      }
+      if (snapshot.forceAdvanced === undefined) {
+        delete config.forceAdvanced;
+      } else {
+        config.forceAdvanced = snapshot.forceAdvanced;
+      }
+      if (snapshot.defaultMode === undefined) {
+        delete config.defaultMode;
+      } else {
+        config.defaultMode = snapshot.defaultMode;
+      }
+      featureFlagState.effects.simpleRendererForced = false;
+      featureFlagState.effects.rendererSnapshot = null;
+    }
+
+    const shouldDisableScoreSync = flags.disableScoreSync === true;
+    if (shouldDisableScoreSync) {
+      if (!featureFlagState.effects.liveFeaturesSuspended) {
+        featureFlagState.effects.scoreboardSnapshot = {
+          message: identityState.scoreboardMessage,
+          offline: identityState.scoreboardOffline,
+        };
+        featureFlagState.effects.liveFeaturesSuspended = true;
+      }
+      const warningMessage =
+        messages.scoreboard ||
+        featureFlagState.effects.scoreboardSnapshot?.message ||
+        'Leaderboard maintenance in progress — runs stay local until service resumes.';
+      updateScoreboardStatus(warningMessage, { offline: true });
+      showGlobalScoreSyncWarning(warningMessage);
+      suspendLiveFeatures('feature-flags', {
+        reason: 'score-sync-disabled',
+        source,
+      });
+    } else if (featureFlagState.effects.liveFeaturesSuspended) {
+      featureFlagState.effects.liveFeaturesSuspended = false;
+      const snapshot = featureFlagState.effects.scoreboardSnapshot || {};
+      resumeLiveFeatures('feature-flags', {
+        reason: 'score-sync-restored',
+        source,
+      });
+      const snapshotMessage =
+        typeof snapshot.message === 'string' && snapshot.message.trim().length
+          ? snapshot.message.trim()
+          : null;
+      const restoredMessage = snapshotMessage || deriveOnlineScoreboardMessage();
+      const offline = snapshot.offline === true;
+      updateScoreboardStatus(restoredMessage, { offline });
+      if (offline) {
+        showGlobalScoreSyncWarning(restoredMessage);
+      } else {
+        hideGlobalScoreSyncWarning(restoredMessage);
+      }
+      featureFlagState.effects.scoreboardSnapshot = null;
+    } else if (
+      typeof messages.scoreboard === 'string' &&
+      messages.scoreboard.trim().length &&
+      identityState.scoreboardOffline !== true
+    ) {
+      updateScoreboardStatus(messages.scoreboard, { offline: false });
+    }
+  }
+
+  function updateFeatureFlagStateFromPayload(payload, context = {}) {
+    const normalised = normaliseFeatureFlagPayload(payload);
+    featureFlagState.flags = { ...FEATURE_FLAG_DEFAULTS, ...normalised.flags };
+    featureFlagState.messages = { scoreboard: normalised.messages.scoreboard ?? null };
+    featureFlagState.metadata = {
+      source: context.source ?? normaliseFeatureFlagMessage(payload?.source ?? 'remote', 64) ?? 'remote',
+      version: normalised.metadata.version ?? featureFlagState.metadata?.version ?? null,
+      updatedAt: normalised.metadata.updatedAt ?? featureFlagState.metadata?.updatedAt ?? null,
+      fetchedAt:
+        context.fetchedAt !== undefined && context.fetchedAt !== null
+          ? normaliseFeatureFlagTimestamp(context.fetchedAt) ?? new Date().toISOString()
+          : new Date().toISOString(),
+      url:
+        context.url ??
+        featureFlagState.metadata?.url ??
+        resolveFeatureFlagUrl(globalScope?.APP_CONFIG) ??
+        null,
+    };
+    featureFlagState.lastError = null;
+    applyFeatureFlagEffects({ source: featureFlagState.metadata.source });
+    notifyFeatureFlagListeners();
+    return cloneFeatureFlagSnapshot();
+  }
+
+  function refreshDynamicFeatureFlags(options = {}) {
+    const config = globalScope.APP_CONFIG || (globalScope.APP_CONFIG = {});
+    const resolvedUrl = options.url
+      ? normaliseFeatureFlagMessage(options.url, 2048)
+      : resolveFeatureFlagUrl(config);
+    if (!resolvedUrl) {
+      if (options.silent !== true && globalScope?.console?.debug) {
+        globalScope.console.debug('Feature flag refresh skipped — no remote configuration URL set.');
+      }
+      return Promise.resolve(cloneFeatureFlagSnapshot());
+    }
+    if (typeof globalScope.fetch !== 'function') {
+      const error = new Error('Fetch API unavailable — feature flag refresh skipped.');
+      featureFlagState.lastError = error;
+      if (options.silent !== true && globalScope?.console?.warn) {
+        globalScope.console.warn('Feature flag refresh failed; fetch API unavailable.', error);
+      }
+      return Promise.resolve(cloneFeatureFlagSnapshot());
+    }
+
+    let controller = null;
+    let timeoutHandle = null;
+    if (typeof globalScope.AbortController === 'function') {
+      controller = new globalScope.AbortController();
+      if (typeof globalScope.setTimeout === 'function') {
+        const timeoutMs = Number.isFinite(options.timeoutMs) ? Math.max(0, options.timeoutMs) : 5000;
+        timeoutHandle = globalScope.setTimeout(() => {
+          try {
+            controller.abort();
+          } catch (abortError) {}
+        }, timeoutMs);
+      }
+    }
+
+    const headers = { Accept: 'application/json' };
+    const requestInit = {
+      method: 'GET',
+      headers,
+    };
+    if (controller) {
+      requestInit.signal = controller.signal;
+    }
+    if (options.fetchOptions && typeof options.fetchOptions === 'object') {
+      Object.assign(requestInit, options.fetchOptions);
+    }
+
+    const fetchPromise = globalScope
+      .fetch(resolvedUrl, requestInit)
+      .then((response) => {
+        if (!response) {
+          throw new Error('Remote configuration request did not return a response.');
+        }
+        if (!response.ok) {
+          const error = new Error(`Remote configuration request failed with status ${response.status}.`);
+          error.status = response.status;
+          throw error;
+        }
+        return response.json().catch(() => ({}));
+      })
+      .then((payload) => {
+        featureFlagState.metadata.url = resolvedUrl;
+        return updateFeatureFlagStateFromPayload(payload, {
+          source: options.source ?? 'remote',
+          fetchedAt: Date.now(),
+          url: resolvedUrl,
+        });
+      })
+      .catch((error) => {
+        featureFlagState.lastError = error;
+        if (options.silent !== true && globalScope?.console?.warn) {
+          globalScope.console.warn('Feature flag refresh failed; continuing with previous state.', error);
+        }
+        throw error;
+      })
+      .finally(() => {
+        if (timeoutHandle && typeof globalScope.clearTimeout === 'function') {
+          try {
+            globalScope.clearTimeout(timeoutHandle);
+          } catch (clearError) {}
+        }
+      });
+
+    return fetchPromise;
+  }
+
+  function initialiseDynamicFeatureFlags() {
+    const config = globalScope.APP_CONFIG || (globalScope.APP_CONFIG = {});
+    featureFlagState.flags = { ...FEATURE_FLAG_DEFAULTS };
+    featureFlagState.messages = { scoreboard: null };
+    featureFlagState.metadata = {
+      source: 'defaults',
+      version: null,
+      updatedAt: null,
+      fetchedAt: new Date().toISOString(),
+      url: resolveFeatureFlagUrl(config),
+    };
+    featureFlagState.ready = false;
+    featureFlagState.lastError = null;
+    featureFlagState.effects.simpleRendererForced = false;
+    featureFlagState.effects.rendererSnapshot = null;
+    featureFlagState.effects.liveFeaturesSuspended = false;
+    featureFlagState.effects.scoreboardSnapshot = null;
+    applyFeatureFlagEffects({ source: 'defaults' });
+    notifyFeatureFlagListeners();
+
+    const url = featureFlagState.metadata.url;
+    if (!url) {
+      featureFlagState.ready = true;
+      notifyFeatureFlagListeners();
+      return Promise.resolve(cloneFeatureFlagSnapshot());
+    }
+
+    return refreshDynamicFeatureFlags({ url, source: 'initialise', silent: true })
+      .catch((error) => {
+        featureFlagState.lastError = error;
+        if (globalScope?.console?.warn) {
+          globalScope.console.warn('Failed to load remote feature flags; continuing with defaults.', error);
+        }
+        return cloneFeatureFlagSnapshot();
+      })
+      .finally(() => {
+        featureFlagState.ready = true;
+        notifyFeatureFlagListeners();
+      });
+  }
+
+  const featureFlagApi = {
+    get(key, fallback = undefined) {
+      if (typeof key !== 'string' || !key) {
+        return fallback;
+      }
+      return Object.prototype.hasOwnProperty.call(featureFlagState.flags, key)
+        ? featureFlagState.flags[key]
+        : fallback;
+    },
+    all() {
+      return cloneFeatureFlagSnapshot();
+    },
+    metadata() {
+      return { ...(featureFlagState.metadata || {}) };
+    },
+    ready() {
+      return featureFlagState.ready === true;
+    },
+    refresh(options = {}) {
+      return refreshDynamicFeatureFlags(options);
+    },
+    subscribe(listener) {
+      if (typeof listener !== 'function') {
+        return () => {};
+      }
+      featureFlagState.listeners.add(listener);
+      try {
+        listener(cloneFeatureFlagSnapshot());
+      } catch (error) {
+        if (globalScope?.console?.debug) {
+          globalScope.console.debug('Feature flag listener failed during subscription.', error);
+        }
+      }
+      return () => {
+        featureFlagState.listeners.delete(listener);
+      };
+    },
+  };
+
+  globalScope.InfiniteRails = globalScope.InfiniteRails || {};
+  globalScope.InfiniteRails.features = featureFlagApi;
+
   function formatBackendEndpointSummary(context = {}) {
     if (context && typeof context.summary === 'string' && context.summary.trim().length) {
       return context.summary.trim();
@@ -22849,6 +23342,15 @@
       hooks.getIdentitySessionState = () => cloneIdentitySessionState();
       hooks.handleGoogleCredential = (response) => handleGoogleCredential(response);
       hooks.getBackendLiveCheckState = () => backendLiveCheckState;
+      hooks.getFeatureFlagState = () => cloneFeatureFlagSnapshot();
+      hooks.refreshFeatureFlags = (options = {}) =>
+        refreshDynamicFeatureFlags({ ...options, silent: options.silent ?? true });
+      hooks.applyFeatureFlagSnapshot = (payload, options = {}) =>
+        updateFeatureFlagStateFromPayload(payload || {}, {
+          source: options.source ?? 'test-hook',
+          fetchedAt: Date.now(),
+          url: options.url ?? featureFlagState.metadata?.url ?? resolveFeatureFlagUrl(globalScope.APP_CONFIG),
+        });
       hooks.activateMissionBriefingFallback = activateMissionBriefingFallback;
       hooks.offerMissionBriefingFallback = offerMissionBriefingFallback;
       hooks.configureInactivityMonitor = (options) => configureInactivityMonitor(options || {});
@@ -24115,13 +24617,13 @@
     );
   }
 
+  const featureFlagInitPromise = initialiseDynamicFeatureFlags();
+
   globalScope.bootstrap = bootstrap;
 
   synchroniseBootstrapWithExistingState();
 
   markBootPhaseOk('script', 'Bootstrap script ready.');
-
-  const skipAdvancedBootstrap = runWebglPreflightCheck();
 
   function handleBootstrapResult(result) {
     if (result && typeof result.then === 'function') {
@@ -24131,9 +24633,12 @@
     }
   }
 
-  if (skipAdvancedBootstrap) {
-    handleBootstrapResult(bootstrap());
-  } else {
+  function startBootstrapSequence() {
+    const skipAdvancedBootstrap = runWebglPreflightCheck();
+    if (skipAdvancedBootstrap) {
+      handleBootstrapResult(bootstrap());
+      return;
+    }
     ensureThree()
       .then(() => {
         handleBootstrapResult(bootstrap());
@@ -24144,5 +24649,32 @@
           tryStartSimpleFallback(error, { reason: 'ensureThree-failure' });
         }
       });
+  }
+
+  const appConfig = globalScope.APP_CONFIG || (globalScope.APP_CONFIG = {});
+  const autoBootstrapDisabled = appConfig.skipAutoBootstrap === true;
+
+  const runBootstrapAfterFlags = () => {
+    if (autoBootstrapDisabled) {
+      if (globalScope?.console?.info) {
+        globalScope.console.info('Auto bootstrap disabled via APP_CONFIG.skipAutoBootstrap.');
+      }
+      return;
+    }
+    startBootstrapSequence();
+  };
+
+  if (featureFlagInitPromise && typeof featureFlagInitPromise.then === 'function') {
+    featureFlagInitPromise
+      .catch((error) => {
+        if (globalScope?.console?.debug) {
+          globalScope.console.debug('Feature flag initialisation failed.', error);
+        }
+      })
+      .finally(() => {
+        runBootstrapAfterFlags();
+      });
+  } else {
+    runBootstrapAfterFlags();
   }
 })();
