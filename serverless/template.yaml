@@ -247,6 +247,19 @@ Resources:
       SSESpecification:
         SSEEnabled: true
 
+  FeatureFlagsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: configKey
+          AttributeType: S
+      KeySchema:
+        - AttributeName: configKey
+          KeyType: HASH
+      SSESpecification:
+        SSEEnabled: true
+
   IncidentCountersTable:
     Type: AWS::DynamoDB::Table
     Properties:
@@ -270,6 +283,31 @@ Resources:
       Subscription:
         - Protocol: email
           Endpoint: pushkar.mishra.in@gmail.com
+
+  ConfigFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./
+      Handler: handlers/config.handler
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref FeatureFlagsTable
+      Environment:
+        Variables:
+          CONFIG_TABLE: !Ref FeatureFlagsTable
+      Events:
+        GetConfig:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGateway
+            Path: /config
+            Method: get
+        OptionsConfig:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGateway
+            Path: /config
+            Method: options
 
   UsersFunction:
     Type: AWS::Serverless::Function
@@ -410,6 +448,9 @@ Outputs:
   RateLimitsTableName:
     Description: DynamoDB table storing per-identity rate limit counters.
     Value: !Ref RateLimitsTable
+  FeatureFlagsTableName:
+    Description: DynamoDB table storing remote configuration for feature flags.
+    Value: !Ref FeatureFlagsTable
   IncidentCountersTableName:
     Description: DynamoDB table storing critical incident aggregation state.
     Value: !Ref IncidentCountersTable
