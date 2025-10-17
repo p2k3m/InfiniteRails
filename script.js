@@ -21297,6 +21297,12 @@
           ? window
           : globalThis;
     const config = scope.APP_CONFIG || (scope.APP_CONFIG = {});
+    if (config.enableAdvancedExperience === undefined) {
+      config.enableAdvancedExperience = true;
+    }
+    if (config.preferAdvanced === undefined) {
+      config.preferAdvanced = config.enableAdvancedExperience !== false;
+    }
     const search = scope.location?.search || '';
     const params = new URLSearchParams(search);
     const queryMode = params.get('mode');
