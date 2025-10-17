@@ -139,7 +139,7 @@ describe('fallback shortcut bindings', () => {
     expect(snapshot.bindings.F7).toBe('triggerTutorialRescue');
   });
 
-  it('activates mission briefing safe mode via the F9 shortcut', () => {
+  it('activates classic “safe” mode via the F9 shortcut', () => {
     const windowStub = createWindowStub({ controlMap: defaultControlMap });
     const api = instantiateFallbackShortcuts(windowStub);
     api.initialiseFallbackShortcutControls(windowStub, windowStub.document);
@@ -153,7 +153,7 @@ describe('fallback shortcut bindings', () => {
     expect(event.stopPropagation).toHaveBeenCalledTimes(1);
   });
 
-  it('requests the simple renderer fallback when F10 is pressed', () => {
+  it('requests the simple legacy graphics mode when F10 is pressed', () => {
     const windowStub = createWindowStub({ controlMap: defaultControlMap });
     const api = instantiateFallbackShortcuts(windowStub);
     api.initialiseFallbackShortcutControls(windowStub, windowStub.document);
@@ -165,7 +165,7 @@ describe('fallback shortcut bindings', () => {
     expect(context?.key).toBe('F10');
   });
 
-  it('launches the tutorial rescue overlay when F7 is pressed', () => {
+  it('launches the full tutorial/mid-run flow when F7 is pressed', () => {
     const windowStub = createWindowStub({ controlMap: defaultControlMap });
     const api = instantiateFallbackShortcuts(windowStub);
     api.initialiseFallbackShortcutControls(windowStub, windowStub.document);

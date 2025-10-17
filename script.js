@@ -17415,11 +17415,11 @@
 
   const FALLBACK_SHORTCUT_ACTIONS = Object.freeze({
     activateBriefingFallback: {
-      label: 'Mission briefing safe mode',
+      label: 'Classic “safe” mode (full fallback to text/inventory/alert interface only)',
       handler(context = {}) {
         const key = typeof context.code === 'string' ? context.code : null;
         if (typeof activateMissionBriefingFallback !== 'function') {
-          logFallbackShortcutEvent('warning', 'Mission briefing fallback shortcut unavailable.', {
+          logFallbackShortcutEvent('warning', 'Classic “safe” mode shortcut unavailable.', {
             action: 'activateBriefingFallback',
             key,
             reason: 'unavailable',
@@ -17429,7 +17429,8 @@
         const activated = Boolean(
           activateMissionBriefingFallback({
             reason: 'user-shortcut',
-            diagnosticMessage: 'Renderer bypassed via safe mode shortcut — mission briefing mode enabled.',
+            diagnosticMessage:
+              'Renderer bypassed via classic “safe” mode shortcut — full fallback text/inventory/alert interface enabled.',
             context: {
               source: 'fallback-shortcut',
               key,
@@ -17437,12 +17438,12 @@
           }),
         );
         if (activated) {
-          logFallbackShortcutEvent('info', 'Mission briefing safe mode activated via keyboard shortcut.', {
+          logFallbackShortcutEvent('info', 'Classic “safe” mode activated via keyboard shortcut.', {
             action: 'activateBriefingFallback',
             key,
           });
         } else {
-          logFallbackShortcutEvent('warning', 'Mission briefing fallback shortcut did not activate the safe mode overlay.', {
+          logFallbackShortcutEvent('warning', 'Classic “safe” mode shortcut did not activate the fallback interface.', {
             action: 'activateBriefingFallback',
             key,
             reason: 'activation-rejected',
@@ -17452,11 +17453,11 @@
       },
     },
     startSimpleFallbackRenderer: {
-      label: 'Simple renderer fallback',
+      label: 'Simple legacy graphics only',
       handler(context = {}) {
         const key = typeof context.code === 'string' ? context.code : null;
         if (typeof tryStartSimpleFallback !== 'function') {
-          logFallbackShortcutEvent('warning', 'Simple renderer fallback shortcut unavailable.', {
+          logFallbackShortcutEvent('warning', 'Simple legacy graphics shortcut unavailable.', {
             action: 'startSimpleFallbackRenderer',
             key,
             reason: 'unavailable',
@@ -17474,7 +17475,7 @@
             }),
           );
         } catch (error) {
-          logFallbackShortcutEvent('error', 'Simple renderer fallback shortcut failed.', {
+          logFallbackShortcutEvent('error', 'Simple legacy graphics shortcut failed.', {
             action: 'startSimpleFallbackRenderer',
             key,
             error: serializeErrorForLogging(error),
@@ -17482,12 +17483,12 @@
           return false;
         }
         if (started) {
-          logFallbackShortcutEvent('info', 'Simple renderer fallback boot requested via keyboard shortcut.', {
+          logFallbackShortcutEvent('info', 'Simple legacy graphics mode requested via keyboard shortcut.', {
             action: 'startSimpleFallbackRenderer',
             key,
           });
         } else {
-          logFallbackShortcutEvent('warning', 'Simple renderer fallback shortcut ignored — fallback already attempted.', {
+          logFallbackShortcutEvent('warning', 'Simple legacy graphics shortcut ignored — fallback already attempted.', {
             action: 'startSimpleFallbackRenderer',
             key,
             reason: 'already-attempted',
@@ -17497,12 +17498,12 @@
       },
     },
     triggerTutorialRescue: {
-      label: 'Tutorial rescue overlay',
+      label: 'Full tutorial/mid-run (if custom logic fails at any time)',
       handler(context = {}) {
         const key = typeof context.code === 'string' ? context.code : null;
         const experience = globalScope?.__INFINITE_RAILS_ACTIVE_EXPERIENCE__ ?? null;
         if (!experience || typeof experience.showFirstRunTutorial !== 'function') {
-          logFallbackShortcutEvent('warning', 'Tutorial rescue shortcut unavailable — renderer inactive.', {
+          logFallbackShortcutEvent('warning', 'Full tutorial/mid-run shortcut unavailable — renderer inactive.', {
             action: 'triggerTutorialRescue',
             key,
             reason: 'experience-unavailable',
@@ -17518,7 +17519,7 @@
           });
           if (result && typeof result.then === 'function') {
             result.catch((error) => {
-              logFallbackShortcutEvent('error', 'Tutorial rescue shortcut promise rejected.', {
+              logFallbackShortcutEvent('error', 'Full tutorial/mid-run shortcut promise rejected.', {
                 action: 'triggerTutorialRescue',
                 key,
                 error: serializeErrorForLogging(error),
@@ -17543,14 +17544,14 @@
             triggerTutorial();
           }
         } catch (error) {
-          logFallbackShortcutEvent('error', 'Tutorial rescue shortcut failed to launch the overlay.', {
+          logFallbackShortcutEvent('error', 'Full tutorial/mid-run shortcut failed to launch the overlay.', {
             action: 'triggerTutorialRescue',
             key,
             error: serializeErrorForLogging(error),
           });
           return false;
         }
-        logFallbackShortcutEvent('info', 'Tutorial rescue overlay launched via keyboard shortcut.', {
+        logFallbackShortcutEvent('info', 'Full tutorial/mid-run flow launched via keyboard shortcut.', {
           action: 'triggerTutorialRescue',
           key,
         });
