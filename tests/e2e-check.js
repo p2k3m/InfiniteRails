@@ -117,11 +117,98 @@ function findUnexpectedWarnings(warnings) {
 }
 
 async function maybeClickStart(page) {
+  const readRendererState = async () =>
+    page
+      .evaluate(() => ({
+        bodyActive: document.body.classList.contains('game-active'),
+        stateActive: Boolean(window.__INFINITE_RAILS_STATE__?.isRunning),
+      }))
+      .catch(() => ({ bodyActive: false, stateActive: false }));
+
+  const triggerManualStart = async () =>
+    page
+      .evaluate(async () => {
+        const experience = window.__INFINITE_RAILS_ACTIVE_EXPERIENCE__;
+        if (!experience || typeof experience.start !== 'function') {
+          return { triggered: false, reason: 'experience-unavailable' };
+        }
+        if (experience.started) {
+          return { triggered: true, alreadyRunning: true };
+        }
+        try {
+          const result = experience.start();
+          if (result && typeof result.then === 'function') {
+            await result;
+          }
+          return { triggered: true, alreadyRunning: false };
+        } catch (error) {
+          return {
+            triggered: false,
+            reason: error instanceof Error ? error.message : String(error),
+          };
+        }
+      })
+      .catch(() => ({ triggered: false, reason: 'evaluation-error' }));
+
+  const triggerExperienceStartViaHook = async () =>
+    page
+      .evaluate(() => {
+        const result = {
+          used: false,
+          status: 'unavailable',
+          error: null,
+          detail: {
+            hasHook: false,
+            simpleAvailable: Boolean(window.SimpleExperience?.create),
+            canvasPresent: Boolean(document.getElementById('gameCanvas')),
+          },
+        };
+        try {
+          const hooks = window.__INFINITE_RAILS_TEST_HOOKS__;
+          const ensureExperience = hooks && typeof hooks.ensureSimpleExperience === 'function'
+            ? hooks.ensureSimpleExperience
+            : null;
+          result.detail.hasHook = Boolean(ensureExperience);
+          if (!ensureExperience) {
+            result.status = 'no-hook';
+            return result;
+          }
+          const mode = window.__INFINITE_RAILS_RENDERER_MODE__ || 'advanced';
+          const instance = ensureExperience(mode);
+          if (!instance || typeof instance !== 'object') {
+            result.status = 'no-instance';
+            result.used = true;
+            return result;
+          }
+          if (instance.started) {
+            result.status = 'already-started';
+            result.used = true;
+            return result;
+          }
+          if (typeof instance.start === 'function') {
+            instance.start();
+            result.status = 'started';
+            result.used = true;
+            return result;
+          }
+          result.status = 'no-start-method';
+          result.used = true;
+          return result;
+        } catch (error) {
+          result.used = true;
+          result.status = 'error';
+          result.error = typeof error?.message === 'string' ? error.message : 'unknown error';
+          return result;
+        }
+      })
+      .catch((evaluationError) => ({
+        used: false,
+        status: 'error',
+        error: typeof evaluationError?.message === 'string' ? evaluationError.message : null,
+      }));
+
   console.info('[E2E][StartButton] Inspecting renderer state prior to automation.');
-  const rendererState = await page.evaluate(() => ({
-    bodyActive: document.body.classList.contains('game-active'),
-    stateActive: Boolean(window.__INFINITE_RAILS_STATE__?.isRunning),
-  }));
+  const rendererState = await readRendererState();
   if (rendererState.bodyActive || rendererState.stateActive) {
     console.info(
       `[E2E][StartButton] Automation skipped — renderer already active (bodyActive=${rendererState.bodyActive} stateActive=${rendererState.stateActive}).`,
@@ -138,27 +225,7 @@ async function maybeClickStart(page) {
   const visible = await startButton.isVisible().catch(() => false);
   if (!visible) {
     console.info('[E2E][StartButton] Start button hidden; awaiting renderer progress without automation.');
-    const manualStart = await page.evaluate(async () => {
-      const experience = window.__INFINITE_RAILS_ACTIVE_EXPERIENCE__;
-      if (!experience || typeof experience.start !== 'function') {
-        return { triggered: false, reason: 'experience-unavailable' };
-      }
-      if (experience.started) {
-        return { triggered: true, alreadyRunning: true };
-      }
-      try {
-        const result = experience.start();
-        if (result && typeof result.then === 'function') {
-          await result;
-        }
-        return { triggered: true, alreadyRunning: false };
-      } catch (error) {
-        return {
-          triggered: false,
-          reason: error instanceof Error ? error.message : String(error),
-        };
-      }
-    });
+    const manualStart = await triggerManualStart();
     if (manualStart.triggered) {
       console.info(
         `[E2E][StartButton] Manual experience start invoked (alreadyRunning=${Boolean(manualStart.alreadyRunning)}).`,
@@ -306,8 +373,52 @@ async function maybeClickStart(page) {
   console.info('[E2E][StartButton] Dispatching click.');
   const readyVisible = await startButton.isVisible().catch(() => false);
   if (!readyVisible) {
-    console.info('[E2E][StartButton] Start button became hidden before click; assuming renderer progressed.');
-    return;
+    console.info('[E2E][StartButton] Start button became hidden before click; verifying renderer activation.');
+    const hiddenState = await readRendererState();
+    if (hiddenState.bodyActive || hiddenState.stateActive) {
+      console.info(
+        `[E2E][StartButton] Renderer already active after button hid (bodyActive=${hiddenState.bodyActive} stateActive=${hiddenState.stateActive}).`,
+      );
+      return;
+    }
+
+    const hiddenHookResult = await triggerExperienceStartViaHook();
+    if (hiddenHookResult.used) {
+      if (hiddenHookResult.status === 'started' || hiddenHookResult.status === 'already-started') {
+        const stateAfterHook = await readRendererState();
+        console.info(
+          `[E2E][StartButton] Experience started via hook after button hid (${hiddenHookResult.status}) — bodyActive=${stateAfterHook.bodyActive} stateActive=${stateAfterHook.stateActive}.`,
+        );
+        return;
+      }
+      if (hiddenHookResult.status === 'error') {
+        console.info(
+          `[E2E][StartButton] Hidden-button hook attempt errored (${hiddenHookResult.error ?? 'unknown error'}); attempting direct start.`,
+        );
+      } else {
+        console.info(
+          `[E2E][StartButton] Hidden-button hook reported status ${hiddenHookResult.status}; attempting direct start (detail=${JSON.stringify(hiddenHookResult.detail ?? {})}).`,
+        );
+      }
+    }
+
+    const hiddenManualStart = await triggerManualStart();
+    if (hiddenManualStart.triggered) {
+      console.info(
+        `[E2E][StartButton] Manual experience start invoked after hidden button (alreadyRunning=${Boolean(hiddenManualStart.alreadyRunning)}).`,
+      );
+      return;
+    }
+
+    const postHiddenState = await readRendererState();
+    if (postHiddenState.bodyActive || postHiddenState.stateActive) {
+      console.info(
+        `[E2E][StartButton] Renderer activated while reconciling hidden button (bodyActive=${postHiddenState.bodyActive} stateActive=${postHiddenState.stateActive}).`,
+      );
+      return;
+    }
+
+    throw new Error('Start button became hidden before automation but renderer remained inactive.');
   }
   const automationState = await page
     .evaluate(() => {
@@ -321,61 +432,7 @@ async function maybeClickStart(page) {
     );
     return;
   }
-  const hookResult = await page
-    .evaluate(() => {
-      const result = {
-        used: false,
-        status: 'unavailable',
-        error: null,
-        detail: {
-          hasHook: false,
-          simpleAvailable: Boolean(window.SimpleExperience?.create),
-          canvasPresent: Boolean(document.getElementById('gameCanvas')),
-        },
-      };
-      try {
-        const hooks = window.__INFINITE_RAILS_TEST_HOOKS__;
-        const ensureExperience = hooks && typeof hooks.ensureSimpleExperience === 'function'
-          ? hooks.ensureSimpleExperience
-          : null;
-        result.detail.hasHook = Boolean(ensureExperience);
-        if (!ensureExperience) {
-          result.status = 'no-hook';
-          return result;
-        }
-        const mode = window.__INFINITE_RAILS_RENDERER_MODE__ || 'advanced';
-        const instance = ensureExperience(mode);
-        if (!instance || typeof instance !== 'object') {
-          result.status = 'no-instance';
-          result.used = true;
-          return result;
-        }
-        if (instance.started) {
-          result.status = 'already-started';
-          result.used = true;
-          return result;
-        }
-        if (typeof instance.start === 'function') {
-          instance.start();
-          result.status = 'started';
-          result.used = true;
-          return result;
-        }
-        result.status = 'no-start-method';
-        result.used = true;
-        return result;
-      } catch (error) {
-        result.used = true;
-        result.status = 'error';
-        result.error = typeof error?.message === 'string' ? error.message : 'unknown error';
-        return result;
-      }
-    })
-    .catch((evaluationError) => ({
-      used: false,
-      status: 'error',
-      error: typeof evaluationError?.message === 'string' ? evaluationError.message : null,
-    }));
+  const hookResult = await triggerExperienceStartViaHook();
   if (hookResult.used) {
     if (hookResult.status === 'started' || hookResult.status === 'already-started') {
       const postHookState = await page
