@@ -24202,6 +24202,17 @@
           }
         } else {
           try {
+            await ensureRendererModule('simple', {
+              mode: 'simple',
+              reason: 'bootstrap:fallback-preload',
+            });
+          } catch (simpleFallbackError) {
+            scope.console?.debug?.(
+              'Failed to preload simple renderer module while preparing advanced renderer.',
+              simpleFallbackError,
+            );
+          }
+          try {
             await ensureRendererModule('advanced', { mode: 'advanced', reason: 'bootstrap' });
           } catch (error) {
             scope.console?.debug?.('Failed to prepare advanced renderer module during bootstrap.', error);
