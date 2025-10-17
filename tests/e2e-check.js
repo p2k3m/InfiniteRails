@@ -125,6 +125,34 @@ async function maybeClickStart(page) {
       }))
       .catch(() => ({ bodyActive: false, stateActive: false }));
 
+  const waitForRendererActivation = async ({ timeout = 6000, reason } = {}) => {
+    try {
+      await page.waitForFunction(
+        () =>
+          document.body.classList.contains('game-active') ||
+          Boolean(window.__INFINITE_RAILS_STATE__?.isRunning),
+        undefined,
+        { timeout },
+      );
+      const state = await readRendererState();
+      console.info(
+        `[E2E][StartButton] Renderer activated${reason ? ` after ${reason}` : ''} (bodyActive=${state.bodyActive} stateActive=${state.stateActive}).`,
+      );
+      return true;
+    } catch (error) {
+      if (error?.name === 'TimeoutError') {
+        console.info(
+          `[E2E][StartButton] Renderer activation wait${reason ? ` for ${reason}` : ''} timed out after ${timeout}ms.`,
+        );
+      } else {
+        console.info(
+          `[E2E][StartButton] Renderer activation wait${reason ? ` for ${reason}` : ''} failed (${error?.message ?? 'unknown error'}).`,
+        );
+      }
+      return false;
+    }
+  };
+
   const triggerManualStart = async () =>
     page
       .evaluate(async () => {
@@ -382,6 +410,10 @@ async function maybeClickStart(page) {
       return;
     }
 
+    if (await waitForRendererActivation({ reason: 'hidden button' })) {
+      return;
+    }
+
     const hiddenHookResult = await triggerExperienceStartViaHook();
     if (hiddenHookResult.used) {
       if (hiddenHookResult.status === 'started' || hiddenHookResult.status === 'already-started') {
@@ -415,6 +447,10 @@ async function maybeClickStart(page) {
       console.info(
         `[E2E][StartButton] Renderer activated while reconciling hidden button (bodyActive=${postHiddenState.bodyActive} stateActive=${postHiddenState.stateActive}).`,
       );
+      return;
+    }
+
+    if (await waitForRendererActivation({ reason: 'post-hidden reconciliation' })) {
       return;
     }
 
