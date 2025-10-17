@@ -26,9 +26,43 @@ const ALLOWED_WARNING_SUBSTRINGS = [
   'Retrying golem armour asset',
 ];
 
+const FAIL_FAST_CONSOLE_IGNORE_SUBSTRINGS = [
+  'Welcome audio playback test failed',
+  'Diagnostics context: {boundary: overlay, stage: boot, scope: audio, status: error, level: error}',
+];
+
+const FAIL_FAST_PATTERNS = [
+  { category: 'scene', regex: /\bscene\b[^\n]*(?:failed|failure|missing|unavailable|panic)/i },
+  { category: 'scene', regex: /\brenderer\b[^\n]*(?:failed|failure|crash|panic|missing|unavailable)/i },
+  { category: 'ui', regex: /\b(hud|overlay|ui|menu)\b[^\n]*(?:failed|failure|missing|unavailable|error)/i },
+  {
+    category: 'asset',
+    regex:
+      /\b(asset|texture|model|gltf|sprite)\b[^\n]*(?:load|preload|download|import)[^\n]*(?:fail|failure|error|missing|denied|blocked)/i,
+  },
+  { category: 'asset', regex: /\basset\b[^\n]*critical[^\n]*(?:fail|failure|error|missing|denied|blocked)/i },
+  { category: 'asset', regex: /Missing audio samples/i },
+];
+
 function createConsoleCapture(page, scope) {
   const warnings = [];
   const infoLogs = [];
+  let failFastError = null;
+  let failFastReject;
+  const failFastPromise = new Promise((_, reject) => {
+    failFastReject = reject;
+  });
+  failFastPromise.catch(() => {});
+
+  const triggerFailFast = (category, detail) => {
+    if (failFastError) {
+      return;
+    }
+    const reason = category ? `${category} error` : 'critical error';
+    failFastError = new Error(`[E2E][${scope}] Fail-fast triggered by ${reason}: ${detail}`);
+    failFastReject(failFastError);
+  };
+
   page.on('console', (msg) => {
     const text = msg.text();
     if (msg.type() === 'log') {
@@ -37,14 +71,43 @@ function createConsoleCapture(page, scope) {
     if (msg.type() === 'error' || msg.type() === 'warning') {
       warnings.push(text);
     }
+    if (msg.type() === 'error') {
+      if (text.startsWith('Diagnostics context:')) {
+        return;
+      }
+      if (FAIL_FAST_CONSOLE_IGNORE_SUBSTRINGS.some((value) => text.includes(value))) {
+        return;
+      }
+      const pattern = FAIL_FAST_PATTERNS.find(({ regex }) => regex.test(text));
+      if (pattern) {
+        triggerFailFast(pattern.category, text);
+      }
+    }
   });
   page.on('requestfailed', (request) => {
     const failure = request.failure();
     console.error(
       `[E2E][${scope}] Request failed: ${request.method()} ${request.url()} (${failure?.errorText ?? 'unknown error'})`,
     );
+    if (/(asset|texture|model|audio|sprite)/i.test(request.url())) {
+      triggerFailFast('asset', `${request.method()} ${request.url()} (${failure?.errorText ?? 'unknown error'})`);
+    }
   });
-  return { warnings, infoLogs };
+  return {
+    warnings,
+    infoLogs,
+    guard(promise) {
+      if (failFastError) {
+        return Promise.reject(failFastError);
+      }
+      return Promise.race([Promise.resolve(promise), failFastPromise]);
+    },
+    assertHealthy() {
+      if (failFastError) {
+        throw failFastError;
+      }
+    },
+  };
 }
 
 function findUnexpectedWarnings(warnings) {
@@ -456,50 +519,59 @@ async function runAdvancedScenario(browser) {
   const scenarioStart = Date.now();
   logCheckpoint('Advanced', 'Scenario start');
   const page = await browser.newPage();
-  const { warnings } = createConsoleCapture(page, 'Advanced');
+  const capture = createConsoleCapture(page, 'Advanced');
+  const { warnings } = capture;
   page.on('pageerror', (err) => {
     throw err;
   });
 
   try {
     logCheckpoint('Advanced', 'Navigating to advanced renderer', { elapsedFrom: scenarioStart });
-    await page.goto('file://' + process.cwd() + '/index.html', {
-      waitUntil: 'domcontentloaded',
-    });
+    await capture.guard(
+      page.goto('file://' + process.cwd() + '/index.html', {
+        waitUntil: 'domcontentloaded',
+      }),
+    );
     logCheckpoint('Advanced', 'Ensuring start button handled', { elapsedFrom: scenarioStart });
-    await maybeClickStart(page);
+    await capture.guard(maybeClickStart(page));
     logCheckpoint('Advanced', 'Waiting for gameplay activation', { elapsedFrom: scenarioStart });
-    await page.waitForFunction(
-      () => document.body.classList.contains('game-active'),
-      undefined,
-      {
-        timeout: 15000,
-      },
+    await capture.guard(
+      page.waitForFunction(
+        () => document.body.classList.contains('game-active'),
+        undefined,
+        {
+          timeout: 15000,
+        },
+      ),
     );
     logCheckpoint('Advanced', 'Gameplay activation confirmed', { elapsedFrom: scenarioStart });
-    await page.waitForFunction(
-      () => Boolean(window.__INFINITE_RAILS_STATE__),
-      undefined,
-      { timeout: 15000 },
+    await capture.guard(
+      page.waitForFunction(
+        () => Boolean(window.__INFINITE_RAILS_STATE__),
+        undefined,
+        { timeout: 15000 },
+      ),
     );
     logCheckpoint('Advanced', 'Renderer state object detected', { elapsedFrom: scenarioStart });
 
     logCheckpoint('Advanced', 'Collecting renderer state snapshot', { elapsedFrom: scenarioStart });
-    const stateSnapshot = await page.evaluate(() => {
-      const state = window.__INFINITE_RAILS_STATE__;
-      if (!state) return null;
-      const worldRows = Array.isArray(state.world) ? state.world.length : 0;
-      const worldCols = Array.isArray(state.world?.[0]) ? state.world[0].length : 0;
-      const eventCount = document.querySelectorAll('#eventLog li').length;
-      return {
-        isRunning: Boolean(state.isRunning),
-        worldRows,
-        worldCols,
-        rendererMode: window.__INFINITE_RAILS_RENDERER_MODE__ ?? null,
-        dimensionName: state.dimension?.name ?? null,
-        eventCount,
-      };
-    });
+    const stateSnapshot = await capture.guard(
+      page.evaluate(() => {
+        const state = window.__INFINITE_RAILS_STATE__;
+        if (!state) return null;
+        const worldRows = Array.isArray(state.world) ? state.world.length : 0;
+        const worldCols = Array.isArray(state.world?.[0]) ? state.world[0].length : 0;
+        const eventCount = document.querySelectorAll('#eventLog li').length;
+        return {
+          isRunning: Boolean(state.isRunning),
+          worldRows,
+          worldCols,
+          rendererMode: window.__INFINITE_RAILS_RENDERER_MODE__ ?? null,
+          dimensionName: state.dimension?.name ?? null,
+          eventCount,
+        };
+      }),
+    );
     if (!stateSnapshot || !stateSnapshot.isRunning) {
       throw new Error('Advanced renderer did not start running.');
     }
@@ -522,19 +594,19 @@ async function runAdvancedScenario(browser) {
     );
 
     logCheckpoint('Advanced', 'Validating HUD and leaderboard', { elapsedFrom: scenarioStart });
-    const hudState = await ensureGameHudReady(page);
+    const hudState = await capture.guard(ensureGameHudReady(page));
     logCheckpoint(
       'Advanced',
       `HUD ready — time: ${hudState.timeText}, dimension: ${hudState.dimensionHeading}, portal: ${hudState.portalLabel}`,
       { elapsedFrom: scenarioStart },
     );
-    const leaderboard = await waitForLeaderboard(page);
+    const leaderboard = await capture.guard(waitForLeaderboard(page));
     logCheckpoint(
       'Advanced',
       `Leaderboard populated — rows: ${leaderboard.rows}`,
       { elapsedFrom: scenarioStart },
     );
-    const scoreHud = await validateScoreHud(page);
+    const scoreHud = await capture.guard(validateScoreHud(page));
     logCheckpoint(
       'Advanced',
       `Score HUD totals — total: ${scoreHud.total}, recipes: ${scoreHud.recipes}, dimensions: ${scoreHud.dimensions}`,
@@ -545,10 +617,14 @@ async function runAdvancedScenario(browser) {
     if (unexpected.length) {
       throw new Error(`Console reported unexpected issues during advanced run: ${unexpected.join(' | ')}`);
     }
+    capture.assertHealthy();
     logCheckpoint('Advanced', 'Scenario complete', { elapsedFrom: scenarioStart });
   } catch (error) {
-    console.warn(`[E2E][Advanced] Scenario skipped due to startup failure: ${error?.message ?? error}`);
-    return;
+    if (error instanceof Error) {
+      error.message = `[E2E][Advanced] ${error.message}`;
+      throw error;
+    }
+    throw new Error(`[E2E][Advanced] ${error}`);
   } finally {
     await page.close();
   }
@@ -558,25 +634,30 @@ async function runSimpleScenario(browser) {
   const scenarioStart = Date.now();
   logCheckpoint('Sandbox', 'Scenario start');
   const page = await browser.newPage();
-  const { warnings, infoLogs } = createConsoleCapture(page, 'Sandbox');
+  const capture = createConsoleCapture(page, 'Sandbox');
+  const { warnings, infoLogs } = capture;
   page.on('pageerror', (err) => {
     throw err;
   });
 
   try {
     logCheckpoint('Sandbox', 'Navigating to simple renderer', { elapsedFrom: scenarioStart });
-    await page.goto('file://' + process.cwd() + '/index.html?mode=simple', {
-      waitUntil: 'domcontentloaded',
-    });
+    await capture.guard(
+      page.goto('file://' + process.cwd() + '/index.html?mode=simple', {
+        waitUntil: 'domcontentloaded',
+      }),
+    );
     logCheckpoint('Sandbox', 'Handling start flow', { elapsedFrom: scenarioStart });
-    await maybeClickStart(page);
-    await page.waitForTimeout(1500);
-    const introVisible = await page.isVisible('#introModal').catch(() => false);
+    await capture.guard(maybeClickStart(page));
+    await capture.guard(page.waitForTimeout(1500));
+    const introVisible = await capture.guard(page.isVisible('#introModal').catch(() => false));
     if (introVisible) {
       throw new Error('Intro modal remained visible after starting the game.');
     }
 
-    const eventCount = await page.evaluate(() => document.querySelectorAll('#eventLog li').length);
+    const eventCount = await capture.guard(
+      page.evaluate(() => document.querySelectorAll('#eventLog li').length),
+    );
     if (eventCount === 0) {
       throw new Error('Sandbox event log did not record any entries.');
     }
@@ -595,32 +676,42 @@ async function runSimpleScenario(browser) {
     }
 
     logCheckpoint('Sandbox', 'Waiting for debug hooks', { elapsedFrom: scenarioStart });
-    await page.waitForFunction(
-      () => Boolean(window.__INFINITE_RAILS_DEBUG__?.getSnapshot),
-      undefined,
-      {
-        timeout: 15000,
-      },
+    await capture.guard(
+      page.waitForFunction(
+        () => Boolean(window.__INFINITE_RAILS_DEBUG__?.getSnapshot),
+        undefined,
+        {
+          timeout: 15000,
+        },
+      ),
     );
-    await page.waitForFunction(
-      () => (window.__INFINITE_RAILS_DEBUG__?.getSnapshot?.()?.voxelColumns ?? 0) >= 4096,
-      undefined,
-      { timeout: 15000 },
+    await capture.guard(
+      page.waitForFunction(
+        () => (window.__INFINITE_RAILS_DEBUG__?.getSnapshot?.()?.voxelColumns ?? 0) >= 4096,
+        undefined,
+        { timeout: 15000 },
+      ),
     );
     logCheckpoint('Sandbox', 'Applying debug mutations', { elapsedFrom: scenarioStart });
-    await page.evaluate(() => {
-      const debug = window.__INFINITE_RAILS_DEBUG__;
-      debug?.forceNight?.();
-      debug?.spawnZombieWave?.(3);
-    });
-    await page.waitForFunction(
-      () => (window.__INFINITE_RAILS_DEBUG__?.getSnapshot?.()?.zombieCount ?? 0) > 0,
-      undefined,
-      { timeout: 10000 },
+    await capture.guard(
+      page.evaluate(() => {
+        const debug = window.__INFINITE_RAILS_DEBUG__;
+        debug?.forceNight?.();
+        debug?.spawnZombieWave?.(3);
+      }),
+    );
+    await capture.guard(
+      page.waitForFunction(
+        () => (window.__INFINITE_RAILS_DEBUG__?.getSnapshot?.()?.zombieCount ?? 0) > 0,
+        undefined,
+        { timeout: 10000 },
+      ),
     );
     logCheckpoint('Sandbox', 'Collecting debug snapshot', { elapsedFrom: scenarioStart });
-    const debugSnapshot = await page.evaluate(() =>
-      window.__INFINITE_RAILS_DEBUG__?.getSnapshot ? window.__INFINITE_RAILS_DEBUG__.getSnapshot() : null,
+    const debugSnapshot = await capture.guard(
+      page.evaluate(() =>
+        window.__INFINITE_RAILS_DEBUG__?.getSnapshot ? window.__INFINITE_RAILS_DEBUG__.getSnapshot() : null,
+      ),
     );
     if (!debugSnapshot) {
       throw new Error('Debug snapshot unavailable — gameplay instance not exposed.');
@@ -636,7 +727,7 @@ async function runSimpleScenario(browser) {
     }
 
     logCheckpoint('Sandbox', 'Validating HUD after debug actions', { elapsedFrom: scenarioStart });
-    const hudState = await ensureGameHudReady(page, { requireNight: true });
+    const hudState = await capture.guard(ensureGameHudReady(page, { requireNight: true }));
     logCheckpoint(
       'Sandbox',
       `HUD ready — time: ${hudState.timeText}, dimension: ${hudState.dimensionHeading}, portal: ${hudState.portalLabel}`,
@@ -644,31 +735,39 @@ async function runSimpleScenario(browser) {
     );
 
     logCheckpoint('Sandbox', 'Driving portal progression', { elapsedFrom: scenarioStart });
-    await page.evaluate(() => {
-      const debug = window.__INFINITE_RAILS_DEBUG__;
-      debug?.completePortalFrame?.();
-      debug?.ignitePortal?.();
-    });
-    await page.waitForFunction(
-      () => Boolean(window.__INFINITE_RAILS_DEBUG__?.getSnapshot?.()?.portalActivated),
-      undefined,
-      { timeout: 8000 },
+    await capture.guard(
+      page.evaluate(() => {
+        const debug = window.__INFINITE_RAILS_DEBUG__;
+        debug?.completePortalFrame?.();
+        debug?.ignitePortal?.();
+      }),
     );
-    await page.evaluate(() => {
-      window.__INFINITE_RAILS_DEBUG__?.advanceDimension?.();
-    });
-    await page.waitForFunction(
-      () => (window.__INFINITE_RAILS_DEBUG__?.getSnapshot?.()?.dimensionIndex ?? 0) > 0,
-      undefined,
-      { timeout: 10000 },
+    await capture.guard(
+      page.waitForFunction(
+        () => Boolean(window.__INFINITE_RAILS_DEBUG__?.getSnapshot?.()?.portalActivated),
+        undefined,
+        { timeout: 8000 },
+      ),
+    );
+    await capture.guard(
+      page.evaluate(() => {
+        window.__INFINITE_RAILS_DEBUG__?.advanceDimension?.();
+      }),
+    );
+    await capture.guard(
+      page.waitForFunction(
+        () => (window.__INFINITE_RAILS_DEBUG__?.getSnapshot?.()?.dimensionIndex ?? 0) > 0,
+        undefined,
+        { timeout: 10000 },
+      ),
     );
 
     logCheckpoint('Sandbox', 'Validating leaderboard and score HUD', { elapsedFrom: scenarioStart });
-    const leaderboard = await waitForLeaderboard(page);
+    const leaderboard = await capture.guard(waitForLeaderboard(page));
     logCheckpoint('Sandbox', `Leaderboard populated — rows: ${leaderboard.rows}`, {
       elapsedFrom: scenarioStart,
     });
-    const scoreHud = await validateScoreHud(page, { requireDimensionCount: true });
+    const scoreHud = await capture.guard(validateScoreHud(page, { requireDimensionCount: true }));
     logCheckpoint(
       'Sandbox',
       `Score HUD totals — total: ${scoreHud.total}, recipes: ${scoreHud.recipes}, dimensions: ${scoreHud.dimensions}`,
@@ -683,6 +782,7 @@ async function runSimpleScenario(browser) {
     if (unexpected.length) {
       throw new Error(`Console reported unexpected issues during sandbox run: ${unexpected.join(' | ')}`);
     }
+    capture.assertHealthy();
     logCheckpoint('Sandbox', 'Scenario complete', { elapsedFrom: scenarioStart });
   } finally {
     await page.close();
@@ -690,7 +790,32 @@ async function runSimpleScenario(browser) {
 }
 
 async function run() {
-  console.warn('[E2E] Skipping Playwright scenarios — renderer automation unavailable in this environment.');
+  const runStart = Date.now();
+  let timeoutId;
+  const watchdog = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => {
+      reject(new Error(`[E2E] Playwright scenarios exceeded ${MAX_RUN_DURATION_MS}ms.`));
+    }, MAX_RUN_DURATION_MS);
+  });
+
+  let browser;
+  try {
+    browser = await chromium.launch({ headless: true });
+    await Promise.race([
+      (async () => {
+        await runAdvancedScenario(browser);
+        await runSimpleScenario(browser);
+      })(),
+      watchdog,
+    ]);
+    const totalSeconds = Math.round((Date.now() - runStart) / 10) / 100;
+    console.info(`[E2E] Completed all Playwright scenarios in ${totalSeconds}s.`);
+  } finally {
+    clearTimeout(timeoutId);
+    if (browser) {
+      await browser.close().catch(() => {});
+    }
+  }
 }
 
 run().catch((error) => {
