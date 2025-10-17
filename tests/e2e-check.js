@@ -138,6 +138,36 @@ async function maybeClickStart(page) {
   const visible = await startButton.isVisible().catch(() => false);
   if (!visible) {
     console.info('[E2E][StartButton] Start button hidden; awaiting renderer progress without automation.');
+    const manualStart = await page.evaluate(async () => {
+      const experience = window.__INFINITE_RAILS_ACTIVE_EXPERIENCE__;
+      if (!experience || typeof experience.start !== 'function') {
+        return { triggered: false, reason: 'experience-unavailable' };
+      }
+      if (experience.started) {
+        return { triggered: true, alreadyRunning: true };
+      }
+      try {
+        const result = experience.start();
+        if (result && typeof result.then === 'function') {
+          await result;
+        }
+        return { triggered: true, alreadyRunning: false };
+      } catch (error) {
+        return {
+          triggered: false,
+          reason: error instanceof Error ? error.message : String(error),
+        };
+      }
+    });
+    if (manualStart.triggered) {
+      console.info(
+        `[E2E][StartButton] Manual experience start invoked (alreadyRunning=${Boolean(manualStart.alreadyRunning)}).`,
+      );
+      return;
+    }
+    console.warn(
+      `[E2E][StartButton] Manual start unavailable — reason: ${manualStart.reason ?? 'unknown'}; waiting for natural progression.`,
+    );
     return;
   }
 
