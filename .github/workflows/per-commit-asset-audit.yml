@@ -1,0 +1,23 @@
+name: Per-commit asset audit
+
+on:
+  push:
+    branches: ['**']
+
+jobs:
+  audit:
+    name: Validate asset manifest for pushed commits
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Use Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Run asset audit
+        run: node scripts/per-commit-asset-audit.js --base "$GITHUB_EVENT_BEFORE" --head "$GITHUB_SHA"

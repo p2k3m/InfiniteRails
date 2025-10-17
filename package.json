@@ -9,6 +9,7 @@
     "test:e2e": "node tests/e2e-check.js",
     "check:manifest": "node scripts/check-manifest.js",
     "check:assets": "node scripts/validate-asset-manifest.js",
+    "audit:assets:commits": "node scripts/per-commit-asset-audit.js",
     "sync:asset-digests": "node scripts/update-asset-digests.js",
     "build:vendor:three": "node scripts/build-three.js",
     "test:unit": "vitest run",
