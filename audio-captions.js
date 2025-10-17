@@ -8,6 +8,10 @@
   const existing = typeof scope.INFINITE_RAILS_AUDIO_CAPTIONS === 'object' ? scope.INFINITE_RAILS_AUDIO_CAPTIONS : {};
 
   const captions = Object.assign({}, existing, {
+    ambientDefault:
+      existing.ambientDefault || 'Control tower ambience hums with soft chords.',
+    ambientOverworld:
+      existing.ambientOverworld || 'Overworld breeze carries a gentle melodic swell.',
     bubble: existing.bubble || 'Bubbles fizz around you.',
     crunch: existing.crunch || 'You crunch through brittle stone.',
     craftChime: existing.craftChime || 'Crafting terminal confirms your recipe.',
