@@ -557,67 +557,82 @@ describe('simple experience render loop resilience', () => {
     });
   });
 
-  describe('runtime WebGL2 detection', () => {
-    it('disables the renderer when the WebGL2 constructor is missing', () => {
+  describe('runtime WebGL detection', () => {
+    it('falls back to WebGL when the WebGL2 constructor is missing', () => {
       const experience = createExperience();
       const failureSpy = vi.spyOn(experience, 'presentRendererFailure');
       const eventSpy = vi.spyOn(experience, 'emitGameEvent');
       const originalWindowCtor = window.WebGL2RenderingContext;
       const originalGlobalCtor = globalThis.WebGL2RenderingContext;
+      const originalCreateElement = document.createElement;
+      const originalConsoleInfo = console.info;
 
       try {
         delete window.WebGL2RenderingContext;
         delete globalThis.WebGL2RenderingContext;
+        document.createElement = vi.fn(() => ({
+          getContext: vi.fn((type) => {
+            if (type === 'webgl') {
+              return {
+                getExtension: vi.fn(() => ({ loseContext: vi.fn() })),
+              };
+            }
+            return null;
+          }),
+        }));
+        console.info = vi.fn();
 
         const supported = experience.verifyWebglSupport();
 
-        expect(supported).toBe(false);
-        expect(failureSpy).toHaveBeenCalledWith(
-          expect.stringContaining('WebGL2 support is required'),
-          expect.objectContaining({
-            stage: 'webgl2-probe',
-            reason: 'webgl2-unavailable',
-            error: expect.objectContaining({ name: 'WebGL2UnavailableError' }),
-          }),
-        );
-        expect(eventSpy).toHaveBeenCalledWith(
+        expect(supported).toBe(true);
+        expect(experience.webglContextMode).toBe('webgl');
+        expect(experience.webglFallbackContextUsed).toBe(true);
+        expect(failureSpy).not.toHaveBeenCalled();
+        expect(eventSpy).not.toHaveBeenCalledWith(
           'initialisation-error',
-          expect.objectContaining({ errorName: 'WebGL2UnavailableError' }),
+          expect.objectContaining({ errorName: 'WebGLContextUnavailable' }),
         );
       } finally {
         window.WebGL2RenderingContext = originalWindowCtor;
         globalThis.WebGL2RenderingContext = originalGlobalCtor;
+        document.createElement = originalCreateElement;
+        console.info = originalConsoleInfo;
       }
     });
 
-    it('reports a renderer failure when a WebGL2 context cannot be created', () => {
+    it('reports a renderer failure when no WebGL context can be created', () => {
       const experience = createExperience();
       const failureSpy = vi.spyOn(experience, 'presentRendererFailure');
       const eventSpy = vi.spyOn(experience, 'emitGameEvent');
       const originalCreateElement = document.createElement;
+      const originalConsoleInfo = console.info;
 
       try {
         document.createElement = vi.fn(() => ({
-          getContext: () => null,
+          getContext: vi.fn(() => null),
         }));
+        console.info = vi.fn();
 
         const supported = experience.verifyWebglSupport();
 
         expect(supported).toBe(false);
+        expect(experience.webglContextMode).toBeNull();
+        expect(experience.webglFallbackContextUsed).toBe(false);
         expect(failureSpy).toHaveBeenCalledWith(
-          expect.stringContaining('WebGL2 support is unavailable'),
+          expect.stringContaining('WebGL support is required'),
           expect.objectContaining({
             stage: 'webgl2-probe',
             reason: 'webgl2-unavailable',
-            error: expect.objectContaining({ name: 'WebGL2ContextUnavailable' }),
+            error: expect.objectContaining({ name: 'WebGLContextUnavailable' }),
           }),
         );
         expect(eventSpy).toHaveBeenCalledWith(
           'initialisation-error',
-          expect.objectContaining({ errorName: 'WebGL2ContextUnavailable' }),
+          expect.objectContaining({ errorName: 'WebGLContextUnavailable' }),
         );
       } finally {
         document.createElement = originalCreateElement;
+        console.info = originalConsoleInfo;
       }
     });
   });
