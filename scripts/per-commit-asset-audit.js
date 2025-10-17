@@ -97,7 +97,27 @@ function describeCommitRange() {
   let base = null;
   let head = null;
 
-  for (const arg of args) {
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+
+    if (arg === '--base') {
+      const next = args[index + 1];
+      if (next && !next.startsWith('--')) {
+        base = next || null;
+        index += 1;
+      }
+      continue;
+    }
+
+    if (arg === '--head') {
+      const next = args[index + 1];
+      if (next && !next.startsWith('--')) {
+        head = next || null;
+        index += 1;
+      }
+      continue;
+    }
+
     if (arg.startsWith('--base=')) {
       base = arg.slice('--base='.length) || null;
       continue;
