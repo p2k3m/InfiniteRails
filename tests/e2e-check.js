@@ -130,6 +130,14 @@ async function maybeClickStart(page) {
       }))
       .catch(() => ({ bodyActive: false, stateActive: false }));
 
+  const readAutomationState = async () =>
+    page
+      .evaluate(() => {
+        const button = document.querySelector('#startButton');
+        return button?.dataset?.simpleExperienceAutoStart ?? null;
+      })
+      .catch(() => null);
+
   const waitForRendererActivation = async ({ timeout = 6000, reason } = {}) => {
     try {
       await page.waitForFunction(
@@ -403,10 +411,35 @@ async function maybeClickStart(page) {
     throw new Error('SimpleExperience module did not become ready before automation.');
   }
 
+  let automationState = await readAutomationState();
+  if (automationState === 'true' || automationState === 'pending') {
+    console.info(
+      `[E2E][StartButton] Automation flagged auto-start (${automationState}); awaiting renderer activation.`,
+    );
+    if (await waitForRendererActivation({ reason: 'automation flag', timeout: 12000 })) {
+      return;
+    }
+    console.info(
+      `[E2E][StartButton] Automation flag ${automationState} did not activate renderer in time; continuing manual flow.`,
+    );
+  }
+
   console.info('[E2E][StartButton] Dispatching click.');
   const readyVisible = await startButton.isVisible().catch(() => false);
   if (!readyVisible) {
     console.info('[E2E][StartButton] Start button became hidden before click; verifying renderer activation.');
+    automationState = await readAutomationState();
+    if (automationState === 'true' || automationState === 'pending') {
+      console.info(
+        `[E2E][StartButton] Automation flag ${automationState} active after button hid; awaiting renderer activation.`,
+      );
+      if (await waitForRendererActivation({ reason: 'hidden-button automation flag', timeout: 12000 })) {
+        return;
+      }
+      console.info(
+        `[E2E][StartButton] Automation flag ${automationState} unresolved after hidden-button wait; continuing fallbacks.`,
+      );
+    }
     const hiddenState = await readRendererState();
     if (hiddenState.bodyActive || hiddenState.stateActive) {
       console.info(
@@ -461,12 +494,7 @@ async function maybeClickStart(page) {
 
     throw new Error('Start button became hidden before automation but renderer remained inactive.');
   }
-  const automationState = await page
-    .evaluate(() => {
-      const button = document.querySelector('#startButton');
-      return button?.dataset?.simpleExperienceAutoStart ?? null;
-    })
-    .catch(() => null);
+  automationState = await readAutomationState();
   if (automationState === 'true' || automationState === 'pending') {
     console.info(
       `[E2E][StartButton] Automation flagged auto-start (${automationState}); skipping manual click.`,
