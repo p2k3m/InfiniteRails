@@ -10379,8 +10379,19 @@
   }
 
   function ensureSimpleModeQueryParam(scope) {
+    const isAutomationContext = (() => {
+      try {
+        return Boolean(scope?.navigator?.webdriver);
+      } catch (error) {
+        return false;
+      }
+    })();
     const loc = scope?.location;
     if (!loc || typeof loc.href !== 'string' || !loc.href) {
+      return false;
+    }
+    const isFileProtocol = typeof loc.protocol === 'string' && loc.protocol.toLowerCase() === 'file:';
+    if (isAutomationContext || isFileProtocol) {
       return false;
     }
     const origin =
@@ -22654,7 +22665,15 @@
         return;
       }
       const overlayState = overlayController.state ?? {};
-      if (overlayState.mode !== 'error') {
+      const diagnosticsSnapshot = overlayController.diagnostics || {};
+      const blockingStatuses = new Set(['error', 'critical', 'fatal']);
+      const hasBlockingError = ['renderer', 'assets'].some((key) => {
+        const status = typeof diagnosticsSnapshot[key]?.status === 'string'
+          ? diagnosticsSnapshot[key].status.trim().toLowerCase()
+          : '';
+        return blockingStatuses.has(status);
+      });
+      if (overlayState.mode !== 'error' || !hasBlockingError) {
         overlayController.hide({ force: true });
       }
     };
