@@ -23154,6 +23154,74 @@
           pending: 'pending',
           completed: 'true',
         };
+        const normaliseAutoStartValue = (value) => {
+          if (typeof value !== 'string') {
+            return null;
+          }
+          const trimmed = value.trim();
+          return trimmed.length ? trimmed : null;
+        };
+        let lastAutoStartState = null;
+        const updateExposedAutoStartState = (value) => {
+          const resolved = normaliseAutoStartValue(value);
+          lastAutoStartState = resolved;
+          const applyToElement = (element) => {
+            if (!element) {
+              return;
+            }
+            try {
+              element.dataset = element.dataset || {};
+              if (resolved) {
+                element.dataset[autoStartMarker] = resolved;
+              } else if (Object.prototype.hasOwnProperty.call(element.dataset, autoStartMarker)) {
+                delete element.dataset[autoStartMarker];
+              }
+            } catch (error) {
+              if (globalScope?.console?.debug) {
+                globalScope.console.debug('Failed to mirror auto-start state on element.', error);
+              }
+            }
+          };
+          applyToElement(documentRef?.body ?? null);
+          try {
+            const scope = globalScope || (typeof globalThis !== 'undefined' ? globalThis : null);
+            if (!scope) {
+              return resolved;
+            }
+            const container =
+              scope.__INFINITE_RAILS_AUTOMATION_STATE__ &&
+              typeof scope.__INFINITE_RAILS_AUTOMATION_STATE__ === 'object'
+                ? scope.__INFINITE_RAILS_AUTOMATION_STATE__
+                : (scope.__INFINITE_RAILS_AUTOMATION_STATE__ = {});
+            if (resolved) {
+              container[autoStartMarker] = resolved;
+            } else if (Object.prototype.hasOwnProperty.call(container, autoStartMarker)) {
+              delete container[autoStartMarker];
+            }
+          } catch (error) {
+            if (globalScope?.console?.debug) {
+              globalScope.console.debug('Failed to expose auto-start state globally.', error);
+            }
+          }
+          return resolved;
+        };
+        const readCurrentAutoStartState = () => {
+          try {
+            const value = ui.startButton?.dataset?.[autoStartMarker];
+            const resolved = normaliseAutoStartValue(value);
+            if (resolved) {
+              lastAutoStartState = resolved;
+              return resolved;
+            }
+          } catch (error) {
+            if (globalScope?.console?.debug) {
+              globalScope.console.debug('Failed to read auto-start marker from start button.', error);
+            }
+          }
+          return lastAutoStartState;
+        };
+        const refreshAutoStartState = () => updateExposedAutoStartState(readCurrentAutoStartState());
+        refreshAutoStartState();
         const markAutoStartPending = () => {
           try {
             if (ui.startButton.dataset[autoStartMarker] !== autoStartStates.completed) {
@@ -23164,11 +23232,13 @@
               globalScope.console.debug('Failed to flag auto-start as pending.', error);
             }
           }
+          refreshAutoStartState();
         };
         const markAutoStartAttempted = () => {
           ui.startButton.dataset[autoStartMarker] = autoStartStates.completed;
+          refreshAutoStartState();
         };
-        const hasAutoStartRun = () => ui.startButton.dataset[autoStartMarker] === autoStartStates.completed;
+        const hasAutoStartRun = () => readCurrentAutoStartState() === autoStartStates.completed;
         const resolveScheduler = () => {
           if (typeof globalScope?.setTimeout === 'function') {
             return globalScope.setTimeout.bind(globalScope);

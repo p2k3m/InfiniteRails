@@ -133,8 +133,32 @@ async function maybeClickStart(page) {
   const readAutomationState = async () =>
     page
       .evaluate(() => {
+        const marker = 'simpleExperienceAutoStart';
+        const normalise = (value) => {
+          if (typeof value !== 'string') {
+            return null;
+          }
+          const trimmed = value.trim();
+          return trimmed.length ? trimmed : null;
+        };
         const button = document.querySelector('#startButton');
-        return button?.dataset?.simpleExperienceAutoStart ?? null;
+        const buttonState = normalise(button?.dataset?.[marker]);
+        if (buttonState) {
+          return buttonState;
+        }
+        const bodyState = normalise(document?.body?.dataset?.[marker]);
+        if (bodyState) {
+          return bodyState;
+        }
+        const globalState = normalise(
+          typeof window.__INFINITE_RAILS_AUTOMATION_STATE__ === 'object'
+            ? window.__INFINITE_RAILS_AUTOMATION_STATE__[marker]
+            : null,
+        );
+        if (globalState) {
+          return globalState;
+        }
+        return null;
       })
       .catch(() => null);
 
