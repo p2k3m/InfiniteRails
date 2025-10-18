@@ -866,7 +866,7 @@
   const DEFAULT_ASSET_VERSION_TAG = '1';
   const EXPECTED_ASSET_MANIFEST_VERSION = '1';
   const EXPECTED_ASSET_MANIFEST_SIGNATURE =
-    'a46f44589f88d1dc7ecf3eacfd80984dad049ea6d13ac9bd061d67ed630364a5';
+    '9dc865bdf0ce60539d7056752b77ab3ec0b1a0866f67d21b643db6d121eeb53c';
   const MANIFEST_INTEGRITY_RELOAD_STORAGE_KEY =
     'infinite-rails.manifest-integrity.reload-attempted';
   const manifestIntegrityState = {
