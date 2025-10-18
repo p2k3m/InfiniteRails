@@ -452,6 +452,49 @@ async function maybeClickStart(page) {
   const readyVisible = await startButton.isVisible().catch(() => false);
   if (!readyVisible) {
     console.info('[E2E][StartButton] Start button became hidden before click; verifying renderer activation.');
+    const hiddenDiagnostics = await page
+      .evaluate(() => {
+        const intro = document.querySelector('#bootstrapIntro');
+        const normalise = (value) => {
+          if (typeof value !== 'string') {
+            return null;
+          }
+          const trimmed = value.trim();
+          return trimmed.length ? trimmed : null;
+        };
+        const readMarker = (target, key) => normalise(target?.dataset?.[key]);
+        const markerKey = 'simpleExperienceAutoStart';
+        const button = document.querySelector('#startButton');
+        const globalState =
+          typeof window.__INFINITE_RAILS_AUTOMATION_STATE__ === 'object'
+            ? window.__INFINITE_RAILS_AUTOMATION_STATE__[markerKey]
+            : null;
+        return {
+          introHidden: intro ? intro.classList.contains('hidden') : null,
+          introDisplay:
+            intro && typeof window.getComputedStyle === 'function'
+              ? window.getComputedStyle(intro).display
+              : null,
+          automationMarkers: {
+            button: readMarker(button, markerKey),
+            body: readMarker(document.body, markerKey),
+            global: normalise(globalState),
+          },
+        };
+      })
+      .catch((error) => ({ introHidden: null, introDisplay: null, automationMarkersError: error?.message ?? 'evaluation error' }));
+    if (hiddenDiagnostics) {
+      const { introHidden, introDisplay, automationMarkers, automationMarkersError } = hiddenDiagnostics;
+      if (automationMarkersError) {
+        console.info(
+          `[E2E][StartButton] Hidden-button diagnostics failed (${automationMarkersError}).`,
+        );
+      } else {
+        console.info(
+          `[E2E][StartButton] Hidden-button diagnostics — introHidden=${introHidden} introDisplay=${introDisplay ?? 'null'} markers=${JSON.stringify(automationMarkers)}.`,
+        );
+      }
+    }
     automationState = await readAutomationState();
     if (automationState === 'true' || automationState === 'pending') {
       console.info(
