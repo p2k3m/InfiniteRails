@@ -23150,15 +23150,67 @@
           ui.startButton.dataset[autoStartMarker] = autoStartStates.completed;
         };
         const hasAutoStartRun = () => ui.startButton.dataset[autoStartMarker] === autoStartStates.completed;
+        const resolveScheduler = () => {
+          if (typeof globalScope?.setTimeout === 'function') {
+            return globalScope.setTimeout.bind(globalScope);
+          }
+          if (typeof setTimeout === 'function') {
+            return setTimeout;
+          }
+          return null;
+        };
+        let autoStartRetryHandle = null;
+        const clearAutoStartRetry = () => {
+          if (autoStartRetryHandle !== null) {
+            const clear = typeof globalScope?.clearTimeout === 'function'
+              ? globalScope.clearTimeout.bind(globalScope)
+              : typeof clearTimeout === 'function'
+                ? clearTimeout
+                : null;
+            if (clear) {
+              clear(autoStartRetryHandle);
+            }
+            autoStartRetryHandle = null;
+          }
+        };
+        const scheduleAutoStartRetry = () => {
+          if (autoStartRetryHandle !== null) {
+            return;
+          }
+          const scheduler = resolveScheduler();
+          if (!scheduler) {
+            return;
+          }
+          autoStartRetryHandle = scheduler(() => {
+            autoStartRetryHandle = null;
+            tryTriggerAutoStart({ immediate: true });
+          }, 180);
+        };
+        const canAutoStartExperience = () => {
+          try {
+            const activeExperience = globalScope?.__INFINITE_RAILS_ACTIVE_EXPERIENCE__ ?? null;
+            if (activeExperience && typeof activeExperience === 'object') {
+              if (activeExperience.started) {
+                return false;
+              }
+              if (typeof activeExperience.start === 'function') {
+                return true;
+              }
+            }
+            if (globalScope?.SimpleExperience?.create) {
+              return true;
+            }
+          } catch (error) {
+            if (globalScope?.console?.debug) {
+              globalScope.console.debug('Failed to evaluate auto-start readiness.', error);
+            }
+          }
+          return false;
+        };
         markAutoStartPending();
-        const tryTriggerAutoStart = ({ immediate = false } = {}) => {
+        function tryTriggerAutoStart({ immediate = false } = {}) {
           if (!immediate) {
-            const scheduler =
-              typeof globalScope?.setTimeout === 'function'
-                ? globalScope.setTimeout.bind(globalScope)
-                  : typeof setTimeout === 'function'
-                    ? setTimeout
-                    : null;
+            const scheduler = resolveScheduler();
             if (scheduler) {
               scheduler(() => {
                 tryTriggerAutoStart({ immediate: true });
@@ -23167,13 +23219,20 @@
             }
           }
           if (!ui.startButton || hasAutoStartRun()) {
+            clearAutoStartRetry();
             return true;
           }
           const preloadingState = ui.startButton.getAttribute('data-preloading');
           if (ui.startButton.disabled || preloadingState === 'true') {
+            scheduleAutoStartRetry();
+            return false;
+          }
+          if (!canAutoStartExperience()) {
+            scheduleAutoStartRetry();
             return false;
           }
           markAutoStartAttempted();
+          clearAutoStartRetry();
           try {
             if (typeof ui.startButton.click === 'function') {
               ui.startButton.click();
@@ -23194,10 +23253,12 @@
               globalScope.console.debug('Automated start trigger failed.', error);
             }
             markAutoStartPending();
+            scheduleAutoStartRetry();
             return false;
           }
+          scheduleAutoStartRetry();
           return false;
-        };
+        }
         if (!hasAutoStartRun() && !tryTriggerAutoStart()) {
           let observer = null;
           const cleanupObserver = () => {
