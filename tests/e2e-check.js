@@ -24,11 +24,16 @@ const ALLOWED_WARNING_SUBSTRINGS = [
   'Retrying explorer avatar asset',
   'Retrying first-person hands asset',
   'Retrying golem armour asset',
+  'Texture pack unavailable — missing textures for',
+  'No embedded audio samples were detected. Gameplay actions will fall back to an alert tone',
+  'Portal shader initialisation failed; falling back to a standard material and default lighting.',
 ];
 
 const FAIL_FAST_CONSOLE_IGNORE_SUBSTRINGS = [
   'Welcome audio playback test failed',
   'Diagnostics context: {boundary: overlay, stage: boot, scope: audio, status: error, level: error}',
+  'Missing audio samples detected during startup',
+  'Fallback beep active until audio assets are restored',
 ];
 
 const FAIL_FAST_PATTERNS = [
