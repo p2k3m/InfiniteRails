@@ -56,6 +56,28 @@ describe('simple experience startup simulations', () => {
     const issueSpy = vi.spyOn(experience, 'recordMajorIssue');
 
     const stageNames = ['world', 'portal', 'mobs'];
+    const loopMethods = [
+      'updateDayNightCycle',
+      'updateMovement',
+      'updateCameraShake',
+      'updateTerrainCulling',
+      'updateZombies',
+      'updateGolems',
+      'updatePortalAnimation',
+      'updateLootChests',
+      'updateNetheriteChallenge',
+      'updateHands',
+      'updatePlayerAnimation',
+      'updateScoreSync',
+      'updateScoreboardPolling',
+      'updateLostGuidance',
+    ];
+    const loopSpies = loopMethods.map((method) => {
+      if (typeof experience[method] !== 'function') {
+        return null;
+      }
+      return vi.spyOn(experience, method).mockImplementation(() => {});
+    });
     const simulationRecords = [];
 
     for (let runIndex = 0; runIndex < 6; runIndex += 1) {
@@ -67,10 +89,12 @@ describe('simple experience startup simulations', () => {
         initialZombieCount: (runIndex % 2) + 1,
         spawnInitialZombies: runIndex % 2 === 0,
       };
+      const frameDelta = 0.008 + runIndex * 0.0025;
       const record = {
         order: stageOrder.slice(),
         reason,
         mobPlan,
+        frameDelta,
       };
 
       for (const stage of stageOrder) {
@@ -89,6 +113,19 @@ describe('simple experience startup simulations', () => {
       record.summary = summary;
       record.zombieCount = Array.isArray(experience.zombies) ? experience.zombies.length : 0;
       record.golemCount = Array.isArray(experience.golems) ? experience.golems.length : 0;
+      const elapsedBefore = experience.elapsed || 0;
+      const loopCountsBefore = loopSpies.map((spy) => spy?.mock.calls.length ?? 0);
+      experience.stepSimulation(frameDelta);
+      const elapsedAfter = experience.elapsed || 0;
+      record.elapsedAfter = elapsedAfter;
+      record.elapsedDelta = elapsedAfter - elapsedBefore;
+      record.loopCalls = Object.fromEntries(
+        loopMethods.map((method, index) => {
+          const spy = loopSpies[index];
+          const deltaCalls = spy ? spy.mock.calls.length - loopCountsBefore[index] : 0;
+          return [method, deltaCalls];
+        }),
+      );
       simulationRecords.push(record);
     }
 
@@ -104,6 +141,12 @@ describe('simple experience startup simulations', () => {
       expect(record.summary.mobs?.total ?? 0).toBeGreaterThanOrEqual(0);
       expect(record.zombieCount).toBeGreaterThanOrEqual(0);
       expect(record.golemCount).toBeGreaterThanOrEqual(0);
+      expect(record.elapsedAfter).toBeGreaterThan(0);
+      expect(record.elapsedDelta).toBeGreaterThan(0);
+      expect(record.elapsedDelta).toBeCloseTo(record.frameDelta, 6);
+      for (const method of loopMethods) {
+        expect(record.loopCalls[method]).toBeGreaterThanOrEqual(1);
+      }
     }
   });
 });
