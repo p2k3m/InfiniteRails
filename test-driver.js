@@ -28,6 +28,42 @@
     bootstrapOverlay: document.getElementById('bootstrapOverlay'),
   };
 
+  const autoStartMarker = 'simpleExperienceAutoStart';
+  const automationStateContainer = (() => {
+    const existing = window.__INFINITE_RAILS_AUTOMATION_STATE__;
+    if (existing && typeof existing === 'object') {
+      return existing;
+    }
+    const created = {};
+    window.__INFINITE_RAILS_AUTOMATION_STATE__ = created;
+    return created;
+  })();
+
+  function updateAutoStartState(value) {
+    const resolved = typeof value === 'string' && value.trim().length ? value.trim() : null;
+    if (dom.startButton) {
+      dom.startButton.dataset = dom.startButton.dataset || {};
+      if (resolved) {
+        dom.startButton.dataset[autoStartMarker] = resolved;
+      } else {
+        delete dom.startButton.dataset[autoStartMarker];
+      }
+    }
+    if (document?.body) {
+      document.body.dataset = document.body.dataset || {};
+      if (resolved) {
+        document.body.dataset[autoStartMarker] = resolved;
+      } else {
+        delete document.body.dataset[autoStartMarker];
+      }
+    }
+    if (resolved) {
+      automationStateContainer[autoStartMarker] = resolved;
+    } else {
+      delete automationStateContainer[autoStartMarker];
+    }
+  }
+
   const dimensionRotation = [
     { name: 'Origin Grassland', status: 'Stabilising the Origin rail.' },
     { name: 'Rock Frontier', status: 'Mapping the Rock frontier.' },
@@ -66,6 +102,12 @@
 
   window.__INFINITE_RAILS_RENDERER_MODE__ = 'advanced';
   window.__INFINITE_RAILS_STATE__ = { isRunning: false, rendererMode: 'advanced' };
+
+  if (automationContext) {
+    updateAutoStartState('pending');
+  } else {
+    updateAutoStartState(null);
+  }
 
   function hideBootOverlays() {
     [dom.overlay, dom.bootstrapOverlay].forEach((element) => {
@@ -176,7 +218,12 @@
   }
 
   function startExperience() {
-    if (state.running) return;
+    if (state.running) {
+      if (automationContext) {
+        updateAutoStartState('true');
+      }
+      return false;
+    }
     state.running = true;
     state.debug.started = true;
     state.debug.voxelColumns = 4096;
@@ -197,6 +244,10 @@
     appendEvent('Portal stabilisation routines engaged.');
     updateGlobalState();
     logStartupMessages();
+    if (automationContext) {
+      updateAutoStartState('true');
+    }
+    return true;
   }
 
   function setupStartButton() {
@@ -211,10 +262,15 @@
       event.preventDefault();
       startExperience();
     });
+    if (automationContext) {
+      updateAutoStartState('pending');
+    }
   }
 
   function ensureAutomationBoot() {
     if (!automationContext) return;
+
+    updateAutoStartState('pending');
 
     const maybeStart = () => {
       if (state.running) return;
@@ -277,6 +333,15 @@
   };
 
   window.__INFINITE_RAILS_DEBUG__ = debugApi;
+
+  window.__INFINITE_RAILS_TEST_DRIVER__ = {
+    start: () => {
+      const result = startExperience();
+      return result;
+    },
+    isRunning: () => state.running === true,
+    setAutoStartState: (value) => updateAutoStartState(value),
+  };
 
   hideBootOverlays();
   setupStartButton();
