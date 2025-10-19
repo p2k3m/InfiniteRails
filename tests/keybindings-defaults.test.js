@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
 
 const DefaultWebGL2RenderingContextStub = function WebGL2RenderingContextStub() {};
@@ -351,6 +351,28 @@ describe('simple experience key remapping', () => {
     expect(reset).toBe(true);
     expect(experience.getKeyBindings().moveForward).toEqual(['KeyW', 'ArrowUp']);
 
+    if (typeof experience.destroy === 'function') {
+      experience.destroy();
+    }
+  });
+
+  it('dispatches keybinding change events when bindings update', () => {
+    const { experience } = createSimpleExperienceInstance();
+    const originalDispatch = window.dispatchEvent;
+    const dispatchSpy = vi.fn(() => true);
+    window.dispatchEvent = dispatchSpy;
+
+    const changed = experience.setKeyBinding('jump', ['KeyJ'], { persist: false });
+    expect(changed).toBe(true);
+
+    const eventCall = dispatchSpy.mock.calls.find(([event]) => event?.type === 'infinite-rails:keybindings-changed');
+    expect(eventCall).toBeDefined();
+    const detail = eventCall[0].detail;
+    expect(detail?.action).toBe('jump');
+    expect(detail?.keys).toEqual(['KeyJ']);
+    expect(detail?.overrides?.jump).toEqual(['KeyJ']);
+
+    window.dispatchEvent = originalDispatch;
     if (typeof experience.destroy === 'function') {
       experience.destroy();
     }

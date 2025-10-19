@@ -2221,6 +2221,31 @@
         globalScope?.console?.debug?.('Failed to apply audio settings to active experience.', error);
       }
     }
+    if (typeof globalScope?.dispatchEvent === 'function') {
+      const EventCtor =
+        typeof globalScope.CustomEvent === 'function'
+          ? globalScope.CustomEvent
+          : typeof CustomEvent === 'function'
+            ? CustomEvent
+            : null;
+      if (EventCtor) {
+        const eventDetail = {
+          snapshot: createAudioSettingsSnapshot(),
+          channel: typeof detail.channel === 'string' ? detail.channel : null,
+          reason: typeof detail.reason === 'string' ? detail.reason : 'update',
+          source: typeof detail.source === 'string' ? detail.source : undefined,
+          persist: detail.persist !== false,
+          timestamp: Date.now(),
+        };
+        try {
+          globalScope.dispatchEvent(
+            new EventCtor('infinite-rails:audio-settings-changed', { detail: eventDetail }),
+          );
+        } catch (error) {
+          globalScope?.console?.debug?.('Audio settings change event dispatch failed.', error);
+        }
+      }
+    }
     const listeners = Array.from(audioSettingsState.listeners);
     listeners.forEach((listener) => {
       try {
@@ -15006,6 +15031,10 @@
       'score-sync-restored',
       'renderer-failure',
       'audio-error',
+      'identity-change',
+      'audio-settings-changed',
+      'control-map-changed',
+      'keybindings-changed',
     ].forEach(register);
     eventLogState.listenersBound = true;
   }
@@ -15039,6 +15068,10 @@
     'score-updated',
     'score-sync-offline',
     'score-sync-restored',
+    'identity-change',
+    'audio-settings-changed',
+    'control-map-changed',
+    'keybindings-changed',
   ]);
 
   const EVENT_SOURCING_MAX_QUEUE = 120;
@@ -20915,7 +20948,7 @@
     return { ...identitySessionState };
   }
 
-  function notifyIdentityConsumers(identity) {
+  function notifyIdentityConsumers(identity, context = {}) {
     const payload = {
       name: identity.name,
       googleId: identity.googleId,
@@ -20924,6 +20957,17 @@
       location: identity.location ?? null,
       locationLabel: identity.locationLabel ?? null,
     };
+    const broadcastPayload = { ...payload };
+    if (typeof context.reason === 'string' && context.reason.trim().length) {
+      broadcastPayload.reason = context.reason.trim();
+    }
+    if (typeof context.source === 'string' && context.source.trim().length) {
+      broadcastPayload.source = context.source.trim();
+    }
+    if (context.offline !== undefined) {
+      broadcastPayload.offline = Boolean(context.offline);
+    }
+    broadcastPayload.timestamp = Date.now();
     try {
       const activeExperience = globalScope.__INFINITE_RAILS_ACTIVE_EXPERIENCE__;
       if (activeExperience && typeof activeExperience.setIdentity === 'function') {
@@ -20939,11 +20983,26 @@
     } catch (error) {
       console.warn('Failed to update InfiniteRails identity', error);
     }
+    if (typeof globalScope?.dispatchEvent === 'function') {
+      const EventCtor =
+        typeof globalScope.CustomEvent === 'function'
+          ? globalScope.CustomEvent
+          : typeof CustomEvent === 'function'
+            ? CustomEvent
+            : null;
+      if (EventCtor) {
+        try {
+          globalScope.dispatchEvent(new EventCtor('infinite-rails:identity-change', { detail: broadcastPayload }));
+        } catch (error) {
+          globalScope?.console?.debug?.('Identity change window event dispatch failed', error);
+        }
+      }
+    }
     if (documentRef) {
       try {
         documentRef.dispatchEvent(
           new CustomEvent('infinite-rails:identity-change', {
-            detail: payload,
+            detail: broadcastPayload,
           }),
         );
       } catch (error) {
@@ -21160,6 +21219,8 @@
 
     identityState.identity = merged;
 
+    const reason = options.reason ?? null;
+
     if (!merged.googleId || (identitySessionState.googleId && identitySessionState.googleId !== merged.googleId)) {
       clearIdentitySession({ persist: true });
     }
@@ -21185,9 +21246,12 @@
       persistIdentitySnapshot(merged);
     }
 
-    notifyIdentityConsumers(merged);
+    notifyIdentityConsumers(merged, {
+      reason,
+      source: typeof options.source === 'string' ? options.source : undefined,
+      offline: options.offline,
+    });
 
-    const reason = options.reason ?? null;
     let message = null;
     if (reason === 'google-sign-in') {
       if (identityState.apiBaseUrl && identityState.endpoints.users) {
