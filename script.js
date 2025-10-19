@@ -18566,13 +18566,13 @@
   }
 
   const THREE_SCRIPT_URL = (() => {
-    const candidates = createAssetUrlCandidates('vendor/three.min.js?v=030c75d4e909.334923ebd655', {
+    const candidates = createAssetUrlCandidates('vendor/three.min.js?v=030c75d4e909.19a4b137461e', {
       preloadedSelector: 'script[data-preload-three]',
     });
     return candidates.length ? candidates[0] : null;
   })();
   const GLTF_LOADER_URL = (() => {
-    const candidates = createAssetUrlCandidates('vendor/GLTFLoader.js?v=0e92b0589a2a.334923ebd655');
+    const candidates = createAssetUrlCandidates('vendor/GLTFLoader.js?v=0e92b0589a2a.19a4b137461e');
     return candidates.length ? candidates[0] : null;
   })();
   const TEST_DRIVER_SCRIPT_URL = (() => {
