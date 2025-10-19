@@ -157,4 +157,106 @@ describe('simple experience dimension plugins', () => {
     expect(Array.isArray(loot.items)).toBe(true);
     expect(loot.items.some((entry) => entry.item === 'portal-charge')).toBe(true);
   });
+
+  it('replaces asset manifests and terrain profiles when provided by plugins', () => {
+    const { experience } = createExperience();
+
+    const plugin = {
+      id: 'void-pack',
+      slot: 'dimension-pack',
+      version: '0.2.0',
+      label: 'Void dimension pack',
+      resources: () => ({
+        themes: [
+          {
+            id: 'void',
+            name: 'Void Realm',
+            label: 'Void Realm',
+            palette: {
+              grass: '#000000',
+              dirt: '#050505',
+              stone: '#0a0a0a',
+              rails: '#ffffff',
+            },
+            fog: '#020202',
+            sky: '#040404',
+            sun: '#888888',
+            hemi: '#101010',
+            gravity: 0.5,
+            speedMultiplier: 1.1,
+            assetManifest: {
+              id: 'void',
+              name: 'Void Realm',
+              terrain: ['void-plateau'],
+              mobs: ['void-wisp'],
+              objects: ['void-obelisk'],
+              assets: {
+                textures: { 'void-plateau': 'textures/void-plateau.png' },
+                models: { obelisk: 'models/void-obelisk.glb' },
+              },
+            },
+            terrainProfile: {
+              minHeight: 2,
+              maxHeight: 7,
+              baseHeight: 1.8,
+              noiseFrequency: 0.18,
+              noiseAmplitude: 2.4,
+            },
+          },
+        ],
+        badgeSymbols: { void: '🕳️' },
+        badgeSynonyms: { void: ['void', 'nothingness'] },
+        lootTables: {
+          void: [
+            {
+              items: [
+                { item: 'void-shard', quantity: 2 },
+                { item: 'portal-charge', quantity: 1 },
+              ],
+              score: 11,
+              message: 'Fragments from the abyss materialise.',
+            },
+          ],
+        },
+        assetManifest: {
+          void: {
+            id: 'void',
+            name: 'Void Realm',
+            terrain: ['void-plateau'],
+            mobs: ['void-wisp'],
+            objects: ['void-obelisk'],
+            assets: {
+              textures: { 'void-plateau': 'textures/void-plateau.png' },
+              models: { obelisk: 'models/void-obelisk.glb' },
+            },
+          },
+        },
+        terrainProfiles: {
+          void: {
+            minHeight: 2,
+            maxHeight: 7,
+            baseHeight: 1.8,
+            noiseFrequency: 0.18,
+            noiseAmplitude: 2.4,
+          },
+        },
+      }),
+    };
+
+    pluginRegistry.hotSwap('dimension-pack', plugin, { reason: 'test-suite' });
+
+    expect(experience.dimensionSettings?.id).toBe('void');
+    expect(experience.dimensionSettings?.assetManifest?.id).toBe('void');
+
+    const manifest = window.SimpleExperience.dimensionManifest;
+    expect(Object.keys(manifest)).toEqual(['void']);
+    expect(Object.isFrozen(manifest.void)).toBe(true);
+    expect(manifest.void.assets.textures['void-plateau']).toBe('textures/void-plateau.png');
+
+    const profiles = window.SimpleExperience.terrainProfiles;
+    expect(Object.keys(profiles)).toEqual(['void']);
+    expect(Object.isFrozen(profiles.void)).toBe(true);
+    expect(profiles.void.minHeight).toBe(2);
+    expect(experience.dimensionTerrainProfile.minHeight).toBe(2);
+  });
 });
