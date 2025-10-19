@@ -7886,8 +7886,17 @@
         }
       : { sampleCount: 0, samples: [] };
     const worldStats = (() => {
+      const base = {
+        startedAt: performanceSamplerState.world.startedAt,
+        completedAt: performanceSamplerState.world.completedAt,
+        durationMs: performanceSamplerState.world.durationMs,
+        columnCount: performanceSamplerState.world.columnCount,
+        voxelCount: performanceSamplerState.world.voxelCount,
+        columnsPerSecond: 0,
+        voxelsPerSecond: 0,
+      };
       if (!Number.isFinite(performanceSamplerState.world.durationMs)) {
-        return null;
+        return base;
       }
       const durationSeconds = performanceSamplerState.world.durationMs / 1000 || 0;
       const columnRate = durationSeconds > 0 && Number.isFinite(performanceSamplerState.world.columnCount)
@@ -7897,11 +7906,7 @@
         ? performanceSamplerState.world.voxelCount / durationSeconds
         : null;
       return {
-        startedAt: performanceSamplerState.world.startedAt,
-        completedAt: performanceSamplerState.world.completedAt,
-        durationMs: performanceSamplerState.world.durationMs,
-        columnCount: performanceSamplerState.world.columnCount,
-        voxelCount: performanceSamplerState.world.voxelCount,
+        ...base,
         columnsPerSecond: columnRate,
         voxelsPerSecond: voxelRate,
       };
@@ -7949,6 +7954,7 @@
     if (Number.isFinite(metrics.fps?.average)) {
       parts.push(`fps ${metrics.fps.average.toFixed(1)}`);
     }
+    let worldIncluded = false;
     if (metrics.worldGeneration) {
       const worldCounts = formatCount(metrics.worldGeneration.voxelCount ?? metrics.worldGeneration.columnCount);
       const worldRate = Number.isFinite(metrics.worldGeneration.voxelsPerSecond)
@@ -7958,9 +7964,14 @@
           : null;
       if (worldCounts && worldRate) {
         parts.push(`world ${worldCounts} @ ${worldRate}`);
+        worldIncluded = true;
       } else if (worldCounts) {
         parts.push(`world ${worldCounts}`);
+        worldIncluded = true;
       }
+    }
+    if (!worldIncluded) {
+      parts.push('world n/a');
     }
     if (metrics.inputLatency) {
       if (Number.isFinite(metrics.inputLatency.averageMs) && metrics.inputLatency.sampleCount > 0) {
@@ -19600,13 +19611,13 @@
   }
 
   const THREE_SCRIPT_URL = (() => {
-    const candidates = createAssetUrlCandidates('vendor/three.min.js?v=030c75d4e909.59b517c397ff-dirty', {
+    const candidates = createAssetUrlCandidates('vendor/three.min.js?v=030c75d4e909.22b09861b61a', {
       preloadedSelector: 'script[data-preload-three]',
     });
     return candidates.length ? candidates[0] : null;
   })();
   const GLTF_LOADER_URL = (() => {
-    const candidates = createAssetUrlCandidates('vendor/GLTFLoader.js?v=0e92b0589a2a.59b517c397ff-dirty');
+    const candidates = createAssetUrlCandidates('vendor/GLTFLoader.js?v=0e92b0589a2a.22b09861b61a');
     return candidates.length ? candidates[0] : null;
   })();
   const TEST_DRIVER_SCRIPT_URL = (() => {
