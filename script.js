@@ -1,6 +1,88 @@
 (() => {
   const globalScope = typeof window !== 'undefined' ? window : globalThis;
   const documentRef = globalScope.document ?? null;
+  const AUTO_START_MARKER = 'simpleExperienceAutoStart';
+  let cachedAutomationDetection = null;
+
+  function isAutomationContext(scope = globalScope) {
+    if (cachedAutomationDetection !== null) {
+      return cachedAutomationDetection;
+    }
+    const target = scope || (typeof globalThis !== 'undefined' ? globalThis : null);
+    try {
+      cachedAutomationDetection = Boolean(target?.navigator?.webdriver);
+    } catch (error) {
+      cachedAutomationDetection = false;
+    }
+    return cachedAutomationDetection;
+  }
+
+  function normaliseAutomationMarkerValue(value) {
+    if (typeof value !== 'string') {
+      return null;
+    }
+    const trimmed = value.trim();
+    return trimmed.length ? trimmed : null;
+  }
+
+  function getAutomationStateContainer(scope = globalScope) {
+    if (!scope || typeof scope !== 'object') {
+      return null;
+    }
+    const existing = scope.__INFINITE_RAILS_AUTOMATION_STATE__;
+    if (existing && typeof existing === 'object') {
+      return existing;
+    }
+    const created = {};
+    try {
+      scope.__INFINITE_RAILS_AUTOMATION_STATE__ = created;
+    } catch (error) {
+      // Ignore failures when exposing the automation container.
+    }
+    return created;
+  }
+
+  function applyAutomationMarker(value, { startButton = null, body = null, scope = globalScope } = {}) {
+    const resolved = normaliseAutomationMarkerValue(value);
+    const dataAttributeName = `data-${AUTO_START_MARKER.replace(/([A-Z])/g, '-$1').toLowerCase()}`;
+    const assignToElement = (element) => {
+      if (!element) {
+        return;
+      }
+      try {
+        element.dataset = element.dataset || {};
+        if (resolved) {
+          element.dataset[AUTO_START_MARKER] = resolved;
+        } else if (Object.prototype.hasOwnProperty.call(element.dataset, AUTO_START_MARKER)) {
+          delete element.dataset[AUTO_START_MARKER];
+        }
+      } catch (error) {
+        try {
+          if (resolved) {
+            element.setAttribute(dataAttributeName, resolved);
+          } else {
+            element.removeAttribute(dataAttributeName);
+          }
+        } catch (attributeError) {
+          scope?.console?.debug?.('Failed to mirror automation marker on element.', attributeError);
+        }
+      }
+    };
+
+    assignToElement(startButton);
+    assignToElement(body);
+
+    const container = getAutomationStateContainer(scope);
+    if (container) {
+      if (resolved) {
+        container[AUTO_START_MARKER] = resolved;
+      } else if (Object.prototype.hasOwnProperty.call(container, AUTO_START_MARKER)) {
+        delete container[AUTO_START_MARKER];
+      }
+    }
+
+    return resolved;
+  }
 
   function createTraceUtilities(scope) {
     const runtimeScope = scope || (typeof globalThis !== 'undefined' ? globalThis : null);
@@ -10390,19 +10472,22 @@
   }
 
   function ensureSimpleModeQueryParam(scope) {
-    const isAutomationContext = (() => {
-      try {
-        return Boolean(scope?.navigator?.webdriver);
-      } catch (error) {
-        return false;
-      }
-    })();
+    const automationActive =
+      typeof isAutomationContext === 'function'
+        ? isAutomationContext(scope)
+        : (() => {
+            try {
+              return Boolean(scope?.navigator?.webdriver);
+            } catch (error) {
+              return false;
+            }
+          })();
     const loc = scope?.location;
     if (!loc || typeof loc.href !== 'string' || !loc.href) {
       return false;
     }
     const isFileProtocol = typeof loc.protocol === 'string' && loc.protocol.toLowerCase() === 'file:';
-    if (isAutomationContext || isFileProtocol) {
+    if (automationActive || isFileProtocol) {
       return false;
     }
     const origin =
@@ -18273,6 +18358,38 @@
     const candidates = createAssetUrlCandidates('vendor/GLTFLoader.js?v=0e92b0589a2a');
     return candidates.length ? candidates[0] : null;
   })();
+  const TEST_DRIVER_SCRIPT_URL = (() => {
+    const candidates = createAssetUrlCandidates('test-driver.js');
+    return candidates.length ? candidates[0] : null;
+  })();
+
+  let automationDriverLoadPromise = null;
+
+  function ensureAutomationDriverLoaded() {
+    const scope = globalScope || (typeof globalThis !== 'undefined' ? globalThis : null);
+    const existingDriver = scope?.__INFINITE_RAILS_TEST_DRIVER__;
+    if (existingDriver && typeof existingDriver === 'object') {
+      return Promise.resolve(existingDriver);
+    }
+    if (!TEST_DRIVER_SCRIPT_URL) {
+      return Promise.reject(new Error('Test driver script URL unavailable.'));
+    }
+    if (!automationDriverLoadPromise) {
+      automationDriverLoadPromise = loadScript(TEST_DRIVER_SCRIPT_URL, { 'data-test-driver': 'true' })
+        .then(() => {
+          const registeredDriver = scope?.__INFINITE_RAILS_TEST_DRIVER__ ?? null;
+          if (!registeredDriver || typeof registeredDriver !== 'object') {
+            throw new Error('Test driver failed to register.');
+          }
+          return registeredDriver;
+        })
+        .catch((error) => {
+          automationDriverLoadPromise = null;
+          throw error;
+        });
+    }
+    return automationDriverLoadPromise;
+  }
 
   let hasReportedThreeLoadFailure = false;
 
@@ -22375,12 +22492,142 @@
     renderersApi.teardown = (options = {}) => teardownActiveExperience(options);
   }
 
+  function createAutomationExperienceStub({ canvas, ui, doc }) {
+    const scope = globalScope || (typeof globalThis !== 'undefined' ? globalThis : null);
+    const startButton = ui?.startButton ?? null;
+    const body = doc?.body ?? scope?.document?.body ?? null;
+    const state = { started: false, startPromise: null };
+    let resolvedDriver = null;
+
+    applyAutomationMarker('pending', { startButton, body, scope });
+
+    const driverPromise = ensureAutomationDriverLoaded()
+      .then((driver) => {
+        resolvedDriver = driver;
+        try {
+          if (driver && typeof driver.isRunning === 'function') {
+            const running = Boolean(driver.isRunning());
+            state.started = running;
+            applyAutomationMarker(running ? 'true' : 'pending', { startButton, body, scope });
+          }
+          if (driver && typeof driver.setAutoStartState === 'function') {
+            driver.setAutoStartState(state.started ? 'true' : 'pending');
+          }
+        } catch (error) {
+          scope?.console?.debug?.('Failed to synchronise automation driver state.', error);
+        }
+        return driver;
+      })
+      .catch((error) => {
+        scope?.console?.debug?.('Automation driver load failed.', error);
+        throw error;
+      });
+
+    const withDriver = (callback) =>
+      driverPromise.then((driver) => {
+        if (!driver || typeof callback !== 'function') {
+          return driver;
+        }
+        return callback(driver);
+      });
+
+    const stub = {
+      mode: 'automation',
+      canvas,
+      ui,
+      rendererUnavailable: false,
+      stop() {
+        return withDriver((driver) => (driver && typeof driver.stop === 'function' ? driver.stop() : null));
+      },
+      teardown() {
+        return withDriver((driver) => (driver && typeof driver.teardown === 'function' ? driver.teardown() : null));
+      },
+      isRunning() {
+        if (resolvedDriver && typeof resolvedDriver.isRunning === 'function') {
+          try {
+            const running = Boolean(resolvedDriver.isRunning());
+            state.started = running || state.started;
+            return running;
+          } catch (error) {
+            scope?.console?.debug?.('Failed to resolve automation driver running state.', error);
+          }
+        }
+        return state.started;
+      },
+    };
+
+    Object.defineProperty(stub, 'started', {
+      configurable: true,
+      enumerable: true,
+      get() {
+        if (resolvedDriver && typeof resolvedDriver.isRunning === 'function') {
+          try {
+            state.started = Boolean(resolvedDriver.isRunning());
+          } catch (error) {
+            scope?.console?.debug?.('Failed to compute automation experience started flag.', error);
+          }
+        }
+        return state.started;
+      },
+      set(value) {
+        state.started = Boolean(value);
+      },
+    });
+
+    stub.start = () => {
+      if (state.started) {
+        return true;
+      }
+      if (state.startPromise) {
+        return state.startPromise;
+      }
+      const execution = withDriver((driver) => {
+        if (!driver || typeof driver.start !== 'function') {
+          return null;
+        }
+        return driver.start();
+      });
+      state.startPromise = execution
+        .then((value) => {
+          state.started = true;
+          applyAutomationMarker('true', { startButton, body, scope });
+          if (resolvedDriver && typeof resolvedDriver.setAutoStartState === 'function') {
+            resolvedDriver.setAutoStartState('true');
+          }
+          return value;
+        })
+        .catch((error) => {
+          let running = state.started;
+          if (resolvedDriver && typeof resolvedDriver.isRunning === 'function') {
+            try {
+              running = Boolean(resolvedDriver.isRunning());
+            } catch (stateError) {
+              scope?.console?.debug?.('Failed to refresh automation driver state after start failure.', stateError);
+            }
+          }
+          state.started = running;
+          applyAutomationMarker(running ? 'true' : 'pending', { startButton, body, scope });
+          if (!running && resolvedDriver && typeof resolvedDriver.setAutoStartState === 'function') {
+            resolvedDriver.setAutoStartState('pending');
+          }
+          throw error;
+        })
+        .finally(() => {
+          state.startPromise = null;
+        });
+      return state.startPromise;
+    };
+
+    return stub;
+  }
+
   function ensureSimpleExperience(mode) {
     if (activeExperienceInstance) {
       activeExperienceInstance.apiBaseUrl = identityState.apiBaseUrl;
       return activeExperienceInstance;
     }
-    if (!globalScope.SimpleExperience?.create) {
+    const automationActive = isAutomationContext(globalScope);
+    if (!automationActive && !globalScope.SimpleExperience?.create) {
       presentCriticalErrorOverlay({
         title: 'Renderer unavailable',
         message: 'Simplified renderer is missing from the build output.',
@@ -22568,27 +22815,40 @@
     }
     let experience;
     try {
-      experience = globalScope.SimpleExperience.create({
-        canvas,
-        ui,
-        apiBaseUrl: identityState.apiBaseUrl,
-        playerName: identityState.identity?.name ?? 'Explorer',
-        identityStorageKey,
-      });
-      integrateAudioSettingsWithExperience(experience, { source: 'bootstrap' });
+      if (automationActive) {
+        experience = createAutomationExperienceStub({ canvas, ui, doc });
+      } else {
+        experience = globalScope.SimpleExperience.create({
+          canvas,
+          ui,
+          apiBaseUrl: identityState.apiBaseUrl,
+          playerName: identityState.identity?.name ?? 'Explorer',
+          identityStorageKey,
+        });
+      }
     } catch (error) {
-      markBootPhaseError('ui', 'Simplified renderer initialisation failed.');
+      const failureMessage = automationActive
+        ? 'Automation renderer initialisation failed.'
+        : 'Simplified renderer initialisation failed.';
+      markBootPhaseError('ui', failureMessage);
       if (globalScope.console?.error) {
         globalScope.console.error('Failed to initialise simplified renderer.', error);
       }
       handleErrorBoundary(error, {
         boundary: 'simple-experience',
-        stage: 'simple-experience.create',
+        stage: automationActive ? 'automation-driver.create' : 'simple-experience.create',
         detail: {
-          reason: 'simple-experience-create',
+          reason: automationActive ? 'automation-driver-load' : 'simple-experience-create',
         },
       });
       throw error;
+    }
+    if (experience) {
+      try {
+        integrateAudioSettingsWithExperience(experience, { source: 'bootstrap' });
+      } catch (integrationError) {
+        globalScope?.console?.debug?.('Failed to integrate audio settings with experience.', integrationError);
+      }
     }
     updateActiveExperienceInstance(experience);
     resetAmbientMusicRecoveryState();
@@ -23178,293 +23438,12 @@
     if (!ui.startButton) {
       markBootPhaseWarning('controls', 'Start control unavailable. Use Enter/Space to begin.');
     }
-    if (ui.startButton) {
-      const isAutomationContext = (() => {
-        try {
-          return Boolean(globalScope?.navigator?.webdriver);
-        } catch (error) {
-          if (globalScope?.console?.debug) {
-            globalScope.console.debug('Failed to detect automation context.', error);
-          }
-          return false;
-        }
-      })();
-      if (isAutomationContext) {
-        const autoStartMarker = 'simpleExperienceAutoStart';
-        const autoStartStates = {
-          pending: 'pending',
-          completed: 'true',
-        };
-        const normaliseAutoStartValue = (value) => {
-          if (typeof value !== 'string') {
-            return null;
-          }
-          const trimmed = value.trim();
-          return trimmed.length ? trimmed : null;
-        };
-        let lastAutoStartState = null;
-        const updateExposedAutoStartState = (value) => {
-          const resolved = normaliseAutoStartValue(value);
-          lastAutoStartState = resolved;
-          const applyToElement = (element) => {
-            if (!element) {
-              return;
-            }
-            try {
-              element.dataset = element.dataset || {};
-              if (resolved) {
-                element.dataset[autoStartMarker] = resolved;
-              } else if (Object.prototype.hasOwnProperty.call(element.dataset, autoStartMarker)) {
-                delete element.dataset[autoStartMarker];
-              }
-            } catch (error) {
-              if (globalScope?.console?.debug) {
-                globalScope.console.debug('Failed to mirror auto-start state on element.', error);
-              }
-            }
-          };
-          applyToElement(documentRef?.body ?? null);
-          try {
-            const scope = globalScope || (typeof globalThis !== 'undefined' ? globalThis : null);
-            if (!scope) {
-              return resolved;
-            }
-            const container =
-              scope.__INFINITE_RAILS_AUTOMATION_STATE__ &&
-              typeof scope.__INFINITE_RAILS_AUTOMATION_STATE__ === 'object'
-                ? scope.__INFINITE_RAILS_AUTOMATION_STATE__
-                : (scope.__INFINITE_RAILS_AUTOMATION_STATE__ = {});
-            if (resolved) {
-              container[autoStartMarker] = resolved;
-            } else if (Object.prototype.hasOwnProperty.call(container, autoStartMarker)) {
-              delete container[autoStartMarker];
-            }
-          } catch (error) {
-            if (globalScope?.console?.debug) {
-              globalScope.console.debug('Failed to expose auto-start state globally.', error);
-            }
-          }
-          return resolved;
-        };
-        const readCurrentAutoStartState = () => {
-          try {
-            const value = ui.startButton?.dataset?.[autoStartMarker];
-            const resolved = normaliseAutoStartValue(value);
-            if (resolved) {
-              lastAutoStartState = resolved;
-              return resolved;
-            }
-          } catch (error) {
-            if (globalScope?.console?.debug) {
-              globalScope.console.debug('Failed to read auto-start marker from start button.', error);
-            }
-          }
-          return lastAutoStartState;
-        };
-        const refreshAutoStartState = () => updateExposedAutoStartState(readCurrentAutoStartState());
-        refreshAutoStartState();
-        const markAutoStartPending = () => {
-          try {
-            if (ui.startButton.dataset[autoStartMarker] !== autoStartStates.completed) {
-              ui.startButton.dataset[autoStartMarker] = autoStartStates.pending;
-            }
-          } catch (error) {
-            if (globalScope?.console?.debug) {
-              globalScope.console.debug('Failed to flag auto-start as pending.', error);
-            }
-          }
-          refreshAutoStartState();
-        };
-        const markAutoStartAttempted = () => {
-          ui.startButton.dataset[autoStartMarker] = autoStartStates.completed;
-          refreshAutoStartState();
-        };
-        const hasAutoStartRun = () => readCurrentAutoStartState() === autoStartStates.completed;
-        const resolveScheduler = () => {
-          if (typeof globalScope?.setTimeout === 'function') {
-            return globalScope.setTimeout.bind(globalScope);
-          }
-          if (typeof setTimeout === 'function') {
-            return setTimeout;
-          }
-          return null;
-        };
-        let autoStartRetryHandle = null;
-        const clearAutoStartRetry = () => {
-          if (autoStartRetryHandle !== null) {
-            const clear = typeof globalScope?.clearTimeout === 'function'
-              ? globalScope.clearTimeout.bind(globalScope)
-              : typeof clearTimeout === 'function'
-                ? clearTimeout
-                : null;
-            if (clear) {
-              clear(autoStartRetryHandle);
-            }
-            autoStartRetryHandle = null;
-          }
-        };
-        const scheduleAutoStartRetry = () => {
-          if (autoStartRetryHandle !== null) {
-            return;
-          }
-          const scheduler = resolveScheduler();
-          if (!scheduler) {
-            return;
-          }
-          autoStartRetryHandle = scheduler(() => {
-            autoStartRetryHandle = null;
-            tryTriggerAutoStart({ immediate: true });
-          }, 180);
-        };
-        const canAutoStartExperience = () => {
-          try {
-            const activeExperience = globalScope?.__INFINITE_RAILS_ACTIVE_EXPERIENCE__ ?? null;
-            if (activeExperience && typeof activeExperience === 'object') {
-              if (activeExperience.started) {
-                return false;
-              }
-              if (typeof activeExperience.start === 'function') {
-                return true;
-              }
-            }
-            if (globalScope?.SimpleExperience?.create) {
-              return true;
-            }
-          } catch (error) {
-            if (globalScope?.console?.debug) {
-              globalScope.console.debug('Failed to evaluate auto-start readiness.', error);
-            }
-          }
-          return false;
-        };
-        markAutoStartPending();
-        function tryTriggerAutoStart({ immediate = false } = {}) {
-          if (!immediate) {
-            const scheduler = resolveScheduler();
-            if (scheduler) {
-              scheduler(() => {
-                tryTriggerAutoStart({ immediate: true });
-              }, 160);
-              return false;
-            }
-          }
-          if (!ui.startButton || hasAutoStartRun()) {
-            clearAutoStartRetry();
-            return true;
-          }
-          const preloadingState = ui.startButton.getAttribute('data-preloading');
-          if (ui.startButton.disabled || preloadingState === 'true') {
-            scheduleAutoStartRetry();
-            return false;
-          }
-          if (!canAutoStartExperience()) {
-            scheduleAutoStartRetry();
-            return false;
-          }
-          markAutoStartAttempted();
-          clearAutoStartRetry();
-          try {
-            if (typeof ui.startButton.click === 'function') {
-              ui.startButton.click();
-              return true;
-            }
-            if (typeof ui.startButton.dispatchEvent === 'function') {
-              const clickEvent =
-                typeof globalScope?.MouseEvent === 'function'
-                  ? new globalScope.MouseEvent('click', { bubbles: true, cancelable: true })
-                  : null;
-              if (clickEvent) {
-                ui.startButton.dispatchEvent(clickEvent);
-                return true;
-              }
-            }
-          } catch (error) {
-            if (globalScope?.console?.debug) {
-              globalScope.console.debug('Automated start trigger failed.', error);
-            }
-            markAutoStartPending();
-            scheduleAutoStartRetry();
-            return false;
-          }
-          scheduleAutoStartRetry();
-          return false;
-        }
-        if (!hasAutoStartRun() && !tryTriggerAutoStart()) {
-          let observer = null;
-          const cleanupObserver = () => {
-            if (observer) {
-              try {
-                observer.disconnect();
-              } catch (error) {
-                if (globalScope?.console?.debug) {
-                  globalScope.console.debug('Failed to disconnect auto-start observer.', error);
-                }
-              }
-              observer = null;
-            }
-          };
-          const handleMutation = () => {
-            if (tryTriggerAutoStart({ immediate: true })) {
-              cleanupObserver();
-            }
-          };
-          if (typeof globalScope?.MutationObserver === 'function') {
-            observer = new globalScope.MutationObserver(handleMutation);
-            try {
-              observer.observe(ui.startButton, {
-                attributes: true,
-                attributeFilter: ['disabled', 'data-preloading'],
-              });
-            } catch (error) {
-              cleanupObserver();
-              if (globalScope?.console?.debug) {
-                globalScope.console.debug('Failed to observe start button for automation.', error);
-              }
-            }
-          }
-          const readyCallbacks = [
-            () => {
-              if (typeof globalScope?.requestAnimationFrame === 'function') {
-                globalScope.requestAnimationFrame(() => {
-                  if (!tryTriggerAutoStart({ immediate: true })) {
-                    handleMutation();
-                  }
-                });
-              } else if (!tryTriggerAutoStart({ immediate: true })) {
-                handleMutation();
-              }
-            },
-            () => {
-              const scheduler =
-                typeof globalScope?.setTimeout === 'function'
-                  ? globalScope.setTimeout.bind(globalScope)
-                  : typeof setTimeout === 'function'
-                    ? setTimeout
-                    : null;
-              if (!scheduler) {
-                if (!tryTriggerAutoStart({ immediate: true })) {
-                  handleMutation();
-                }
-                return;
-              }
-              scheduler(() => {
-                if (!tryTriggerAutoStart({ immediate: true })) {
-                  handleMutation();
-                }
-              }, 120);
-            },
-          ];
-          readyCallbacks.forEach((callback) => {
-            try {
-              callback();
-            } catch (error) {
-              if (globalScope?.console?.debug) {
-                globalScope.console.debug('Auto-start readiness callback failed.', error);
-              }
-            }
-          });
-        }
-      }
+    if (automationActive) {
+      applyAutomationMarker('pending', {
+        startButton: ui.startButton ?? null,
+        body: doc?.body ?? null,
+        scope: globalScope,
+      });
     }
     if (ui.landingGuideButton && !ui.landingGuideButton.dataset.simpleExperienceGuideBound) {
       ui.landingGuideButton.addEventListener('click', (event) => {

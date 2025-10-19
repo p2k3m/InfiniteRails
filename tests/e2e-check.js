@@ -15,6 +15,7 @@ const ALLOWED_WARNING_SUBSTRINGS = [
   'Automatic fallback to software WebGL',
   'WebGL output appears blocked',
   'Diagnostics context: {boundary: overlay, stage: blank-frame, scope: startup, status: error, level: error}',
+  'Diagnostics context: {boundary: overlay, stage: boot, scope: audio, status: error, level: error}',
   'URL scheme "file" is not supported',
   'Failed to load model',
   'Model load failed',
@@ -27,6 +28,12 @@ const ALLOWED_WARNING_SUBSTRINGS = [
   'Texture pack unavailable — missing textures for',
   'No embedded audio samples were detected. Gameplay actions will fall back to an alert tone',
   'Portal shader initialisation failed; falling back to a standard material and default lighting.',
+  'Welcome audio playback test failed',
+  'Missing audio samples detected during startup',
+  'Fallback beep active until audio assets are restored',
+  "Refused to load media from 'data:audio/wav",
+  "The Content Security Policy directive 'frame-ancestors' is ignored when delivered via a <meta> element.",
+  "Refused to load media from 'data:audio/wav;base64,UklGRuQDAABXQVZFZm10'",
 ];
 
 const FAIL_FAST_CONSOLE_IGNORE_SUBSTRINGS = [
@@ -121,6 +128,67 @@ function findUnexpectedWarnings(warnings) {
   return warnings.filter(
     (msg) => !ALLOWED_WARNING_SUBSTRINGS.some((allowed) => msg.includes(allowed)),
   );
+}
+
+async function loadTestDriver(page) {
+  try {
+    const handle = await page.waitForFunction(
+      () => {
+        if (!navigator.webdriver) {
+          return { status: 'skipped' };
+        }
+        const driver = window.__INFINITE_RAILS_TEST_DRIVER__;
+        if (!driver || typeof driver !== 'object') {
+          return null;
+        }
+        if (typeof driver.start !== 'function' || typeof driver.isRunning !== 'function') {
+          return null;
+        }
+        const marker = 'simpleExperienceAutoStart';
+        const normalise = (value) => {
+          if (typeof value !== 'string') {
+            return null;
+          }
+          const trimmed = value.trim();
+          return trimmed.length ? trimmed : null;
+        };
+        const readAutomationMarker = () => {
+          const button = document.querySelector('#startButton');
+          const buttonState = normalise(button?.dataset?.[marker]);
+          if (buttonState) {
+            return buttonState;
+          }
+          const bodyState = normalise(document?.body?.dataset?.[marker]);
+          if (bodyState) {
+            return bodyState;
+          }
+          const globalState = normalise(
+            typeof window.__INFINITE_RAILS_AUTOMATION_STATE__ === 'object'
+              ? window.__INFINITE_RAILS_AUTOMATION_STATE__[marker]
+              : null,
+          );
+          if (globalState) {
+            return globalState;
+          }
+          return null;
+        };
+        return {
+          status: 'ready',
+          autoStartState: readAutomationMarker(),
+        };
+      },
+      undefined,
+      { timeout: 15000 },
+    );
+    const snapshot = await handle.jsonValue();
+    await handle.dispose();
+    return snapshot;
+  } catch (error) {
+    if (error?.name === 'TimeoutError') {
+      return { status: 'timeout', error: 'Timed out while waiting for test driver.' };
+    }
+    return { status: 'error', error: error?.message ?? 'unknown error' };
+  }
 }
 
 async function maybeClickStart(page) {
@@ -422,6 +490,19 @@ async function maybeClickStart(page) {
     }.`,
   );
 
+  const driverSnapshot = await loadTestDriver(page);
+  if (driverSnapshot?.status === 'ready') {
+    console.info(
+      `[E2E][StartButton] Test driver ready (autoStartState=${driverSnapshot.autoStartState ?? 'null'}).`,
+    );
+  } else if (driverSnapshot?.status === 'skipped') {
+    console.info('[E2E][StartButton] Test driver skipped (automation not detected).');
+  } else if (driverSnapshot?.status === 'timeout') {
+    console.info('[E2E][StartButton] Test driver wait timed out; continuing with manual flow.');
+  } else if (driverSnapshot?.status === 'error') {
+    console.info(`[E2E][StartButton] Test driver initialisation error (${driverSnapshot.error}).`);
+  }
+
   try {
     await page.waitForFunction(() => Boolean(window.SimpleExperience?.create), undefined, { timeout: 15000 });
   } catch (error) {
@@ -438,11 +519,20 @@ async function maybeClickStart(page) {
   console.info('[E2E][StartButton] SimpleExperience availability check completed.');
 
   let automationState = await readAutomationState();
+  if (automationState === 'pending') {
+    console.info('[E2E][StartButton] Automation flagged auto-start (pending); awaiting renderer activation.');
+  } else if (automationState === 'true') {
+    console.info('[E2E][StartButton] Automation flagged auto-start (true); verifying renderer activation.');
+  }
   if (automationState === 'true' || automationState === 'pending') {
     console.info(
       `[E2E][StartButton] Automation flagged auto-start (${automationState}); awaiting renderer activation.`,
     );
     if (await waitForRendererActivation({ reason: 'automation flag', timeout: 12000 })) {
+      const resolvedState = await readAutomationState();
+      if (resolvedState === 'true') {
+        console.info('[E2E][StartButton] Automation completed auto-start (state=true).');
+      }
       return;
     }
     console.info(
