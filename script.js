@@ -84,6 +84,66 @@
     return resolved;
   }
 
+  function waitForNextFrame({ scope = globalScope, minimumDelayMs = 16 } = {}) {
+    const runtime = scope || (typeof globalThis !== 'undefined' ? globalThis : null);
+    if (!runtime) {
+      return Promise.resolve();
+    }
+    const raf =
+      typeof runtime.requestAnimationFrame === 'function'
+        ? runtime.requestAnimationFrame.bind(runtime)
+        : null;
+    const clearTimer =
+      typeof runtime.clearTimeout === 'function'
+        ? runtime.clearTimeout.bind(runtime)
+        : typeof clearTimeout === 'function'
+          ? clearTimeout
+          : null;
+    const setTimer =
+      typeof runtime.setTimeout === 'function'
+        ? runtime.setTimeout.bind(runtime)
+        : typeof setTimeout === 'function'
+          ? setTimeout
+          : null;
+    return new Promise((resolve) => {
+      let resolved = false;
+      const finalize = () => {
+        if (resolved) {
+          return;
+        }
+        resolved = true;
+        resolve();
+      };
+      const delay = Number.isFinite(minimumDelayMs) ? Math.max(0, minimumDelayMs) : 16;
+      let fallbackTimer = null;
+      if (setTimer) {
+        fallbackTimer = setTimer(() => {
+          fallbackTimer = null;
+          finalize();
+        }, delay);
+      }
+      if (raf) {
+        try {
+          raf(() => {
+            if (fallbackTimer !== null && clearTimer) {
+              clearTimer(fallbackTimer);
+              fallbackTimer = null;
+            }
+            finalize();
+          });
+          return;
+        } catch (error) {
+          if (fallbackTimer === null) {
+            finalize();
+          }
+        }
+      }
+      if (!setTimer) {
+        finalize();
+      }
+    });
+  }
+
   function createTraceUtilities(scope) {
     const runtimeScope = scope || (typeof globalThis !== 'undefined' ? globalThis : null);
     const SESSION_STORAGE_KEY = 'infinite-rails.session-id';
@@ -6552,6 +6612,95 @@
     suppressed: false,
   };
 
+  const worldGenerationOverlayState = {
+    active: new Map(),
+    visible: false,
+  };
+
+  function normaliseWorldGenerationReason(value) {
+    if (typeof value === 'string' && value.trim().length) {
+      return value.trim().toLowerCase();
+    }
+    return 'world-generation';
+  }
+
+  function resolveWorldGenerationDimension(detail = {}) {
+    const dimension = detail && typeof detail === 'object' ? detail.dimension : null;
+    if (!dimension || typeof dimension !== 'object') {
+      return null;
+    }
+    const id = typeof dimension.id === 'string' && dimension.id.trim().length ? dimension.id.trim() : null;
+    const name = typeof dimension.name === 'string' && dimension.name.trim().length ? dimension.name.trim() : null;
+    const label = typeof dimension.label === 'string' && dimension.label.trim().length ? dimension.label.trim() : null;
+    if (!id && !name && !label) {
+      return null;
+    }
+    return { id, name, label };
+  }
+
+  function computeWorldGenerationOverlayCopy(reason, detail = {}) {
+    const normalizedReason = normaliseWorldGenerationReason(reason);
+    const dimension = resolveWorldGenerationDimension(detail) || null;
+    const descriptor = dimension?.label || dimension?.name || null;
+    const defaultTitleMap = {
+      'dimension-transition': descriptor ? `Shifting to ${descriptor}…` : 'Stabilising new dimension…',
+      'world-reload': descriptor ? `Rebuilding ${descriptor}…` : 'Rebuilding world…',
+      'session-start': descriptor ? `Stabilising ${descriptor}…` : 'Preparing expedition…',
+    };
+    const title =
+      typeof detail.title === 'string' && detail.title.trim().length
+        ? detail.title.trim()
+        : defaultTitleMap[normalizedReason] || (descriptor ? `Stabilising ${descriptor}…` : 'Generating world…');
+    const message =
+      typeof detail.message === 'string' && detail.message.trim().length
+        ? detail.message.trim()
+        : descriptor
+          ? `Calibrating ${descriptor} terrain and portal anchors.`
+          : 'Calibrating terrain and portal anchors.';
+    return { title, message, dimension };
+  }
+
+  function getActiveWorldGenerationOverlayDetail() {
+    if (!worldGenerationOverlayState.active.size) {
+      return null;
+    }
+    const entries = Array.from(worldGenerationOverlayState.active.values());
+    return entries[entries.length - 1] || null;
+  }
+
+  function showWorldGenerationOverlay(reason, detail = {}) {
+    const key = normaliseWorldGenerationReason(reason);
+    const overlayDetail = computeWorldGenerationOverlayCopy(key, detail);
+    worldGenerationOverlayState.active.set(key, { ...overlayDetail, reason: key });
+    worldGenerationOverlayState.visible = true;
+    if (typeof bootstrapOverlay !== 'undefined' && bootstrapOverlay.state?.mode !== 'error') {
+      bootstrapOverlay.showLoading({ title: overlayDetail.title, message: overlayDetail.message });
+    }
+  }
+
+  function hideWorldGenerationOverlay(reason) {
+    const key = normaliseWorldGenerationReason(reason);
+    if (worldGenerationOverlayState.active.has(key)) {
+      worldGenerationOverlayState.active.delete(key);
+    }
+    if (worldGenerationOverlayState.active.size > 0) {
+      const nextDetail = getActiveWorldGenerationOverlayDetail();
+      if (nextDetail && typeof bootstrapOverlay !== 'undefined' && bootstrapOverlay.state?.mode !== 'error') {
+        bootstrapOverlay.showLoading({ title: nextDetail.title, message: nextDetail.message });
+      }
+      return;
+    }
+    worldGenerationOverlayState.visible = false;
+    if (assetLoadingIndicatorState.active.size) {
+      updateAssetLoadingIndicatorOverlay();
+      return;
+    }
+    if (typeof bootstrapOverlay !== 'undefined' && bootstrapOverlay.state?.mode === 'loading') {
+      bootstrapOverlay.hide({ force: true });
+    }
+    assetLoadingIndicatorState.overlayActive = false;
+  }
+
   function suppressAssetLoadingIndicatorOverlay() {
     if (assetLoadingIndicatorState.suppressed) {
       return;
@@ -6561,7 +6710,8 @@
     assetLoadingIndicatorState.overlayActive = false;
     if (
       typeof bootstrapOverlay !== 'undefined' &&
-      bootstrapOverlay.state?.mode === 'loading'
+      bootstrapOverlay.state?.mode === 'loading' &&
+      !worldGenerationOverlayState.visible
     ) {
       bootstrapOverlay.hide({ force: true });
     }
@@ -6594,16 +6744,26 @@
     }
     if (assetLoadingIndicatorState.suppressed) {
       if (assetLoadingIndicatorState.overlayActive && bootstrapOverlay.state?.mode === 'loading') {
-        bootstrapOverlay.hide({ force: true });
+        if (!worldGenerationOverlayState.visible) {
+          bootstrapOverlay.hide({ force: true });
+        }
       }
       assetLoadingIndicatorState.overlayActive = false;
       return;
     }
     const entries = Array.from(assetLoadingIndicatorState.active.values());
     if (!entries.length) {
-      if (assetLoadingIndicatorState.overlayActive && bootstrapOverlay.state?.mode === 'loading') {
-        bootstrapOverlay.hide();
+      if (!worldGenerationOverlayState.visible) {
+        if (assetLoadingIndicatorState.overlayActive && bootstrapOverlay.state?.mode === 'loading') {
+          bootstrapOverlay.hide();
+        }
+        assetLoadingIndicatorState.overlayActive = false;
+      } else {
+        assetLoadingIndicatorState.overlayActive = false;
       }
+      return;
+    }
+    if (worldGenerationOverlayState.visible) {
       assetLoadingIndicatorState.overlayActive = false;
       return;
     }
@@ -6664,10 +6824,14 @@
       return;
     }
     if (!assetLoadingIndicatorState.active.size) {
-      if (assetLoadingIndicatorState.overlayActive && bootstrapOverlay.state?.mode === 'loading') {
-        bootstrapOverlay.hide();
+      if (!worldGenerationOverlayState.visible) {
+        if (assetLoadingIndicatorState.overlayActive && bootstrapOverlay.state?.mode === 'loading') {
+          bootstrapOverlay.hide();
+        }
+        assetLoadingIndicatorState.overlayActive = false;
+      } else {
+        assetLoadingIndicatorState.overlayActive = false;
       }
-      assetLoadingIndicatorState.overlayActive = false;
       return;
     }
     updateAssetLoadingIndicatorOverlay();
@@ -6691,10 +6855,14 @@
       assetLoadingIndicatorState.active.delete(token);
     });
     if (!assetLoadingIndicatorState.active.size) {
-      if (assetLoadingIndicatorState.overlayActive && bootstrapOverlay.state?.mode === 'loading') {
-        bootstrapOverlay.hide();
+      if (!worldGenerationOverlayState.visible) {
+        if (assetLoadingIndicatorState.overlayActive && bootstrapOverlay.state?.mode === 'loading') {
+          bootstrapOverlay.hide();
+        }
+        assetLoadingIndicatorState.overlayActive = false;
+      } else {
+        assetLoadingIndicatorState.overlayActive = false;
       }
-      assetLoadingIndicatorState.overlayActive = false;
       return;
     }
     updateAssetLoadingIndicatorOverlay();
@@ -12022,6 +12190,14 @@
           globalScope?.console?.debug?.('Failed to clear storage diagnostic action.', clearError);
         }
       }
+    });
+    globalScope.addEventListener('infinite-rails:world-generation-start', (event) => {
+      const detail = event?.detail && typeof event.detail === 'object' ? event.detail : {};
+      showWorldGenerationOverlay(detail.reason, detail);
+    });
+    globalScope.addEventListener('infinite-rails:world-generation-complete', (event) => {
+      const detail = event?.detail && typeof event.detail === 'object' ? event.detail : {};
+      hideWorldGenerationOverlay(detail.reason);
     });
     globalScope.addEventListener('infinite-rails:asset-load-delay-indicator', (event) => {
       const detail = event?.detail && typeof event.detail === 'object' ? event.detail : {};
@@ -23853,9 +24029,41 @@
               }
             }
             experience.apiBaseUrl = backendReady ? identityState.apiBaseUrl : null;
-            const result = experience.start();
+            const overlayReason = 'session-start';
+            let overlayShown = false;
+            if (experience && typeof experience.start === 'function') {
+              showWorldGenerationOverlay(overlayReason, {
+                title: 'Preparing expedition…',
+                message: 'Generating world and calibrating portal anchors.',
+              });
+              overlayShown = true;
+              await waitForNextFrame({ scope: globalScope });
+            }
+            if (!experience || typeof experience.start !== 'function') {
+              if (overlayShown) {
+                hideWorldGenerationOverlay(overlayReason);
+              }
+              return null;
+            }
+            let result;
+            try {
+              result = experience.start();
+            } catch (startError) {
+              if (overlayShown) {
+                hideWorldGenerationOverlay(overlayReason);
+              }
+              throw startError;
+            }
             if (result && typeof result.then === 'function') {
-              return result;
+              if (!overlayShown) {
+                return result;
+              }
+              return result.finally(() => {
+                hideWorldGenerationOverlay(overlayReason);
+              });
+            }
+            if (overlayShown) {
+              hideWorldGenerationOverlay(overlayReason);
             }
             return result;
           };
