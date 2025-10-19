@@ -10140,6 +10140,7 @@
   const dynamicModuleLoader = createDynamicModuleLoader();
 
   const MODULE_PLUGIN_DEPENDENCIES = Object.freeze([
+    'plugin:game-plugins',
     'plugin:asset-resolver',
     'plugin:audio-aliases',
     'plugin:audio-captions',
@@ -10148,6 +10149,23 @@
     'plugin:portal-mechanics',
     'plugin:scoreboard-utils',
   ]);
+
+  dynamicModuleLoader.register({
+    id: 'plugin:game-plugins',
+    type: 'plugin',
+    label: 'Game plugin registry',
+    scripts: [{ path: 'game-plugin-registry.js', attributes: { 'data-module': 'game-plugin-registry' } }],
+    global: 'InfiniteRailsPluginSystem',
+    boundary: 'bootstrap',
+    stage: 'modules.game-plugin-registry.load',
+    teardown: () => {
+      try {
+        delete globalScope.InfiniteRailsPluginSystem;
+      } catch (error) {
+        globalScope?.console?.debug?.('Failed to tear down game plugin registry module.', error);
+      }
+    },
+  });
 
   dynamicModuleLoader.register({
     id: 'plugin:asset-resolver',
