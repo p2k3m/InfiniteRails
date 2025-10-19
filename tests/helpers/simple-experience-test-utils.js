@@ -115,6 +115,7 @@ if (typeof globalThis.WebGL2RenderingContext !== 'function') {
 
 const repoRoot = path.resolve(__dirname, '..', '..');
 
+let pluginRegistryLoaded = false;
 let simpleExperienceLoaded = false;
 let documentStub = null;
 let windowStub = null;
@@ -277,8 +278,18 @@ function ensureTestEnvironment() {
   return { documentStub, windowStub };
 }
 
+function ensurePluginRegistryLoaded() {
+  if (pluginRegistryLoaded) {
+    return;
+  }
+  const registrySource = fs.readFileSync(path.join(repoRoot, 'game-plugin-registry.js'), 'utf8');
+  vm.runInThisContext(registrySource);
+  pluginRegistryLoaded = true;
+}
+
 function ensureSimpleExperienceLoaded() {
   ensureTestEnvironment();
+  ensurePluginRegistryLoaded();
   if (simpleExperienceLoaded) {
     return { documentStub, windowStub };
   }
