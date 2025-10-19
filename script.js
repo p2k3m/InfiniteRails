@@ -144,6 +144,554 @@
     });
   }
 
+  function clamp(value, min, max) {
+    if (!Number.isFinite(value)) {
+      return Number.isFinite(min) ? min : 0;
+    }
+    if (Number.isFinite(min) && value < min) {
+      return min;
+    }
+    if (Number.isFinite(max) && value > max) {
+      return max;
+    }
+    return value;
+  }
+
+  function createSeededRandomGenerator(seed) {
+    let state = Math.abs(Math.floor(Number.isFinite(seed) ? seed : Date.now())) || 1;
+    return () => {
+      state = (1664525 * state + 1013904223) % 4294967296;
+      return state / 4294967296;
+    };
+  }
+
+  function generateWorkerWorld(payload = {}) {
+    const sizeCandidate = Number.isFinite(payload.size) ? Math.floor(payload.size) : null;
+    const size = clamp(sizeCandidate ?? 64, 4, 256);
+    const minHeight = Number.isFinite(payload.minHeight) ? Math.floor(payload.minHeight) : 3;
+    const maxHeightCandidate = Number.isFinite(payload.maxHeight) ? Math.floor(payload.maxHeight) : minHeight + 12;
+    const maxHeight = Math.max(minHeight + 1, maxHeightCandidate);
+    const heightRange = Math.max(1, maxHeight - minHeight);
+    const rng = createSeededRandomGenerator(payload.seed);
+    const heightMap = new Array(size);
+    const columns = [];
+    let voxelCount = 0;
+    const islandRadius = size / 2;
+    const center = islandRadius - 0.5;
+    for (let x = 0; x < size; x += 1) {
+      heightMap[x] = new Array(size);
+      for (let z = 0; z < size; z += 1) {
+        const dx = (x - center) / islandRadius;
+        const dz = (z - center) / islandRadius;
+        const distance = Math.sqrt(dx * dx + dz * dz);
+        const falloff = clamp(1 - distance * distance, 0, 1);
+        const noise = (rng() + rng() * 0.5 + rng() * 0.25) / 1.75;
+        const wave = Math.sin((x + rng() * 10) * 0.15) * 0.15 + Math.cos((z + rng() * 5) * 0.2) * 0.1;
+        const height = Math.round(minHeight + clamp(noise * falloff + wave, 0, 1) * heightRange);
+        heightMap[x][z] = height;
+        voxelCount += height;
+        const blocks = [];
+        for (let level = 0; level < height; level += 1) {
+          if (level === height - 1) {
+            blocks.push('grass');
+          } else if (level >= height - 3) {
+            blocks.push('dirt');
+          } else {
+            blocks.push('stone');
+          }
+        }
+        columns.push({
+          x,
+          z,
+          height,
+          blocks,
+        });
+      }
+    }
+    return {
+      type: 'world',
+      size,
+      minHeight,
+      maxHeight,
+      seed: payload.seed ?? null,
+      columns,
+      heightMap,
+      stats: {
+        columnCount: size * size,
+        voxelCount,
+      },
+      generatedAt: Date.now(),
+    };
+  }
+
+  function buildWorkerMesh(payload = {}) {
+    const columns = Array.isArray(payload.columns) ? payload.columns : [];
+    const chunkSizeCandidate = Number.isFinite(payload.chunkSize) ? Math.floor(payload.chunkSize) : null;
+    const chunkSize = clamp(chunkSizeCandidate ?? 16, 1, 128);
+    const chunkMap = new Map();
+    let meshCount = 0;
+    let vertexCount = 0;
+    columns.forEach((column) => {
+      const gridX = Number.isFinite(column?.x) ? column.x : 0;
+      const gridZ = Number.isFinite(column?.z) ? column.z : 0;
+      const height = clamp(column?.height ?? 0, 0, Number.isFinite(payload.maxHeight) ? payload.maxHeight : 64);
+      const chunkX = Math.floor(gridX / chunkSize);
+      const chunkZ = Math.floor(gridZ / chunkSize);
+      const key = `${chunkX}|${chunkZ}`;
+      if (!chunkMap.has(key)) {
+        chunkMap.set(key, {
+          key,
+          chunkX,
+          chunkZ,
+          meshes: [],
+        });
+      }
+      const meshDescriptor = {
+        id: `${gridX}|${gridZ}`,
+        position: { x: gridX, y: 0, z: gridZ },
+        dimensions: { width: 1, height, depth: 1 },
+      };
+      chunkMap.get(key).meshes.push(meshDescriptor);
+      meshCount += 1;
+      vertexCount += 24;
+    });
+    const chunkDescriptors = Array.from(chunkMap.values()).map((chunk) => ({
+      key: chunk.key,
+      chunkX: chunk.chunkX,
+      chunkZ: chunk.chunkZ,
+      meshCount: chunk.meshes.length,
+      meshes: chunk.meshes,
+    }));
+    return {
+      type: 'mesh',
+      chunkSize,
+      chunkCount: chunkDescriptors.length,
+      meshCount,
+      vertexCount,
+      chunks: chunkDescriptors,
+      generatedAt: Date.now(),
+    };
+  }
+
+  function computeWorkerAi(payload = {}) {
+    const delta = Number.isFinite(payload.delta) ? payload.delta : 0.016;
+    const player = payload.player && typeof payload.player === 'object' ? payload.player : { x: 0, y: 0, z: 0 };
+    const zombies = Array.isArray(payload.zombies) ? payload.zombies : [];
+    const defaultSpeed = Number.isFinite(payload.defaultSpeed) ? payload.defaultSpeed : 1.5;
+    const attackRadius = Number.isFinite(payload.attackRadius) ? payload.attackRadius : 1.5;
+    const updates = zombies.map((zombie, index) => {
+      const sourceX = Number.isFinite(zombie?.x) ? zombie.x : 0;
+      const sourceZ = Number.isFinite(zombie?.z) ? zombie.z : 0;
+      const sourceY = Number.isFinite(zombie?.y) ? zombie.y : 0;
+      const dx = player.x - sourceX;
+      const dz = player.z - sourceZ;
+      const distance = Math.sqrt(dx * dx + dz * dz) || 1;
+      const speed = Number.isFinite(zombie?.speed) ? zombie.speed : defaultSpeed;
+      const step = speed * delta;
+      const normalisedX = dx / distance;
+      const normalisedZ = dz / distance;
+      const nextX = sourceX + normalisedX * step;
+      const nextZ = sourceZ + normalisedZ * step;
+      const nextState = distance <= attackRadius ? 'attack' : 'chase';
+      return {
+        id: zombie?.id ?? index,
+        nextPosition: {
+          x: nextX,
+          y: sourceY,
+          z: nextZ,
+        },
+        distanceToPlayer: distance,
+        state: nextState,
+      };
+    });
+    return {
+      type: 'ai',
+      delta,
+      updates,
+      count: updates.length,
+      generatedAt: Date.now(),
+    };
+  }
+
+  function createIsolatedWorkerTaskLibrary() {
+    return {
+      world: (payload) => generateWorkerWorld(payload),
+      mesh: (payload) => buildWorkerMesh(payload),
+      ai: (payload) => computeWorkerAi(payload),
+    };
+  }
+
+  function createIsolatedGameWorkerManager(scope = globalScope) {
+    const taskLibrary = createIsolatedWorkerTaskLibrary();
+    const fallbackManager = {
+      isWorkerBacked: false,
+      runWorldGeneration: (payload) => Promise.resolve(taskLibrary.world(payload)),
+      runMeshPreparation: (payload) => Promise.resolve(taskLibrary.mesh(payload)),
+      runAiSimulation: (payload) => Promise.resolve(taskLibrary.ai(payload)),
+      terminate: () => {},
+    };
+    if (!scope || typeof scope.Worker !== 'function' || typeof scope.Blob !== 'function') {
+      return fallbackManager;
+    }
+    let blobUrl = null;
+    let worker = null;
+    try {
+      const workerScript = `"use strict";\nconst createTaskLibrary = ${createIsolatedWorkerTaskLibrary.toString()};\nconst taskLibrary = createTaskLibrary();\nconst handlers = {\n  "world-gen": taskLibrary.world,\n  "mesh-build": taskLibrary.mesh,\n  "ai-sim": taskLibrary.ai,\n};\nself.onmessage = (event) => {\n  const data = event && typeof event.data === "object" ? event.data : {};\n  const { id, task, payload } = data;\n  const handler = handlers[task];\n  if (!handler) {\n    const message = task ? "Unknown task: " + task : "Task not provided";\n    self.postMessage({ id, error: { message } });\n    return;\n  }\n  Promise.resolve()\n    .then(() => handler(payload))\n    .then((result) => {\n      self.postMessage({ id, result });\n    })\n    .catch((error) => {\n      const message = error && typeof error.message === "string" ? error.message : String(error);\n      self.postMessage({ id, error: { message } });\n    });\n};\n`;
+      const blob = new scope.Blob([workerScript], { type: 'application/javascript' });
+      blobUrl = scope.URL && typeof scope.URL.createObjectURL === 'function' ? scope.URL.createObjectURL(blob) : null;
+      if (!blobUrl) {
+        throw new Error('Failed to allocate worker URL');
+      }
+      worker = new scope.Worker(blobUrl);
+    } catch (error) {
+      scope?.console?.debug?.('Failed to bootstrap isolated game worker.', error);
+      if (blobUrl && scope.URL && typeof scope.URL.revokeObjectURL === 'function') {
+        scope.URL.revokeObjectURL(blobUrl);
+      }
+      return fallbackManager;
+    }
+    const pending = new Map();
+    let nextId = 1;
+    worker.onmessage = (event) => {
+      const data = event && typeof event.data === 'object' ? event.data : {};
+      const { id } = data;
+      if (!pending.has(id)) {
+        return;
+      }
+      const { resolve, reject } = pending.get(id);
+      pending.delete(id);
+      if (data && Object.prototype.hasOwnProperty.call(data, 'error') && data.error) {
+        const errorMessage = typeof data.error.message === 'string' ? data.error.message : 'Worker task failed';
+        reject(new Error(errorMessage));
+        return;
+      }
+      resolve(data.result);
+    };
+    worker.onerror = (event) => {
+      scope?.console?.debug?.('Isolated game worker emitted an error.', event);
+    };
+
+    const handlerLookup = {
+      'world-gen': taskLibrary.world,
+      'mesh-build': taskLibrary.mesh,
+      'ai-sim': taskLibrary.ai,
+    };
+
+    const runTask = (taskName, payload) => {
+      if (!worker) {
+        const handler = handlerLookup[taskName];
+        return handler ? Promise.resolve(handler(payload)) : Promise.resolve(null);
+      }
+      const id = nextId;
+      nextId += 1;
+      return new Promise((resolve, reject) => {
+        pending.set(id, { resolve, reject });
+        try {
+          worker.postMessage({ id, task: taskName, payload });
+        } catch (error) {
+          pending.delete(id);
+          reject(error);
+        }
+      });
+    };
+
+    return {
+      isWorkerBacked: true,
+      runWorldGeneration: (payload) => runTask('world-gen', payload),
+      runMeshPreparation: (payload) => runTask('mesh-build', payload),
+      runAiSimulation: (payload) => runTask('ai-sim', payload),
+      terminate: () => {
+        if (worker) {
+          try {
+            worker.terminate();
+          } catch (error) {
+            scope?.console?.debug?.('Failed to terminate isolated game worker.', error);
+          }
+        }
+        worker = null;
+        if (blobUrl && scope.URL && typeof scope.URL.revokeObjectURL === 'function') {
+          scope.URL.revokeObjectURL(blobUrl);
+        }
+        if (pending.size) {
+          pending.forEach(({ reject }) => {
+            try {
+              reject(new Error('Worker terminated'));
+            } catch (error) {
+              scope?.console?.debug?.('Failed to reject worker promise during termination.', error);
+            }
+          });
+          pending.clear();
+        }
+      },
+    };
+  }
+
+  const isolatedGameWorkerManager = createIsolatedGameWorkerManager(globalScope);
+  const isolatedWorkerState = new WeakMap();
+
+  function ensurePositionVector(source, fallback = { x: 0, y: 0, z: 0 }) {
+    if (!source || typeof source !== 'object') {
+      return { ...fallback };
+    }
+    const x = Number.isFinite(source.x) ? source.x : Number.isFinite(source.gridX) ? source.gridX : fallback.x ?? 0;
+    const y = Number.isFinite(source.y) ? source.y : Number.isFinite(source.gridY) ? source.gridY : fallback.y ?? 0;
+    const z = Number.isFinite(source.z)
+      ? source.z
+      : Number.isFinite(source.gridZ)
+        ? source.gridZ
+        : Number.isFinite(source.posZ)
+          ? source.posZ
+          : Number.isFinite(source.y)
+            ? source.y
+            : fallback.z ?? 0;
+    return { x, y, z };
+  }
+
+  function buildWorldWorkerPayload(instance, options = {}) {
+    if (!instance || typeof instance !== 'object') {
+      return { size: 64 };
+    }
+    const sizeCandidates = [options.size, instance.worldSize, instance.terrainSize, instance.gridSize];
+    const size = sizeCandidates.find((value) => Number.isFinite(value)) ?? 64;
+    const seed = [options.seed, instance.worldSeed, instance.seed].find((value) => Number.isFinite(value)) ?? Date.now();
+    const minHeight = [options.minHeight, instance.terrainMinHeight].find((value) => Number.isFinite(value)) ?? 3;
+    const maxHeight = [options.maxHeight, instance.terrainMaxHeight].find((value) => Number.isFinite(value)) ?? minHeight + 12;
+    return {
+      size,
+      seed,
+      minHeight,
+      maxHeight,
+    };
+  }
+
+  function buildMeshWorkerPayload(instance, options = {}, worldResult = null) {
+    const chunkSize = [options.chunkSize, instance.terrainChunkSize, instance.chunkSize].find((value) => Number.isFinite(value)) ?? 16;
+    const maxHeight = [options.maxHeight, worldResult?.maxHeight, instance.terrainMaxHeight].find((value) => Number.isFinite(value)) ?? 64;
+    const columns = Array.isArray(worldResult?.columns) ? worldResult.columns : [];
+    return {
+      chunkSize,
+      maxHeight,
+      columns,
+    };
+  }
+
+  function buildAiWorkerPayload(instance, delta, options = {}) {
+    const resolvedDelta = Number.isFinite(delta) ? delta : Number.isFinite(options.delta) ? options.delta : 0.016;
+    const defaultSpeed = [options.defaultSpeed, instance.zombieSpeed, instance.entitySpeed].find((value) => Number.isFinite(value)) ?? 1.5;
+    const attackRadius = [options.attackRadius, instance.zombieAttackRadius, instance.entityAttackRadius].find((value) => Number.isFinite(value)) ?? 1.5;
+    const playerPosition = ensurePositionVector(options.player ?? instance.player?.position ?? instance.playerPosition ?? {}, {
+      x: 0,
+      y: 0,
+      z: 0,
+    });
+    const sourceZombies = Array.isArray(options.entities)
+      ? options.entities
+      : Array.isArray(instance.zombies)
+        ? instance.zombies
+        : Array.isArray(instance.entities?.zombies)
+          ? instance.entities.zombies
+          : [];
+    const zombies = sourceZombies.map((zombie) => {
+      const position = ensurePositionVector(zombie, { x: 0, y: 0, z: 0 });
+      const speed = Number.isFinite(zombie?.speed) ? zombie.speed : defaultSpeed;
+      return {
+        id: zombie?.id ?? zombie?.uuid ?? null,
+        x: position.x,
+        y: position.y,
+        z: position.z,
+        speed,
+      };
+    });
+    return {
+      delta: resolvedDelta,
+      defaultSpeed,
+      attackRadius,
+      player: playerPosition,
+      zombies,
+    };
+  }
+
+  function dispatchWorldGenerationLifecycleEvent(phase, detail = {}, scope = globalScope) {
+    if (!scope || typeof scope.dispatchEvent !== 'function' || typeof scope.CustomEvent !== 'function') {
+      return;
+    }
+    const name = phase === 'start' ? 'infinite-rails:world-generation-start' : 'infinite-rails:world-generation-complete';
+    try {
+      scope.dispatchEvent(new scope.CustomEvent(name, { detail }));
+    } catch (error) {
+      scope?.console?.debug?.('Failed to dispatch world generation lifecycle event.', error);
+    }
+  }
+
+  function ensureFinally(result, callback) {
+    let called = false;
+    const finalize = () => {
+      if (called) {
+        return;
+      }
+      called = true;
+      try {
+        callback();
+      } catch (error) {
+        globalScope?.console?.debug?.('Failed to run finaliser for worker-backed task.', error);
+      }
+    };
+    if (result && typeof result.then === 'function') {
+      return result.finally(() => finalize());
+    }
+    finalize();
+    return result;
+  }
+
+  function attachIsolatedGameWorkersToExperience(instance, manager = isolatedGameWorkerManager, scope = globalScope) {
+    if (!instance || typeof instance !== 'object') {
+      return;
+    }
+    if (!manager) {
+      return;
+    }
+    if (isolatedWorkerState.has(instance)) {
+      return;
+    }
+    const state = {
+      manager,
+      lastWorldResult: null,
+      lastMeshResult: null,
+      lastAiResult: null,
+    };
+    isolatedWorkerState.set(instance, state);
+
+    if (typeof instance.buildTerrain === 'function') {
+      const originalBuildTerrain = instance.buildTerrain;
+      instance.buildTerrain = function workerBackedBuildTerrain(...args) {
+        const options = args.length > 0 && args[0] && typeof args[0] === 'object' ? { ...args[0] } : {};
+        if (options.skipWorker === true) {
+          return originalBuildTerrain.apply(this, args);
+        }
+        const payload = buildWorldWorkerPayload(this, options);
+        const detail = {
+          reason: options?.reason || 'worker-offload',
+          descriptor: options?.descriptor ?? null,
+          source: 'isolated-game-worker',
+        };
+        dispatchWorldGenerationLifecycleEvent('start', detail, scope);
+        return manager
+          .runWorldGeneration(payload)
+          .then((result) => {
+            state.lastWorldResult = result;
+            options.workerResult = { ...options.workerResult, world: result };
+            args[0] = options;
+            try {
+              const output = originalBuildTerrain.apply(this, args);
+              return ensureFinally(output, () => {
+                dispatchWorldGenerationLifecycleEvent('complete', detail, scope);
+              });
+            } catch (error) {
+              dispatchWorldGenerationLifecycleEvent(
+                'complete',
+                { ...detail, failed: true, errorMessage: error?.message || String(error) },
+                scope,
+              );
+              throw error;
+            }
+          })
+          .catch((error) => {
+            scope?.console?.debug?.('Worker-backed world generation failed; falling back to synchronous execution.', error);
+            dispatchWorldGenerationLifecycleEvent(
+              'complete',
+              { ...detail, failed: true, errorMessage: error?.message || String(error) },
+              scope,
+            );
+            return originalBuildTerrain.apply(this, args);
+          });
+      };
+    }
+
+    if (typeof instance.buildRails === 'function') {
+      const originalBuildRails = instance.buildRails;
+      instance.buildRails = function workerBackedBuildRails(...args) {
+        const options = args.length > 0 && args[0] && typeof args[0] === 'object' ? { ...args[0] } : {};
+        if (options.skipWorker === true) {
+          return originalBuildRails.apply(this, args);
+        }
+        const payload = buildMeshWorkerPayload(this, options, state.lastWorldResult);
+        return manager
+          .runMeshPreparation(payload)
+          .then((result) => {
+            state.lastMeshResult = result;
+            options.workerResult = { ...options.workerResult, mesh: result, world: state.lastWorldResult };
+            args[0] = options;
+            return originalBuildRails.apply(this, args);
+          })
+          .catch((error) => {
+            scope?.console?.debug?.('Worker-backed mesh preparation failed; falling back to synchronous execution.', error);
+            return originalBuildRails.apply(this, args);
+          });
+      };
+    }
+
+    const aiMethodCandidates = ['updateZombies', 'updateGolems', 'updateAi'];
+    aiMethodCandidates.forEach((methodName) => {
+      if (typeof instance[methodName] !== 'function') {
+        return;
+      }
+      const originalMethod = instance[methodName];
+      instance[methodName] = function workerBackedAiUpdate(...args) {
+        const delta = args.length > 0 && Number.isFinite(args[0]) ? args[0] : Number.isFinite(args[1]) ? args[1] : 0.016;
+        const optionsIndex = args.length > 0 && typeof args[args.length - 1] === 'object' ? args.length - 1 : null;
+        const options = optionsIndex !== null ? { ...args[optionsIndex] } : {};
+        if (options.skipWorker === true) {
+          return originalMethod.apply(this, args);
+        }
+        const payload = buildAiWorkerPayload(this, delta, options);
+        return manager
+          .runAiSimulation(payload)
+          .then((result) => {
+            state.lastAiResult = result;
+            options.workerResult = { ...options.workerResult, ai: result };
+            const nextArgs = args.slice();
+            if (optionsIndex !== null) {
+              nextArgs[optionsIndex] = options;
+            } else {
+              nextArgs.push(options);
+            }
+            return originalMethod.apply(this, nextArgs);
+          })
+          .catch((error) => {
+            scope?.console?.debug?.(
+              `Worker-backed AI simulation failed for ${methodName}; falling back to synchronous execution.`,
+              error,
+            );
+            return originalMethod.apply(this, args);
+          });
+      };
+    });
+
+    try {
+      Object.defineProperty(instance, '__isolatedWorkerSupport__', {
+        configurable: true,
+        enumerable: false,
+        writable: true,
+        value: {
+          manager,
+          state,
+        },
+      });
+    } catch (error) {
+      scope?.console?.debug?.('Failed to expose isolated worker metadata on experience.', error);
+    }
+  }
+
+  if (globalScope && typeof globalScope.addEventListener === 'function') {
+    globalScope.addEventListener('unload', () => {
+      try {
+        isolatedGameWorkerManager?.terminate?.();
+      } catch (error) {
+        globalScope?.console?.debug?.('Failed to terminate isolated worker manager on unload.', error);
+      }
+    });
+  }
+
   function createTraceUtilities(scope) {
     const runtimeScope = scope || (typeof globalThis !== 'undefined' ? globalThis : null);
     const SESSION_STORAGE_KEY = 'infinite-rails.session-id';
@@ -1252,6 +1800,11 @@
       attachSurvivalWatchdogHooksToExperience(instance);
     } catch (error) {
       globalScope?.console?.debug?.('Failed to attach survival watchdog hooks to experience.', error);
+    }
+    try {
+      attachIsolatedGameWorkersToExperience(instance);
+    } catch (error) {
+      globalScope?.console?.debug?.('Failed to attach isolated game workers to experience.', error);
     }
   }
 
