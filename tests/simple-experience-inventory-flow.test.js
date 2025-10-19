@@ -479,6 +479,7 @@ describe('simple experience inventory and crafting flows', () => {
 
     const updateInventorySpy = vi.spyOn(experience, 'updateInventoryUi').mockImplementation(() => {});
     const updateHudSpy = vi.spyOn(experience, 'updateHud').mockImplementation(() => {});
+    const eventSpy = vi.spyOn(experience, 'emitGameEvent').mockImplementation(() => {});
 
     experience.hotbar.forEach((slot) => {
       slot.item = null;
@@ -500,6 +501,15 @@ describe('simple experience inventory and crafting flows', () => {
     expect(experience.selectedHotbarIndex).toBe(1);
     expect(updateInventorySpy).toHaveBeenCalled();
     expect(updateHudSpy).toHaveBeenCalledWith(expect.objectContaining({ reason: 'respawn' }));
+    expect(eventSpy).toHaveBeenCalledWith(
+      'player-defeated',
+      expect.objectContaining({
+        respawnSource: 'spawn-column',
+        inventoryRestored: true,
+        inventoryCount: 11,
+        scorePenalty: 0,
+      }),
+    );
   });
 
   it('falls back to placeholder slots when drag payloads are malformed', () => {
