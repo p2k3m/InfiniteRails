@@ -96,6 +96,34 @@ above whenever you want to regression-test the work-in-progress advanced build w
 
 An automatic “safe mode” circuit breaker now guards the boot sequence: if the advanced renderer fails to emit its start signal within five seconds, the watchdog logs the timeout and relaunches the simplified sandbox. Overriding `APP_CONFIG.rendererStartTimeoutMs` still allows deployments to extend or reduce that window when necessary.
 
+### Health checks & diagnostics
+
+#### Runtime heartbeat checks
+
+Set `APP_CONFIG.healthEndpoint` to the fully-qualified URL you want the client to ping for uptime monitoring. The bootstrap validates that the endpoint is absolute, uses HTTP(S), and falls back gracefully when the config is missing or malformed. You can customise the cadence with `APP_CONFIG.healthHeartbeatIntervalMs` (milliseconds) or `APP_CONFIG.healthHeartbeatMinutes` (minutes); both values are clamped to a minimum of 60 seconds and default to five minutes when omitted.【F:script.js†L12705-L12784】
+
+At runtime the watchdog records every result to the diagnostics feed and automatically schedules new heartbeats while the endpoint remains healthy. You can inspect or trigger checks manually from the browser console by using the exposed test hooks:
+
+```js
+const hooks = window.__INFINITE_RAILS_TEST_HOOKS__;
+hooks.getHeartbeatState();      // Returns endpoint, status, and last result snapshot.
+hooks.triggerHeartbeat({ force: true }); // Immediately replays the POST, even if the monitor is paused.
+```
+
+These helpers expose the same telemetry used by CI to confirm the deployment target is live, making it easy to run ad‑hoc health checks before handing off a build.【F:script.js†L24345-L24375】
+
+#### Circuit breakers & fallbacks
+
+If the renderer misses its startup deadline the watchdog cancels the pending boot and marks the attempt before swapping to the safe-mode sandbox. When you need to tune the timeout, raise or lower `APP_CONFIG.rendererStartTimeoutMs` so the watchdog matches your hosting environment.【F:script.js†L24383-L24426】
+
+While the watchdog is recovering you can still surface the text-only “Mission Briefing” flow (also bound to <kbd>F9</kbd>) to keep players moving. Triggering `window.__INFINITE_RAILS_TEST_HOOKS__.activateMissionBriefingFallback()` pins the fallback UI in place, disables the start button, and rewrites the objectives copy so support teams can walk players through the scenario without the renderer online.【F:script.js†L24428-L24513】
+
+#### Collecting diagnostic logs
+
+Every boot failure, heartbeat result, and user-facing recovery action is funnelled into the diagnostics overlay. Use the **Download logs** button in that overlay to save a JSON bundle that includes boot snapshots, live diagnostics, and manifest verification results.【F:script.js†L5984-L6024】【F:script.js†L16830-L16899】
+
+The same report is available programmatically; calling `window.InfiniteRails.bootDiagnostics.downloadReport()` emits the identical JSON payload used by the UI button, and `window.InfiniteRails.logs.getEntries()` surfaces the rolling console buffer for deeper dives.【F:script.js†L900-L908】【F:script.js†L25422-L25431】
+
 ### Troubleshooting
 
 #### White screen or blank viewport
