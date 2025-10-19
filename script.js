@@ -19015,13 +19015,13 @@
   }
 
   const THREE_SCRIPT_URL = (() => {
-    const candidates = createAssetUrlCandidates('vendor/three.min.js?v=030c75d4e909.63770a240073-dirty', {
+    const candidates = createAssetUrlCandidates('vendor/three.min.js?v=030c75d4e909.59b517c397ff-dirty', {
       preloadedSelector: 'script[data-preload-three]',
     });
     return candidates.length ? candidates[0] : null;
   })();
   const GLTF_LOADER_URL = (() => {
-    const candidates = createAssetUrlCandidates('vendor/GLTFLoader.js?v=0e92b0589a2a.63770a240073-dirty');
+    const candidates = createAssetUrlCandidates('vendor/GLTFLoader.js?v=0e92b0589a2a.59b517c397ff-dirty');
     return candidates.length ? candidates[0] : null;
   })();
   const TEST_DRIVER_SCRIPT_URL = (() => {
