@@ -15074,6 +15074,13 @@
     'keybindings-changed',
   ]);
 
+  const EVENT_SOURCING_IMMEDIATE_FLUSH_TYPES = new Set([
+    'identity-change',
+    'audio-settings-changed',
+    'control-map-changed',
+    'keybindings-changed',
+  ]);
+
   const EVENT_SOURCING_MAX_QUEUE = 120;
   const EVENT_SOURCING_BATCH_SIZE = 10;
   const EVENT_SOURCING_FLUSH_INTERVAL_MS = 1500;
@@ -15810,6 +15817,13 @@
         return;
       }
       pushEventSourcingEntry(entry);
+      if (EVENT_SOURCING_IMMEDIATE_FLUSH_TYPES.has(type)) {
+        try {
+          scheduleEventSourcingFlush({ immediate: true });
+        } catch (flushError) {
+          globalScope?.console?.debug?.('Failed to schedule immediate event sourcing flush.', flushError);
+        }
+      }
     } catch (error) {
       globalScope?.console?.debug?.('Failed to queue gameplay event for sourcing.', error);
     }
