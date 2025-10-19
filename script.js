@@ -19872,6 +19872,24 @@
     disableScoreSync: false,
   });
 
+  const HEALTH_DEGRADED_STATUSES = new Set([
+    'degraded',
+    'degraded-performance',
+    'partial-outage',
+    'partial-outages',
+    'major-outage',
+    'major-outages',
+    'major-incident',
+    'critical',
+    'outage',
+    'outages',
+    'maintenance',
+    'maintenance-mode',
+    'incident',
+    'incidents',
+    'suspended',
+  ]);
+
   const featureFlagState = {
     flags: { ...FEATURE_FLAG_DEFAULTS },
     messages: { scoreboard: null },
@@ -19881,6 +19899,7 @@
       updatedAt: null,
       fetchedAt: null,
       url: null,
+      health: null,
     },
     ready: false,
     listeners: new Set(),
@@ -19956,6 +19975,80 @@
     return Number.isNaN(date.getTime()) ? null : date.toISOString();
   }
 
+  function normaliseFeatureFlagStatus(value, maxLength = 64) {
+    const raw = normaliseFeatureFlagMessage(value, maxLength);
+    if (!raw) {
+      return { raw: null, normalised: null };
+    }
+    const normalised = raw
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+/, '')
+      .replace(/-+$/, '');
+    return { raw, normalised: normalised || raw.toLowerCase() };
+  }
+
+  function resolveHealthOverridesForFeatureFlags(source = {}) {
+    const health = source && typeof source === 'object' ? source : {};
+    const { raw: rawStatus, normalised: status } = normaliseFeatureFlagStatus(
+      health.status ?? health.state ?? health.level ?? health.condition,
+    );
+    const degraded = Boolean(status && HEALTH_DEGRADED_STATUSES.has(status));
+
+    const healthFeatures =
+      health.features && typeof health.features === 'object' ? health.features : {};
+
+    const safeModeCandidate = normaliseFeatureFlagBoolean(
+      health.safeMode ?? health.forceSafeMode ?? health.enableSafeMode,
+    );
+    const safeMode =
+      safeModeCandidate === null ? (degraded ? true : null) : safeModeCandidate;
+
+    const forceSimpleRenderer = normaliseFeatureFlagBoolean(
+      healthFeatures.forceSimpleRenderer ??
+        healthFeatures.forceSimpleMode ??
+        health.forceSimpleRenderer ??
+        health.forceSimpleMode,
+    );
+
+    const disableScoreSync = normaliseFeatureFlagBoolean(
+      healthFeatures.disableScoreSync ??
+        healthFeatures.suspendLiveFeatures ??
+        healthFeatures.disableLeaderboard ??
+        health.disableScoreSync ??
+        health.suspendLiveFeatures,
+    );
+
+    const message = normaliseFeatureFlagMessage(
+      health.message ??
+        health.scoreboardMessage ??
+        health.leaderboardMessage ??
+        healthFeatures.message,
+    );
+
+    const updatedAt = normaliseFeatureFlagTimestamp(health.updatedAt ?? health.timestamp);
+
+    const metadata = {
+      status: status ?? null,
+      rawStatus: rawStatus ?? null,
+      degraded,
+    };
+    if (updatedAt) {
+      metadata.updatedAt = updatedAt;
+    }
+    if (message) {
+      metadata.message = message;
+    }
+
+    return {
+      safeMode,
+      forceSimpleRenderer,
+      disableScoreSync,
+      message,
+      metadata,
+    };
+  }
+
   function cloneFeatureFlagSnapshot() {
     return {
       flags: { ...featureFlagState.flags },
@@ -20017,53 +20110,110 @@
 
     const safeMode = normaliseFeatureFlagBoolean(featuresCandidate.safeMode ?? base.safeMode);
 
-    const resolvedForceSimple =
-      safeMode === true
-        ? true
-        : normaliseFeatureFlagBoolean(
-            featuresCandidate.forceSimpleRenderer ??
-              featuresCandidate.forceSimpleMode ??
-              featuresCandidate.simpleMode ??
-              base.forceSimpleRenderer ??
-              base.forceSimpleMode,
-          );
+    const resolvedForceSimpleCandidate = normaliseFeatureFlagBoolean(
+      featuresCandidate.forceSimpleRenderer ??
+        featuresCandidate.forceSimpleMode ??
+        featuresCandidate.simpleMode ??
+        base.forceSimpleRenderer ??
+        base.forceSimpleMode,
+    );
 
-    const resolvedDisableScoreSync =
-      safeMode === true
-        ? true
-        : normaliseFeatureFlagBoolean(
-            featuresCandidate.disableScoreSync ??
-              featuresCandidate.suspendLiveFeatures ??
-              featuresCandidate.disableLeaderboard ??
-              base.disableScoreSync ??
-              base.suspendLiveFeatures,
-          );
+    const resolvedDisableScoreSyncCandidate = normaliseFeatureFlagBoolean(
+      featuresCandidate.disableScoreSync ??
+        featuresCandidate.suspendLiveFeatures ??
+        featuresCandidate.disableLeaderboard ??
+        base.disableScoreSync ??
+        base.suspendLiveFeatures,
+    );
 
-    const scoreboardMessage = normaliseFeatureFlagMessage(
+    const health = resolveHealthOverridesForFeatureFlags(base.health);
+
+    let resolvedForceSimple =
+      resolvedForceSimpleCandidate === null
+        ? FEATURE_FLAG_DEFAULTS.forceSimpleRenderer
+        : resolvedForceSimpleCandidate;
+    if (safeMode === true || health.safeMode === true) {
+      resolvedForceSimple = true;
+    } else if (health.forceSimpleRenderer === true) {
+      resolvedForceSimple = true;
+    } else if (health.forceSimpleRenderer === false) {
+      resolvedForceSimple = false;
+    }
+
+    let resolvedDisableScoreSync =
+      resolvedDisableScoreSyncCandidate === null
+        ? FEATURE_FLAG_DEFAULTS.disableScoreSync
+        : resolvedDisableScoreSyncCandidate;
+    if (safeMode === true || health.safeMode === true) {
+      resolvedDisableScoreSync = true;
+    } else if (health.disableScoreSync === true) {
+      resolvedDisableScoreSync = true;
+    } else if (health.disableScoreSync === false) {
+      resolvedDisableScoreSync = false;
+    }
+
+    let scoreboardMessage = normaliseFeatureFlagMessage(
       (base.messages && (base.messages.scoreboard ?? base.messages.leaderboard)) ??
         featuresCandidate.scoreboardMessage ??
         featuresCandidate.leaderboardMessage ??
         base.scoreboardMessage,
     );
 
+    if (!scoreboardMessage && (resolvedDisableScoreSync || health.message)) {
+      scoreboardMessage =
+        health.message ??
+        'Leaderboard maintenance in progress — runs stay local until service resumes.';
+    }
+
+    const metadata = {
+      version: normaliseFeatureFlagMessage(base.version ?? base.revision ?? null, 64),
+      updatedAt: normaliseFeatureFlagTimestamp(base.updatedAt ?? base.timestamp ?? null),
+    };
+
+    const healthMetadata = {
+      ...health.metadata,
+      degraded:
+        Boolean(health.metadata.degraded) ||
+        safeMode === true ||
+        health.safeMode === true ||
+        resolvedDisableScoreSync === true ||
+        resolvedForceSimple === true,
+    };
+    if (!healthMetadata.message && (health.message || scoreboardMessage)) {
+      healthMetadata.message = health.message ?? scoreboardMessage ?? null;
+    }
+    if (!healthMetadata.status && healthMetadata.rawStatus) {
+      const { normalised } = normaliseFeatureFlagStatus(healthMetadata.rawStatus);
+      if (normalised) {
+        healthMetadata.status = normalised;
+      }
+    }
+    delete healthMetadata.rawStatus;
+    if (!healthMetadata.status) {
+      delete healthMetadata.status;
+    }
+    if (!healthMetadata.message) {
+      delete healthMetadata.message;
+    }
+    if (!healthMetadata.updatedAt) {
+      delete healthMetadata.updatedAt;
+    }
+    if (!healthMetadata.degraded) {
+      healthMetadata.degraded = false;
+    }
+    if (Object.keys(healthMetadata).length) {
+      metadata.health = healthMetadata;
+    }
+
     return {
       flags: {
-        forceSimpleRenderer:
-          resolvedForceSimple === null
-            ? FEATURE_FLAG_DEFAULTS.forceSimpleRenderer
-            : resolvedForceSimple,
-        disableScoreSync:
-          resolvedDisableScoreSync === null
-            ? FEATURE_FLAG_DEFAULTS.disableScoreSync
-            : resolvedDisableScoreSync,
+        forceSimpleRenderer: resolvedForceSimple,
+        disableScoreSync: resolvedDisableScoreSync,
       },
       messages: {
         scoreboard: scoreboardMessage,
       },
-      metadata: {
-        version: normaliseFeatureFlagMessage(base.version ?? base.revision ?? null, 64),
-        updatedAt: normaliseFeatureFlagTimestamp(base.updatedAt ?? base.timestamp ?? null),
-      },
+      metadata,
     };
   }
 
@@ -20181,6 +20331,12 @@
         featureFlagState.metadata?.url ??
         resolveFeatureFlagUrl(globalScope?.APP_CONFIG) ??
         null,
+      health:
+        normalised.metadata.health !== undefined
+          ? { ...normalised.metadata.health }
+          : featureFlagState.metadata?.health
+            ? { ...featureFlagState.metadata.health }
+            : null,
     };
     featureFlagState.lastError = null;
     applyFeatureFlagEffects({ source: featureFlagState.metadata.source });
@@ -20283,6 +20439,7 @@
       updatedAt: null,
       fetchedAt: new Date().toISOString(),
       url: resolveFeatureFlagUrl(config),
+      health: null,
     };
     featureFlagState.ready = false;
     featureFlagState.lastError = null;
