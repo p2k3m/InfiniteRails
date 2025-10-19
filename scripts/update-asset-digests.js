@@ -43,6 +43,8 @@ function updateFileReferences(versionMap) {
     path.join(repoRoot, 'tests', 'renderer-three-init.test.js'),
   ];
 
+  const updatedFiles = [];
+
   targetFiles.forEach((filePath) => {
     if (!fs.existsSync(filePath)) {
       return;
@@ -56,63 +58,81 @@ function updateFileReferences(versionMap) {
     if (updated !== original) {
       fs.writeFileSync(filePath, updated);
       console.log(`Updated cache-busting references in ${path.relative(repoRoot, filePath)}`);
+      updatedFiles.push(path.relative(repoRoot, filePath));
     }
   });
+
+  return updatedFiles;
 }
 
 function ensureManifestDigests() {
   const buildSha = resolveBuildSha();
-  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-  const { entries } = loadManifest();
+  const maxPasses = 10;
+  let pass = 0;
+  let hasLoggedUpdates = false;
 
-  const updates = [];
-  const versionMap = new Map();
-  entries.forEach((entry, index) => {
-    const fullPath = path.join(repoRoot, entry.path);
-    let stats;
-    try {
-      stats = fs.statSync(fullPath);
-    } catch (error) {
-      return;
-    }
+  while (pass < maxPasses) {
+    pass += 1;
 
-    if (!stats.isFile()) {
-      return;
-    }
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    const { entries } = loadManifest();
 
-    const digest = computeAssetDigest(fullPath);
-    const expectedVersion = formatAssetVersion(digest, buildSha);
-    versionMap.set(entry.path, expectedVersion);
-    if (entry.version === expectedVersion) {
-      return;
-    }
+    const updates = [];
+    const versionMap = new Map();
 
-    const originalVersion = entry.version;
-    manifest.assets[index] = rewriteAssetReference(entry, digest, buildSha);
-    updates.push({
-      asset: entry.path,
-      from: originalVersion,
-      to: expectedVersion,
+    entries.forEach((entry, index) => {
+      const fullPath = path.join(repoRoot, entry.path);
+      let stats;
+      try {
+        stats = fs.statSync(fullPath);
+      } catch (error) {
+        return;
+      }
+
+      if (!stats.isFile()) {
+        return;
+      }
+
+      const digest = computeAssetDigest(fullPath);
+      const expectedVersion = formatAssetVersion(digest, buildSha);
+      versionMap.set(entry.path, expectedVersion);
+      if (entry.version === expectedVersion) {
+        return;
+      }
+
+      const originalVersion = entry.version;
+      manifest.assets[index] = rewriteAssetReference(entry, digest, buildSha);
+      updates.push({
+        asset: entry.path,
+        from: originalVersion,
+        to: expectedVersion,
+      });
     });
-  });
 
-  if (updates.length === 0) {
-    console.log('asset-manifest.json digests already match on-disk assets.');
-    updateFileReferences(versionMap);
-    return;
+    if (updates.length > 0) {
+      fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+      console.log('Updated asset-manifest.json digests:');
+      for (const update of updates) {
+        const fromValue = update.from ? `v=${update.from}` : 'missing digest';
+        console.log(` • ${update.asset}: ${fromValue} → v=${update.to}`);
+      }
+      console.log('\nReview and commit asset-manifest.json before publishing.');
+
+      hasLoggedUpdates = true;
+    }
+
+    const updatedFiles = updateFileReferences(versionMap);
+
+    if (updates.length === 0 && updatedFiles.length === 0) {
+      if (!hasLoggedUpdates) {
+        console.log('asset-manifest.json digests already match on-disk assets.');
+      }
+      return;
+    }
   }
 
-  fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
-
-  updateFileReferences(versionMap);
-
-  console.log('Updated asset-manifest.json digests:');
-  for (const update of updates) {
-    const fromValue = update.from ? `v=${update.from}` : 'missing digest';
-    console.log(` • ${update.asset}: ${fromValue} → v=${update.to}`);
-  }
-
-  console.log('\nReview and commit asset-manifest.json before publishing.');
+  throw new Error('Unable to synchronise asset digests after multiple passes.');
 }
 
 function main() {
