@@ -16262,6 +16262,223 @@
     updateEventOverlayContainerState();
   }
 
+  const EVENT_STATUS_PRESETS = {
+    'recipe-crafted': { icon: '🛠️', label: 'Crafting', variant: 'success' },
+    'player-defeated': { icon: '💀', label: 'Respawn', variant: 'danger' },
+    'loot-collected': { icon: '💎', label: 'Loot', variant: 'success' },
+    'portal-ready': { icon: '🌀', label: 'Portal', variant: 'info' },
+    'portal-activated': { icon: '🚪', label: 'Portal', variant: 'success' },
+    'start-error': { icon: '🚫', label: 'Error', variant: 'danger' },
+    'initialisation-error': { icon: '⚠️', label: 'Error', variant: 'danger' },
+    'renderer-failure': { icon: '💥', label: 'Error', variant: 'danger' },
+  };
+
+  const eventStatusState = {
+    container: null,
+    entries: [],
+    listenersBound: false,
+    maxEntries: 4,
+  };
+
+  function getEventStatusContainer() {
+    const container = eventStatusState.container;
+    if (container && container.isConnected) {
+      return container;
+    }
+    if (!documentRef || typeof documentRef.getElementById !== 'function') {
+      return container || null;
+    }
+    const element = documentRef.getElementById('eventStatusFeed');
+    if (element) {
+      eventStatusState.container = element;
+      return element;
+    }
+    return container || null;
+  }
+
+  function updateEventStatusContainerState() {
+    const container = getEventStatusContainer();
+    if (!container) {
+      return;
+    }
+    if (container.dataset) {
+      container.dataset.populated = container.childElementCount > 0 ? 'true' : 'false';
+    }
+  }
+
+  function setEventStatusContainer(element) {
+    if (!element) {
+      return;
+    }
+    eventStatusState.container = element;
+    renderEventStatusEntries();
+  }
+
+  function resolveEventStatusPreset(type) {
+    if (typeof type !== 'string') {
+      return { icon: '✨', label: 'Status', variant: 'info' };
+    }
+    return EVENT_STATUS_PRESETS[type] || { icon: '✨', label: 'Status', variant: 'info' };
+  }
+
+  function createEventStatusElement(entry, doc) {
+    if (!entry || !doc?.createElement) {
+      return null;
+    }
+    const item = doc.createElement('li');
+    item.className = 'status-feed__entry';
+    item.dataset.variant = entry.variant || 'info';
+    item.setAttribute('role', 'status');
+    item.setAttribute('aria-label', `${entry.label}: ${entry.message}`);
+
+    const iconEl = doc.createElement('span');
+    iconEl.className = 'status-feed__icon';
+    iconEl.setAttribute('aria-hidden', 'true');
+    iconEl.textContent = entry.icon || '✨';
+
+    const bodyEl = doc.createElement('span');
+    bodyEl.className = 'status-feed__body';
+
+    const labelEl = doc.createElement('span');
+    labelEl.className = 'status-feed__label';
+    labelEl.textContent = entry.label || 'Status';
+
+    const messageEl = doc.createElement('span');
+    messageEl.className = 'status-feed__message';
+    messageEl.textContent = entry.message || '';
+
+    bodyEl.appendChild(labelEl);
+    bodyEl.appendChild(messageEl);
+    item.appendChild(iconEl);
+    item.appendChild(bodyEl);
+    return item;
+  }
+
+  function renderEventStatusEntries() {
+    const container = getEventStatusContainer();
+    if (!container) {
+      return;
+    }
+    while (container.firstChild) {
+      container.removeChild(container.firstChild);
+    }
+    const doc = container.ownerDocument || documentRef;
+    const fragment = doc?.createDocumentFragment ? doc.createDocumentFragment() : null;
+    eventStatusState.entries.forEach((entry) => {
+      const node = createEventStatusElement(entry, doc);
+      if (node) {
+        if (fragment) {
+          fragment.appendChild(node);
+        } else {
+          container.appendChild(node);
+        }
+      }
+    });
+    if (fragment) {
+      container.appendChild(fragment);
+    }
+    updateEventStatusContainerState();
+  }
+
+  function sanitiseEventStatusMessage(type, detail) {
+    const described = describeEventLogMessage(type, detail);
+    if (typeof described === 'string' && described.trim().length) {
+      return described.trim();
+    }
+    const direct = typeof detail?.message === 'string' ? detail.message.trim() : '';
+    if (direct) {
+      return direct;
+    }
+    if (type === 'recipe-crafted') {
+      return 'Recipe crafted.';
+    }
+    if (type === 'loot-collected') {
+      return 'Loot secured.';
+    }
+    if (type === 'player-defeated') {
+      return 'Respawn initiated.';
+    }
+    if (type === 'portal-ready') {
+      return 'Portal frame stabilised.';
+    }
+    if (type === 'portal-activated') {
+      return 'Portal activated.';
+    }
+    if (type === 'renderer-failure') {
+      return 'Renderer failure encountered.';
+    }
+    if (type === 'start-error') {
+      return 'Renderer initialisation failed.';
+    }
+    if (type === 'initialisation-error') {
+      return 'Initialisation error encountered.';
+    }
+    return '';
+  }
+
+  function createEventStatusEntry(type, detail = {}) {
+    const message = sanitiseEventStatusMessage(type, detail);
+    if (!message) {
+      return null;
+    }
+    const preset = resolveEventStatusPreset(type);
+    const icon =
+      (typeof detail?.icon === 'string' && detail.icon.trim().length ? detail.icon.trim() : null) || preset.icon;
+    const variant =
+      (typeof detail?.variant === 'string' && detail.variant.trim().length ? detail.variant.trim() : null) ||
+      preset.variant ||
+      'info';
+    const label =
+      (typeof detail?.label === 'string' && detail.label.trim().length ? detail.label.trim() : null) ||
+      preset.label ||
+      'Status';
+    return {
+      type,
+      message,
+      icon,
+      variant,
+      label,
+      timestamp: Number.isFinite(detail?.timestamp) ? detail.timestamp : Date.now(),
+    };
+  }
+
+  function addEventStatusEntry(type, detail = {}) {
+    const entry = createEventStatusEntry(type, detail);
+    if (!entry) {
+      return;
+    }
+    eventStatusState.entries = eventStatusState.entries.filter(
+      (existing) => existing.type !== entry.type || existing.message !== entry.message,
+    );
+    eventStatusState.entries.unshift(entry);
+    while (eventStatusState.entries.length > eventStatusState.maxEntries) {
+      eventStatusState.entries.pop();
+    }
+    renderEventStatusEntries();
+  }
+
+  function ensureEventStatusListeners() {
+    if (eventStatusState.listenersBound || typeof globalScope?.addEventListener !== 'function') {
+      return;
+    }
+    const register = (type) => {
+      globalScope.addEventListener(`infinite-rails:${type}`, (event) => {
+        addEventStatusEntry(type, event?.detail ?? {});
+      });
+    };
+    ['recipe-crafted', 'player-defeated', 'loot-collected', 'portal-ready', 'portal-activated'].forEach(register);
+    ['start-error', 'initialisation-error', 'renderer-failure'].forEach(register);
+    eventStatusState.listenersBound = true;
+  }
+
+  function bindExperienceEventStatus(ui) {
+    if (ui?.eventStatusFeed) {
+      setEventStatusContainer(ui.eventStatusFeed);
+    }
+    ensureEventStatusListeners();
+    renderEventStatusEntries();
+  }
+
   function getEventLogHistorySnapshot() {
     return eventLogState.history.map((entry) => ({
       type: entry.type,
@@ -22548,6 +22765,7 @@
       heartsEl: byId('hearts'),
       bubblesEl: byId('bubbles'),
       timeEl: byId('timeOfDay'),
+      eventStatusFeed: byId('eventStatusFeed'),
       scorePanelEl: byId('scorePanel'),
       scoreTotalEl: byId('scoreTotal'),
       scoreRecipesEl: byId('scoreRecipes'),
@@ -22915,6 +23133,7 @@
       DEV_STATS: 'ui-developer-stats',
       DIAGNOSTICS: 'ui-diagnostics',
       EVENT_LOG: 'ui-event-log',
+      EVENT_STATUS: 'ui-event-status',
       EVENT_OVERLAYS: 'ui-event-overlays',
     };
 
@@ -23013,6 +23232,10 @@
     uiLoader.register('experience-event-log', (context) => bindExperienceEventLog(context.ui || {}), {
       guard: createUiGuard('eventLogEl'),
       circuitBreaker: CIRCUITS.EVENT_LOG,
+    });
+    uiLoader.register('experience-event-status', (context) => bindExperienceEventStatus(context.ui || {}), {
+      guard: createUiGuard('eventStatusFeed'),
+      circuitBreaker: CIRCUITS.EVENT_STATUS,
     });
     uiLoader.register('experience-event-overlays', (context) => bindExperienceEventOverlays(context.ui || {}), {
       guard: createUiGuard('eventOverlayStack'),

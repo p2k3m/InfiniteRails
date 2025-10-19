@@ -344,13 +344,20 @@
             <div class="hud-status" aria-label="Player vitals" role="group" data-hint="Health, oxygen, and time remainers.">
               <div class="status-item hearts" id="hearts" data-hint="Current health hearts."></div>
               <div class="status-item bubbles" id="bubbles" data-hint="Breath remaining while underwater."></div>
-                <div class="status-item time" id="timeOfDay" data-hint="Local dimension time."></div>
-              </div>
-              <button
-                type="button"
-                class="craft-launcher"
-                id="openCrafting"
-                aria-label="Open crafting interface"
+              <div class="status-item time" id="timeOfDay" data-hint="Local dimension time."></div>
+              <ul
+                class="status-feed"
+                id="eventStatusFeed"
+                role="status"
+                aria-live="polite"
+                aria-label="Recent status updates"
+              ></ul>
+            </div>
+            <button
+              type="button"
+              class="craft-launcher"
+              id="openCrafting"
+              aria-label="Open crafting interface"
                 aria-haspopup="dialog"
                 aria-controls="craftingModal"
                 data-hint="Launch the portable crafting interface."
