@@ -21,6 +21,21 @@ describe('simple experience dimension plugins', () => {
     }
   });
 
+  it('registers the core dimension pack plugin on load', () => {
+    const pluginId = window.SimpleExperience?.coreDimensionPluginId;
+    expect(typeof pluginId).toBe('string');
+    const plugins = pluginRegistry.listPlugins('dimension-pack');
+    const matching = plugins.filter((plugin) => plugin && plugin.id === pluginId);
+    expect(matching.length).toBeGreaterThanOrEqual(1);
+    const active = pluginRegistry.getActivePlugin('dimension-pack');
+    expect(active?.id).toBe(pluginId);
+    const resources = pluginRegistry.getResources('dimension-pack');
+    expect(Array.isArray(resources?.themes)).toBe(true);
+    expect(resources.themes.length).toBeGreaterThan(0);
+    const state = window.SimpleExperience.getDimensionPluginState();
+    expect(state?.lastApplied?.pluginId).toBe(pluginId);
+  });
+
   it('hot swaps dimension content at runtime and refreshes active experiences', () => {
     const { experience } = createExperience();
     expect(experience.dimensionSettings?.id).toBeTruthy();
