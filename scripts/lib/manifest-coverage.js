@@ -1,6 +1,10 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
+/**
+ * File extensions considered when scanning for asset references within text files.
+ * @type {Set<string>}
+ */
 const TEXT_REFERENCE_EXTENSIONS = new Set([
   '.js',
   '.cjs',
@@ -18,8 +22,16 @@ const TEXT_REFERENCE_EXTENSIONS = new Set([
   '.svg',
 ]);
 
+/**
+ * Directories that should be ignored when scanning for asset references.
+ * @type {Set<string>}
+ */
 const REFERENCE_EXCLUDE_DIRS = new Set(['node_modules', '.git', 'coverage', 'dist', 'docs', 'tests']);
 
+/**
+ * Manifest entries that are considered referenced regardless of textual matches.
+ * @type {Set<string>}
+ */
 const DEFAULT_ALWAYS_REACHABLE_ASSETS = new Set([
   'index.html',
   'styles.css',
@@ -41,21 +53,48 @@ const DEFAULT_ALWAYS_REACHABLE_ASSETS = new Set([
   'vendor/howler-stub.js',
 ]);
 
+/**
+ * Converts a filesystem path to POSIX-style separators for consistent comparisons.
+ *
+ * @param {string} value
+ * @returns {string}
+ */
 function toPosixPath(value) {
   return value.split(path.sep).join('/');
 }
 
+/**
+ * Merges custom always-reachable assets with the default set of entries.
+ *
+ * @param {Iterable<string> | undefined | null} input
+ * @returns {Set<string>}
+ */
 function normaliseAlwaysReachable(input) {
   const values = Array.isArray(input) || input instanceof Set ? Array.from(input) : [];
   return new Set([...DEFAULT_ALWAYS_REACHABLE_ASSETS, ...values]);
 }
 
+/**
+ * Determines whether a file should be scanned for potential asset references.
+ *
+ * @param {string} relativePath
+ * @param {{ textExtensions?: Set<string> }} [options]
+ * @returns {boolean}
+ */
 function isTextReferenceFile(relativePath, options = {}) {
   const extensions = options.textExtensions || TEXT_REFERENCE_EXTENSIONS;
   const extension = path.extname(relativePath).toLowerCase();
   return extensions.has(extension);
 }
 
+/**
+ * Recursively collects files that may reference assets via textual content.
+ *
+ * @param {string} baseDir
+ * @param {{ excludeDirs?: Iterable<string> }} [options]
+ * @param {string} [relativeDir]
+ * @returns {{ relative: string, absolute: string }[]}
+ */
 function collectReferenceFiles(baseDir, options = {}, relativeDir = '') {
   const excludeDirs = options.excludeDirs ? new Set(options.excludeDirs) : REFERENCE_EXCLUDE_DIRS;
   const directoryPath = relativeDir ? path.join(baseDir, relativeDir) : baseDir;
@@ -94,6 +133,13 @@ function collectReferenceFiles(baseDir, options = {}, relativeDir = '') {
   return files;
 }
 
+/**
+ * Identifies manifest assets that have no textual references in the project.
+ *
+ * @param {string[]} assets
+ * @param {{ baseDir?: string, alwaysReachable?: Iterable<string> }} [options]
+ * @returns {{ unreachable: string[], references: Map<string, string[]> }}
+ */
 function listUnreachableManifestAssets(assets, options = {}) {
   if (!Array.isArray(assets) || assets.length === 0) {
     return { unreachable: [], references: new Map() };

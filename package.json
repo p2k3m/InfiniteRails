@@ -4,7 +4,7 @@
   "description": "Infinite Dimension is a browser-based voxel survival-puzzle prototype built entirely with vanilla HTML, CSS, and JavaScript. Gather resources, craft ordered recipes, stabilise portals, and brave bespoke rulesets in every dimension as you race to recover the Eternal Ingot. This iteration introduces a responsive profile hub, optional Google SSO, geolocation capture, and a DynamoDB-ready scoreboard that showcases every explorer’s run.",
   "main": "script.js",
   "scripts": {
-    "pretest": "node scripts/check-simple-experience.js",
+    "pretest": "node scripts/check-simple-experience.js && node scripts/check-inline-docs.js",
     "test": "vitest run",
     "test:e2e": "node tests/e2e-check.js",
     "check:manifest": "node scripts/check-manifest.js",

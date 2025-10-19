@@ -165,6 +165,13 @@ function isRelativePath(value) {
   return !/^(?:[a-z]+:)?\/\//i.test(normalised) && !normalised.startsWith('data:');
 }
 
+/**
+ * Generates potential offline manifest entries for a given model reference.
+ *
+ * @param {string} modelPath
+ * @param {string} manifestKey
+ * @returns {string[]}
+ */
 function toOfflineCandidates(modelPath, manifestKey) {
   const candidates = new Set();
   if (manifestKey) {
@@ -197,6 +204,10 @@ function toOfflineCandidates(modelPath, manifestKey) {
   return Array.from(candidates);
 }
 
+/**
+ * Validates the asset manifest against runtime requirements and fallbacks.
+ * Ensures all referenced models have offline substitutes when required.
+ */
 function validateManifest() {
   const manifest = loadManifest();
   const offlineAssets = loadOfflineAssets();

@@ -267,6 +267,13 @@ function sanitizeProgress(payload) {
   return progress;
 }
 
+/**
+ * Lambda handler that manages user inventory snapshots and trades.
+ *
+ * @param {object} event
+ * @param {object} [awsContext]
+ * @returns {Promise<import('../lib/http').ApiResponse>}
+ */
 exports.handler = async (event, awsContext = {}) => {
   const trace = createTraceContext(event, awsContext);
   const logger = createTraceLogger(trace);

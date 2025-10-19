@@ -2,6 +2,10 @@
 
 const { applyTraceHeaders, embedTraceInBody } = require('./trace');
 
+/**
+ * Strict Content-Security-Policy applied to all serverless HTTP responses.
+ * @type {string}
+ */
 const CONTENT_SECURITY_POLICY = [
   "default-src 'none'",
   "base-uri 'none'",
@@ -10,6 +14,10 @@ const CONTENT_SECURITY_POLICY = [
   "connect-src 'self'",
 ].join('; ');
 
+/**
+ * Security-centric HTTP headers shared by all responses.
+ * @type {Record<string, string>}
+ */
 const SECURITY_HEADERS = {
   'Content-Security-Policy': CONTENT_SECURITY_POLICY,
   'Referrer-Policy': 'same-origin',
@@ -17,6 +25,10 @@ const SECURITY_HEADERS = {
   'X-Frame-Options': 'DENY',
 };
 
+/**
+ * Default HTTP headers for API Gateway responses including CORS values.
+ * @type {Record<string, string>}
+ */
 const DEFAULT_HEADERS = {
   ...SECURITY_HEADERS,
   'Access-Control-Allow-Origin': '*',
@@ -31,6 +43,14 @@ function mergeHeaders(base, extra) {
   return { ...base, ...extra };
 }
 
+/**
+ * Creates a JSON API Gateway response while applying trace metadata.
+ *
+ * @param {number} statusCode
+ * @param {object | null} body
+ * @param {{ headers?: Record<string, string>, trace?: ReturnType<typeof import('./trace').createTraceContext> }} [options]
+ * @returns {{ statusCode: number, headers: Record<string, string>, body: string }}
+ */
 function createResponse(statusCode, body, { headers: extraHeaders = {}, trace = null } = {}) {
   const headersWithCors = mergeHeaders(DEFAULT_HEADERS, extraHeaders);
   const headers = applyTraceHeaders(headersWithCors, trace);
@@ -46,6 +66,12 @@ function createResponse(statusCode, body, { headers: extraHeaders = {}, trace = 
   };
 }
 
+/**
+ * Safely parses an API Gateway event body as JSON.
+ *
+ * @param {object} event
+ * @returns {any}
+ */
 function parseJsonBody(event) {
   if (!event || event.body === undefined || event.body === null || event.body === '') {
     return null;
@@ -78,6 +104,12 @@ function parseJsonBody(event) {
   }
 }
 
+/**
+ * Generates a standard 204 OPTIONS response with correct headers.
+ *
+ * @param {{ headers?: Record<string, string>, trace?: ReturnType<typeof import('./trace').createTraceContext> }} [options]
+ * @returns {{ statusCode: number, headers: Record<string, string>, body: string }}
+ */
 function handleOptions({ headers: extraHeaders = {}, trace = null } = {}) {
   const headersWithCors = mergeHeaders(DEFAULT_HEADERS, extraHeaders);
   const headers = applyTraceHeaders(headersWithCors, trace);

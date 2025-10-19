@@ -2,6 +2,11 @@ const { execSync } = require('node:child_process');
 const path = require('node:path');
 
 const repoRoot = path.resolve(__dirname, '..', '..');
+/**
+ * The maximum number of hexadecimal characters preserved from a raw Git SHA.
+ * This keeps build identifiers short while still being unique for local builds.
+ * @type {number}
+ */
 const BUILD_SHA_LENGTH = 12;
 
 function normaliseSha(value) {
@@ -35,6 +40,14 @@ function describeWorkingTreeState() {
   return status.split('\n').some((line) => line.trim()) ? 'dirty' : 'clean';
 }
 
+/**
+ * Determines the best available build SHA for the current repository state.
+ * Falls back through CI-provided environment variables, the local HEAD commit,
+ * and finally the working tree snapshot if necessary.
+ *
+ * @param {{ allowDirty?: boolean }} [options]
+ * @returns {string}
+ */
 function resolveBuildSha({ allowDirty = true } = {}) {
   const envCandidates = [process.env.BUILD_SHA, process.env.GITHUB_SHA, process.env.COMMIT_SHA];
   for (const candidate of envCandidates) {
