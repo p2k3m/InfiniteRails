@@ -3430,6 +3430,76 @@ body.portal-fallback-active .portal-status__icon::after {
   width: 100%;
 }
 
+.status-feed {
+  display: grid;
+  gap: clamp(0.35rem, 1.2vw, 0.55rem);
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  pointer-events: none;
+}
+
+.status-feed:empty {
+  display: none;
+}
+
+.status-feed__entry {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.45rem;
+  align-items: start;
+  padding: 0.4rem 0.55rem;
+  border-radius: 10px;
+  background: rgba(10, 24, 16, 0.55);
+  border: 1px solid rgba(73, 242, 255, 0.18);
+  border-left: 3px solid var(--accent);
+  color: var(--text-secondary);
+  box-shadow: inset 0 0 0 1px rgba(73, 242, 255, 0.04);
+}
+
+body[data-color-mode='light'] .status-feed__entry {
+  background: rgba(255, 255, 255, 0.78);
+  border: 1px solid rgba(44, 158, 232, 0.18);
+  box-shadow: inset 0 0 0 1px rgba(44, 158, 232, 0.08);
+}
+
+.status-feed__entry[data-variant='success'] {
+  border-left-color: var(--success);
+}
+
+.status-feed__entry[data-variant='warning'] {
+  border-left-color: var(--accent-strong);
+}
+
+.status-feed__entry[data-variant='danger'] {
+  border-left-color: var(--danger);
+}
+
+.status-feed__icon {
+  font-size: clamp(0.95rem, 2.2vw, 1.2rem);
+  line-height: 1;
+  filter: drop-shadow(0 2px 0 rgba(7, 18, 10, 0.55));
+}
+
+.status-feed__body {
+  display: grid;
+  gap: 0.1rem;
+}
+
+.status-feed__label {
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+.status-feed__message {
+  font-size: 0.78rem;
+  line-height: 1.35;
+  color: var(--text-secondary);
+}
+
 .hud-card--status .craft-launcher {
   justify-self: flex-start;
 }
