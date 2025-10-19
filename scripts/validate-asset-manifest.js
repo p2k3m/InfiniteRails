@@ -12,6 +12,10 @@ const workflowPath = path.join(repoRoot, '.github', 'workflows', 'deploy.yml');
 const templatePath = path.join(repoRoot, 'serverless', 'template.yaml');
 const scriptPath = path.join(repoRoot, 'script.js');
 const ASSET_PERMISSION_PREFIXES = ['assets', 'textures', 'audio'];
+/**
+ * Directories that should always be considered when validating manifest coverage.
+ * @type {string[]}
+ */
 const DEFAULT_MANIFEST_DIRECTORIES = [...ASSET_PERMISSION_PREFIXES, 'vendor'];
 const HASH_ALGORITHM = 'sha256';
 const HASH_LENGTH = 12;
@@ -80,6 +84,13 @@ function createSearchParamEntries(query) {
   return entries;
 }
 
+/**
+ * Parses and validates a raw manifest string entry into structured metadata.
+ *
+ * @param {string} asset
+ * @param {number} index
+ * @returns {{ original: string, path: string, versionedPath: string, query: string, versionValues: string[], version: string | null, extraParams: string[] }}
+ */
 function parseManifestAsset(asset, index) {
   if (typeof asset !== 'string') {
     throw new Error(`asset-manifest.json entry at index ${index} must be a string.`);
@@ -114,6 +125,12 @@ function parseManifestAsset(asset, index) {
   };
 }
 
+/**
+ * Computes the truncated content hash for a manifest asset file.
+ *
+ * @param {string} fullPath
+ * @returns {string}
+ */
 function computeAssetDigest(fullPath) {
   const contents = fs.readFileSync(fullPath);
   return crypto.createHash(HASH_ALGORITHM).update(contents).digest('hex').slice(0, HASH_LENGTH);
@@ -205,6 +222,12 @@ function normalisePath(value) {
   return value.replace(/^\.\//, '').split('?')[0];
 }
 
+/**
+ * Extracts glob-style patterns from a GitHub Actions workflow definition.
+ *
+ * @param {object} workflow
+ * @returns {string[]}
+ */
 function extractIncludePatterns(workflow) {
   const patterns = [];
   const includeRegex = /--include\s+"([^"]+)"/g;
@@ -215,6 +238,13 @@ function extractIncludePatterns(workflow) {
   return patterns;
 }
 
+/**
+ * Determines whether a workflow include pattern matches a manifest asset path.
+ *
+ * @param {string} pattern
+ * @param {string} asset
+ * @returns {boolean}
+ */
 function patternMatchesAsset(pattern, asset) {
   if (!pattern || !asset) {
     return false;
@@ -226,6 +256,11 @@ function patternMatchesAsset(pattern, asset) {
   return asset === pattern;
 }
 
+/**
+ * Loads and parses asset-manifest.json into structured asset entries.
+ *
+ * @returns {{ entries: ReturnType<typeof parseManifestAsset>[], issues: string[] }}
+ */
 function loadManifest() {
   if (!fs.existsSync(manifestPath)) {
     throw new Error('asset-manifest.json is missing from the repository root.');
@@ -274,6 +309,12 @@ function loadManifest() {
   return { entries, assetBaseUrl: manifestBaseUrl };
 }
 
+/**
+ * Ensures manifest entries contain unique paths and query variants.
+ *
+ * @param {ReturnType<typeof parseManifestAsset>[] | undefined} assets
+ * @returns {string[]}
+ */
 function ensureUniqueAssets(assets) {
   const seen = new Set();
   const duplicates = new Set();
@@ -286,6 +327,12 @@ function ensureUniqueAssets(assets) {
   return Array.from(duplicates);
 }
 
+/**
+ * Identifies manifest entries whose target files do not exist on disk.
+ *
+ * @param {ReturnType<typeof parseManifestAsset>[]}
+ * @returns {string[]}
+ */
 function listMissingFiles(assets) {
   return assets.filter((asset) => {
     const fullPath = path.join(repoRoot, asset);
@@ -344,6 +391,12 @@ function describePermissionIssues(fullPath, { includeStatErrors = false } = {}) 
   };
 }
 
+/**
+ * Detects manifest assets lacking the expected public-read permissions.
+ *
+ * @param {ReturnType<typeof parseManifestAsset>[]}
+ * @returns {string[]}
+ */
 function listPermissionIssues(assets) {
   const issues = [];
   for (const asset of assets) {
@@ -442,6 +495,12 @@ function describeDirectoryPermissionIssues(fullPath, { includeStatErrors = false
   };
 }
 
+/**
+ * Validates that S3 directories have the required bucket policies applied.
+ *
+ * @param {string[]} [prefixes]
+ * @returns {string[]}
+ */
 function listAssetDirectoryPermissionIssues(prefixes = ASSET_PERMISSION_PREFIXES) {
   const issues = [];
   for (const prefix of prefixes) {
@@ -475,6 +534,13 @@ function listAssetDirectoryPermissionIssues(prefixes = ASSET_PERMISSION_PREFIXES
   return issues;
 }
 
+/**
+ * Lists manifest entries that are not matched by any workflow sync patterns.
+ *
+ * @param {ReturnType<typeof parseManifestAsset>[]}
+ * @param {string[]} patterns
+ * @returns {string[]}
+ */
 function listUncoveredAssets(assets, patterns) {
   return assets.filter((asset) => !patterns.some((pattern) => patternMatchesAsset(pattern, asset)));
 }
@@ -483,6 +549,12 @@ function toPosixPath(value) {
   return value.split(path.sep).join('/');
 }
 
+/**
+ * Collects all files beneath the provided directory prefixes.
+ *
+ * @param {string[]} [prefixes]
+ * @returns {string[]}
+ */
 function listFilesUnderPrefixes(prefixes = DEFAULT_MANIFEST_DIRECTORIES) {
   const files = [];
   for (const prefix of prefixes) {
@@ -501,6 +573,13 @@ function listFilesUnderPrefixes(prefixes = DEFAULT_MANIFEST_DIRECTORIES) {
   return files;
 }
 
+/**
+ * Determines which files within the asset directories are missing from the manifest.
+ *
+ * @param {string[]} manifestPaths
+ * @param {string[]} [prefixes]
+ * @returns {string[]}
+ */
 function listUnlistedAssetFiles(manifestPaths, prefixes = DEFAULT_MANIFEST_DIRECTORIES) {
   const manifestSet = new Set((manifestPaths || []).filter(Boolean));
   return listFilesUnderPrefixes(prefixes).filter((file) => !manifestSet.has(file));
@@ -510,6 +589,11 @@ function sanitizeCloudFormationYaml(contents) {
   return contents.replace(/!Ref\s+/g, '').replace(/!GetAtt\s+/g, '').replace(/!Sub\s+/g, '');
 }
 
+/**
+ * Loads the CloudFormation bucket policy template used for asset validation.
+ *
+ * @returns {object | null}
+ */
 function loadTemplateDocument() {
   if (!fs.existsSync(templatePath)) {
     throw new Error('CloudFormation template serverless/template.yaml is missing.');
@@ -525,6 +609,12 @@ function loadTemplateDocument() {
   }
 }
 
+/**
+ * Summarises discrepancies detected in the CloudFormation bucket policy template.
+ *
+ * @param {object | null} templateDocument
+ * @returns {string[]}
+ */
 function describeBucketPolicyIssues(templateDocument) {
   const issues = [];
   const bucketPolicy =
@@ -603,6 +693,13 @@ function describeBucketPolicyIssues(templateDocument) {
   return issues;
 }
 
+/**
+ * Resolves the base URL used to validate remote asset availability.
+ *
+ * @param {string[]} [argv]
+ * @param {NodeJS.ProcessEnv} [env]
+ * @returns {string}
+ */
 function resolveBaseUrl(argv = process.argv.slice(2), env = process.env) {
   const inline = argv.find((arg) => arg.startsWith('--base-url='));
   if (inline) {
@@ -621,6 +718,14 @@ function resolveBaseUrl(argv = process.argv.slice(2), env = process.env) {
   return candidates.find((value) => typeof value === 'string' && value.trim().length > 0)?.trim() || '';
 }
 
+/**
+ * Issues HTTP HEAD requests for manifest assets and reports failures.
+ *
+ * @param {ReturnType<typeof parseManifestAsset>[]} entries
+ * @param {string} baseUrl
+ * @param {typeof fetch} [fetchImpl]
+ * @returns {Promise<string[]>}
+ */
 async function listFailedHeadRequests(entries, baseUrl, fetchImpl = globalThis.fetch) {
   if (!baseUrl) {
     return [];

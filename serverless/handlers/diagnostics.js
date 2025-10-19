@@ -380,6 +380,13 @@ async function ingestDiagnostics(event, trace, logger) {
   return createResponse(202, { message: 'Diagnostics recorded.', results }, { trace });
 }
 
+/**
+ * Lambda handler that records client-side diagnostics and raises incidents.
+ *
+ * @param {object} event
+ * @param {object} [awsContext]
+ * @returns {Promise<import('../lib/http').ApiResponse>}
+ */
 exports.handler = async (event, awsContext = {}) => {
   const trace = createTraceContext(event, awsContext);
   const logger = createTraceLogger(trace);

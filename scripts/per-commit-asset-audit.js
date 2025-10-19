@@ -16,6 +16,12 @@ function runGit(command) {
   }
 }
 
+/**
+ * Converts file paths to a consistent POSIX format for manifest comparisons.
+ *
+ * @param {string} value
+ * @returns {string}
+ */
 function normalisePath(value) {
   if (typeof value !== 'string') {
     return '';
@@ -92,6 +98,11 @@ function isTrackedAssetPath(filePath) {
   return TRACKED_PREFIXES.some((prefix) => filePath.startsWith(prefix));
 }
 
+/**
+ * Determines the commit range to audit based on CLI flags and CI metadata.
+ *
+ * @returns {{ base: string | null, head: string | null, range: string }}
+ */
 function describeCommitRange() {
   const args = process.argv.slice(2);
   let base = null;
@@ -158,6 +169,13 @@ function describeCommitRange() {
   return { base, head, range };
 }
 
+/**
+ * Lists commits encompassed by the provided revision bounds, newest last.
+ *
+ * @param {string | null} base
+ * @param {string | null} head
+ * @returns {string[]}
+ */
 function listCommitsInRange(base, head) {
   const target = head || 'HEAD';
   const spec = base ? `${base}..${target}` : target;
@@ -174,6 +192,13 @@ function listCommitsInRange(base, head) {
     .reverse();
 }
 
+/**
+ * Compares tracked files and manifest entries for a specific commit.
+ * Returns any assets missing from either side of the comparison.
+ *
+ * @param {string} commit
+ * @returns {{ commit: string, missing: string[], unexpected: string[] }}
+ */
 function auditCommit(commit) {
   const files = listTrackedFiles(commit);
   const fileSet = new Set(files);

@@ -613,6 +613,13 @@ async function queryEvents(event, trace, logger) {
   return createResponse(200, responseBody, { trace });
 }
 
+/**
+ * Lambda handler that stores gameplay telemetry events for later analysis.
+ *
+ * @param {object} event
+ * @param {object} [awsContext]
+ * @returns {Promise<import('../lib/http').ApiResponse>}
+ */
 exports.handler = async (event, awsContext = {}) => {
   const trace = createTraceContext(event, awsContext);
   const logger = createTraceLogger(trace);

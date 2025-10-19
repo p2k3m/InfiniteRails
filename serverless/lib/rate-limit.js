@@ -1,7 +1,19 @@
 'use strict';
 
+/**
+ * Default rate-limit window duration in seconds when no override is provided.
+ * @type {number}
+ */
 const DEFAULT_WINDOW_SECONDS = 60;
+/**
+ * Default maximum number of requests allowed within the rate-limit window.
+ * @type {number}
+ */
 const DEFAULT_MAX_REQUESTS = 60;
+/**
+ * HTTP header used to communicate the Google identity involved in rate limiting.
+ * @type {string}
+ */
 const RATE_LIMIT_HEADER_GOOGLE_ID = 'x-rate-limit-google-id';
 
 function safeString(value, fallback = '') {
@@ -82,6 +94,21 @@ function normaliseHeaderValue(headers, name) {
   return '';
 }
 
+/**
+ * Applies a distributed rate limit using DynamoDB for the provided identity.
+ *
+ * @param {{
+ *   dynamo?: { update: Function },
+ *   tableName?: string,
+ *   identity?: string,
+ *   scope?: string,
+ *   limit?: number,
+ *   windowSeconds?: number,
+ *   now?: number,
+ *   logger?: Console
+ * }} [options]
+ * @returns {Promise<object>}
+ */
 async function enforceRateLimit({
   dynamo,
   tableName,
@@ -164,6 +191,12 @@ async function enforceRateLimit({
   }
 }
 
+/**
+ * Derives a stable rate-limit identity from authentication or request metadata.
+ *
+ * @param {{ googleId?: string, sessionId?: string, sourceIp?: string, headers?: object, multiValueHeaders?: object }} [event]
+ * @returns {{ identity: string, googleId: string | null, sessionId: string | null, sourceIp: string | null }}
+ */
 function deriveRateLimitIdentity({ googleId, sessionId, sourceIp, headers, multiValueHeaders } = {}) {
   const headerGoogleId =
     normaliseHeaderValue(headers, RATE_LIMIT_HEADER_GOOGLE_ID) ||

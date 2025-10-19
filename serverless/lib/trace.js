@@ -2,8 +2,20 @@
 
 const crypto = require('crypto');
 
+/**
+ * HTTP header containing the distributed trace identifier for requests.
+ * @type {string}
+ */
 const TRACE_HEADER_TRACE_ID = 'X-Trace-Id';
+/**
+ * HTTP header containing the client session identifier.
+ * @type {string}
+ */
 const TRACE_HEADER_SESSION_ID = 'X-Trace-Session';
+/**
+ * HTTP header containing the API Gateway request identifier.
+ * @type {string}
+ */
 const TRACE_HEADER_REQUEST_ID = 'X-Request-Id';
 
 function safeTrim(value) {
@@ -92,6 +104,13 @@ function buildTraceHeaders(traceId, sessionId, requestId) {
   return headers;
 }
 
+/**
+ * Builds a trace context from API Gateway event metadata and AWS context values.
+ *
+ * @param {object} [event]
+ * @param {object} [awsContext]
+ * @returns {{ traceId: string, sessionId: string, requestId: string | null, headers: Record<string, string> }}
+ */
 function createTraceContext(event = {}, awsContext = {}) {
   const headerMap = normaliseHeaders(event?.headers);
 
@@ -143,6 +162,13 @@ function formatTracePrefix(trace) {
   return parts.length ? `[${parts.join(' ')}]` : '';
 }
 
+/**
+ * Wraps a logger with trace metadata injection for each log call.
+ *
+ * @param {{ traceId?: string, sessionId?: string, requestId?: string | null }} trace
+ * @param {Console} [baseLogger]
+ * @returns {{ trace: object, log: Function, info: Function, warn: Function, error: Function, debug: Function }}
+ */
 function createTraceLogger(trace, baseLogger = console) {
   const target = baseLogger && typeof baseLogger === 'object' ? baseLogger : console;
   const prefix = formatTracePrefix(trace);
@@ -178,6 +204,13 @@ function createTraceLogger(trace, baseLogger = console) {
   };
 }
 
+/**
+ * Adds trace identifiers to HTTP response headers when available.
+ *
+ * @param {Record<string, string>} [headers]
+ * @param {{ traceId?: string, sessionId?: string, requestId?: string | null }} [trace]
+ * @returns {Record<string, string>}
+ */
 function applyTraceHeaders(headers = {}, trace) {
   const base = { ...(headers || {}) };
   if (!trace || typeof trace !== 'object') {
@@ -187,6 +220,13 @@ function applyTraceHeaders(headers = {}, trace) {
   return { ...base, ...traceHeaders };
 }
 
+/**
+ * Embeds trace identifiers into JSON response bodies where appropriate.
+ *
+ * @param {any} body
+ * @param {{ traceId?: string, sessionId?: string, requestId?: string | null }} [trace]
+ * @returns {any}
+ */
 function embedTraceInBody(body, trace) {
   if (!trace || typeof trace !== 'object' || !body || typeof body !== 'object') {
     return body;

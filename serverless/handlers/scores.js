@@ -295,6 +295,13 @@ async function upsertScore(event, trace, logger) {
   );
 }
 
+/**
+ * Lambda handler that records and retrieves leaderboard scores.
+ *
+ * @param {object} event
+ * @param {object} [awsContext]
+ * @returns {Promise<import('../lib/http').ApiResponse>}
+ */
 exports.handler = async (event, awsContext = {}) => {
   const trace = createTraceContext(event, awsContext);
   const logger = createTraceLogger(trace);

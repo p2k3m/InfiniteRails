@@ -150,6 +150,13 @@ async function loadRemoteConfig({ trace, logger }) {
   return applySafeDefaults(result.Item);
 }
 
+/**
+ * Lambda handler for the configuration endpoint used by the web client.
+ *
+ * @param {object} [event]
+ * @param {object} [context]
+ * @returns {Promise<import('../lib/http').ApiResponse>}
+ */
 exports.handler = async (event = {}, context = {}) => {
   const trace = createTraceContext(event, context);
   const logger = createTraceLogger(trace);

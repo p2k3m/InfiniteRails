@@ -65,6 +65,11 @@ function updateFileReferences(versionMap) {
   return updatedFiles;
 }
 
+/**
+ * Synchronises the asset manifest digests with the current on-disk files.
+ * Recomputes checksums, updates manifest entries, and rewrites references in
+ * dependent files until everything aligns with the local asset state.
+ */
 function ensureManifestDigests() {
   const buildSha = resolveBuildSha();
   const maxPasses = 10;

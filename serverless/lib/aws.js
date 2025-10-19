@@ -3,6 +3,11 @@
 let cachedSdk = null;
 let cachedClient = null;
 
+/**
+ * Resolves the AWS SDK module, falling back to a stub when unavailable.
+ *
+ * @returns {typeof import('aws-sdk') | { DynamoDB: { DocumentClient: Function } }}
+ */
 function resolveAwsSdk() {
   if (cachedSdk) {
     return cachedSdk;
@@ -32,6 +37,11 @@ function resolveAwsSdk() {
   }
 }
 
+/**
+ * Provides a cached DynamoDB DocumentClient instance for serverless handlers.
+ *
+ * @returns {import('aws-sdk').DynamoDB.DocumentClient}
+ */
 function getDocumentClient() {
   if (cachedClient) {
     return cachedClient;
@@ -48,6 +58,9 @@ function getDocumentClient() {
   return cachedClient;
 }
 
+/**
+ * Clears the cached DocumentClient, primarily for testing overrides.
+ */
 function __resetDocumentClient() {
   cachedClient = null;
 }
