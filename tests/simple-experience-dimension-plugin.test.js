@@ -90,4 +90,71 @@ describe('simple experience dimension plugins', () => {
     expect(Array.isArray(loot.items)).toBe(true);
     expect(loot.items.some((entry) => entry.item === 'portal-charge')).toBe(true);
   });
+
+  it('exposes a public API to apply dimension plugin resources on demand', () => {
+    const { experience } = createExperience();
+    const manifest = window.SimpleExperience.dimensionManifest.origin;
+    const terrainProfile =
+      window.SimpleExperience.terrainProfiles.origin || window.SimpleExperience.defaultTerrainProfile;
+
+    const manualResources = {
+      themes: [
+        {
+          id: 'manual',
+          name: 'Manual Expanse',
+          label: 'Manual Expanse',
+          palette: {
+            grass: '#112233',
+            dirt: '#0f1419',
+            stone: '#1a2a3a',
+            rails: '#ff8800',
+          },
+          fog: '#0f1419',
+          sky: '#1a2a3a',
+          sun: '#ffffff',
+          hemi: '#1c2c3c',
+          gravity: 0.9,
+          speedMultiplier: 1.07,
+          description: 'Manual override applied through the plugin API.',
+          assetManifest: manifest,
+          terrainProfile,
+        },
+      ],
+      badgeSymbols: { manual: '★' },
+      badgeSynonyms: { manual: ['manual', 'override'] },
+      lootTables: {
+        manual: [
+          {
+            items: [
+              { item: 'stone', quantity: 1 },
+              { item: 'portal-charge', quantity: 1 },
+            ],
+            score: 12,
+            message: 'Manual loot delivered.',
+          },
+        ],
+      },
+    };
+
+    const detail = { plugin: { id: 'manual-override', version: '2.0.0' }, reason: 'manual-test' };
+    const result = window.SimpleExperience.applyDimensionPluginResources(manualResources, detail);
+
+    expect(result?.pluginId).toBe('manual-override');
+    expect(result?.version).toBe('2.0.0');
+    expect(result?.reason).toBe('manual-test');
+
+    const themes = window.SimpleExperience.dimensionThemes;
+    expect(themes[0].id).toBe('manual');
+    expect(Object.isFrozen(themes[0])).toBe(true);
+
+    expect(experience.dimensionSettings?.id).toBe('manual');
+    expect(experience.dimensionSettings?.name).toBe('Manual Expanse');
+
+    const lootTables = window.SimpleExperience.dimensionLootTables;
+    expect(Array.isArray(lootTables.manual)).toBe(true);
+    expect(Object.isFrozen(lootTables.manual)).toBe(true);
+    const loot = experience.getChestLootForDimension('manual', 0);
+    expect(Array.isArray(loot.items)).toBe(true);
+    expect(loot.items.some((entry) => entry.item === 'portal-charge')).toBe(true);
+  });
 });
