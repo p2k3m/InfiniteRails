@@ -8,6 +8,33 @@ const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, '..');
 const scriptSource = fs.readFileSync(path.join(repoRoot, 'script.js'), 'utf8');
 const simpleExperienceSource = fs.readFileSync(path.join(repoRoot, 'simple-experience.js'), 'utf8');
+const manifest = JSON.parse(fs.readFileSync(path.join(repoRoot, 'asset-manifest.json'), 'utf8'));
+
+function resolveManifestAsset(pathname) {
+  const match = manifest.assets.find((entry) => entry.startsWith(`${pathname}?`) || entry === pathname);
+  if (!match) {
+    throw new Error(`Failed to resolve manifest entry for ${pathname}`);
+  }
+  return match;
+}
+
+function appendAssetVersion(url) {
+  if (url.includes('?')) {
+    return `${url}&assetVersion=1`;
+  }
+  return `${url}?assetVersion=1`;
+}
+
+function withHost(url, host) {
+  const [path, query = ''] = url.split('?');
+  const normalisedHost = host.endsWith('/') ? host.slice(0, -1) : host;
+  const prefixedPath = path.startsWith('/') ? path : `/${path}`;
+  return query ? `${normalisedHost}${prefixedPath}?${query}` : `${normalisedHost}${prefixedPath}`;
+}
+
+const vendorThreeManifestUrl = resolveManifestAsset('vendor/three.min.js');
+const vendorThreeScriptUrl = appendAssetVersion(vendorThreeManifestUrl);
+const gltfLoaderManifestUrl = resolveManifestAsset('vendor/GLTFLoader.js');
 
 const ensureThreeStart = scriptSource.indexOf('function ensureThree()');
 const ensureThreeEnd = scriptSource.indexOf('function ensureGLTFLoader');
@@ -39,7 +66,7 @@ const createAssetUrlCandidatesSource = scriptSource.slice(
 
 function instantiateEnsureThree({
   loadScript,
-  scriptUrl = 'vendor/three.min.js?v=030c75d4e909&assetVersion=1',
+  scriptUrl = vendorThreeScriptUrl,
   documentStub,
   reportThreeLoadFailure = () => {},
 }) {
@@ -221,7 +248,7 @@ describe('default renderer Three.js bootstrap', () => {
   });
 
   it('includes only bundled Three.js asset candidates', () => {
-    expect(scriptSource).toContain("createAssetUrlCandidates('vendor/three.min.js?v=030c75d4e909', {");
+    expect(scriptSource).toContain(`createAssetUrlCandidates('${vendorThreeManifestUrl}', {`);
     expect(scriptSource).toContain("preloadedSelector: 'script[data-preload-three]'");
     expect(scriptSource).not.toContain("'https://unpkg.com/three");
     expect(scriptSource).not.toContain("'https://cdn.jsdelivr.net/npm/three");
@@ -240,7 +267,7 @@ describe('default renderer Three.js bootstrap', () => {
     const reportThreeLoadFailure = vi.fn();
     const { ensureThree, resetLoader } = instantiateEnsureThree({
       loadScript,
-      scriptUrl: 'vendor/three.min.js?v=030c75d4e909&assetVersion=1',
+      scriptUrl: vendorThreeScriptUrl,
       documentStub,
       reportThreeLoadFailure,
     });
@@ -273,7 +300,7 @@ describe('default renderer Three.js bootstrap', () => {
 
     const { ensureThree, resetLoader } = instantiateEnsureThree({
       loadScript,
-      scriptUrl: 'vendor/three.min.js?v=030c75d4e909&assetVersion=1',
+      scriptUrl: vendorThreeScriptUrl,
       documentStub,
       reportThreeLoadFailure,
     });
@@ -308,7 +335,7 @@ describe('default renderer Three.js bootstrap', () => {
 
     const { ensureThree, resetLoader } = instantiateEnsureThree({
       loadScript,
-      scriptUrl: 'vendor/three.min.js?v=030c75d4e909&assetVersion=1',
+      scriptUrl: vendorThreeScriptUrl,
       documentStub,
     });
 
@@ -316,7 +343,7 @@ describe('default renderer Three.js bootstrap', () => {
 
     expect(loadScript).toHaveBeenCalledTimes(1);
     expect(loadScript).toHaveBeenCalledWith(
-      'vendor/three.min.js?v=030c75d4e909&assetVersion=1',
+      vendorThreeScriptUrl,
       expect.objectContaining({ 'data-three-bootstrap': 'true' })
     );
     expect(result).toEqual(scope.THREE);
@@ -338,21 +365,21 @@ describe('default renderer Three.js bootstrap', () => {
 
     const { ensureThree, resetLoader } = instantiateEnsureThree({
       loadScript,
-      scriptUrl: 'vendor/three.min.js?v=030c75d4e909&assetVersion=1',
+      scriptUrl: vendorThreeScriptUrl,
       documentStub,
       reportThreeLoadFailure,
     });
 
     await expect(ensureThree()).rejects.toThrow(
-      'Unable to load Three.js from vendor/three.min.js?v=030c75d4e909&assetVersion=1.'
+      `Unable to load Three.js from ${vendorThreeScriptUrl}.`
     );
     expect(reportThreeLoadFailure).toHaveBeenCalledTimes(1);
     const [errorArg, contextArg] = reportThreeLoadFailure.mock.calls[0];
     expect(errorArg).toBeInstanceOf(Error);
-    expect(errorArg.message).toBe('Unable to load Three.js from vendor/three.min.js?v=030c75d4e909&assetVersion=1.');
+    expect(errorArg.message).toBe(`Unable to load Three.js from ${vendorThreeScriptUrl}.`);
     expect(contextArg).toMatchObject({
       reason: 'load-failed',
-      url: 'vendor/three.min.js?v=030c75d4e909&assetVersion=1',
+      url: vendorThreeScriptUrl,
       error: 'offline',
     });
     resetLoader();
@@ -372,7 +399,7 @@ describe('default renderer Three.js bootstrap', () => {
 
 describe('createAssetUrlCandidates helper', () => {
   it('prefers a preloaded script source when available', () => {
-    const preloadedSrc = 'https://cdn.example.com/vendor/three.min.js?v=030c75d4e909';
+    const preloadedSrc = withHost(vendorThreeManifestUrl, 'https://cdn.example.com');
     const documentStub = {
       querySelector: vi.fn((selector) =>
         selector === 'script[data-preload-three]' ? { src: preloadedSrc } : null,
@@ -383,11 +410,11 @@ describe('createAssetUrlCandidates helper', () => {
       documentStub,
       globalScopeStub,
     });
-    const candidates = createAssetUrlCandidates('vendor/three.min.js?v=030c75d4e909', {
+    const candidates = createAssetUrlCandidates(vendorThreeManifestUrl, {
       preloadedSelector: 'script[data-preload-three]',
     });
     expect(documentStub.querySelector).toHaveBeenCalledWith('script[data-preload-three]');
-    expect(candidates).toEqual(['https://cdn.example.com/vendor/three.min.js?v=030c75d4e909&assetVersion=1']);
+    expect(candidates).toEqual([appendAssetVersion(withHost(vendorThreeManifestUrl, 'https://cdn.example.com'))]);
   });
 
   it('falls back to the configured asset base when no preloaded script is present', () => {
@@ -400,9 +427,9 @@ describe('createAssetUrlCandidates helper', () => {
       documentStub,
       globalScopeStub,
     });
-    const candidates = createAssetUrlCandidates('vendor/three.min.js?v=030c75d4e909');
+    const candidates = createAssetUrlCandidates(vendorThreeManifestUrl);
     expect(candidates).toEqual([
-      'https://cdn.example.com/bundles/vendor/three.min.js?v=030c75d4e909&assetVersion=1',
+      appendAssetVersion(withHost(vendorThreeManifestUrl, 'https://cdn.example.com/bundles')),
     ]);
   });
 
@@ -411,12 +438,12 @@ describe('createAssetUrlCandidates helper', () => {
       documentStub: { querySelector: vi.fn(() => null) },
       globalScopeStub: { APP_CONFIG: {}, console: { warn: vi.fn() } },
     });
-    expect(createAssetUrlCandidates('vendor/three.min.js?v=030c75d4e909')).toEqual([
-      'vendor/three.min.js?v=030c75d4e909&assetVersion=1',
+    expect(createAssetUrlCandidates(vendorThreeManifestUrl)).toEqual([
+      appendAssetVersion(vendorThreeManifestUrl),
     ]);
     expect(
-      createAssetUrlCandidates('https://static.example.com/vendor/three.min.js?v=030c75d4e909'),
-    ).toEqual(['https://static.example.com/vendor/three.min.js?v=030c75d4e909&assetVersion=1']);
+      createAssetUrlCandidates(withHost(vendorThreeManifestUrl, 'https://static.example.com')),
+    ).toEqual([appendAssetVersion(withHost(vendorThreeManifestUrl, 'https://static.example.com'))]);
   });
 
   it('monitors signed asset bases for imminent expiry', () => {

@@ -16,6 +16,19 @@ const DEFAULT_MANIFEST_DIRECTORIES = [...ASSET_PERMISSION_PREFIXES, 'vendor'];
 const HASH_ALGORITHM = 'sha256';
 const HASH_LENGTH = 12;
 
+function parseVersionComponents(value) {
+  if (typeof value !== 'string') {
+    return { digest: '', build: '' };
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return { digest: '', build: '' };
+  }
+  const [digest, ...rest] = trimmed.split('.');
+  const build = rest.join('.') || '';
+  return { digest, build };
+}
+
 function ensureTrailingSlash(value) {
   if (!value || typeof value !== 'string') {
     return value;
@@ -161,11 +174,22 @@ function listVersionedAssetIssues(entries) {
     }
 
     const actual = entry.versionValues[0];
-    if (actual !== expected) {
+    const { digest: actualDigest, build: buildTag } = parseVersionComponents(actual);
+    if (!buildTag) {
       issues.push({
         asset: entry.versionedPath,
         expected,
         actual,
+        reason: 'missing-build-tag',
+      });
+      continue;
+    }
+
+    if (actualDigest !== expected) {
+      issues.push({
+        asset: entry.versionedPath,
+        expected,
+        actual: actualDigest,
         reason: 'mismatch',
       });
     }
@@ -734,8 +758,10 @@ async function main() {
               return `${issue.asset} defines multiple v parameters (${issue.actual}); expected ${issue.expected}.`;
             case 'unexpected-params':
               return `${issue.asset} includes unsupported query parameters (${issue.actual}); only ?v= is allowed.`;
+            case 'missing-build-tag':
+              return `${issue.asset} must include the current build SHA alongside the digest.`;
             case 'mismatch':
-              return `${issue.asset} has v=${issue.actual} but should be ${issue.expected}.`;
+              return `${issue.asset} has digest ${issue.actual} but should be ${issue.expected}.`;
             default:
               return `${issue.asset} has an unknown version issue.`;
           }
