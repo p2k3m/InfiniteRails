@@ -10777,7 +10777,30 @@
       status: 'ok',
       message: 'World assets loaded.',
     });
-    bootstrapOverlay.hide({ force: true });
+
+    const worldOverlayActive = worldGenerationOverlayState?.visible === true;
+    const assetOverlayPending =
+      assetLoadingIndicatorState?.active instanceof Map && assetLoadingIndicatorState.active.size > 0;
+
+    if (worldOverlayActive) {
+      const overlayDetail =
+        typeof getActiveWorldGenerationOverlayDetail === 'function'
+          ? getActiveWorldGenerationOverlayDetail()
+          : null;
+      if (overlayDetail && bootstrapOverlay.state?.mode !== 'error') {
+        bootstrapOverlay.showLoading({
+          title: overlayDetail.title,
+          message: overlayDetail.message,
+        });
+      }
+    } else if (assetOverlayPending) {
+      if (typeof updateAssetLoadingIndicatorOverlay === 'function') {
+        updateAssetLoadingIndicatorOverlay();
+      }
+    } else {
+      bootstrapOverlay.hide({ force: true });
+    }
+
     hideHudAlert();
     if (typeof logDiagnosticsEvent === 'function' && options.log !== false) {
       const logMessage =
