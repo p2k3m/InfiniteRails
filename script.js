@@ -2550,15 +2550,26 @@
       return url;
     }
 
-    if (/^[a-z][a-z0-9+.-]*:/i.test(base)) {
+    const isAbsoluteScheme = /^[a-z][a-z0-9+.-]*:/i.test(base);
+    if (isAbsoluteScheme) {
       try {
         const parsed = new URL(url);
+        if (parsed.protocol === 'file:') {
+          return url;
+        }
         if (!parsed.searchParams.has('assetVersion')) {
           parsed.searchParams.set('assetVersion', versionTag);
         }
         return parsed.toString();
       } catch (error) {
         // Ignore parse errors for relative paths and fall back to manual tagging.
+      }
+    } else {
+      const locationProtocol = typeof globalScope?.location?.protocol === 'string'
+        ? globalScope.location.protocol.toLowerCase()
+        : '';
+      if (locationProtocol === 'file:') {
+        return url;
       }
     }
 
@@ -17827,6 +17838,12 @@
     }
     const urls = [];
     const seen = new Set();
+    const normalisedPath = relativePath.replace(/^\.\//, '');
+    const isHttpUrl = /^https?:/i.test(relativePath);
+    const locationProtocol = typeof globalScope?.location?.protocol === 'string'
+      ? globalScope.location.protocol.toLowerCase()
+      : '';
+    const runningFromFileProtocol = locationProtocol === 'file:';
 
     const fallbackNormaliseTag = (value) => {
       if (value === null || value === undefined) {
@@ -17890,6 +17907,28 @@
       if (/(?:^|[?&])assetVersion=/.test(base)) {
         return value;
       }
+      const hasScheme = /^[a-z][a-z0-9+.-]*:/i.test(base);
+      if (hasScheme) {
+        try {
+          const parsed = new URL(value);
+          if (parsed.protocol === 'file:') {
+            return value;
+          }
+          if (!parsed.searchParams.has('assetVersion')) {
+            parsed.searchParams.set('assetVersion', versionTag);
+          }
+          return parsed.toString();
+        } catch (error) {
+          // Ignore parse errors for relative paths and fall back to manual tagging.
+        }
+      } else {
+        const locationProtocol = typeof globalScope?.location?.protocol === 'string'
+          ? globalScope.location.protocol.toLowerCase()
+          : '';
+        if (locationProtocol === 'file:') {
+          return value;
+        }
+      }
       const separator = base.includes('?') ? '&' : '?';
       const tagged = `${base}${separator}assetVersion=${encodeURIComponent(versionTag)}`;
       return hash ? `${tagged}#${hash}` : tagged;
@@ -17909,8 +17948,10 @@
       seen.add(tagged);
       urls.push(tagged);
     };
-    const normalisedPath = relativePath.replace(/^\.\//, '');
-    const isHttpUrl = /^https?:/i.test(relativePath);
+
+    if (runningFromFileProtocol) {
+      registerCandidate(normalisedPath);
+    }
 
     if (options?.preloadedSelector && documentRef && typeof documentRef.querySelector === 'function') {
       try {
