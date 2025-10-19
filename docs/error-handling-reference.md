@@ -2,6 +2,45 @@
 
 This reference lists every `catch` branch in the interactive bootstrap (`script.js`) and the gameplay sandbox (`simple-experience.js`). Each entry documents what can fail and the defensive action the runtime takes so maintainers can quickly trace resilience behaviour.
 
+## Developer triage
+
+Use the following runbook when the diagnostics console starts filling with new entries. Severity is determined by the `level` supplied to `logDiagnosticsEvent`/`logThroughDiagnostics`, which in turn steers the bootstrap overlay, the server-side beacon, and the critical error presenter.【F:script.js†L7625-L7643】【F:script.js†L7868-L7944】
+
+### Debug / informational noise
+
+* **Console output** – surfaced through `console.debug` or an info-level diagnostics entry. These lines are primarily for local traceability and never ship to the critical overlay or the central diagnostics endpoint unless the session runs in a development or CI environment.【F:script.js†L7625-L7643】【F:script.js†L7868-L7944】
+* **What it means** – state probes, feature toggles, or “best effort” flows that recovered without user impact (for example, storage preference fallbacks).
+* **Triage** – capture the log snippet if it looks new, but treat as non-actionable unless it becomes noisy or points at a regression under active test.
+* **Escalation** – only file a follow-up ticket if the noise increases materially or QA cannot verify a related feature; no paging.
+
+### Warnings
+
+* **Console output** – tagged `level: 'warning'` on diagnostics entries, styling the overlay entry amber while staying off the critical error modal.【F:script.js†L6172-L6244】【F:styles.css†L6500-L6526】
+* **What it means** – degraded functionality with a graceful fallback (for example, cached scoreboard data failing to refresh or optional audio actions that were skipped).
+* **Triage** – reproduce locally, confirm the fallback matches the table below, and assess whether player impact is minor. Capture HAR/trace data if the warning references network APIs.
+* **Escalation** – raise in the daily triage channel and file a bug if it impacts release criteria; page on-call only if the warning repeats every session and no fallback remains.
+
+### Errors
+
+* **Console output** – diagnostics entries marked `level: 'error'` and mirrored into the critical error overlay once per fingerprint, often paired with a red border in the live log.【F:script.js†L7801-L7865】【F:styles.css†L6509-L6535】
+* **What it means** – a primary system failed but the runtime kept itself alive (for example, renderer boot retry logic or identity persistence problems).
+* **Triage** – gather the overlay screenshot, the diagnostics entry (including `traceId`/`sessionId`), and any recovery action results. Validate whether `sendDiagnosticsEventToServer` attempted to beacon the payload for observability.【F:script.js†L7625-L7643】
+* **Escalation** – notify the on-call engineer if the error reproduces for multiple accounts or blocks critical stories; otherwise open a P1 bug with collected traces.
+
+### Critical errors
+
+* **Console output** – entries explicitly flagged as critical (or errors emitted from a critical asset scope) trigger the blocking boot diagnostics and keep the critical overlay pinned until the user intervenes.【F:script.js†L7801-L7865】【F:script.js†L23674-L23710】
+* **What it means** – failure to load a required asset, renderer, or API endpoint that prevents progress even after retry logic.
+* **Triage** – confirm which diagnostic section shows a blocking status, dump the associated detail payload, and attempt the documented recovery action in the overlay.
+* **Escalation** – page the on-call engineer immediately and log an incident; include the `traceId`, recovery attempts, and whether the preload or availability checks succeeded earlier in boot.【F:script.js†L23687-L23710】
+
+### Fatal errors
+
+* **Console output** – entries marked `level: 'fatal'` (or rethrown initialisation failures) halt boot entirely and rethrow so upstream monitoring captures the crash.【F:script.js†L7625-L7643】【F:script.js†L21566-L21620】
+* **What it means** – an unrecoverable setup failure, such as Google identity bootstrap throwing synchronously before any fallbacks are available.【F:script.js†L21566-L21620】
+* **Triage** – capture the browser console stack, note which bootstrap phase was active, and verify whether the failure is environment-specific (ad blockers, third-party cookies, etc.).
+* **Escalation** – treat as a Sev-0: page immediately, open an incident, and attach environment details. Hand off to SRE if external identity or platform dependencies are implicated.
+
 ## script.js
 
 | Line | Context | Failure scenario | Fallback / Notes |
