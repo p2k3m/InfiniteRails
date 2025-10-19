@@ -134,6 +134,25 @@ describe('Audio settings API', () => {
     expect(musicLabel.textContent).toBe('25%');
   });
 
+  it('dispatches audio settings change events with snapshots', () => {
+    const { windowStub } = setupBootstrap();
+    const audioApi = windowStub.InfiniteRails.audio;
+
+    windowStub.dispatchEvent.mockClear();
+
+    audioApi.setVolume('effects', 0.32);
+
+    const eventCall = windowStub.dispatchEvent.mock.calls.find(
+      ([event]) => event?.type === 'infinite-rails:audio-settings-changed',
+    );
+    expect(eventCall).toBeDefined();
+    const event = eventCall[0];
+    expect(event.detail).toBeDefined();
+    expect(event.detail?.snapshot?.volumes?.effects).toBeCloseTo(0.32, 5);
+    expect(event.detail?.reason).toBe('volume-change');
+    expect(event.detail?.persist).toBe(true);
+  });
+
   it('quarantines corrupted audio settings before falling back to defaults', () => {
     const { sandbox, windowStub } = createBootstrapSandbox();
     const storage = {

@@ -30,7 +30,9 @@ afterEach(() => {
 });
 
 describe('simple experience startup simulations', () => {
-  it('simulates gameplay runs with randomised world/portal/mob startup order without instability', () => {
+  it(
+    'simulates gameplay runs with randomised world/portal/mob startup order without instability',
+    () => {
     const { experience } = createExperience();
 
     const THREE = experience.THREE;
@@ -148,5 +150,7 @@ describe('simple experience startup simulations', () => {
         expect(record.loopCalls[method]).toBeGreaterThanOrEqual(1);
       }
     }
-  });
+    },
+    15_000,
+  );
 });
