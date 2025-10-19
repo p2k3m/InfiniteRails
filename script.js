@@ -14469,6 +14469,30 @@
     return parts.join(', ');
   }
 
+  function formatRespawnSourceLabel(value) {
+    if (typeof value !== 'string') {
+      return '';
+    }
+    const trimmed = value.trim();
+    if (!trimmed.length) {
+      return '';
+    }
+    const key = trimmed.toLowerCase();
+    const labels = {
+      'portal-anchor': 'portal anchor',
+      'world-center': 'world center',
+      'last-spawn-column': 'last spawn column',
+      'last-spawn-world': 'last spawn position',
+      'column-scan': 'nearby terrain',
+      preferred: 'preferred checkpoint',
+      context: 'context hint',
+    };
+    if (Object.prototype.hasOwnProperty.call(labels, key)) {
+      return labels[key];
+    }
+    return key.replace(/[-_]+/g, ' ');
+  }
+
   function describeEventLogMessage(type, detail) {
     const summaryMessage = (text, fallback) => {
       if (typeof text === 'string' && text.trim().length) {
@@ -14593,6 +14617,32 @@
           return `${message} (+${formattedScore} pts).`;
         }
         return message;
+      }
+      case 'player-defeated': {
+        const fragments = [];
+        const source =
+          typeof detail?.respawnSource === 'string' && detail.respawnSource.trim().length
+            ? detail.respawnSource.trim()
+            : typeof detail?.respawnPlan?.source === 'string' && detail.respawnPlan.source.trim().length
+              ? detail.respawnPlan.source.trim()
+              : '';
+        const sourceLabel = formatRespawnSourceLabel(source);
+        if (sourceLabel) {
+          fragments.push(`Respawned via ${sourceLabel}.`);
+        }
+        if (detail?.inventoryRestored) {
+          fragments.push('Inventory restored.');
+        }
+        const penalty = Number.isFinite(detail?.scorePenalty) ? Math.max(0, Math.round(detail.scorePenalty)) : null;
+        if (penalty && penalty > 0) {
+          const formattedPenalty =
+            typeof penalty.toLocaleString === 'function' ? penalty.toLocaleString() : String(penalty);
+          fragments.push(`-${formattedPenalty} pts penalty.`);
+        }
+        if (!fragments.length) {
+          return 'Player defeated — respawn initiated.';
+        }
+        return fragments.join(' ');
       }
       case 'debug-mode':
         return detail?.enabled
@@ -15927,6 +15977,168 @@
     });
   }
 
+  function formatScoreDelta(score) {
+    if (!Number.isFinite(score) || score === 0) {
+      return '';
+    }
+    const magnitude = Math.abs(Math.round(score));
+    const formatted = typeof magnitude.toLocaleString === 'function' ? magnitude.toLocaleString() : String(magnitude);
+    return score > 0 ? ` (+${formatted} pts)` : ` (-${formatted} pts)`;
+  }
+
+  function handleRecipeCraftedOverlay(detail = {}) {
+    const label = typeof detail?.recipeLabel === 'string' ? detail.recipeLabel.trim() : '';
+    const score = Number.isFinite(detail?.scoreAwarded)
+      ? detail.scoreAwarded
+      : Number.isFinite(detail?.score)
+        ? detail.score
+        : null;
+    const inventoryCount = Number.isFinite(detail?.inventoryCount)
+      ? Math.max(0, Math.round(detail.inventoryCount))
+      : null;
+    const fragments = [];
+    const baseLabel = label ? `${label} crafted` : 'Recipe crafted';
+    let baseMessage = `${baseLabel}${formatScoreDelta(score)}`.trim();
+    if (baseMessage.length && !/[.!?]$/.test(baseMessage)) {
+      baseMessage = `${baseMessage}.`;
+    }
+    if (baseMessage.length) {
+      fragments.push(baseMessage);
+    }
+    if (inventoryCount !== null) {
+      const formattedInventory =
+        typeof inventoryCount.toLocaleString === 'function' ? inventoryCount.toLocaleString() : String(inventoryCount);
+      fragments.push(`Inventory: ${formattedInventory} items.`);
+    }
+    const message = fragments.join(' • ') || 'Recipe crafted.';
+    showEventOverlay({
+      title: 'Crafting complete',
+      message,
+      icon: '🛠️',
+      variant: 'success',
+      duration: 6000,
+    });
+  }
+
+  function handlePlayerDefeatedOverlay(detail = {}) {
+    const fragments = [];
+    const source =
+      typeof detail?.respawnSource === 'string' && detail.respawnSource.trim().length
+        ? detail.respawnSource.trim()
+        : typeof detail?.respawnPlan?.source === 'string' && detail.respawnPlan.source.trim().length
+          ? detail.respawnPlan.source.trim()
+          : '';
+    const sourceLabel = formatRespawnSourceLabel(source);
+    if (sourceLabel) {
+      fragments.push(`Respawned via ${sourceLabel}.`);
+    }
+    if (detail?.inventoryRestored) {
+      fragments.push('Inventory restored.');
+    }
+    const inventoryCount = Number.isFinite(detail?.inventoryCount)
+      ? Math.max(0, Math.round(detail.inventoryCount))
+      : null;
+    if (inventoryCount !== null) {
+      const formattedInventory =
+        typeof inventoryCount.toLocaleString === 'function' ? inventoryCount.toLocaleString() : String(inventoryCount);
+      fragments.push(`Inventory: ${formattedInventory} items.`);
+    }
+    const penalty = Number.isFinite(detail?.scorePenalty) ? Math.max(0, Math.round(detail.scorePenalty)) : null;
+    if (penalty && penalty > 0) {
+      const formattedPenalty =
+        typeof penalty.toLocaleString === 'function' ? penalty.toLocaleString() : String(penalty);
+      fragments.push(`Penalty: -${formattedPenalty} pts.`);
+    }
+    const message = fragments.join(' • ') || 'Respawn initiated.';
+    showEventOverlay({
+      title: 'Player defeated',
+      message,
+      icon: '💀',
+      variant: 'danger',
+      duration: 9000,
+    });
+  }
+
+  const CRITICAL_ERROR_OVERLAY_PRESETS = {
+    'start-error': {
+      title: 'Launch failed',
+      icon: '🚫',
+      fallback: 'Renderer failed to start.',
+      variant: 'danger',
+      duration: 12000,
+      sticky: true,
+    },
+    'initialisation-error': {
+      title: 'Initialisation error',
+      icon: '⚠️',
+      fallback: 'Setup encountered an error.',
+      variant: 'danger',
+      duration: 12000,
+      sticky: true,
+    },
+    'renderer-failure': {
+      title: 'Renderer failure',
+      icon: '🔥',
+      fallback: 'Rendering stalled — reload recommended.',
+      variant: 'danger',
+      duration: 15000,
+      sticky: true,
+    },
+    'asset-load-failure': {
+      title: 'Asset load failure',
+      icon: '🚨',
+      fallback: 'Critical asset failed to load.',
+      variant: 'warning',
+      duration: 12000,
+      sticky: false,
+    },
+    default: {
+      title: 'Runtime error',
+      icon: '⚠️',
+      fallback: 'An unexpected error occurred.',
+      variant: 'danger',
+      duration: 10000,
+      sticky: false,
+    },
+  };
+
+  function handleCriticalErrorOverlay(type, detail = {}) {
+    const preset = CRITICAL_ERROR_OVERLAY_PRESETS[type] || CRITICAL_ERROR_OVERLAY_PRESETS.default;
+    let message = typeof detail?.message === 'string' ? detail.message.trim() : '';
+    if (!message.length) {
+      message = preset.fallback;
+    }
+    const contextParts = [];
+    const stage = typeof detail?.stage === 'string' ? detail.stage.trim() : '';
+    const reason = typeof detail?.reason === 'string' ? detail.reason.trim() : '';
+    const code = typeof detail?.code === 'string' ? detail.code.trim() : '';
+    if (stage) {
+      contextParts.push(stage);
+    }
+    if (reason && reason.toLowerCase() !== stage.toLowerCase()) {
+      contextParts.push(reason);
+    }
+    if (code) {
+      contextParts.push(code);
+    }
+    if (contextParts.length) {
+      const context = contextParts.join(' • ');
+      if (/[.!?]$/.test(message)) {
+        message = `${message} ${context}.`;
+      } else {
+        message = `${message} (${context})`;
+      }
+    }
+    showEventOverlay({
+      title: preset.title,
+      message,
+      icon: preset.icon,
+      variant: preset.variant || 'danger',
+      duration: Number.isFinite(preset.duration) ? preset.duration : undefined,
+      sticky: Boolean(preset.sticky),
+    });
+  }
+
   function handleAssetFetchStartOverlay(detail = {}) {
     const label = formatAssetLogLabel(detail);
     const key = createAssetOverlayKey(detail?.kind, detail?.key);
@@ -16024,16 +16236,21 @@
     }
     const register = (type, handler) => {
       globalScope.addEventListener(`infinite-rails:${type}`, (event) => {
-        handler(event?.detail ?? {}, event);
+        handler(event?.detail ?? {}, event, type);
       });
     };
     register('dimension-advanced', handleDimensionAdvancedOverlay);
     register('portal-ready', handlePortalReadyOverlay);
     register('portal-activated', handlePortalActivatedOverlay);
+    register('recipe-crafted', handleRecipeCraftedOverlay);
+    register('player-defeated', handlePlayerDefeatedOverlay);
     register('loot-collected', handleLootCollectedOverlay);
     register('asset-fetch-start', handleAssetFetchStartOverlay);
     register('asset-fetch-complete', handleAssetFetchCompleteOverlay);
     register('asset-availability', handleAssetAvailabilityOverlay);
+    ['start-error', 'initialisation-error', 'renderer-failure', 'asset-load-failure'].forEach((type) => {
+      register(type, (detail) => handleCriticalErrorOverlay(type, detail));
+    });
     eventOverlayState.listenersBound = true;
   }
 
