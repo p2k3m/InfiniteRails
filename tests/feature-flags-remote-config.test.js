@@ -386,6 +386,10 @@ describe('dynamic feature flags remote configuration', () => {
     const identityState = hooks.getFeatureFlagState();
     expect(identityState.flags.forceSimpleRenderer).toBe(true);
     expect(identityState.flags.disableScoreSync).toBe(true);
+    expect(identityState.metadata.health).toEqual({
+      degraded: true,
+      message: 'Leaderboard offline for maintenance.',
+    });
 
     const liveState = hooks.getIdentityState();
     expect(liveState.liveFeaturesSuspended).toBe(true);
@@ -426,5 +430,69 @@ describe('dynamic feature flags remote configuration', () => {
     const hooks = windowStub.__INFINITE_RAILS_TEST_HOOKS__;
     const identityState = hooks.getIdentityState();
     expect(identityState.liveFeaturesSuspended).toBe(false);
+    const featureSnapshot = hooks.getFeatureFlagState();
+    expect(featureSnapshot.metadata.health).toEqual({ degraded: false });
+  });
+
+  it('enables safe mode automatically when remote health reports a major outage', async () => {
+    const configs = [
+      {
+        config: {
+          health: {
+            status: 'major_outage',
+            message: 'Services degraded — pausing leaderboard.',
+          },
+        },
+      },
+    ];
+
+    const { windowStub, scoreboardStatus } = await runScriptWithSandbox(configs);
+
+    expect(windowStub.InfiniteRails.features.get('forceSimpleRenderer')).toBe(true);
+    expect(windowStub.InfiniteRails.features.get('disableScoreSync')).toBe(true);
+    expect(scoreboardStatus.textContent).toBe('Services degraded — pausing leaderboard.');
+    expect(scoreboardStatus.dataset.offline).toBe('true');
+
+    const metadata = windowStub.InfiniteRails.features.metadata();
+    expect(metadata.health).toEqual({
+      degraded: true,
+      message: 'Services degraded — pausing leaderboard.',
+      status: 'major-outage',
+    });
+  });
+
+  it('restores advanced features when remote health recovers', async () => {
+    const configs = [
+      {
+        config: {
+          health: {
+            status: 'major_outage',
+            message: 'Services degraded — pausing leaderboard.',
+          },
+        },
+      },
+      {
+        config: {
+          health: {
+            status: 'operational',
+          },
+        },
+      },
+    ];
+
+    const { windowStub, scoreboardStatus } = await runScriptWithSandbox(configs);
+
+    await windowStub.InfiniteRails.features.refresh({ silent: true });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(windowStub.InfiniteRails.features.get('forceSimpleRenderer')).toBe(false);
+    expect(windowStub.InfiniteRails.features.get('disableScoreSync')).toBe(false);
+    expect(scoreboardStatus.textContent).toBe(
+      'Google Sign-In unavailable — configure APP_CONFIG.googleClientId to enable SSO.',
+    );
+    expect(scoreboardStatus.dataset.offline).toBeUndefined();
+
+    const metadata = windowStub.InfiniteRails.features.metadata();
+    expect(metadata.health).toEqual({ degraded: false, status: 'operational' });
   });
 });

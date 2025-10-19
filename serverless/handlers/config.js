@@ -6,6 +6,24 @@ const { getDocumentClient } = require('../lib/aws.js');
 
 const DEFAULT_CONFIG_KEY = 'feature-flags';
 
+const HEALTH_DEGRADED_STATUSES = new Set([
+  'degraded',
+  'degraded-performance',
+  'partial-outage',
+  'partial-outages',
+  'major-outage',
+  'major-outages',
+  'major-incident',
+  'critical',
+  'outage',
+  'outages',
+  'maintenance',
+  'maintenance-mode',
+  'incident',
+  'incidents',
+  'suspended',
+]);
+
 function resolveConfigTable() {
   const rawValue = process.env.CONFIG_TABLE;
   if (typeof rawValue !== 'string') {
@@ -78,6 +96,81 @@ function normaliseTimestamp(value) {
   return Number.isNaN(date.getTime()) ? null : date.toISOString();
 }
 
+function normaliseStatus(value, { maxLength = 64 } = {}) {
+  const raw = normaliseString(value, { maxLength });
+  if (!raw) {
+    return { raw: null, normalised: null };
+  }
+  const normalised = raw
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+/, '')
+    .replace(/-+$/, '');
+  return { raw, normalised: normalised || raw.toLowerCase() };
+}
+
+function resolveHealthOverrides(source = {}) {
+  const health = source && typeof source === 'object' ? source : {};
+  const { raw: rawStatus, normalised: status } = normaliseStatus(
+    health.status ?? health.state ?? health.level ?? health.condition,
+  );
+  const degraded = Boolean(status && HEALTH_DEGRADED_STATUSES.has(status));
+
+  const healthFeatures =
+    health.features && typeof health.features === 'object' ? health.features : {};
+
+  const safeModeCandidate = normaliseBoolean(
+    health.safeMode ?? health.forceSafeMode ?? health.enableSafeMode,
+  );
+  const safeMode =
+    safeModeCandidate === null ? (degraded ? true : null) : safeModeCandidate;
+
+  const forceSimpleRenderer = normaliseBoolean(
+    healthFeatures.forceSimpleRenderer ??
+      healthFeatures.forceSimpleMode ??
+      health.forceSimpleRenderer ??
+      health.forceSimpleMode,
+  );
+
+  const disableScoreSync = normaliseBoolean(
+    healthFeatures.disableScoreSync ??
+      healthFeatures.suspendLiveFeatures ??
+      healthFeatures.disableLeaderboard ??
+      health.disableScoreSync ??
+      health.suspendLiveFeatures,
+  );
+
+  const message =
+    normaliseString(
+      health.message ??
+        health.scoreboardMessage ??
+        health.leaderboardMessage ??
+        healthFeatures.message,
+    ) ?? null;
+
+  const updatedAt = normaliseTimestamp(health.updatedAt ?? health.timestamp);
+
+  const metadata = {
+    status: status ?? null,
+    rawStatus: rawStatus ?? null,
+    degraded,
+  };
+  if (updatedAt) {
+    metadata.updatedAt = updatedAt;
+  }
+  if (message) {
+    metadata.message = message;
+  }
+
+  return {
+    safeMode,
+    forceSimpleRenderer,
+    disableScoreSync,
+    message,
+    metadata,
+  };
+}
+
 function applySafeDefaults(entry = {}) {
   const flags = entry.features && typeof entry.features === 'object' ? entry.features : {};
   const messages = entry.messages && typeof entry.messages === 'object' ? entry.messages : {};
@@ -86,16 +179,65 @@ function applySafeDefaults(entry = {}) {
   const disableScoreSync = normaliseBoolean(flags.disableScoreSync ?? flags.suspendLiveFeatures);
   const safeMode = normaliseBoolean(flags.safeMode);
 
+  const health = resolveHealthOverrides(entry.health);
+
   const effectiveForceSimple =
-    safeMode === true ? true : forceSimpleRenderer === null ? false : forceSimpleRenderer;
+    safeMode === true || health.safeMode === true
+      ? true
+      : health.forceSimpleRenderer === true
+        ? true
+        : health.forceSimpleRenderer === false
+          ? false
+          : forceSimpleRenderer === null
+            ? false
+            : forceSimpleRenderer;
   const effectiveDisableSync =
-    safeMode === true ? true : disableScoreSync === null ? false : disableScoreSync;
+    safeMode === true || health.safeMode === true
+      ? true
+      : health.disableScoreSync === true
+        ? true
+        : health.disableScoreSync === false
+          ? false
+          : disableScoreSync === null
+            ? false
+            : disableScoreSync;
 
   const scoreboardMessage =
     normaliseString(messages.scoreboard ?? messages.leaderboard ?? flags.scoreboardMessage) ??
-    (effectiveDisableSync
-      ? 'Leaderboard maintenance in progress — runs stay local until service resumes.'
+    ((effectiveDisableSync || health.message)
+      ? health.message ??
+        'Leaderboard maintenance in progress — runs stay local until service resumes.'
       : null);
+
+  const healthMetadata = {
+    ...health.metadata,
+    degraded:
+      Boolean(health.metadata.degraded) || effectiveDisableSync === true || effectiveForceSimple === true,
+  };
+  if (!healthMetadata.message && (health.message || scoreboardMessage)) {
+    healthMetadata.message = health.message ?? scoreboardMessage ?? null;
+  }
+
+  if (!healthMetadata.status && healthMetadata.rawStatus) {
+    const { normalised } = normaliseStatus(healthMetadata.rawStatus);
+    if (normalised) {
+      healthMetadata.status = normalised;
+    }
+  }
+
+  delete healthMetadata.rawStatus;
+  if (!healthMetadata.status) {
+    delete healthMetadata.status;
+  }
+  if (!healthMetadata.message) {
+    delete healthMetadata.message;
+  }
+  if (!healthMetadata.updatedAt) {
+    delete healthMetadata.updatedAt;
+  }
+  if (!healthMetadata.degraded) {
+    healthMetadata.degraded = false;
+  }
 
   return {
     version: normaliseString(entry.version, { maxLength: 64 }) ?? null,
@@ -108,6 +250,7 @@ function applySafeDefaults(entry = {}) {
     messages: {
       scoreboard: scoreboardMessage,
     },
+    health: healthMetadata,
   };
 }
 
