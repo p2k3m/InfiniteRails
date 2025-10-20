@@ -321,6 +321,48 @@
     };
   }
 
+  function createIsolatedWorkerScript() {
+    const scriptSections = [
+      '"use strict";',
+      `const clamp = ${clamp.toString()};`,
+      `const createSeededRandomGenerator = ${createSeededRandomGenerator.toString()};`,
+      `const generateWorkerWorld = ${generateWorkerWorld.toString()};`,
+      `const buildWorkerMesh = ${buildWorkerMesh.toString()};`,
+      `const computeWorkerAi = ${computeWorkerAi.toString()};`,
+      `const createTaskLibrary = ${createIsolatedWorkerTaskLibrary.toString()};`,
+      'const taskLibrary = createTaskLibrary();',
+      'const handlers = {',
+      '  "world-gen": taskLibrary.world,',
+      '  "mesh-build": taskLibrary.mesh,',
+      '  "ai-sim": taskLibrary.ai,',
+      '};',
+      'self.onmessage = function (event) {',
+      '  const data = event && typeof event.data === "object" ? event.data : {};',
+      '  const id = data.id;',
+      '  const task = data.task;',
+      '  const payload = data.payload;',
+      '  const handler = handlers[task];',
+      '  if (!handler) {',
+      '    const message = task ? "Unknown task: " + task : "Task not provided";',
+      '    self.postMessage({ id, error: { message } });',
+      '    return;',
+      '  }',
+      '  Promise.resolve()',
+      '    .then(function () {',
+      '      return handler(payload);',
+      '    })',
+      '    .then(function (result) {',
+      '      self.postMessage({ id, result });',
+      '    })',
+      '    .catch(function (error) {',
+      '      const message = error && typeof error.message === "string" ? error.message : String(error);',
+      '      self.postMessage({ id, error: { message } });',
+      '    });',
+      '};',
+    ];
+    return scriptSections.join('\n');
+  }
+
   function createIsolatedGameWorkerManager(scope = globalScope) {
     const taskLibrary = createIsolatedWorkerTaskLibrary();
     const fallbackManager = {
@@ -336,7 +378,7 @@
     let blobUrl = null;
     let worker = null;
     try {
-      const workerScript = `"use strict";\nconst createTaskLibrary = ${createIsolatedWorkerTaskLibrary.toString()};\nconst taskLibrary = createTaskLibrary();\nconst handlers = {\n  "world-gen": taskLibrary.world,\n  "mesh-build": taskLibrary.mesh,\n  "ai-sim": taskLibrary.ai,\n};\nself.onmessage = (event) => {\n  const data = event && typeof event.data === "object" ? event.data : {};\n  const { id, task, payload } = data;\n  const handler = handlers[task];\n  if (!handler) {\n    const message = task ? "Unknown task: " + task : "Task not provided";\n    self.postMessage({ id, error: { message } });\n    return;\n  }\n  Promise.resolve()\n    .then(() => handler(payload))\n    .then((result) => {\n      self.postMessage({ id, result });\n    })\n    .catch((error) => {\n      const message = error && typeof error.message === "string" ? error.message : String(error);\n      self.postMessage({ id, error: { message } });\n    });\n};\n`;
+      const workerScript = createIsolatedWorkerScript();
       const blob = new scope.Blob([workerScript], { type: 'application/javascript' });
       blobUrl = scope.URL && typeof scope.URL.createObjectURL === 'function' ? scope.URL.createObjectURL(blob) : null;
       if (!blobUrl) {
