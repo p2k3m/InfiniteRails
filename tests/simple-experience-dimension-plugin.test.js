@@ -106,6 +106,92 @@ describe('simple experience dimension plugins', () => {
     expect(loot.items.some((entry) => entry.item === 'portal-charge')).toBe(true);
   });
 
+  it('reapplies resources when re-registering an active plugin with the same id', () => {
+    const { experience } = createExperience();
+    const pluginId = 'test-dimension-pack-refresh';
+
+    pluginRegistry.register(
+      {
+        id: pluginId,
+        slot: 'dimension-pack',
+        version: '0.1.0',
+        label: 'Refreshable pack',
+        resources: () => ({
+          themes: [
+            {
+              id: 'refresh-alpha',
+              name: 'Refresh Alpha',
+              label: 'Refresh Alpha',
+              palette: {
+                grass: '#223344',
+                dirt: '#1b1b1b',
+                stone: '#101010',
+                rails: '#ffcc00',
+              },
+              fog: '#101010',
+              sky: '#090909',
+              sun: '#ffffff',
+              hemi: '#303030',
+              gravity: 0.9,
+              speedMultiplier: 1.05,
+              terrainProfile: {
+                id: 'refresh-alpha',
+                heightOffset: 1,
+                noiseScale: 0.2,
+                roughness: 0.4,
+              },
+            },
+          ],
+        }),
+      },
+      { activate: true, reason: 'test-register-refresh' },
+    );
+
+    expect(experience.dimensionSettings?.id).toBe('refresh-alpha');
+
+    pluginRegistry.register(
+      {
+        id: pluginId,
+        slot: 'dimension-pack',
+        version: '0.2.0',
+        label: 'Refreshable pack',
+        resources: () => ({
+          themes: [
+            {
+              id: 'refresh-beta',
+              name: 'Refresh Beta',
+              label: 'Refresh Beta',
+              palette: {
+                grass: '#112244',
+                dirt: '#0f0f12',
+                stone: '#07070b',
+                rails: '#00ffee',
+              },
+              fog: '#050509',
+              sky: '#020203',
+              sun: '#eeeeff',
+              hemi: '#1c1c24',
+              gravity: 1.1,
+              speedMultiplier: 0.95,
+              terrainProfile: {
+                id: 'refresh-beta',
+                heightOffset: 3,
+                noiseScale: 0.35,
+                roughness: 0.6,
+              },
+            },
+          ],
+        }),
+      },
+      { activate: true, reason: 'test-register-refresh-update' },
+    );
+
+    expect(experience.dimensionSettings?.id).toBe('refresh-beta');
+    expect(window.SimpleExperience?.dimensionThemes?.some((theme) => theme?.id === 'refresh-beta')).toBe(true);
+    const state = window.SimpleExperience?.getDimensionPluginState();
+    expect(state?.lastApplied?.pluginId).toBe(pluginId);
+  });
+
   it('exposes a public API to apply dimension plugin resources on demand', () => {
     const { experience } = createExperience();
     const manifest = window.SimpleExperience.dimensionManifest.origin;

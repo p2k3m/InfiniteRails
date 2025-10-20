@@ -4,6 +4,11 @@ The dimension plugin slot (`dimension-pack`) now supports hot-swappable data and
 modules. Plugins can override themes, loot tables, lifecycle hooks, and runtime
 augmentations without requiring a full page reload.
 
+Re-registering a plugin with the same `id` is safe—if the descriptor changes
+(for example, a new version or updated resource generator), the registry
+reactivates the module and propagates the refreshed resources to every active
+`SimpleExperience` instance.
+
 ## Lifecycle hooks
 
 Provide lifecycle callbacks via `resources.lifecycleHooks`:
