@@ -100,6 +100,7 @@ describe('isolated game worker integration', () => {
 
   it('applies worker AI updates to zombie movement', () => {
     const { experience } = createExperience();
+    experience.initialisePerformanceMetrics();
     const worldRoot = new experience.THREE.Group();
     experience.scene = worldRoot;
     experience.worldRoot = worldRoot;
@@ -158,5 +159,14 @@ describe('isolated game worker integration', () => {
     experience.updateZombies(0.016, { workerResult: { ai: aiResult } });
     expect(damageSpy).toHaveBeenCalledTimes(1);
     expect(zombie.lastAttack).toBeGreaterThan(lastAttack);
+    expect(experience.lastWorkerAiSummary).toMatchObject({
+      source: 'worker-simulated',
+      updateCount: 1,
+    });
+    expect(experience.performanceMetrics.worldGen.workerSupport.ai).toBe(true);
+    expect(experience.performanceMetrics.worldGen.workerAi).toMatchObject({
+      source: 'worker-simulated',
+      updateCount: 1,
+    });
   });
 });

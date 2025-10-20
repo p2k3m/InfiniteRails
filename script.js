@@ -679,9 +679,12 @@
               const metrics = this?.performanceMetrics?.worldGen ?? null;
               if (metrics) {
                 if (!metrics.workerSupport || typeof metrics.workerSupport !== 'object') {
-                  metrics.workerSupport = { world: false, mesh: true };
+                  metrics.workerSupport = { world: false, mesh: true, ai: false };
                 } else {
                   metrics.workerSupport.mesh = true;
+                  if (typeof metrics.workerSupport.ai !== 'boolean') {
+                    metrics.workerSupport.ai = false;
+                  }
                 }
                 metrics.workerMesh = {
                   source: meshSummary.source ?? 'worker-prepared',
@@ -722,6 +725,67 @@
           .then((result) => {
             state.lastAiResult = result;
             options.workerResult = { ...options.workerResult, ai: result };
+            let aiSummary = null;
+            let summaryApplied = false;
+            if (typeof this.applyWorkerAiResult === 'function') {
+              try {
+                aiSummary = this.applyWorkerAiResult(result, { methodName, delta });
+                summaryApplied = Boolean(aiSummary);
+              } catch (error) {
+                scope?.console?.debug?.('Failed to apply worker AI result.', error);
+              }
+            }
+            if (!aiSummary && typeof this.normaliseWorkerAiResult === 'function') {
+              try {
+                aiSummary = this.normaliseWorkerAiResult(result, {
+                  delta,
+                  methodName,
+                });
+              } catch (error) {
+                scope?.console?.debug?.('Failed to normalise worker AI result.', error);
+              }
+            }
+            if (aiSummary && !summaryApplied) {
+              try {
+                this.lastWorkerAiSummary = aiSummary;
+              } catch (error) {
+                scope?.console?.debug?.('Failed to persist worker AI summary on experience.', error);
+              }
+              const metrics = this?.performanceMetrics?.worldGen ?? null;
+              if (metrics) {
+                if (!metrics.workerSupport || typeof metrics.workerSupport !== 'object') {
+                  metrics.workerSupport = { world: false, mesh: false, ai: false };
+                }
+                if (typeof metrics.workerSupport.world !== 'boolean') {
+                  metrics.workerSupport.world = false;
+                }
+                if (typeof metrics.workerSupport.mesh !== 'boolean') {
+                  metrics.workerSupport.mesh = false;
+                }
+                metrics.workerSupport.ai = true;
+                metrics.workerAi = {
+                  source: aiSummary.source ?? 'worker-simulated',
+                  updateCount: Number.isFinite(aiSummary.updateCount) ? aiSummary.updateCount : null,
+                  delta:
+                    Number.isFinite(aiSummary.delta)
+                      ? aiSummary.delta
+                      : Number.isFinite(result.delta)
+                        ? result.delta
+                        : Number.isFinite(delta)
+                          ? delta
+                          : null,
+                  generatedAt:
+                    Number.isFinite(aiSummary.workerGeneratedAt)
+                      ? aiSummary.workerGeneratedAt
+                      : Number.isFinite(aiSummary.generatedAt)
+                        ? aiSummary.generatedAt
+                        : Number.isFinite(result.generatedAt)
+                          ? result.generatedAt
+                          : null,
+                  entityType: aiSummary.entityType ?? methodName,
+                };
+              }
+            }
             const nextArgs = args.slice();
             if (optionsIndex !== null) {
               nextArgs[optionsIndex] = options;
