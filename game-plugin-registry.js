@@ -138,7 +138,9 @@
         }
         const slot = ensureSlot(plugin.slot);
         const previous = slot.active;
-        if (previous && previous.id === plugin.id && options.force !== true) {
+        const isSamePluginInstance =
+          previous && previous.definition === plugin && previous.id === plugin.id;
+        if (isSamePluginInstance && options.force !== true) {
           return slot.resources;
         }
         let resources = {};
