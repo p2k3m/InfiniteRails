@@ -375,43 +375,6 @@
     if (!scope || typeof scope.Worker !== 'function' || typeof scope.Blob !== 'function') {
       return fallbackManager;
     }
-    let blobUrl = null;
-    let worker = null;
-    try {
-      const workerScript = createIsolatedWorkerScript();
-      const blob = new scope.Blob([workerScript], { type: 'application/javascript' });
-      blobUrl = scope.URL && typeof scope.URL.createObjectURL === 'function' ? scope.URL.createObjectURL(blob) : null;
-      if (!blobUrl) {
-        throw new Error('Failed to allocate worker URL');
-      }
-      worker = new scope.Worker(blobUrl);
-    } catch (error) {
-      scope?.console?.debug?.('Failed to bootstrap isolated game worker.', error);
-      if (blobUrl && scope.URL && typeof scope.URL.revokeObjectURL === 'function') {
-        scope.URL.revokeObjectURL(blobUrl);
-      }
-      return fallbackManager;
-    }
-    const pending = new Map();
-    let nextId = 1;
-    worker.onmessage = (event) => {
-      const data = event && typeof event.data === 'object' ? event.data : {};
-      const { id } = data;
-      if (!pending.has(id)) {
-        return;
-      }
-      const { resolve, reject } = pending.get(id);
-      pending.delete(id);
-      if (data && Object.prototype.hasOwnProperty.call(data, 'error') && data.error) {
-        const errorMessage = typeof data.error.message === 'string' ? data.error.message : 'Worker task failed';
-        reject(new Error(errorMessage));
-        return;
-      }
-      resolve(data.result);
-    };
-    worker.onerror = (event) => {
-      scope?.console?.debug?.('Isolated game worker emitted an error.', event);
-    };
 
     const handlerLookup = {
       'world-gen': taskLibrary.world,
@@ -419,19 +382,148 @@
       'ai-sim': taskLibrary.ai,
     };
 
+    let blobUrl = null;
+    let blobRefCount = 0;
+
+    const ensureBlobUrl = () => {
+      if (blobUrl) {
+        return blobUrl;
+      }
+      const workerScript = createIsolatedWorkerScript();
+      let url = null;
+      try {
+        const blob = new scope.Blob([workerScript], { type: 'application/javascript' });
+        url = scope.URL && typeof scope.URL.createObjectURL === 'function' ? scope.URL.createObjectURL(blob) : null;
+      } catch (error) {
+        scope?.console?.debug?.('Failed to prepare isolated worker script blob.', error);
+        url = null;
+      }
+      if (!url) {
+        throw new Error('Failed to allocate worker URL');
+      }
+      blobUrl = url;
+      return blobUrl;
+    };
+
+    const releaseBlobUrl = () => {
+      if (blobRefCount > 0) {
+        blobRefCount -= 1;
+      }
+      if (blobRefCount <= 0 && blobUrl && scope.URL && typeof scope.URL.revokeObjectURL === 'function') {
+        try {
+          scope.URL.revokeObjectURL(blobUrl);
+        } catch (error) {
+          scope?.console?.debug?.('Failed to revoke isolated worker URL.', error);
+        }
+        blobUrl = null;
+        blobRefCount = 0;
+      }
+    };
+
+    const workerEntries = new Map();
+
+    const destroyWorkerEntry = (entry, reason = 'Worker terminated') => {
+      if (!entry) {
+        return;
+      }
+      if (entry.pending && entry.pending.size) {
+        entry.pending.forEach(({ reject }) => {
+          try {
+            reject(new Error(reason));
+          } catch (error) {
+            scope?.console?.debug?.('Failed to reject worker promise during teardown.', error);
+          }
+        });
+        entry.pending.clear();
+      }
+      if (entry.worker) {
+        try {
+          entry.worker.terminate();
+        } catch (error) {
+          scope?.console?.debug?.('Failed to terminate isolated game worker.', error);
+        }
+        releaseBlobUrl();
+      }
+      entry.worker = null;
+    };
+
+    const ensureWorkerEntry = (taskName) => {
+      if (workerEntries.has(taskName)) {
+        return workerEntries.get(taskName);
+      }
+      let workerInstance = null;
+      try {
+        const url = ensureBlobUrl();
+        workerInstance = new scope.Worker(url);
+        blobRefCount += 1;
+      } catch (error) {
+        scope?.console?.debug?.('Failed to bootstrap isolated game worker.', error);
+        if (workerInstance) {
+          try {
+            workerInstance.terminate();
+          } catch (terminateError) {
+            scope?.console?.debug?.('Failed to dispose partially constructed worker.', terminateError);
+          }
+          workerInstance = null;
+        }
+        releaseBlobUrl();
+        return null;
+      }
+      const entry = {
+        worker: workerInstance,
+        pending: new Map(),
+        nextId: 1,
+        taskName,
+      };
+      workerInstance.onmessage = (event) => {
+        const data = event && typeof event.data === 'object' ? event.data : {};
+        const { id } = data;
+        if (!entry.pending.has(id)) {
+          return;
+        }
+        const { resolve, reject } = entry.pending.get(id);
+        entry.pending.delete(id);
+        if (data && Object.prototype.hasOwnProperty.call(data, 'error') && data.error) {
+          const errorMessage = typeof data.error.message === 'string' ? data.error.message : 'Worker task failed';
+          reject(new Error(errorMessage));
+          return;
+        }
+        resolve(data.result);
+      };
+      const handleWorkerFault = (event, detailMessage = 'Worker error') => {
+        scope?.console?.debug?.('Isolated game worker emitted an error.', { event, taskName });
+        destroyWorkerEntry(entry, detailMessage);
+        workerEntries.delete(taskName);
+      };
+      workerInstance.onerror = (event) => {
+        handleWorkerFault(event, 'Worker error event');
+      };
+      if (typeof workerInstance.onmessageerror === 'object' || typeof workerInstance.onmessageerror === 'function') {
+        workerInstance.onmessageerror = (event) => {
+          handleWorkerFault(event, 'Worker message error');
+        };
+      }
+      workerEntries.set(taskName, entry);
+      return entry;
+    };
+
     const runTask = (taskName, payload) => {
-      if (!worker) {
-        const handler = handlerLookup[taskName];
+      const handler = handlerLookup[taskName];
+      const entry = ensureWorkerEntry(taskName);
+      if (!entry || !entry.worker) {
         return handler ? Promise.resolve(handler(payload)) : Promise.resolve(null);
       }
-      const id = nextId;
-      nextId += 1;
+      const id = entry.nextId;
+      entry.nextId += 1;
       return new Promise((resolve, reject) => {
-        pending.set(id, { resolve, reject });
+        entry.pending.set(id, { resolve, reject });
         try {
-          worker.postMessage({ id, task: taskName, payload });
+          entry.worker.postMessage({ id, task: taskName, payload });
         } catch (error) {
-          pending.delete(id);
+          entry.pending.delete(id);
+          scope?.console?.debug?.('Failed to post message to isolated game worker.', error);
+          destroyWorkerEntry(entry, 'Worker postMessage failed');
+          workerEntries.delete(taskName);
           reject(error);
         }
       });
@@ -443,27 +535,19 @@
       runMeshPreparation: (payload) => runTask('mesh-build', payload),
       runAiSimulation: (payload) => runTask('ai-sim', payload),
       terminate: () => {
-        if (worker) {
+        workerEntries.forEach((entry) => {
+          destroyWorkerEntry(entry, 'Worker manager terminated');
+        });
+        workerEntries.clear();
+        if (blobUrl && scope.URL && typeof scope.URL.revokeObjectURL === 'function') {
           try {
-            worker.terminate();
+            scope.URL.revokeObjectURL(blobUrl);
           } catch (error) {
-            scope?.console?.debug?.('Failed to terminate isolated game worker.', error);
+            scope?.console?.debug?.('Failed to revoke isolated worker URL during termination.', error);
           }
         }
-        worker = null;
-        if (blobUrl && scope.URL && typeof scope.URL.revokeObjectURL === 'function') {
-          scope.URL.revokeObjectURL(blobUrl);
-        }
-        if (pending.size) {
-          pending.forEach(({ reject }) => {
-            try {
-              reject(new Error('Worker terminated'));
-            } catch (error) {
-              scope?.console?.debug?.('Failed to reject worker promise during termination.', error);
-            }
-          });
-          pending.clear();
-        }
+        blobUrl = null;
+        blobRefCount = 0;
       },
     };
   }
