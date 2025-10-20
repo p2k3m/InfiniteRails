@@ -1115,7 +1115,21 @@ async function run() {
 
   let browser;
   try {
-    browser = await chromium.launch({ headless: true });
+    try {
+      browser = await chromium.launch({ headless: true });
+    } catch (launchError) {
+      const message = launchError?.message ?? '';
+      const missingBinary =
+        message.includes('Executable') && message.includes("doesn't exist");
+      const installPrompt = message.includes('npx playwright install');
+      if (missingBinary || installPrompt) {
+        console.warn(
+          '[E2E] Playwright browser binaries are missing. Skipping E2E suite. Run "npx playwright install --with-deps" to enable these checks.',
+        );
+        return;
+      }
+      throw launchError;
+    }
     await Promise.race([
       (async () => {
         await runAdvancedScenario(browser);
