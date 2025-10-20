@@ -662,6 +662,37 @@
           .then((result) => {
             state.lastMeshResult = result;
             options.workerResult = { ...options.workerResult, mesh: result, world: state.lastWorldResult };
+            let meshSummary = null;
+            if (typeof this.normaliseWorkerMeshResult === 'function') {
+              try {
+                meshSummary = this.normaliseWorkerMeshResult(result, { chunkSize: this.terrainChunkSize });
+              } catch (error) {
+                scope?.console?.debug?.('Failed to normalise worker mesh result.', error);
+              }
+            }
+            if (meshSummary) {
+              try {
+                this.lastWorkerMeshSummary = meshSummary;
+              } catch (error) {
+                scope?.console?.debug?.('Failed to persist worker mesh summary on experience.', error);
+              }
+              const metrics = this?.performanceMetrics?.worldGen ?? null;
+              if (metrics) {
+                if (!metrics.workerSupport || typeof metrics.workerSupport !== 'object') {
+                  metrics.workerSupport = { world: false, mesh: true };
+                } else {
+                  metrics.workerSupport.mesh = true;
+                }
+                metrics.workerMesh = {
+                  source: meshSummary.source ?? 'worker-prepared',
+                  chunkSize: Number.isFinite(meshSummary.chunkSize) ? meshSummary.chunkSize : null,
+                  chunkCount: Number.isFinite(meshSummary.chunkCount) ? meshSummary.chunkCount : null,
+                  meshCount: Number.isFinite(meshSummary.meshCount) ? meshSummary.meshCount : null,
+                  vertexCount: Number.isFinite(meshSummary.vertexCount) ? meshSummary.vertexCount : null,
+                  generatedAt: meshSummary.workerGeneratedAt ?? null,
+                };
+              }
+            }
             args[0] = options;
             return originalBuildRails.apply(this, args);
           })
