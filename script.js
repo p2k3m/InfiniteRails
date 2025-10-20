@@ -684,8 +684,110 @@
       lastWorldResult: null,
       lastMeshResult: null,
       lastAiResult: null,
+      prefetchCache: new Map(),
     };
     isolatedWorkerState.set(instance, state);
+
+    const resolvePrefetchKey = (ctx, options = {}) => {
+      if (typeof options.dimensionId === 'string' && options.dimensionId.trim().length) {
+        return options.dimensionId.trim();
+      }
+      if (typeof options.theme?.id === 'string' && options.theme.id.trim().length) {
+        return options.theme.id.trim();
+      }
+      if (Number.isFinite(options.index)) {
+        return `index-${Math.max(0, Math.floor(options.index))}`;
+      }
+      if (typeof ctx?.dimensionSettings?.id === 'string' && ctx.dimensionSettings.id.trim().length) {
+        return ctx.dimensionSettings.id.trim();
+      }
+      return null;
+    };
+
+    instance.prefetchWorldDataForDimension = function prefetchWorldDataForDimension(prefetchOptions = {}) {
+      const dimensionKey = resolvePrefetchKey(this, prefetchOptions);
+      if (!dimensionKey) {
+        return Promise.resolve(null);
+      }
+      const existing = state.prefetchCache.get(dimensionKey);
+      if (existing && existing.promise) {
+        return existing.promise;
+      }
+      const entry = existing || {
+        world: null,
+        mesh: null,
+        worldSummary: null,
+        meshSummary: null,
+        worldConsumed: false,
+        meshConsumed: false,
+      };
+      const promise = (async () => {
+        const theme = prefetchOptions.theme || null;
+        const profile = theme?.terrainProfile || null;
+        let caps = null;
+        if (typeof this.calculateTerrainCapsForProfile === 'function') {
+          try {
+            caps = this.calculateTerrainCapsForProfile(profile);
+          } catch (error) {
+            scope?.console?.debug?.('Failed to calculate terrain caps for prefetched dimension.', error);
+          }
+        }
+        if (!caps) {
+          const min = Number.isFinite(this.minColumnHeight) ? Math.max(1, Math.floor(this.minColumnHeight)) : 1;
+          const maxCandidate = Number.isFinite(this.maxColumnHeight)
+            ? Math.floor(this.maxColumnHeight)
+            : Math.max(min, 6);
+          const budgetCandidate = Number.isFinite(this.maxTerrainVoxels)
+            ? Math.max(0, Math.floor(this.maxTerrainVoxels))
+            : 64 * 64 * Math.max(4, min);
+          caps = {
+            minColumnHeight: min,
+            maxColumnHeight: Math.max(min, maxCandidate),
+            maxTerrainVoxels: Math.max(64 * 64 * min, budgetCandidate),
+          };
+        }
+        const worldPayload = buildWorldWorkerPayload(this, {
+          minHeight: caps.minColumnHeight,
+          maxHeight: caps.maxColumnHeight,
+        });
+        const worldResult = await manager.runWorldGeneration(worldPayload);
+        entry.world = worldResult;
+        entry.worldConsumed = false;
+        if (typeof this.normaliseWorkerWorldResult === 'function') {
+          try {
+            entry.worldSummary = this.normaliseWorkerWorldResult(worldResult, {
+              minColumnHeight: caps.minColumnHeight,
+              maxColumnHeight: caps.maxColumnHeight,
+              voxelBudget: caps.maxTerrainVoxels,
+            });
+          } catch (error) {
+            scope?.console?.debug?.('Failed to normalise prefetched worker world result.', error);
+          }
+        }
+        const meshPayload = buildMeshWorkerPayload(this, { maxHeight: caps.maxColumnHeight }, worldResult);
+        const meshResult = await manager.runMeshPreparation(meshPayload);
+        entry.mesh = meshResult;
+        entry.meshConsumed = false;
+        if (typeof this.normaliseWorkerMeshResult === 'function') {
+          try {
+            entry.meshSummary = this.normaliseWorkerMeshResult(meshResult, { chunkSize: this.terrainChunkSize });
+          } catch (error) {
+            scope?.console?.debug?.('Failed to summarise prefetched worker mesh result.', error);
+          }
+        }
+        entry.caps = caps;
+        entry.promise = null;
+        state.prefetchCache.set(dimensionKey, entry);
+        return entry;
+      })()
+        .catch((error) => {
+          state.prefetchCache.delete(dimensionKey);
+          throw error;
+        });
+      entry.promise = promise;
+      state.prefetchCache.set(dimensionKey, entry);
+      return promise;
+    };
 
     if (typeof instance.buildTerrain === 'function') {
       const originalBuildTerrain = instance.buildTerrain;
@@ -694,12 +796,41 @@
         if (options.skipWorker === true) {
           return originalBuildTerrain.apply(this, args);
         }
-        const payload = buildWorldWorkerPayload(this, options);
         const detail = {
           reason: options?.reason || 'worker-offload',
           descriptor: options?.descriptor ?? null,
           source: 'isolated-game-worker',
         };
+        const dimensionKey = resolvePrefetchKey(this, options);
+        const cachedEntry = dimensionKey ? state.prefetchCache.get(dimensionKey) : null;
+        const cachedReady = cachedEntry && cachedEntry.world && !cachedEntry.worldConsumed;
+        if (cachedReady) {
+          dispatchWorldGenerationLifecycleEvent('start', detail, scope);
+          options.workerResult = { ...(options.workerResult || {}), world: cachedEntry.world };
+          if (cachedEntry.mesh && !cachedEntry.meshConsumed) {
+            options.workerResult.mesh = cachedEntry.mesh;
+          }
+          cachedEntry.worldConsumed = true;
+          state.lastWorldResult = cachedEntry.world;
+          args[0] = options;
+          try {
+            const output = originalBuildTerrain.apply(this, args);
+            return ensureFinally(output, () => {
+              dispatchWorldGenerationLifecycleEvent('complete', detail, scope);
+              if (cachedEntry && cachedEntry.worldConsumed && cachedEntry.meshConsumed) {
+                state.prefetchCache.delete(dimensionKey);
+              }
+            });
+          } catch (error) {
+            dispatchWorldGenerationLifecycleEvent(
+              'complete',
+              { ...detail, failed: true, errorMessage: error?.message || String(error) },
+              scope,
+            );
+            throw error;
+          }
+        }
+        const payload = buildWorldWorkerPayload(this, options);
         dispatchWorldGenerationLifecycleEvent('start', detail, scope);
         return manager
           .runWorldGeneration(payload)
@@ -739,6 +870,61 @@
         const options = args.length > 0 && args[0] && typeof args[0] === 'object' ? { ...args[0] } : {};
         if (options.skipWorker === true) {
           return originalBuildRails.apply(this, args);
+        }
+        const dimensionKey = resolvePrefetchKey(this, options);
+        const cachedEntry = dimensionKey ? state.prefetchCache.get(dimensionKey) : null;
+        const cachedMeshReady = cachedEntry && cachedEntry.mesh && !cachedEntry.meshConsumed;
+        if (cachedMeshReady) {
+          options.workerResult = { ...(options.workerResult || {}), mesh: cachedEntry.mesh };
+          cachedEntry.meshConsumed = true;
+          state.lastMeshResult = cachedEntry.mesh;
+          if (cachedEntry.world && !cachedEntry.worldConsumed) {
+            options.workerResult.world = cachedEntry.world;
+            cachedEntry.worldConsumed = true;
+            state.lastWorldResult = cachedEntry.world;
+          } else if (state.lastWorldResult && !options.workerResult.world) {
+            options.workerResult.world = state.lastWorldResult;
+          }
+          let meshSummary = cachedEntry.meshSummary || null;
+          if (!meshSummary && typeof this.normaliseWorkerMeshResult === 'function') {
+            try {
+              meshSummary = this.normaliseWorkerMeshResult(cachedEntry.mesh, { chunkSize: this.terrainChunkSize });
+            } catch (error) {
+              scope?.console?.debug?.('Failed to summarise cached worker mesh result.', error);
+            }
+          }
+          if (meshSummary) {
+            try {
+              this.lastWorkerMeshSummary = meshSummary;
+            } catch (error) {
+              scope?.console?.debug?.('Failed to persist cached worker mesh summary on experience.', error);
+            }
+            const metrics = this?.performanceMetrics?.worldGen ?? null;
+            if (metrics) {
+              if (!metrics.workerSupport || typeof metrics.workerSupport !== 'object') {
+                metrics.workerSupport = { world: false, mesh: true, ai: false };
+              } else {
+                metrics.workerSupport.mesh = true;
+                if (typeof metrics.workerSupport.ai !== 'boolean') {
+                  metrics.workerSupport.ai = false;
+                }
+              }
+              metrics.workerMesh = {
+                source: meshSummary.source ?? 'worker-prepared',
+                chunkSize: Number.isFinite(meshSummary.chunkSize) ? meshSummary.chunkSize : null,
+                chunkCount: Number.isFinite(meshSummary.chunkCount) ? meshSummary.chunkCount : null,
+                meshCount: Number.isFinite(meshSummary.meshCount) ? meshSummary.meshCount : null,
+                vertexCount: Number.isFinite(meshSummary.vertexCount) ? meshSummary.vertexCount : null,
+                generatedAt: meshSummary.workerGeneratedAt ?? null,
+              };
+            }
+          }
+          args[0] = options;
+          const result = originalBuildRails.apply(this, args);
+          if (cachedEntry.worldConsumed && cachedEntry.meshConsumed) {
+            state.prefetchCache.delete(dimensionKey);
+          }
+          return result;
         }
         const payload = buildMeshWorkerPayload(this, options, state.lastWorldResult);
         return manager
