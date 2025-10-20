@@ -2275,6 +2275,450 @@
   let activeExperienceInstance = null;
   let synchronisingActiveExperience = false;
 
+  const CRASH_RECOVERY_STORAGE_KEY = 'infinite-rails:crash-recovery-dump';
+  const crashRecoveryState = {
+    snapshot: null,
+    offerPending: false,
+    offerDisplayed: false,
+    restoring: false,
+    retryTimer: null,
+  };
+
+  function cloneCrashRecoverySnapshot(snapshot) {
+    if (!snapshot || typeof snapshot !== 'object') {
+      return null;
+    }
+    try {
+      return JSON.parse(JSON.stringify(snapshot));
+    } catch (error) {
+      globalScope?.console?.debug?.('Failed to clone crash recovery snapshot.', error);
+      return null;
+    }
+  }
+
+  function loadCrashRecoverySnapshotFromStorage() {
+    if (!globalScope?.localStorage) {
+      return null;
+    }
+    let raw;
+    try {
+      raw = globalScope.localStorage.getItem(CRASH_RECOVERY_STORAGE_KEY);
+    } catch (error) {
+      globalScope?.console?.debug?.('Failed to read crash recovery snapshot from storage.', error);
+      return null;
+    }
+    if (!raw) {
+      return null;
+    }
+    try {
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object') {
+        throw new Error('Crash recovery snapshot invalid.');
+      }
+      return parsed;
+    } catch (error) {
+      quarantineLocalStorageKey(CRASH_RECOVERY_STORAGE_KEY, {
+        context: 'crash recovery snapshot',
+        reason: 'Resetting corrupted crash recovery snapshot.',
+        error,
+      });
+      return null;
+    }
+  }
+
+  function persistCrashRecoverySnapshot(snapshot) {
+    if (!globalScope?.localStorage) {
+      return false;
+    }
+    try {
+      globalScope.localStorage.setItem(CRASH_RECOVERY_STORAGE_KEY, JSON.stringify(snapshot));
+      return true;
+    } catch (error) {
+      globalScope?.console?.warn?.('Failed to persist crash recovery snapshot.', error);
+      return false;
+    }
+  }
+
+  function clearCrashRecoverySnapshotFromStorage() {
+    if (!globalScope?.localStorage) {
+      return false;
+    }
+    try {
+      globalScope.localStorage.removeItem(CRASH_RECOVERY_STORAGE_KEY);
+      return true;
+    } catch (error) {
+      globalScope?.console?.debug?.('Failed to clear crash recovery snapshot from storage.', error);
+      return false;
+    }
+  }
+
+  function dispatchCrashRecoveryEvent(name, detail = {}) {
+    const scope = typeof globalScope !== 'undefined' ? globalScope : globalThis;
+    const EventCtor = scope?.CustomEvent || (typeof CustomEvent === 'function' ? CustomEvent : null);
+    if (!scope || typeof scope.dispatchEvent !== 'function' || typeof EventCtor !== 'function') {
+      return;
+    }
+    try {
+      scope.dispatchEvent(new EventCtor(name, { detail }));
+    } catch (error) {
+      scope?.console?.debug?.('Failed to dispatch crash recovery event.', error);
+    }
+  }
+
+  function getBootstrapOverlayController() {
+    try {
+      if (typeof bootstrapOverlay !== 'undefined') {
+        return bootstrapOverlay;
+      }
+    } catch (error) {
+      // Ignore reference errors before bootstrapOverlay initialises.
+    }
+    const scope = typeof globalScope !== 'undefined' ? globalScope : globalThis;
+    if (scope && typeof scope.bootstrapOverlay === 'object') {
+      return scope.bootstrapOverlay;
+    }
+    return null;
+  }
+
+  function formatCrashRecoveryTimestamp(value) {
+    if (!value) {
+      return null;
+    }
+    try {
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) {
+        return null;
+      }
+      return date.toLocaleString();
+    } catch (error) {
+      globalScope?.console?.debug?.('Failed to format crash recovery timestamp.', error);
+      return null;
+    }
+  }
+
+  function scheduleCrashRecoveryOffer(delayMs = 1200) {
+    if (!crashRecoveryState.snapshot) {
+      return;
+    }
+    const setFn =
+      (typeof globalScope?.setTimeout === 'function' && globalScope.setTimeout.bind(globalScope)) ||
+      (typeof setTimeout === 'function' ? setTimeout : null);
+    if (!setFn) {
+      return;
+    }
+    if (crashRecoveryState.retryTimer !== null) {
+      return;
+    }
+    const clampedDelay = Math.max(0, Number.isFinite(delayMs) ? delayMs : 1200);
+    crashRecoveryState.retryTimer = setFn(() => {
+      crashRecoveryState.retryTimer = null;
+      const offered = refreshCrashRecoveryOffer();
+      if (!offered && crashRecoveryState.snapshot) {
+        scheduleCrashRecoveryOffer(Math.min(5000, Math.max(1000, clampedDelay * 1.5)));
+      }
+    }, clampedDelay);
+  }
+
+  function refreshCrashRecoveryOffer() {
+    if (!crashRecoveryState.snapshot || crashRecoveryState.restoring) {
+      return false;
+    }
+    const overlay = getBootstrapOverlayController();
+    if (!overlay || typeof overlay.setRecoveryAction !== 'function') {
+      return false;
+    }
+    const experience = activeExperienceInstance;
+    if (!experience || typeof experience.restoreAtomicSegments !== 'function') {
+      return false;
+    }
+    const capturedAt = formatCrashRecoveryTimestamp(crashRecoveryState.snapshot.capturedAt);
+    const descriptionParts = [];
+    if (capturedAt) {
+      descriptionParts.push(`Captured ${capturedAt}.`);
+    }
+    descriptionParts.push('Restore inventory, score, and dimension state from the crash snapshot.');
+    const description = descriptionParts.join(' ');
+    overlay.setRecoveryAction({
+      label: 'Restore crash snapshot',
+      ariaLabel: 'Restore the crash recovery snapshot captured after the last failure.',
+      description,
+      action: 'restore-crash-snapshot',
+      onSelect: () => {
+        attemptCrashRecoveryRestore({ source: 'bootstrap-overlay' });
+      },
+    });
+    crashRecoveryState.offerPending = false;
+    crashRecoveryState.offerDisplayed = true;
+    return true;
+  }
+
+  function updateCrashRecoverySnapshot(snapshot, options = {}) {
+    const { persist = true, offer = true, dispatch = true, delayMs = 1200 } = options;
+    const previousSnapshot = crashRecoveryState.snapshot;
+    const sanitisedSnapshot = snapshot && typeof snapshot === 'object' ? cloneCrashRecoverySnapshot(snapshot) || snapshot : null;
+    crashRecoveryState.snapshot = sanitisedSnapshot;
+    crashRecoveryState.offerDisplayed = false;
+    crashRecoveryState.restoring = false;
+    crashRecoveryState.offerPending = offer && Boolean(sanitisedSnapshot);
+    if (crashRecoveryState.retryTimer !== null) {
+      const clearFn =
+        (typeof globalScope?.clearTimeout === 'function' && globalScope.clearTimeout.bind(globalScope)) ||
+        (typeof clearTimeout === 'function' ? clearTimeout : null);
+      if (clearFn) {
+        clearFn(crashRecoveryState.retryTimer);
+      }
+      crashRecoveryState.retryTimer = null;
+    }
+    if (persist) {
+      if (sanitisedSnapshot) {
+        persistCrashRecoverySnapshot(sanitisedSnapshot);
+      } else {
+        clearCrashRecoverySnapshotFromStorage();
+      }
+    }
+    if (dispatch) {
+      if (sanitisedSnapshot && !previousSnapshot) {
+        dispatchCrashRecoveryEvent('infinite-rails:crash-recovery-available', {
+          snapshot: cloneCrashRecoverySnapshot(sanitisedSnapshot),
+        });
+      } else if (!sanitisedSnapshot && previousSnapshot) {
+        dispatchCrashRecoveryEvent('infinite-rails:crash-recovery-cleared', {
+          reason: options.reason ?? null,
+        });
+      } else if (sanitisedSnapshot && previousSnapshot) {
+        dispatchCrashRecoveryEvent('infinite-rails:crash-recovery-updated', {
+          snapshot: cloneCrashRecoverySnapshot(sanitisedSnapshot),
+        });
+      }
+    }
+    if (!sanitisedSnapshot && options.clearOverlayAction === true) {
+      const overlay = getBootstrapOverlayController();
+      overlay?.clearRecoveryAction?.();
+    }
+    if (crashRecoveryState.offerPending) {
+      scheduleCrashRecoveryOffer(delayMs);
+    }
+  }
+
+  function buildCrashRecoverySnapshot(context = {}) {
+    const heartbeat = buildHeartbeatStatusSnapshot();
+    let atomicSegments = null;
+    const experience = activeExperienceInstance;
+    if (experience && typeof experience.captureAtomicSegments === 'function') {
+      try {
+        atomicSegments = experience.captureAtomicSegments({ score: true, inventory: true, dimension: true });
+      } catch (error) {
+        globalScope?.console?.debug?.('Failed to capture crash recovery atomic segments.', error);
+        atomicSegments = null;
+      }
+    }
+    const detail = sanitiseDetailForLogging(context.detail);
+    let errorInfo = null;
+    if (context.error && typeof context.error === 'object') {
+      errorInfo = {
+        name: typeof context.error.name === 'string' ? context.error.name : null,
+        message: typeof context.error.message === 'string' ? context.error.message : null,
+        stack: typeof context.error.stack === 'string' ? context.error.stack : null,
+      };
+    }
+    const snapshot = {
+      version: 1,
+      capturedAt: new Date().toISOString(),
+      boundary: context.boundary ?? null,
+      stage: context.stage ?? null,
+      reason:
+        typeof context.reason === 'string' && context.reason.trim().length
+          ? context.reason.trim()
+          : typeof detail?.reason === 'string' && detail.reason.trim().length
+            ? detail.reason.trim()
+            : null,
+      message: typeof context.message === 'string' ? context.message : null,
+      userMessage: typeof context.userMessage === 'string' ? context.userMessage : null,
+      diagnosticMessage: typeof context.diagnosticMessage === 'string' ? context.diagnosticMessage : null,
+      error: errorInfo,
+      detail,
+      heartbeat: heartbeat ?? null,
+      atomicSegments: atomicSegments && Object.keys(atomicSegments).length ? atomicSegments : null,
+      rendererMode: globalScope?.InfiniteRails?.rendererMode ?? null,
+      sessionId: typeof traceManager?.sessionId === 'string' ? traceManager.sessionId : null,
+    };
+    if (Number.isFinite(context.timestamp)) {
+      try {
+        snapshot.triggeredAt = new Date(context.timestamp).toISOString();
+      } catch (error) {
+        snapshot.triggeredAt = context.timestamp;
+      }
+    }
+    return snapshot;
+  }
+
+  function recordCrashRecoverySnapshot(context = {}) {
+    const snapshot = buildCrashRecoverySnapshot(context);
+    if (!snapshot) {
+      return false;
+    }
+    const persisted = persistCrashRecoverySnapshot(snapshot);
+    if (!persisted) {
+      return false;
+    }
+    updateCrashRecoverySnapshot(snapshot, { persist: false, offer: false, dispatch: true });
+    if (typeof logDiagnosticsEvent === 'function') {
+      logDiagnosticsEvent('runtime', 'Captured crash recovery snapshot.', {
+        level: 'error',
+        detail: {
+          boundary: snapshot.boundary,
+          stage: snapshot.stage,
+          capturedAt: snapshot.capturedAt,
+        },
+      });
+    }
+    return true;
+  }
+
+  function handleCrashRecoveryRestoreFailure(error, options = {}) {
+    if (typeof showHudAlert === 'function') {
+      showHudAlert({
+        title: 'Crash recovery failed',
+        message: 'Unable to apply crash recovery snapshot. Try again once the renderer is stable.',
+        severity: 'error',
+        autoHideMs: 9000,
+      });
+    }
+    if (typeof logDiagnosticsEvent === 'function') {
+      logDiagnosticsEvent('runtime', 'Crash recovery snapshot restore failed.', {
+        level: 'error',
+        detail: {
+          error: error?.message ?? String(error),
+          source: options.source ?? 'overlay',
+        },
+      });
+    }
+    if (globalScope?.console?.warn) {
+      globalScope.console.warn('Failed to apply crash recovery snapshot.', error);
+    }
+    crashRecoveryState.offerPending = true;
+    scheduleCrashRecoveryOffer(2000);
+  }
+
+  function finaliseCrashRecoverySuccess(snapshot, options = {}) {
+    const overlay = getBootstrapOverlayController();
+    overlay?.clearRecoveryAction?.();
+    if (typeof showHudAlert === 'function') {
+      showHudAlert({
+        title: 'Session restored',
+        message: 'Crash recovery snapshot restored successfully.',
+        severity: 'success',
+        autoHideMs: 8000,
+      });
+    }
+    if (typeof logDiagnosticsEvent === 'function') {
+      logDiagnosticsEvent('runtime', 'Crash recovery snapshot restored.', {
+        level: 'success',
+        detail: {
+          capturedAt: snapshot?.capturedAt ?? null,
+          boundary: snapshot?.boundary ?? null,
+          stage: snapshot?.stage ?? null,
+          source: options.source ?? 'overlay',
+        },
+      });
+    }
+    updateCrashRecoverySnapshot(null, {
+      persist: true,
+      offer: false,
+      reason: 'applied',
+      clearOverlayAction: false,
+    });
+    dispatchCrashRecoveryEvent('infinite-rails:crash-recovery-applied', {
+      snapshot: cloneCrashRecoverySnapshot(snapshot),
+      source: options.source ?? 'overlay',
+    });
+  }
+
+  function attemptCrashRecoveryRestore(options = {}) {
+    if (!crashRecoveryState.snapshot) {
+      return false;
+    }
+    const experience = activeExperienceInstance;
+    if (!experience || typeof experience.restoreAtomicSegments !== 'function') {
+      if (typeof showHudAlert === 'function') {
+        showHudAlert({
+          title: 'Renderer not ready',
+          message: 'Renderer initialisation in progress. Try restoring once gameplay resumes.',
+          severity: 'info',
+          autoHideMs: 6000,
+        });
+      }
+      crashRecoveryState.offerPending = true;
+      scheduleCrashRecoveryOffer(1500);
+      return false;
+    }
+    const snapshot = cloneCrashRecoverySnapshot(crashRecoveryState.snapshot);
+    if (!snapshot) {
+      return false;
+    }
+    const atomic = snapshot.atomicSegments && typeof snapshot.atomicSegments === 'object' ? snapshot.atomicSegments : null;
+    const segments = {};
+    if (atomic?.score) {
+      segments.score = true;
+    }
+    if (atomic?.inventory) {
+      segments.inventory = true;
+    }
+    if (atomic?.dimension) {
+      segments.dimension = true;
+    }
+    if (!Object.keys(segments).length) {
+      if (typeof showHudAlert === 'function') {
+        showHudAlert({
+          title: 'Crash snapshot unavailable',
+          message: 'No restorable gameplay segments were captured.',
+          severity: 'warning',
+          autoHideMs: 7000,
+        });
+      }
+      updateCrashRecoverySnapshot(null, {
+        persist: true,
+        offer: false,
+        reason: 'empty-snapshot',
+        clearOverlayAction: true,
+      });
+      return false;
+    }
+    crashRecoveryState.restoring = true;
+    try {
+      const result = experience.restoreAtomicSegments(atomic, segments);
+      if (result && typeof result.then === 'function') {
+        return result
+          .then(() => {
+            crashRecoveryState.restoring = false;
+            finaliseCrashRecoverySuccess(snapshot, options);
+            return true;
+          })
+          .catch((error) => {
+            crashRecoveryState.restoring = false;
+            handleCrashRecoveryRestoreFailure(error, options);
+            return false;
+          });
+      }
+      crashRecoveryState.restoring = false;
+      finaliseCrashRecoverySuccess(snapshot, options);
+      return true;
+    } catch (error) {
+      crashRecoveryState.restoring = false;
+      handleCrashRecoveryRestoreFailure(error, options);
+      return false;
+    }
+  }
+
+  const storedCrashRecoverySnapshot = loadCrashRecoverySnapshotFromStorage();
+  if (storedCrashRecoverySnapshot) {
+    updateCrashRecoverySnapshot(storedCrashRecoverySnapshot, {
+      persist: false,
+      offer: true,
+      delayMs: 1500,
+    });
+  }
+
   function attachRuntimeHooksToActiveExperience(instance) {
     if (!instance || typeof instance !== 'object') {
       return;
@@ -2317,6 +2761,10 @@
       globalScope?.console?.debug?.('Failed to synchronise active experience state.', error);
     } finally {
       synchronisingActiveExperience = false;
+    }
+    if (crashRecoveryState.snapshot) {
+      crashRecoveryState.offerPending = true;
+      scheduleCrashRecoveryOffer(600);
     }
     return activeExperienceInstance;
   }
@@ -10661,6 +11109,17 @@
       detail,
       error,
       normalised,
+    });
+    recordCrashRecoverySnapshot({
+      boundary: boundaryKey,
+      stage,
+      reason: detail?.reason ?? null,
+      message: logMessage,
+      userMessage,
+      diagnosticMessage,
+      detail,
+      error: normalised,
+      timestamp: options.timestamp ?? Date.now(),
     });
     const watchdogDescriptor = normaliseSurvivalWatchdogDescriptor(detail, stage);
     if (shouldTriggerSurvivalWatchdog(watchdogDescriptor)) {
@@ -27002,6 +27461,38 @@
   if (typeof globalScope.InfiniteRails.refreshTextures !== 'function') {
     globalScope.InfiniteRails.refreshTextures = (options = {}) => assetsApi.refreshTextures(options);
   }
+
+  const crashRecoveryApi = globalScope.InfiniteRails.crashRecovery || {};
+  crashRecoveryApi.isAvailable = () => Boolean(crashRecoveryState.snapshot);
+  crashRecoveryApi.getSnapshot = () => cloneCrashRecoverySnapshot(crashRecoveryState.snapshot);
+  crashRecoveryApi.restore = (options = {}) => attemptCrashRecoveryRestore({ source: options.source ?? 'api' });
+  crashRecoveryApi.discard = (options = {}) => {
+    if (!crashRecoveryState.snapshot) {
+      return false;
+    }
+    const snapshot = cloneCrashRecoverySnapshot(crashRecoveryState.snapshot);
+    updateCrashRecoverySnapshot(null, {
+      persist: options.persist !== false,
+      offer: false,
+      reason: options.reason ?? 'api-discard',
+      clearOverlayAction: true,
+    });
+    dispatchCrashRecoveryEvent('infinite-rails:crash-recovery-discarded', {
+      snapshot,
+      source: options.source ?? 'api',
+    });
+    return true;
+  };
+  crashRecoveryApi.capture = (options = {}) =>
+    recordCrashRecoverySnapshot({
+      reason: options.reason ?? 'api-capture',
+      stage: options.stage ?? 'api',
+      detail: options.detail ?? null,
+      message: options.message ?? null,
+      userMessage: options.userMessage ?? null,
+      diagnosticMessage: options.diagnosticMessage ?? null,
+    });
+  globalScope.InfiniteRails.crashRecovery = crashRecoveryApi;
 
   if (typeof globalScope.addEventListener === 'function') {
     globalScope.addEventListener(
