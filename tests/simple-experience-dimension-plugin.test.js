@@ -274,4 +274,178 @@ describe('simple experience dimension plugins', () => {
     expect(profiles.void.minHeight).toBe(2);
     expect(experience.dimensionTerrainProfile.minHeight).toBe(2);
   });
+
+  it('applies lifecycle hooks from plugins to active experiences', async () => {
+    const { experience } = createExperience();
+    const calls = [];
+
+    const plugin = {
+      id: 'hook-pack',
+      slot: 'dimension-pack',
+      version: '0.3.0',
+      label: 'Lifecycle hook pack',
+      resources: () => ({
+        themes: [
+          {
+            id: 'hook',
+            name: 'Hook Expanse',
+            label: 'Hook Expanse',
+            palette: {
+              grass: '#123456',
+              dirt: '#0f1820',
+              stone: '#1c2733',
+              rails: '#fedcba',
+            },
+            fog: '#0c1117',
+            sky: '#101923',
+            sun: '#ffffff',
+            hemi: '#13202c',
+            gravity: 0.92,
+            speedMultiplier: 1.04,
+            description: 'Lifecycle hook validation dimension.',
+          },
+        ],
+        badgeSymbols: { hook: '🪝' },
+        badgeSynonyms: { hook: ['hook', 'test'] },
+        lootTables: {
+          hook: [
+            {
+              items: [
+                { item: 'portal-charge', quantity: 1 },
+                { item: 'stone', quantity: 1 },
+              ],
+              score: 7,
+              message: 'Hook loot delivered.',
+            },
+          ],
+        },
+        lifecycleHooks: {
+          exit: [
+            (payload, context) => {
+              calls.push({ phase: 'exit', payload, context });
+            },
+          ],
+          enter: [
+            (payload, context) => {
+              calls.push({ phase: 'enter', payload, context });
+            },
+          ],
+          ready: [
+            (payload, context) => {
+              calls.push({ phase: 'ready', payload, context });
+            },
+          ],
+        },
+      }),
+    };
+
+    pluginRegistry.hotSwap('dimension-pack', plugin, { reason: 'lifecycle-test' });
+
+    expect(experience.dimensionLifecycleHooks.exit.size).toBeGreaterThan(0);
+    expect(experience.dimensionLifecycleHooks.enter.size).toBeGreaterThan(0);
+    expect(experience.dimensionLifecycleHooks.ready.size).toBeGreaterThan(0);
+
+    await experience.runDimensionExitHooks({ previousDimension: experience.dimensionSettings });
+    await experience.runDimensionEnterHooks({ nextDimension: experience.dimensionSettings });
+    await experience.runDimensionReadyHooks({});
+
+    const phases = calls.map((entry) => entry.phase);
+    expect(phases).toContain('exit');
+    expect(phases).toContain('enter');
+    expect(phases).toContain('ready');
+    const readyCall = calls.find((entry) => entry.phase === 'ready');
+    expect(readyCall?.context?.experience).toBe(experience);
+    expect(readyCall?.context?.detail?.plugin?.id).toBe('hook-pack');
+    expect(readyCall?.context?.resources?.themes?.[0]?.id).toBe('hook');
+  });
+
+  it('runs experience augmentations and tears them down on plugin replacement', async () => {
+    const { experience } = createExperience();
+    let cleanupCounter = 0;
+
+    const plugin = {
+      id: 'augmentation-pack',
+      slot: 'dimension-pack',
+      version: '0.4.0',
+      label: 'Augmentation pack',
+      resources: () => ({
+        themes: [
+          {
+            id: 'augment',
+            name: 'Augment Plane',
+            label: 'Augment Plane',
+            palette: {
+              grass: '#224466',
+              dirt: '#1c2733',
+              stone: '#0f1924',
+              rails: '#ffaa33',
+            },
+            fog: '#111820',
+            sky: '#16212b',
+            sun: '#ffe0aa',
+            hemi: '#1a2735',
+            gravity: 1.05,
+            speedMultiplier: 0.97,
+            description: 'Augmentation logic validation dimension.',
+          },
+        ],
+        badgeSymbols: { augment: '✳️' },
+        badgeSynonyms: { augment: ['augment', 'logic'] },
+        lootTables: {
+          augment: [
+            {
+              items: [
+                { item: 'stone', quantity: 1 },
+                { item: 'portal-charge', quantity: 1 },
+              ],
+              score: 11,
+              message: 'Augmentation loot emitted.',
+            },
+          ],
+        },
+        experienceAugmentations: [
+          ({ experience: instance, registerLifecycleHook, addCleanup }) => {
+            instance.pluginAugmented = true;
+            instance.readyHookCount = 0;
+            const off = registerLifecycleHook('ready', (_, context) => {
+              instance.readyHookCount += 1;
+              instance.lastPluginContext = context;
+            });
+            addCleanup(off);
+            addCleanup({
+              dispose: () => {
+                cleanupCounter += 1;
+              },
+            });
+            return () => {
+              cleanupCounter += 1;
+              instance.pluginAugmented = false;
+            };
+          },
+        ],
+      }),
+    };
+
+    pluginRegistry.hotSwap('dimension-pack', plugin, { reason: 'augmentation-test' });
+
+    expect(experience.pluginAugmented).toBe(true);
+    expect(experience.readyHookCount).toBe(0);
+
+    await experience.runDimensionReadyHooks({});
+    expect(experience.readyHookCount).toBe(1);
+    expect(experience.lastPluginContext?.detail?.plugin?.id).toBe('augmentation-pack');
+    expect(experience.lastPluginContext?.resources?.themes?.[0]?.id).toBe('augment');
+
+    experience.readyHookCount = 0;
+
+    pluginRegistry.activate(window.SimpleExperience.coreDimensionPluginId, {
+      reason: 'restore-core',
+    });
+
+    expect(experience.pluginAugmented).toBe(false);
+    expect(cleanupCounter).toBe(2);
+
+    await experience.runDimensionReadyHooks({});
+    expect(experience.readyHookCount).toBe(0);
+  });
 });
