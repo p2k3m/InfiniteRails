@@ -10156,6 +10156,7 @@
     detail = null,
     timestamp = null,
     logToConsole = true,
+    error = null,
   } = {}) {
     if (typeof bootstrapOverlay?.showError === 'function') {
       try {
@@ -10282,9 +10283,9 @@
         bootstrapOverlay.clearDiagnosticAction('assets');
       }
     }
+    const stageLabel =
+      typeof detail?.stage === 'string' && detail.stage.trim().length ? detail.stage.trim() : null;
     if (logToConsole && typeof logCriticalErrorToConsole === 'function') {
-      const stageLabel =
-        typeof detail?.stage === 'string' && detail.stage.trim().length ? detail.stage.trim() : null;
       logCriticalErrorToConsole({
         message: logMessage,
         diagnosticMessage,
@@ -10296,6 +10297,7 @@
         stage: stageLabel,
         detail,
         timestamp,
+        error,
       });
     }
     if (logScope && typeof logDiagnosticsEvent === 'function') {
@@ -10304,6 +10306,41 @@
         detail,
         timestamp: Number.isFinite(timestamp) ? timestamp : undefined,
       });
+    }
+    const crashDetailOptOut =
+      Boolean(detail && typeof detail === 'object' && (detail.crashRecovery === false || detail.skipCrashRecovery === true));
+    const normalisedLevel =
+      typeof logLevel === 'string' && logLevel.trim().length ? logLevel.trim().toLowerCase() : 'error';
+    const crashEligible =
+      !crashDetailOptOut &&
+      (normalisedLevel === 'fatal' || normalisedLevel === 'critical' || detail?.crashRecoveryEligible === true);
+    if (crashEligible) {
+      const crashRecoveryRecorder =
+        typeof recordCrashRecoverySnapshot === 'function'
+          ? recordCrashRecoverySnapshot
+          : globalScope && typeof globalScope.recordCrashRecoverySnapshot === 'function'
+            ? globalScope.recordCrashRecoverySnapshot
+            : null;
+      if (crashRecoveryRecorder) {
+        const sanitisedDetail = sanitiseDetailForLogging(detail);
+        crashRecoveryRecorder({
+          boundary:
+            typeof sanitisedDetail?.boundary === 'string' && sanitisedDetail.boundary.trim().length
+              ? sanitisedDetail.boundary.trim()
+              : 'overlay',
+          stage: stageLabel ?? sanitisedDetail?.stage ?? null,
+          reason:
+            typeof sanitisedDetail?.reason === 'string' && sanitisedDetail.reason.trim().length
+              ? sanitisedDetail.reason.trim()
+              : null,
+          message: logMessage,
+          userMessage: message,
+          diagnosticMessage,
+          detail: sanitisedDetail ?? null,
+          error: error instanceof Error ? error : null,
+          timestamp: Number.isFinite(timestamp) ? timestamp : Date.now(),
+        });
+      }
     }
   }
 
@@ -11083,7 +11120,11 @@
       (stage ? `${stage} failure: ${normalised.message}` : normalised.message);
     const logScope = options.logScope ?? defaults.logScope ?? 'runtime';
     const logMessage = options.logMessage ?? defaults.logMessage ?? diagnosticMessage;
-    const logLevel = options.logLevel ?? defaults.logLevel ?? 'error';
+    const logLevel =
+      typeof (options.logLevel ?? defaults.logLevel) === 'string' &&
+      (options.logLevel ?? defaults.logLevel)?.trim().length
+        ? (options.logLevel ?? defaults.logLevel).trim()
+        : 'fatal';
     presentCriticalErrorOverlay({
       title: overlayTitle,
       message: userMessage,
@@ -11096,6 +11137,7 @@
       detail,
       timestamp: options.timestamp,
       logToConsole: false,
+      error,
     });
     logCriticalErrorToConsole({
       message: logMessage,
@@ -11110,25 +11152,6 @@
       error,
       normalised,
     });
-    const crashRecoveryRecorder =
-      typeof recordCrashRecoverySnapshot === 'function'
-        ? recordCrashRecoverySnapshot
-        : globalScope && typeof globalScope.recordCrashRecoverySnapshot === 'function'
-          ? globalScope.recordCrashRecoverySnapshot
-          : null;
-    if (crashRecoveryRecorder) {
-      crashRecoveryRecorder({
-        boundary: boundaryKey,
-        stage,
-        reason: detail?.reason ?? null,
-        message: logMessage,
-        userMessage,
-        diagnosticMessage,
-        detail,
-        error: normalised,
-        timestamp: options.timestamp ?? Date.now(),
-      });
-    }
     const watchdogDescriptor = normaliseSurvivalWatchdogDescriptor(detail, stage);
     if (shouldTriggerSurvivalWatchdog(watchdogDescriptor)) {
       applySurvivalWatchdog(watchdogDescriptor, { boundary: boundaryKey });
@@ -13310,7 +13333,7 @@
         diagnosticMessage: failureMessage,
         logScope: 'startup',
         logMessage: failureMessage,
-        logLevel: 'error',
+        logLevel: 'fatal',
         detail,
         timestamp: Number.isFinite(detail?.timestamp) ? detail.timestamp : undefined,
       });
@@ -13992,6 +14015,7 @@
         diagnosticMessage,
         logScope: 'startup',
         logMessage: diagnosticMessage,
+        logLevel: 'fatal',
         detail,
         timestamp: Number.isFinite(detail?.timestamp) ? detail.timestamp : undefined,
       });
@@ -14050,6 +14074,7 @@
         diagnosticMessage,
         logScope: 'startup',
         logMessage: diagnosticMessage,
+        logLevel: 'fatal',
         detail,
         timestamp: Number.isFinite(detail?.timestamp) ? detail.timestamp : undefined,
       });
@@ -25345,6 +25370,7 @@
         diagnosticMessage: 'Simplified renderer is missing from the build output.',
         logScope: 'startup',
         logMessage: 'Simplified renderer is missing from the build output.',
+        logLevel: 'fatal',
         detail: {
           reason: 'missing-simple-experience',
         },
@@ -25362,6 +25388,7 @@
         diagnosticMessage: 'Game canvas could not be located. Reload the page to retry.',
         logScope: 'startup',
         logMessage: 'Game canvas could not be located. Reload the page to retry.',
+        logLevel: 'fatal',
         detail: {
           reason: 'missing-canvas',
         },
@@ -26071,6 +26098,7 @@
             diagnosticMessage: 'Critical assets failed to preload. Reload to try again.',
             logScope: 'assets',
             logMessage: 'Critical assets failed to preload. Reload to try again.',
+            logLevel: 'fatal',
             detail: {
               reason: 'asset-preload',
               errorMessage,
