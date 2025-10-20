@@ -11110,17 +11110,25 @@
       error,
       normalised,
     });
-    recordCrashRecoverySnapshot({
-      boundary: boundaryKey,
-      stage,
-      reason: detail?.reason ?? null,
-      message: logMessage,
-      userMessage,
-      diagnosticMessage,
-      detail,
-      error: normalised,
-      timestamp: options.timestamp ?? Date.now(),
-    });
+    const crashRecoveryRecorder =
+      typeof recordCrashRecoverySnapshot === 'function'
+        ? recordCrashRecoverySnapshot
+        : globalScope && typeof globalScope.recordCrashRecoverySnapshot === 'function'
+          ? globalScope.recordCrashRecoverySnapshot
+          : null;
+    if (crashRecoveryRecorder) {
+      crashRecoveryRecorder({
+        boundary: boundaryKey,
+        stage,
+        reason: detail?.reason ?? null,
+        message: logMessage,
+        userMessage,
+        diagnosticMessage,
+        detail,
+        error: normalised,
+        timestamp: options.timestamp ?? Date.now(),
+      });
+    }
     const watchdogDescriptor = normaliseSurvivalWatchdogDescriptor(detail, stage);
     if (shouldTriggerSurvivalWatchdog(watchdogDescriptor)) {
       applySurvivalWatchdog(watchdogDescriptor, { boundary: boundaryKey });
