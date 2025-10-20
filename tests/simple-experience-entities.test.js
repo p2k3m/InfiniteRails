@@ -1691,6 +1691,77 @@ describe('simple experience entity lifecycle', () => {
     }
   });
 
+  it('prefetches next dimension assets when the portal stabilises', async () => {
+    const { experience } = createExperienceForTest();
+    experience.start();
+    await Promise.resolve();
+
+    const prefetchSpy = vi.fn(() => Promise.resolve(null));
+    experience.prefetchWorldDataForDimension = prefetchSpy;
+    const textureSpy = vi
+      .spyOn(experience, 'loadExternalVoxelTexture')
+      .mockReturnValue(Promise.resolve(null));
+    const modelSpy = vi.spyOn(experience, 'enqueueLazyModelWarmup').mockImplementation(() => {});
+
+    try {
+      const worldSize = experience.heightMap.length;
+      experience.initialHeightMap = Array.from({ length: worldSize }, () => Array(worldSize).fill(0));
+      experience.heightMap = experience.initialHeightMap.map((row) => row.slice());
+      experience.portalAnchorGrid = experience.computePortalAnchorGrid();
+      const anchor = experience.portalAnchorGrid;
+      const gridZ = Math.max(0, Math.min(worldSize - 1, anchor.z));
+      const leftX = Math.max(0, Math.min(worldSize - 1, anchor.x - 1));
+      const centerX = Math.max(0, Math.min(worldSize - 1, anchor.x));
+      const rightX = Math.max(0, Math.min(worldSize - 1, anchor.x + 1));
+
+      experience.resetPortalFrameState();
+
+      const BLOCK_SIZE = 1;
+      const buildColumn = (gridX) => {
+        const columnKey = `${gridX}|${gridZ}`;
+        const column = [];
+        const slots = Array.from(experience.portalFrameSlots.values()).filter(
+          (slot) => slot.gridX === gridX && slot.gridZ === gridZ,
+        );
+        slots.forEach((slot) => {
+          const baseHeight = Number.isFinite(slot.baseHeight)
+            ? slot.baseHeight
+            : experience.initialHeightMap?.[gridX]?.[gridZ] ?? 0;
+          const level = baseHeight + slot.relY;
+          const mesh = new experience.THREE.Mesh(experience.blockGeometry, experience.materials.stone);
+          mesh.position.set(
+            (gridX - worldSize / 2) * BLOCK_SIZE,
+            level * BLOCK_SIZE + BLOCK_SIZE / 2,
+            (gridZ - worldSize / 2) * BLOCK_SIZE,
+          );
+          mesh.userData = { columnKey, level, gx: gridX, gz: gridZ, blockType: 'stone' };
+          column[level] = mesh;
+        });
+        experience.columns.set(columnKey, column);
+        experience.heightMap[gridX][gridZ] = column.length;
+        experience.updatePortalFrameStateForColumn(gridX, gridZ);
+      };
+
+      [leftX, centerX, rightX].forEach((gridX) => buildColumn(gridX));
+
+      expect(experience.portalReady).toBe(true);
+      expect(prefetchSpy).toHaveBeenCalledTimes(1);
+      const prefetchArgs = prefetchSpy.mock.calls[0]?.[0] ?? {};
+      expect(prefetchArgs).toMatchObject({ index: experience.currentDimensionIndex + 1 });
+      const nextTheme = window.SimpleExperience.dimensionThemes[experience.currentDimensionIndex + 1] ?? null;
+      if (nextTheme?.id) {
+        expect(prefetchArgs.dimensionId).toBe(nextTheme.id);
+      } else {
+        expect(prefetchArgs.dimensionId).toBeDefined();
+      }
+      expect(textureSpy).toHaveBeenCalled();
+      expect(modelSpy).toHaveBeenCalled();
+    } finally {
+      textureSpy.mockRestore();
+      modelSpy.mockRestore();
+    }
+  });
+
   it('pulses chest scale and glow when the player is nearby', () => {
     const { experience } = createExperienceForTest();
     const THREE = window.THREE_GLOBAL;
