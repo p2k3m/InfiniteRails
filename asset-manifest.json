@@ -1,6 +1,11 @@
 {
   "version": 1,
   "assetBaseUrl": "https://d3gj6x3ityfh5o.cloudfront.net/",
+  "knownGoodManifest": {
+    "tag": "build/61e4a3d4804d",
+    "path": "deployment/known-good-manifest.json",
+    "recordedAt": "2024-07-01T00:00:00.000Z"
+  },
   "assets": [
     "index.html?v=be85a26b6942.61e4a3d4804d-dirty",
     "styles.css?v=61df9773de32.61e4a3d4804d-dirty",
