@@ -162,9 +162,32 @@ export function createBootstrapSandbox(options = {}) {
   const scoreboardStatus = createElement('div', { ownerDocument: documentStub });
   scoreboardStatus.setAttribute('id', 'scoreboardStatus');
 
+  const scoreSyncWarning = createElement('div', { ownerDocument: documentStub });
+  scoreSyncWarning.setAttribute('id', 'scoreSyncWarning');
+  scoreSyncWarning.hidden = true;
+
+  const scoreSyncWarningMessage = createElement('span', { ownerDocument: documentStub });
+  scoreSyncWarningMessage.className = 'score-sync-warning__message';
+  scoreSyncWarning.appendChild(scoreSyncWarningMessage);
+
+  const leaderboardTable = createElement('div', { ownerDocument: documentStub });
+  leaderboardTable.setAttribute('id', 'leaderboardTable');
+  leaderboardTable.dataset.empty = 'true';
+
+  const leaderboardEmptyMessage = createElement('p', { ownerDocument: documentStub });
+  leaderboardEmptyMessage.setAttribute('id', 'leaderboardEmptyMessage');
+  leaderboardEmptyMessage.hidden = true;
+
+  const refreshScoresButton = createElement('button', { ownerDocument: documentStub });
+  refreshScoresButton.setAttribute('id', 'refreshScores');
+
   documentStub.body.appendChild(startButton);
   documentStub.body.appendChild(canvas);
   documentStub.body.appendChild(scoreboardStatus);
+  documentStub.body.appendChild(scoreSyncWarning);
+  documentStub.body.appendChild(leaderboardTable);
+  documentStub.body.appendChild(leaderboardEmptyMessage);
+  documentStub.body.appendChild(refreshScoresButton);
 
   const settingsForm = createElement('form', { ownerDocument: documentStub });
   settingsForm.setAttribute('data-settings-form', '');
@@ -228,6 +251,9 @@ export function createBootstrapSandbox(options = {}) {
     documentStub.querySelector.mockImplementation((selector) => {
       if (selector === '[data-settings-form]') {
         return settingsForm;
+      }
+      if (selector === '#scoreSyncWarning .score-sync-warning__message') {
+        return scoreSyncWarningMessage;
       }
       return null;
     });
@@ -397,6 +423,11 @@ export function createBootstrapSandbox(options = {}) {
     startButton,
     canvas,
     scoreboardStatus,
+    scoreSyncWarning,
+    scoreSyncWarningMessage,
+    leaderboardTable,
+    leaderboardEmptyMessage,
+    refreshScoresButton,
     consoleStub,
     timers,
   };
