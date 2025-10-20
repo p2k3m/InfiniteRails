@@ -720,6 +720,9 @@
         meshSummary: null,
         worldConsumed: false,
         meshConsumed: false,
+        ai: null,
+        aiSummary: null,
+        aiConsumed: false,
       };
       const promise = (async () => {
         const theme = prefetchOptions.theme || null;
@@ -775,6 +778,53 @@
             scope?.console?.debug?.('Failed to summarise prefetched worker mesh result.', error);
           }
         }
+        if (typeof manager.runAiSimulation === 'function') {
+          try {
+            const aiOptions = {};
+            if (prefetchOptions.aiOptions && typeof prefetchOptions.aiOptions === 'object') {
+              const { defaultSpeed, attackRadius, player, entities } = prefetchOptions.aiOptions;
+              if (Number.isFinite(defaultSpeed)) {
+                aiOptions.defaultSpeed = defaultSpeed;
+              }
+              if (Number.isFinite(attackRadius)) {
+                aiOptions.attackRadius = attackRadius;
+              }
+              if (player && typeof player === 'object') {
+                aiOptions.player = player;
+              }
+              if (Array.isArray(entities)) {
+                aiOptions.entities = entities;
+              }
+            }
+            if (Array.isArray(prefetchOptions.aiEntities)) {
+              aiOptions.entities = prefetchOptions.aiEntities;
+            } else if (!Array.isArray(aiOptions.entities)) {
+              aiOptions.entities = [];
+            }
+            const aiDelta = Number.isFinite(prefetchOptions.aiDelta) ? prefetchOptions.aiDelta : undefined;
+            const aiPayload = buildAiWorkerPayload(this, aiDelta, aiOptions);
+            const aiResult = await manager.runAiSimulation(aiPayload);
+            entry.ai = aiResult;
+            entry.aiConsumed = false;
+            if (typeof this.normaliseWorkerAiResult === 'function') {
+              try {
+                entry.aiSummary = this.normaliseWorkerAiResult(aiResult, {
+                  methodName: 'updateZombies',
+                  delta: aiPayload?.delta,
+                });
+              } catch (error) {
+                scope?.console?.debug?.('Failed to summarise prefetched worker AI result.', error);
+              }
+            } else {
+              entry.aiSummary = null;
+            }
+          } catch (error) {
+            entry.ai = null;
+            entry.aiSummary = null;
+            entry.aiConsumed = false;
+            scope?.console?.debug?.('Failed to prefetch worker AI result for dimension.', error);
+          }
+        }
         entry.caps = caps;
         entry.promise = null;
         state.prefetchCache.set(dimensionKey, entry);
@@ -817,7 +867,12 @@
             const output = originalBuildTerrain.apply(this, args);
             return ensureFinally(output, () => {
               dispatchWorldGenerationLifecycleEvent('complete', detail, scope);
-              if (cachedEntry && cachedEntry.worldConsumed && cachedEntry.meshConsumed) {
+              if (
+                cachedEntry &&
+                cachedEntry.worldConsumed &&
+                cachedEntry.meshConsumed &&
+                (!cachedEntry.ai || cachedEntry.aiConsumed)
+              ) {
                 state.prefetchCache.delete(dimensionKey);
               }
             });
@@ -921,7 +976,11 @@
           }
           args[0] = options;
           const result = originalBuildRails.apply(this, args);
-          if (cachedEntry.worldConsumed && cachedEntry.meshConsumed) {
+          if (
+            cachedEntry.worldConsumed &&
+            cachedEntry.meshConsumed &&
+            (!cachedEntry.ai || cachedEntry.aiConsumed)
+          ) {
             state.prefetchCache.delete(dimensionKey);
           }
           return result;
@@ -988,6 +1047,28 @@
         const options = optionsIndex !== null ? { ...args[optionsIndex] } : {};
         if (options.skipWorker === true) {
           return originalMethod.apply(this, args);
+        }
+        const dimensionKey = resolvePrefetchKey(this, options);
+        const cachedEntry = dimensionKey ? state.prefetchCache.get(dimensionKey) : null;
+        const cachedAiReady = cachedEntry && cachedEntry.ai && !cachedEntry.aiConsumed;
+        if (cachedAiReady) {
+          options.workerResult = { ...(options.workerResult || {}), ai: cachedEntry.ai };
+          cachedEntry.aiConsumed = true;
+          state.lastAiResult = cachedEntry.ai;
+          const nextArgs = args.slice();
+          if (optionsIndex !== null) {
+            nextArgs[optionsIndex] = options;
+          } else {
+            nextArgs.push(options);
+          }
+          if (
+            cachedEntry.worldConsumed &&
+            cachedEntry.meshConsumed &&
+            (!cachedEntry.ai || cachedEntry.aiConsumed)
+          ) {
+            state.prefetchCache.delete(dimensionKey);
+          }
+          return originalMethod.apply(this, nextArgs);
         }
         const payload = buildAiWorkerPayload(this, delta, options);
         return manager
