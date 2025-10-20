@@ -42,6 +42,62 @@ describe('isolated game worker integration', () => {
     expect(experience.performanceMetrics.worldGen.heightmapSource).toBe('worker-generated');
   });
 
+  it('records worker mesh statistics when supplied by the worker result', () => {
+    const { experience } = createExperience();
+    experience.initialisePerformanceMetrics();
+    const minHeight = Number.isFinite(experience.minColumnHeight) ? experience.minColumnHeight : 3;
+    const maxHeight = Number.isFinite(experience.maxColumnHeight) ? experience.maxColumnHeight : minHeight + 12;
+    const generated = experience.generateProceduralHeightmap({
+      profile: experience.dimensionTerrainProfile || null,
+      minColumnHeight: minHeight,
+      maxColumnHeight: maxHeight,
+      voxelBudget: experience.maxTerrainVoxels ?? undefined,
+      dimensionIndex: experience.currentDimensionIndex ?? 0,
+    });
+    const workerWorld = {
+      size: 64,
+      minHeight,
+      maxHeight,
+      heightMap: generated.matrix,
+      stats: {
+        columnCount: 64 * 64,
+        voxelCount: generated.meta?.voxelCount ?? 0,
+      },
+      generatedAt: Date.now(),
+      seed: 98765,
+    };
+    const workerMesh = {
+      type: 'mesh',
+      chunkSize: 16,
+      chunkCount: 4,
+      meshCount: 128,
+      vertexCount: 128 * 24,
+      generatedAt: Date.now(),
+      chunks: [
+        { key: '0|0', chunkX: 0, chunkZ: 0, meshCount: 32 },
+        { key: '1|0', chunkX: 1, chunkZ: 0, meshCount: 32 },
+        { key: '0|1', chunkX: 0, chunkZ: 1, meshCount: 32 },
+        { key: '1|1', chunkX: 1, chunkZ: 1, meshCount: 32 },
+      ],
+    };
+    experience.buildTerrain({ workerResult: { world: workerWorld, mesh: workerMesh } });
+    const summary = experience.lastTerrainBuildSummary;
+    expect(summary.workerMesh).toMatchObject({
+      source: 'worker-prepared',
+      chunkCount: workerMesh.chunkCount,
+      meshCount: workerMesh.meshCount,
+      chunkSize: workerMesh.chunkSize,
+    });
+    const metrics = experience.performanceMetrics.worldGen;
+    expect(metrics.workerSupport.mesh).toBe(true);
+    expect(metrics.workerMesh).toMatchObject({
+      chunkCount: workerMesh.chunkCount,
+      meshCount: workerMesh.meshCount,
+      chunkSize: workerMesh.chunkSize,
+      source: 'worker-prepared',
+    });
+  });
+
   it('applies worker AI updates to zombie movement', () => {
     const { experience } = createExperience();
     const worldRoot = new experience.THREE.Group();
