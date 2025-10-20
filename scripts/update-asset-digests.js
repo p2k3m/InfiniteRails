@@ -3,11 +3,9 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
-const {
-  loadManifest,
-  computeAssetDigest,
-} = require('./validate-asset-manifest.js');
+const { loadManifest, computeAssetDigest } = require('./validate-asset-manifest.js');
 const { resolveBuildSha } = require('./lib/build-sha.js');
+const { updateFileReferences } = require('./lib/version-ref-updater.js');
 
 const repoRoot = path.resolve(__dirname, '..');
 const manifestPath = path.join(repoRoot, 'asset-manifest.json');
@@ -28,41 +26,6 @@ function rewriteAssetReference(entry, digest, buildSha) {
   params.append('v', formatAssetVersion(digest, buildSha));
   const query = params.toString();
   return query ? `${entry.path}?${query}` : entry.path;
-}
-
-function escapeRegExp(value) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-function updateFileReferences(versionMap) {
-  const targetFiles = [
-    path.join(repoRoot, 'index.html'),
-    path.join(repoRoot, 'script.js'),
-    path.join(repoRoot, 'simple-experience.js'),
-    path.join(repoRoot, 'asset-resolver.js'),
-    path.join(repoRoot, 'tests', 'renderer-three-init.test.js'),
-  ];
-
-  const updatedFiles = [];
-
-  targetFiles.forEach((filePath) => {
-    if (!fs.existsSync(filePath)) {
-      return;
-    }
-    const original = fs.readFileSync(filePath, 'utf8');
-    let updated = original;
-    versionMap.forEach((version, assetPath) => {
-      const pattern = new RegExp(`${escapeRegExp(assetPath)}\\?v=[^'"\\s&?#]+`, 'g');
-      updated = updated.replace(pattern, `${assetPath}?v=${version}`);
-    });
-    if (updated !== original) {
-      fs.writeFileSync(filePath, updated);
-      console.log(`Updated cache-busting references in ${path.relative(repoRoot, filePath)}`);
-      updatedFiles.push(path.relative(repoRoot, filePath));
-    }
-  });
-
-  return updatedFiles;
 }
 
 /**

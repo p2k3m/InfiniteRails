@@ -14,6 +14,7 @@
     "build:vendor:three": "node scripts/build-three.js",
     "test:unit": "vitest run",
     "test:pre-release": "node scripts/run-pre-release-checks.js",
+    "rollback:known-good": "node scripts/rollback-known-good.js",
     "prepublishOnly": "npm run test:pre-release",
     "preversion": "npm run test:pre-release"
   },

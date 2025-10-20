@@ -126,6 +126,14 @@ The same report is available programmatically; calling `window.InfiniteRails.boo
 
 ### Troubleshooting
 
+#### Known-good rollback
+
+If a deployment introduces regressions, run `npm run rollback:known-good` to restore the tagged
+manifest snapshot recorded at `deployment/known-good-manifest.json`. The utility copies the
+snapshot into `asset-manifest.json` and rewrites every cache-busted reference in `index.html`,
+`script.js`, `simple-experience.js`, and the test harness so browsers fetch the stable asset pack
+immediately.【F:scripts/rollback-known-good.js†L1-L129】【F:deployment/known-good-manifest.json†L1-L29】
+
 #### White screen or blank viewport
 
 If you load the page and only see the HUD without the voxel world, run through the quick checks below:
