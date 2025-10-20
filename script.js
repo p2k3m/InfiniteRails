@@ -20441,6 +20441,9 @@
   const scoreSyncWarningMessageEl = documentRef?.querySelector(
     '#scoreSyncWarning .score-sync-warning__message',
   ) ?? null;
+  const refreshScoresButtonEl = documentRef?.getElementById('refreshScores') ?? null;
+  const leaderboardTableEl = documentRef?.getElementById('leaderboardTable') ?? null;
+  const leaderboardEmptyMessageEl = documentRef?.getElementById('leaderboardEmptyMessage') ?? null;
   const googleButtonContainers = documentRef
     ? Array.from(documentRef.querySelectorAll('[data-google-button-container]'))
     : [];
@@ -20711,6 +20714,60 @@
     scoreSyncWarningEl.removeAttribute('data-visible');
   }
 
+  function lockLeaderboardForErrorRate(message) {
+    const fallbackMessage =
+      'Leaderboard offline — elevated error rate detected. Features will resume after services stabilise.';
+    const finalMessage = typeof message === 'string' && message.trim().length ? message.trim() : fallbackMessage;
+    if (leaderboardTableEl) {
+      try {
+        leaderboardTableEl.hidden = true;
+        if (leaderboardTableEl.dataset) {
+          leaderboardTableEl.dataset.errorRateLocked = 'true';
+          leaderboardTableEl.dataset.empty = 'true';
+        }
+        if (typeof leaderboardTableEl.setAttribute === 'function') {
+          leaderboardTableEl.setAttribute('data-error-rate-locked', 'true');
+          leaderboardTableEl.setAttribute('data-empty', 'true');
+          leaderboardTableEl.setAttribute('hidden', 'true');
+          leaderboardTableEl.setAttribute('aria-hidden', 'true');
+          leaderboardTableEl.setAttribute('inert', 'true');
+        }
+      } catch (error) {
+        globalScope?.console?.debug?.('Failed to lock leaderboard container after error spike.', error);
+      }
+    }
+    if (refreshScoresButtonEl) {
+      try {
+        refreshScoresButtonEl.disabled = true;
+        if (refreshScoresButtonEl.dataset) {
+          refreshScoresButtonEl.dataset.errorRateLocked = 'true';
+        }
+        if (typeof refreshScoresButtonEl.setAttribute === 'function') {
+          refreshScoresButtonEl.setAttribute('data-error-rate-locked', 'true');
+          refreshScoresButtonEl.setAttribute('disabled', 'true');
+          refreshScoresButtonEl.setAttribute('aria-disabled', 'true');
+        }
+      } catch (error) {
+        globalScope?.console?.debug?.('Failed to disable leaderboard refresh after error spike.', error);
+      }
+    }
+    if (leaderboardEmptyMessageEl) {
+      try {
+        leaderboardEmptyMessageEl.hidden = false;
+        leaderboardEmptyMessageEl.textContent = finalMessage;
+        if (leaderboardEmptyMessageEl.dataset) {
+          leaderboardEmptyMessageEl.dataset.errorRateMessage = 'true';
+        }
+        if (typeof leaderboardEmptyMessageEl.setAttribute === 'function') {
+          leaderboardEmptyMessageEl.setAttribute('data-error-rate-message', 'true');
+          leaderboardEmptyMessageEl.removeAttribute('hidden');
+        }
+      } catch (error) {
+        globalScope?.console?.debug?.('Failed to surface leaderboard error rate message.', error);
+      }
+    }
+  }
+
   const networkCircuitBreaker = (() => {
     const FAILURE_THRESHOLD = 3;
     const FAILURE_WINDOW_MS = 15000;
@@ -20936,6 +20993,252 @@
       getMessage: getOfflineMessage,
     };
   })();
+
+  const errorRateCircuitBreaker = (() => {
+    const ERROR_THRESHOLD = 5;
+    const ERROR_WINDOW_MS = 30000;
+    const CATEGORY_ALIASES = new Map(
+      Object.entries({
+        backend: 'api',
+        api: 'api',
+        network: 'api',
+        http: 'api',
+        asset: 'asset',
+        assets: 'asset',
+        gltf: 'asset',
+        texture: 'asset',
+        renderer: 'render',
+        render: 'render',
+        webgl: 'render',
+        graphics: 'render',
+        ui: 'ui',
+        hud: 'ui',
+        overlay: 'ui',
+        controls: 'ui',
+        script: 'script',
+        runtime: 'script',
+        logic: 'script',
+      }),
+    );
+    const CATEGORY_CONFIG = {
+      api: {
+        message:
+          'Leaderboard offline — elevated API error rate detected. Features will resume after the deployment fix.',
+        overlayScope: 'backend',
+        suspendLiveFeatures: true,
+        lockLeaderboard: true,
+      },
+      asset: {
+        message:
+          'Asset pipeline degraded — elevated asset error rate detected. Visual fidelity reduced until the next deploy.',
+        overlayScope: 'assets',
+      },
+      render: {
+        message:
+          'Renderer paused — elevated render error rate detected. Reload once the patched build is deployed.',
+        overlayScope: 'render',
+      },
+      ui: {
+        message:
+          'HUD modules hidden — elevated UI error rate detected. Diagnostics mode remains active until redeploy.',
+        overlayScope: 'ui',
+      },
+      script: {
+        message:
+          'Runtime degraded — elevated script error rate detected. Some systems are offline until a patch ships.',
+        overlayScope: 'runtime',
+      },
+      general: {
+        message:
+          'Experience degraded — elevated error rate detected. Certain features are offline until services stabilise.',
+        overlayScope: 'system',
+      },
+    };
+    const state = new Map();
+
+    function now() {
+      return Date.now();
+    }
+
+    function normaliseCategory(value) {
+      if (typeof value !== 'string') {
+        return 'general';
+      }
+      const trimmed = value.trim().toLowerCase();
+      if (!trimmed) {
+        return 'general';
+      }
+      if (CATEGORY_ALIASES.has(trimmed)) {
+        return CATEGORY_ALIASES.get(trimmed);
+      }
+      if (Object.prototype.hasOwnProperty.call(CATEGORY_CONFIG, trimmed)) {
+        return trimmed;
+      }
+      return 'general';
+    }
+
+    function shouldTrackLevel(level) {
+      if (typeof level !== 'string') {
+        return false;
+      }
+      const normalised = level.trim().toLowerCase();
+      return normalised === 'error' || normalised === 'critical' || normalised === 'fatal';
+    }
+
+    function applyTripEffects(category, entry) {
+      const config = CATEGORY_CONFIG[category] ?? CATEGORY_CONFIG.general;
+      const message = config.message;
+      const detail = {
+        category,
+        reason: 'error-rate-spike',
+        scope: typeof entry?.scope === 'string' ? entry.scope : null,
+        lastMessage: typeof entry?.message === 'string' ? entry.message : null,
+      };
+
+      if (config.lockLeaderboard) {
+        lockLeaderboardForErrorRate(message);
+      }
+
+      if (config.suspendLiveFeatures) {
+        try {
+          suspendLiveFeatures('error-rate', detail);
+        } catch (error) {
+          globalScope?.console?.debug?.('Failed to suspend live features after error rate spike.', error);
+        }
+      }
+
+      if (config.lockLeaderboard || config.suspendLiveFeatures) {
+        try {
+          updateScoreboardStatus(message, { offline: true });
+        } catch (error) {
+          globalScope?.console?.debug?.('Failed to update scoreboard after error rate spike.', error);
+        }
+        try {
+          showGlobalScoreSyncWarning(message);
+        } catch (error) {
+          globalScope?.console?.debug?.('Failed to display scoreboard warning after error rate spike.', error);
+        }
+      }
+
+      if (documentRef?.body) {
+        try {
+          documentRef.body.dataset.errorRateCircuit = 'true';
+          documentRef.body.dataset.errorRateCategory = category;
+        } catch (error) {
+          globalScope?.console?.debug?.('Failed to annotate document with error rate circuit state.', error);
+        }
+      }
+
+      if (typeof bootstrapOverlay?.setDiagnostic === 'function') {
+        try {
+          bootstrapOverlay.setDiagnostic(config.overlayScope ?? 'error-rate', {
+            status: 'error',
+            message,
+          });
+        } catch (error) {
+          globalScope?.console?.debug?.('Failed to update diagnostics overlay after error rate spike.', error);
+        }
+      }
+
+      if (typeof logDiagnosticsEvent === 'function') {
+        try {
+          logDiagnosticsEvent('error-rate', `Error rate circuit opened for ${category} category.`, {
+            level: 'error',
+            detail,
+          });
+        } catch (error) {
+          globalScope?.console?.debug?.('Failed to record error rate circuit diagnostics.', error);
+        }
+      }
+
+      return message;
+    }
+
+    function record(entry) {
+      if (!shouldTrackLevel(entry?.level)) {
+        return;
+      }
+      const category = normaliseCategory(entry?.category ?? entry?.scope);
+      const timestamp = Number.isFinite(entry?.timestamp) ? entry.timestamp : now();
+      let info = state.get(category);
+      if (!info) {
+        info = { timestamps: [], tripped: false, trippedAt: 0, lastEntry: null, message: null };
+        state.set(category, info);
+      }
+      info.timestamps.push(timestamp);
+      const cutoff = timestamp - ERROR_WINDOW_MS;
+      info.timestamps = info.timestamps.filter((value) => value >= cutoff);
+      info.lastEntry = entry;
+      if (!info.tripped && info.timestamps.length >= ERROR_THRESHOLD) {
+        info.tripped = true;
+        info.trippedAt = timestamp;
+        info.message = applyTripEffects(category, entry);
+      }
+    }
+
+    function isTripped(category) {
+      if (typeof category === 'string' && category.trim().length) {
+        const normalised = normaliseCategory(category);
+        return Boolean(state.get(normalised)?.tripped);
+      }
+      for (const info of state.values()) {
+        if (info.tripped) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    function getState() {
+      const categories = {};
+      state.forEach((info, key) => {
+        categories[key] = {
+          tripped: info.tripped === true,
+          trippedAt: info.trippedAt || null,
+          recentCount: info.timestamps.length,
+          message: info.message ?? null,
+          lastMessage: typeof info.lastEntry?.message === 'string' ? info.lastEntry.message : null,
+        };
+      });
+      return {
+        trippedCategories: Object.entries(categories)
+          .filter(([, info]) => info.tripped)
+          .map(([key]) => key),
+        categories,
+      };
+    }
+
+    return {
+      record,
+      isTripped,
+      getState,
+    };
+  })();
+
+  try {
+    if (typeof centralLogStore?.subscribe === 'function') {
+      centralLogStore.subscribe((entry) => {
+        try {
+          errorRateCircuitBreaker.record(entry);
+        } catch (error) {
+          globalScope?.console?.debug?.('Error rate circuit listener failed.', error);
+        }
+      });
+    }
+  } catch (error) {
+    globalScope?.console?.debug?.('Failed to connect error rate circuit to log stream.', error);
+  }
+
+  if (globalScope) {
+    try {
+      globalScope.InfiniteRails = globalScope.InfiniteRails || {};
+      if (!globalScope.InfiniteRails.errorRateCircuit) {
+        globalScope.InfiniteRails.errorRateCircuit = errorRateCircuitBreaker;
+      }
+    } catch (error) {
+      globalScope?.console?.debug?.('Failed to expose error rate circuit on InfiniteRails namespace.', error);
+    }
+  }
 
   const FEATURE_FLAG_DEFAULTS = Object.freeze({
     forceSimpleRenderer: false,
@@ -25575,6 +25878,8 @@
         tripped: networkCircuitBreaker.isTripped(),
         message: networkCircuitBreaker.getMessage(),
       });
+      hooks.getErrorRateCircuitState = () => errorRateCircuitBreaker.getState();
+      hooks.isErrorRateCircuitTripped = (category) => errorRateCircuitBreaker.isTripped(category);
       hooks.getHeartbeatState = () => ({
         endpoint: uptimeHeartbeatState.endpoint,
         intervalMs: uptimeHeartbeatState.intervalMs,
