@@ -7192,6 +7192,19 @@ body[data-color-mode='light'] .settings-modal__theme-option input:checked ~ span
   color: var(--text-secondary);
 }
 
+.settings-modal__toggle-status {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  background: rgba(73, 242, 255, 0.14);
+  border-radius: 999px;
+  padding: 0.15rem 0.6rem;
+  justify-self: start;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
 .settings-modal__toggle-control {
   position: relative;
   width: 56px;

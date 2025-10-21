@@ -1096,6 +1096,28 @@
                 <span class="toggle-switch" aria-hidden="true"></span>
               </span>
             </label>
+            <label class="settings-modal__toggle">
+              <span class="settings-modal__toggle-copy">
+                <span id="forceSimpleModeLabel" class="settings-modal__toggle-title">Sandbox renderer</span>
+                <span id="forceSimpleModeDescription" class="settings-modal__toggle-description">
+                  Force the simplified sandbox renderer for maximum compatibility or after a crash.
+                </span>
+                <span id="forceSimpleModeStatus" class="settings-modal__toggle-status" hidden>
+                  Sandbox renderer is active.
+                </span>
+              </span>
+              <span class="settings-modal__toggle-control">
+                <input
+                  type="checkbox"
+                  id="forceSimpleModeToggle"
+                  name="forceSimpleModeToggle"
+                  class="toggle-switch__input"
+                  aria-describedby="forceSimpleModeDescription"
+                  aria-labelledby="forceSimpleModeLabel"
+                />
+                <span class="toggle-switch" aria-hidden="true"></span>
+              </span>
+            </label>
           </fieldset>
           <fieldset class="settings-modal__fieldset settings-modal__fieldset--account">
             <legend class="settings-modal__legend">Account</legend>

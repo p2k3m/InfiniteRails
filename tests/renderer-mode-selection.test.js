@@ -55,6 +55,10 @@ function instantiateSimpleFallback(scope) {
       'const bootstrap = scope.bootstrap;' +
       'const globalScope = scope;' +
       'const documentRef = scope.documentRef ?? scope.document ?? null;' +
+      'const ensureRendererModule = scope.ensureRendererModule ?? (() => null);' +
+      'const reloadActiveRenderer = scope.reloadActiveRenderer ?? (() => Promise.resolve());' +
+      'const getActiveRendererMode = scope.getActiveRendererMode ?? (() => scope.activeRendererMode ?? null);' +
+      'const simpleModeToggleState = scope.simpleModeToggleState ?? (scope.simpleModeToggleState = { control: null, status: null, baselineConfig: null, baselineCaptured: false });' +
       'const bootstrapOverlay = scope.bootstrapOverlay ?? { showLoading: () => {}, showError: () => {}, setDiagnostic: () => {}, setRecoveryAction: () => {} };' +
       'const isDebugModeEnabled = scope.isDebugModeEnabled ?? (() => false);' +
       ensureSimpleModeSource +
@@ -66,6 +70,10 @@ return {
   scheduleRendererStartWatchdog,
   cancelRendererStartWatchdog,
   getRendererStartWatchdogState,
+  updateSimpleModeToggle,
+  rememberSimpleModeBaseline,
+  restoreSimpleModeConfig,
+  simpleModeToggleState,
 };
 `
   );
@@ -849,6 +857,181 @@ describe('renderer mode selection', () => {
       expect(replaceState).toHaveBeenCalledTimes(1);
       expect(bootstrap).toHaveBeenCalledTimes(1);
       expect(getRendererStartWatchdogState()).toMatchObject({ handle: null, mode: null });
+    });
+
+    it('ensures the simple renderer module before restarting bootstrap', async () => {
+      const ensureSimple = vi.fn(() => Promise.resolve());
+      const bootstrap = vi.fn();
+      const scope = {
+        APP_CONFIG: { enableAdvancedExperience: true, preferAdvanced: true },
+        SimpleExperience: { create: () => ({}) },
+        console: { warn: () => {}, error: () => {}, debug: () => {} },
+        bootstrap,
+        bootstrapOverlay: {
+          showLoading: vi.fn(),
+          showError: vi.fn(),
+          setDiagnostic: vi.fn(),
+          setRecoveryAction: vi.fn(),
+          state: { mode: 'loading' },
+        },
+        documentRef: { getElementById: () => null },
+        ensureRendererModule: ensureSimple,
+      };
+      const { tryStartSimpleFallback } = instantiateSimpleFallback(scope);
+      const result = tryStartSimpleFallback(new Error('advanced failed'), {
+        reason: 'renderer-failure',
+        mode: 'advanced',
+      });
+      expect(result).toBe(true);
+      expect(ensureSimple).toHaveBeenCalledWith(
+        'simple',
+        expect.objectContaining({
+          mode: 'simple',
+          reason: expect.stringContaining('renderer-failure'),
+        }),
+      );
+      const ensurePromise = ensureSimple.mock.results[0]?.value;
+      if (ensurePromise && typeof ensurePromise.then === 'function') {
+        await ensurePromise;
+      }
+      expect(bootstrap).toHaveBeenCalledTimes(1);
+    });
+
+    it('continues fallback bootstrap when simple module ensure rejects', async () => {
+      const ensureError = new Error('module failure');
+      const ensureSimple = vi.fn(() => Promise.reject(ensureError));
+      const bootstrap = vi.fn();
+      const scope = {
+        APP_CONFIG: { enableAdvancedExperience: true, preferAdvanced: true },
+        SimpleExperience: { create: () => ({}) },
+        console: { warn: () => {}, error: () => {}, debug: () => {} },
+        bootstrap,
+        bootstrapOverlay: {
+          showLoading: vi.fn(),
+          showError: vi.fn(),
+          setDiagnostic: vi.fn(),
+          setRecoveryAction: vi.fn(),
+          state: { mode: 'loading' },
+        },
+        documentRef: { getElementById: () => null },
+        ensureRendererModule: ensureSimple,
+      };
+      const { tryStartSimpleFallback } = instantiateSimpleFallback(scope);
+      const result = tryStartSimpleFallback(new Error('advanced failed'), {
+        reason: 'renderer-failure',
+        mode: 'advanced',
+      });
+      expect(result).toBe(true);
+      const ensurePromise = ensureSimple.mock.results[0]?.value;
+      if (ensurePromise && typeof ensurePromise.catch === 'function') {
+        await ensurePromise.catch(() => {});
+      }
+      await Promise.resolve();
+      expect(bootstrap).toHaveBeenCalledTimes(1);
+    });
+
+    it('allows fallback retry when allowRetry flag is provided', () => {
+      const bootstrap = vi.fn();
+      const scope = {
+        APP_CONFIG: { enableAdvancedExperience: true, preferAdvanced: true },
+        SimpleExperience: { create: () => ({}) },
+        console: { warn: () => {}, error: () => {}, debug: () => {} },
+        bootstrap,
+        bootstrapOverlay: {
+          showLoading: vi.fn(),
+          showError: vi.fn(),
+          setDiagnostic: vi.fn(),
+          setRecoveryAction: vi.fn(),
+          state: { mode: 'loading' },
+        },
+        documentRef: { getElementById: () => null },
+        ensureRendererModule: () => null,
+      };
+      const { tryStartSimpleFallback, getAttempted } = instantiateSimpleFallback(scope);
+      expect(tryStartSimpleFallback(new Error('first'), { reason: 'renderer-failure' })).toBe(true);
+      expect(getAttempted()).toBe(true);
+      const retryResult = tryStartSimpleFallback(new Error('retry'), {
+        reason: 'user-toggle',
+        mode: 'advanced',
+        allowRetry: true,
+      });
+      expect(retryResult).toBe(true);
+    });
+
+    it('restores advanced renderer config and resets fallback attempt state', () => {
+      const scope = {
+        APP_CONFIG: { enableAdvancedExperience: true, preferAdvanced: true },
+        SimpleExperience: { create: () => ({}) },
+        console: { warn: () => {}, error: () => {}, debug: () => {} },
+        bootstrap: vi.fn(),
+        bootstrapOverlay: {
+          showLoading: vi.fn(),
+          showError: vi.fn(),
+          setDiagnostic: vi.fn(),
+          setRecoveryAction: vi.fn(),
+          state: { mode: 'loading' },
+        },
+        documentRef: { getElementById: () => null },
+        ensureRendererModule: () => null,
+      };
+      const { tryStartSimpleFallback, restoreSimpleModeConfig, rememberSimpleModeBaseline, getAttempted } =
+        instantiateSimpleFallback(scope);
+      rememberSimpleModeBaseline(scope.APP_CONFIG);
+      expect(tryStartSimpleFallback(new Error('failure'), { reason: 'renderer-failure' })).toBe(true);
+      expect(scope.APP_CONFIG.forceSimpleMode).toBe(true);
+      expect(scope.APP_CONFIG.enableAdvancedExperience).toBe(false);
+      expect(scope.APP_CONFIG.preferAdvanced).toBe(false);
+      expect(getAttempted()).toBe(true);
+      restoreSimpleModeConfig(scope.APP_CONFIG);
+      expect(scope.APP_CONFIG.forceSimpleMode).toBeUndefined();
+      expect(scope.APP_CONFIG.enableAdvancedExperience).toBe(true);
+      expect(scope.APP_CONFIG.preferAdvanced).toBe(true);
+      expect(getAttempted()).toBe(false);
+    });
+
+    it('updates the sandbox toggle UI state and status message', () => {
+      const toggleEl = { checked: false, dataset: {}, setAttribute: vi.fn(), isConnected: true };
+      const statusEl = { hidden: true, textContent: '' };
+      const documentStub = {
+        getElementById: vi.fn((id) => {
+          if (id === 'forceSimpleModeToggle') {
+            return toggleEl;
+          }
+          if (id === 'forceSimpleModeStatus') {
+            return statusEl;
+          }
+          return null;
+        }),
+      };
+      const scope = {
+        APP_CONFIG: { enableAdvancedExperience: true, preferAdvanced: true },
+        SimpleExperience: { create: () => ({}) },
+        console: { warn: () => {}, error: () => {}, debug: () => {} },
+        bootstrap: vi.fn(),
+        bootstrapOverlay: {
+          showLoading: vi.fn(),
+          showError: vi.fn(),
+          setDiagnostic: vi.fn(),
+          setRecoveryAction: vi.fn(),
+          state: { mode: 'loading' },
+        },
+        document: documentStub,
+        documentRef: documentStub,
+        ensureRendererModule: () => null,
+        simpleModeToggleState: { control: null, status: null, baselineConfig: null, baselineCaptured: false },
+      };
+      const { updateSimpleModeToggle, rememberSimpleModeBaseline } = instantiateSimpleFallback(scope);
+      rememberSimpleModeBaseline(scope.APP_CONFIG);
+      scope.APP_CONFIG.forceSimpleMode = true;
+      updateSimpleModeToggle({ active: true, reason: 'renderer-timeout', source: 'fallback' });
+      expect(toggleEl.checked).toBe(true);
+      expect(toggleEl.dataset.simpleModeForced).toBe('true');
+      expect(statusEl.hidden).toBe(false);
+      expect(statusEl.textContent).toContain('timeout');
+      scope.APP_CONFIG.forceSimpleMode = false;
+      updateSimpleModeToggle({ active: false, source: 'user' });
+      expect(statusEl.hidden).toBe(true);
+      expect(statusEl.textContent).toBe('');
     });
 
     it('returns false when the simple sandbox is unavailable', () => {
