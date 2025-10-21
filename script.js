@@ -13029,6 +13029,101 @@
   }
 
   let lastRendererFailureDetail = null;
+  const rendererStartFailureState = { last: null };
+
+  function recordRendererStartFailure(source, options = {}) {
+    const normalizedSource =
+      typeof source === 'string' && source.trim().length ? source.trim() : 'unknown';
+    const message =
+      typeof options.message === 'string' && options.message.trim().length
+        ? options.message.trim()
+        : null;
+    const title =
+      typeof options.title === 'string' && options.title.trim().length
+        ? options.title.trim()
+        : null;
+    const diagnosticScope =
+      typeof options.diagnosticScope === 'string' && options.diagnosticScope.trim().length
+        ? options.diagnosticScope.trim().toLowerCase()
+        : null;
+    const diagnosticStatus =
+      typeof options.diagnosticStatus === 'string' && options.diagnosticStatus.trim().length
+        ? options.diagnosticStatus.trim().toLowerCase()
+        : null;
+    const diagnosticMessage =
+      typeof options.diagnosticMessage === 'string' && options.diagnosticMessage.trim().length
+        ? options.diagnosticMessage.trim()
+        : message;
+    const stage =
+      typeof options.stage === 'string' && options.stage.trim().length ? options.stage.trim() : null;
+    const detail =
+      options.detail && typeof options.detail === 'object' ? { ...options.detail } : null;
+    const timestamp = Number.isFinite(options.timestamp) ? options.timestamp : Date.now();
+    rendererStartFailureState.last = {
+      source: normalizedSource,
+      title,
+      message,
+      diagnosticScope,
+      diagnosticStatus,
+      diagnosticMessage,
+      stage,
+      detail,
+      timestamp,
+    };
+    return rendererStartFailureState.last;
+  }
+
+  function resolveRendererStartFailureSummary() {
+    if (rendererStartFailureState.last) {
+      return rendererStartFailureState.last;
+    }
+    const diagnostics =
+      typeof bootstrapOverlay?.diagnostics === 'object' ? bootstrapOverlay.diagnostics : null;
+    if (!diagnostics) {
+      return null;
+    }
+    const scopeOrder = ['renderer', 'assets', 'audio', 'backend'];
+    for (const scope of scopeOrder) {
+      const diagnostic = diagnostics?.[scope];
+      if (!diagnostic) {
+        continue;
+      }
+      const statusRaw =
+        typeof diagnostic.status === 'string' && diagnostic.status.trim().length
+          ? diagnostic.status.trim().toLowerCase()
+          : '';
+      const message =
+        typeof diagnostic.message === 'string' && diagnostic.message.trim().length
+          ? diagnostic.message.trim()
+          : null;
+      if (!message) {
+        continue;
+      }
+      if (statusRaw && statusRaw !== 'error' && statusRaw !== 'warning') {
+        continue;
+      }
+      const title =
+        scope === 'assets'
+          ? 'Asset diagnostics reported an error'
+          : scope === 'audio'
+            ? 'Audio diagnostics reported an issue'
+            : scope === 'backend'
+              ? 'Service diagnostics reported an issue'
+              : 'Renderer diagnostics reported an issue';
+      return {
+        source: `diagnostic:${scope}`,
+        title,
+        message,
+        diagnosticScope: scope,
+        diagnosticStatus: statusRaw || 'error',
+        diagnosticMessage: message,
+        stage: null,
+        detail: { scope, status: statusRaw || 'error' },
+        timestamp: Date.now(),
+      };
+    }
+    return null;
+  }
 
   function formatRendererFailureMessage(detail) {
     const baseMessage =
@@ -14167,6 +14262,19 @@
       }
       lastRendererFailureDetail = detail;
       const failureMessage = formatRendererFailureMessage(detail);
+      recordRendererStartFailure('renderer-failure', {
+        title: 'Renderer unavailable',
+        message: failureMessage,
+        diagnosticScope: 'renderer',
+        diagnosticStatus: 'error',
+        diagnosticMessage: failureMessage,
+        detail,
+        stage:
+          typeof detail.stage === 'string' && detail.stage.trim().length
+            ? detail.stage.trim()
+            : null,
+        timestamp: Number.isFinite(detail?.timestamp) ? detail.timestamp : undefined,
+      });
       presentCriticalErrorOverlay({
         title: 'Renderer unavailable',
         message: failureMessage,
@@ -14268,6 +14376,19 @@
       });
       const overlayMessage = networkCircuitBreaker.prefixOfflineMessage(overlayBase);
       const diagnosticMessage = networkCircuitBreaker.prefixOfflineMessage(decoratedFriendly);
+      recordRendererStartFailure('asset-load-failure', {
+        title: 'Assets failed to load',
+        message: overlayMessage,
+        diagnosticScope: 'assets',
+        diagnosticStatus: 'error',
+        diagnosticMessage,
+        detail,
+        stage:
+          typeof detail.stage === 'string' && detail.stage.trim().length
+            ? detail.stage.trim()
+            : null,
+        timestamp: Number.isFinite(detail?.timestamp) ? detail.timestamp : undefined,
+      });
       presentCriticalErrorOverlay({
         title: 'Assets failed to load',
         message: overlayMessage,
@@ -14881,6 +15002,16 @@
       const overlayMessage = extraParts.length
         ? `${diagnosticMessage} — ${extraParts.join(' — ')}`
         : diagnosticMessage;
+      recordRendererStartFailure('start-error', {
+        title: 'Unable to start expedition',
+        message: overlayMessage,
+        diagnosticScope: 'renderer',
+        diagnosticStatus: 'error',
+        diagnosticMessage,
+        detail,
+        stage,
+        timestamp: Number.isFinite(detail?.timestamp) ? detail.timestamp : undefined,
+      });
       presentCriticalErrorOverlay({
         title: 'Unable to start expedition',
         message: overlayMessage,
@@ -14940,6 +15071,16 @@
       const overlayMessage = extraParts.length
         ? `${diagnosticMessage} — ${extraParts.join(' — ')}`
         : diagnosticMessage;
+      recordRendererStartFailure('initialisation-error', {
+        title: 'Initialisation error detected',
+        message: overlayMessage,
+        diagnosticScope: 'renderer',
+        diagnosticStatus: 'error',
+        diagnosticMessage,
+        detail,
+        stage,
+        timestamp: Number.isFinite(detail?.timestamp) ? detail.timestamp : undefined,
+      });
       presentCriticalErrorOverlay({
         title: 'Initialisation error detected',
         message: overlayMessage,
@@ -22152,6 +22293,18 @@
     if (scope?.console?.error) {
       scope.console.error('Three.js failed to load.', { error, context });
     }
+    const failureDetail = {
+      reason: typeof context?.reason === 'string' ? context.reason : null,
+      message: typeof error?.message === 'string' ? error.message : null,
+    };
+    recordRendererStartFailure('three-load-failure', {
+      title: 'Renderer unavailable',
+      message: 'Unable to load the 3D renderer. Reload the page to try again.',
+      diagnosticScope: 'renderer',
+      diagnosticStatus: 'error',
+      diagnosticMessage: 'Three.js failed to load. Reload to try again.',
+      detail: failureDetail,
+    });
     if (typeof logDiagnosticsEvent === 'function') {
       try {
         logDiagnosticsEvent('startup', 'Three.js failed to load.', {
@@ -27966,7 +28119,7 @@
     }
   }
 
-  const DEFAULT_RENDERER_START_TIMEOUT_MS = 5000;
+  const DEFAULT_RENDERER_START_TIMEOUT_MS = 2000;
   let simpleFallbackAttempted = false;
   let rendererStartWatchdogHandle = null;
   let rendererStartWatchdogMode = null;
@@ -28363,6 +28516,52 @@
           );
         }
       }
+      const resolveStartFailureSummary =
+        typeof resolveRendererStartFailureSummary === 'function'
+          ? resolveRendererStartFailureSummary
+          : typeof globalScope?.resolveRendererStartFailureSummary === 'function'
+            ? globalScope.resolveRendererStartFailureSummary
+            : () => null;
+      const recordStartFailure =
+        typeof recordRendererStartFailure === 'function'
+          ? recordRendererStartFailure
+          : typeof globalScope?.recordRendererStartFailure === 'function'
+            ? globalScope.recordRendererStartFailure
+            : () => {};
+      const failureSummary = resolveStartFailureSummary();
+      const overlayTitle =
+        typeof failureSummary?.title === 'string' && failureSummary.title.trim().length
+          ? failureSummary.title.trim()
+          : 'Renderer failed to start';
+      const overlayMessage =
+        typeof failureSummary?.message === 'string' && failureSummary.message.trim().length
+          ? failureSummary.message.trim()
+          : 'Renderer did not initialise within 2 seconds. Ensure WebGL is enabled and required assets are available, then reload to try again.';
+      const diagnosticScope =
+        typeof failureSummary?.diagnosticScope === 'string' && failureSummary.diagnosticScope.trim().length
+          ? failureSummary.diagnosticScope.trim()
+          : 'renderer';
+      const diagnosticStatus =
+        typeof failureSummary?.diagnosticStatus === 'string' && failureSummary.diagnosticStatus.trim().length
+          ? failureSummary.diagnosticStatus.trim()
+          : 'error';
+      const diagnosticMessage =
+        typeof failureSummary?.diagnosticMessage === 'string' && failureSummary.diagnosticMessage.trim().length
+          ? failureSummary.diagnosticMessage.trim()
+          : overlayMessage;
+      const overlayDetail = { ...fallbackDetail };
+      if (failureSummary?.detail && typeof failureSummary.detail === 'object') {
+        overlayDetail.failure = { ...failureSummary.detail };
+      }
+      recordStartFailure('startup-watchdog', {
+        title: overlayTitle,
+        message: overlayMessage,
+        diagnosticScope,
+        diagnosticStatus,
+        diagnosticMessage,
+        detail: overlayDetail,
+        timestamp: triggeredAt,
+      });
       const overlay = typeof bootstrapOverlay !== 'undefined' ? bootstrapOverlay : null;
       if (overlay && typeof overlay.setDiagnostic === 'function') {
         try {
@@ -28371,6 +28570,16 @@
             message: 'Advanced renderer timed out. Launching simplified safe mode.',
             detail: fallbackDetail,
           });
+          if (failureSummary?.diagnosticScope && failureSummary.diagnosticScope !== 'renderer') {
+            overlay.setDiagnostic(failureSummary.diagnosticScope, {
+              status:
+                typeof failureSummary.diagnosticStatus === 'string' && failureSummary.diagnosticStatus.trim().length
+                  ? failureSummary.diagnosticStatus.trim()
+                  : 'error',
+              message: diagnosticMessage,
+              detail: overlayDetail,
+            });
+          }
         } catch (overlayError) {
           globalScope?.console?.debug?.(
             'Failed to update renderer diagnostic after start timeout.',
@@ -28378,6 +28587,24 @@
           );
         }
       }
+      const presentCriticalOverlay =
+        typeof presentCriticalErrorOverlay === 'function'
+          ? presentCriticalErrorOverlay
+          : typeof globalScope?.presentCriticalErrorOverlay === 'function'
+            ? globalScope.presentCriticalErrorOverlay
+            : () => {};
+      presentCriticalOverlay({
+        title: overlayTitle,
+        message: overlayMessage,
+        diagnosticScope,
+        diagnosticStatus,
+        diagnosticMessage,
+        logScope: 'startup',
+        logMessage: overlayMessage,
+        logLevel: 'fatal',
+        detail: overlayDetail,
+        timestamp: triggeredAt,
+      });
       if (typeof tryStartSimpleFallback === 'function') {
         const timeoutError = new Error('Advanced renderer start timed out.');
         try {
