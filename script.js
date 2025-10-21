@@ -25652,6 +25652,30 @@
     return fallbackDetail;
   }
 
+  function abortBootstrapForMissingWindowWebgl2(config) {
+    if (!config || typeof config !== 'object') {
+      return false;
+    }
+    const windowScope = typeof window !== 'undefined' ? window : null;
+    if (!windowScope || typeof windowScope.WebGL2RenderingContext !== 'undefined') {
+      return false;
+    }
+    const error = new Error(
+      'WebGL2 support is required to launch Infinite Rails. window.WebGL2RenderingContext is undefined in this browser.',
+    );
+    error.name = 'WebGL2UnavailableError';
+    error.reason = 'webgl2-unavailable';
+    error.supportSummary = 'window.WebGL2RenderingContext constructor missing at bootstrap.';
+    const fallbackDetail = applyWebglFallbackConfig(config, error) || error;
+    const messages = resolveWebglFallbackMessages(fallbackDetail || error);
+    const logMessage =
+      messages && typeof messages.logMessage === 'string' && messages.logMessage
+        ? messages.logMessage
+        : 'WebGL2 support unavailable at bootstrap. Falling back to simplified renderer.';
+    globalScope?.console?.error?.(logMessage, error);
+    return true;
+  }
+
   function probeWebglSupport(doc) {
     const scopeCandidate =
       (doc && typeof doc.defaultView === 'object' && doc.defaultView) ||
@@ -25717,6 +25741,9 @@
     const search = scope.location?.search || '';
     const params = new URLSearchParams(search);
     const queryMode = params.get('mode');
+    if (abortBootstrapForMissingWindowWebgl2(config)) {
+      return true;
+    }
     if (config.__webglFallbackApplied) {
       applyWebglFallbackConfig(config, config.__webglFallbackDetail || null);
       return true;
@@ -25781,6 +25808,9 @@
           globalScope.console.debug('Failed to parse query params for WebGL preflight.', error);
         }
       }
+    }
+    if (abortBootstrapForMissingWindowWebgl2(config)) {
+      return true;
     }
     if (config.__webglFallbackApplied) {
       applyWebglFallbackConfig(config, config.__webglFallbackDetail || null);
