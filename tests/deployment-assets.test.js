@@ -460,6 +460,12 @@ describe('deployment workflow asset coverage', () => {
     });
   });
 
+  it('deploy workflow performs a full CloudFront cache invalidation', () => {
+    expect(workflowContents.includes('aws cloudfront create-invalidation')).toBe(true);
+    expect(workflowContents.includes("--paths '/*'"))
+      .toBe(true);
+  });
+
   it('CloudFront function enforces MIME type and CORS headers for CDN assets', () => {
     const functionResource = templateDocument?.Resources?.AssetsMimeTypeFunction || null;
 

@@ -35,7 +35,7 @@ jobs:
           CI: true
 
   deploy:
-    if: github.event_name == 'push'
+    if: github.event_name != 'pull_request'
     needs: pre-release-checks
     name: Build & Deploy
     runs-on: ubuntu-latest
