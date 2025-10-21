@@ -9572,6 +9572,254 @@
     }
   }
 
+  const RUNTIME_METRICS_EVENT_TYPE = 'runtime-metrics';
+  const RUNTIME_METRICS_THROTTLE_MS = 5000;
+
+  const runtimeMetricsState = {
+    eventSourcingEnabled: false,
+    pendingReason: null,
+    flushTimer: null,
+    lastSummary: null,
+    metrics: {
+      fps: null,
+      fpsSampleAt: null,
+      networkPingMs: null,
+      networkPingSampleAt: null,
+      networkSource: null,
+      networkStatus: null,
+      networkStatusCode: null,
+      networkEndpoint: null,
+      assetLoadPercent: null,
+      assetSampleAt: null,
+      assetMissing: null,
+      assetTotal: null,
+      assetStatus: null,
+      assetInlineCount: null,
+      errorSpikeRate: null,
+      errorSampleAt: null,
+      errorTrippedCategories: [],
+      errorRecentCounts: {},
+    },
+  };
+
+  function updateRuntimeMetrics(partial = {}, reason = 'update') {
+    if (!partial || typeof partial !== 'object') {
+      return;
+    }
+    const metrics = runtimeMetricsState.metrics;
+    Object.keys(partial).forEach((key) => {
+      metrics[key] = partial[key];
+    });
+    runtimeMetricsState.pendingReason = reason;
+    scheduleRuntimeMetricsFlush(reason);
+  }
+
+  function scheduleRuntimeMetricsFlush(reason = 'update') {
+    if (!runtimeMetricsState.eventSourcingEnabled) {
+      return;
+    }
+    const scope = typeof globalScope !== 'undefined' ? globalScope : globalThis;
+    const setFn =
+      typeof scope?.setTimeout === 'function'
+        ? scope.setTimeout.bind(scope)
+        : typeof setTimeout === 'function'
+          ? setTimeout
+          : null;
+    if (!setFn) {
+      dispatchRuntimeMetrics(reason);
+      return;
+    }
+    if (runtimeMetricsState.flushTimer !== null) {
+      return;
+    }
+    runtimeMetricsState.flushTimer = setFn(() => {
+      runtimeMetricsState.flushTimer = null;
+      dispatchRuntimeMetrics(runtimeMetricsState.pendingReason || reason);
+    }, RUNTIME_METRICS_THROTTLE_MS);
+  }
+
+  function cancelRuntimeMetricsFlush() {
+    if (runtimeMetricsState.flushTimer === null) {
+      return;
+    }
+    const scope = typeof globalScope !== 'undefined' ? globalScope : globalThis;
+    const clearFn =
+      typeof scope?.clearTimeout === 'function'
+        ? scope.clearTimeout.bind(scope)
+        : typeof clearTimeout === 'function'
+          ? clearTimeout
+          : null;
+    if (clearFn) {
+      try {
+        clearFn(runtimeMetricsState.flushTimer);
+      } catch (error) {}
+    }
+    runtimeMetricsState.flushTimer = null;
+  }
+
+  function buildRuntimeMetricsSample(now) {
+    const metrics = runtimeMetricsState.metrics;
+    const sample = {};
+    const summaryParts = [];
+
+    const fpsValue = Number(metrics.fps);
+    if (Number.isFinite(fpsValue) && fpsValue > 0) {
+      const summaryFps = fpsValue >= 100 ? Math.round(fpsValue) : Number(fpsValue.toFixed(1));
+      sample.fps = Number(fpsValue.toFixed(2));
+      sample.fpsSampleAt = metrics.fpsSampleAt ?? null;
+      summaryParts.push(`fps ${summaryFps}`);
+    } else {
+      sample.fps = null;
+    }
+
+    const pingValue = Number(metrics.networkPingMs);
+    if (Number.isFinite(pingValue) && pingValue >= 0) {
+      sample.networkPingMs = Number(pingValue.toFixed(2));
+      sample.networkPingSampleAt = metrics.networkPingSampleAt ?? null;
+      if (typeof metrics.networkSource === 'string' && metrics.networkSource.trim().length) {
+        sample.networkSource = metrics.networkSource.trim();
+      }
+      if (typeof metrics.networkStatus === 'string' && metrics.networkStatus.trim().length) {
+        sample.networkStatus = metrics.networkStatus.trim();
+      }
+      if (Number.isFinite(metrics.networkStatusCode)) {
+        sample.networkStatusCode = metrics.networkStatusCode;
+      }
+      if (typeof metrics.networkEndpoint === 'string' && metrics.networkEndpoint.trim().length) {
+        sample.networkEndpoint = metrics.networkEndpoint.trim();
+      }
+      summaryParts.push(`ping ${Math.round(pingValue)}ms`);
+    } else {
+      sample.networkPingMs = null;
+    }
+
+    const assetPercent = Number(metrics.assetLoadPercent);
+    if (Number.isFinite(assetPercent)) {
+      sample.assetLoadPercent = Number(assetPercent.toFixed(2));
+      sample.assetSampleAt = metrics.assetSampleAt ?? null;
+      if (Number.isFinite(metrics.assetMissing)) {
+        sample.assetMissing = Math.max(0, Math.round(metrics.assetMissing));
+      }
+      if (Number.isFinite(metrics.assetTotal)) {
+        sample.assetTotal = Math.max(0, Math.round(metrics.assetTotal));
+      }
+      if (typeof metrics.assetStatus === 'string' && metrics.assetStatus.trim().length) {
+        sample.assetStatus = metrics.assetStatus.trim();
+      }
+      if (Number.isFinite(metrics.assetInlineCount)) {
+        sample.assetInlineCount = Math.max(0, Math.round(metrics.assetInlineCount));
+      }
+      summaryParts.push(`assets ${assetPercent.toFixed(1)}%`);
+    } else {
+      sample.assetLoadPercent = null;
+    }
+
+    const scope = typeof globalScope !== 'undefined' ? globalScope : globalThis;
+    const errorCircuit = scope?.InfiniteRails?.errorRateCircuit ?? null;
+    if (errorCircuit && typeof errorCircuit.getState === 'function') {
+      try {
+        const snapshot = errorCircuit.getState();
+        if (snapshot && typeof snapshot === 'object') {
+          const categories = snapshot.categories && typeof snapshot.categories === 'object' ? snapshot.categories : {};
+          const tripped = Array.isArray(snapshot.trippedCategories) ? snapshot.trippedCategories : [];
+          const totalCategories = Object.keys(categories).length;
+          let ratio = null;
+          if (totalCategories > 0) {
+            ratio = tripped.length / totalCategories;
+          } else if (tripped.length) {
+            ratio = 1;
+          }
+          if (ratio !== null) {
+            metrics.errorSpikeRate = ratio;
+          }
+          metrics.errorTrippedCategories = tripped.slice();
+          const recentCounts = {};
+          Object.entries(categories).forEach(([key, info]) => {
+            const count = Number(info?.recentCount);
+            if (Number.isFinite(count)) {
+              recentCounts[key] = count;
+            }
+          });
+          metrics.errorRecentCounts = recentCounts;
+          metrics.errorSampleAt = now;
+        }
+      } catch (error) {}
+    }
+
+    const errorRatio = Number(metrics.errorSpikeRate);
+    if (Number.isFinite(errorRatio) && errorRatio >= 0) {
+      sample.errorSpikeRate = Number(errorRatio.toFixed(3));
+      sample.errorSampleAt = metrics.errorSampleAt ?? null;
+      if (Array.isArray(metrics.errorTrippedCategories) && metrics.errorTrippedCategories.length) {
+        sample.errorTrippedCategories = metrics.errorTrippedCategories.slice(0, 12);
+      }
+      if (metrics.errorRecentCounts && typeof metrics.errorRecentCounts === 'object') {
+        sample.errorRecentCounts = { ...metrics.errorRecentCounts };
+      }
+      summaryParts.push(`errors ${(errorRatio * 100).toFixed(0)}%`);
+    } else {
+      sample.errorSpikeRate = null;
+    }
+
+    return { sample, summaryParts };
+  }
+
+  function dispatchRuntimeMetrics(reason = 'update') {
+    runtimeMetricsState.pendingReason = null;
+    if (!runtimeMetricsState.eventSourcingEnabled) {
+      return false;
+    }
+    if (typeof captureEventForSourcing !== 'function') {
+      return false;
+    }
+    const now = Date.now();
+    const { sample, summaryParts } = buildRuntimeMetricsSample(now);
+    const hasData = ['fps', 'networkPingMs', 'assetLoadPercent', 'errorSpikeRate'].some(
+      (key) => sample[key] !== null && sample[key] !== undefined,
+    );
+    if (!hasData) {
+      return false;
+    }
+    const summaryLabel = summaryParts.length ? summaryParts.join(' · ') : 'Runtime metrics sample';
+    const summary = {
+      id: 'runtime-metrics',
+      name: 'Runtime metrics',
+      reason: summaryLabel,
+      updatedAt: new Date(now).toISOString(),
+    };
+    const detail = {
+      timestamp: now,
+      reason,
+      metrics: sample,
+      analytics: 'performance',
+      rendererMode:
+        typeof globalScope?.InfiniteRails?.rendererMode === 'string'
+          ? globalScope.InfiniteRails.rendererMode
+          : null,
+    };
+    try {
+      captureEventForSourcing(RUNTIME_METRICS_EVENT_TYPE, { summary, detail });
+      runtimeMetricsState.lastSummary = summaryLabel;
+      return true;
+    } catch (error) {
+      globalScope?.console?.debug?.('Failed to enqueue runtime metrics event.', error);
+      return false;
+    }
+  }
+
+  function setRuntimeMetricsEventSourcingEnabled(enabled) {
+    const next = Boolean(enabled);
+    if (runtimeMetricsState.eventSourcingEnabled === next) {
+      return;
+    }
+    runtimeMetricsState.eventSourcingEnabled = next;
+    if (!next) {
+      cancelRuntimeMetricsFlush();
+      return;
+    }
+    scheduleRuntimeMetricsFlush('availability');
+  }
+
   function maybeEmitPerformanceMetrics() {
     if (performanceSamplerState.metricsEmitted) {
       return;
@@ -14174,6 +14422,38 @@
         });
       }
     });
+    globalScope.addEventListener('infinite-rails:network-ping', (event) => {
+      const detail = event?.detail && typeof event.detail === 'object' ? event.detail : {};
+      const duration = Number(detail?.durationMs);
+      if (!Number.isFinite(duration)) {
+        return;
+      }
+      const timestamp = Number.isFinite(detail?.timestamp) ? detail.timestamp : Date.now();
+      const source =
+        typeof detail?.label === 'string' && detail.label.trim().length
+          ? detail.label.trim()
+          : typeof detail?.source === 'string' && detail.source.trim().length
+            ? detail.source.trim()
+            : null;
+      const endpoint =
+        typeof detail?.endpoint === 'string' && detail.endpoint.trim().length
+          ? detail.endpoint.trim()
+          : null;
+      updateRuntimeMetrics(
+        {
+          networkPingMs: duration,
+          networkPingSampleAt: timestamp,
+          networkSource: source,
+          networkStatus:
+            typeof detail?.status === 'string' && detail.status.trim().length
+              ? detail.status.trim()
+              : null,
+          networkStatusCode: Number.isFinite(detail?.statusCode) ? detail.statusCode : null,
+          networkEndpoint: endpoint,
+        },
+        'network',
+      );
+    });
     globalScope.addEventListener('infinite-rails:asset-recovery-reload-requested', () => {
       bootstrapOverlay.setDiagnostic('assets', {
         status: 'error',
@@ -14718,6 +14998,17 @@
             detail: payload,
             timestamp: payload.timestamp,
           });
+        }
+        const fpsValue = Number(metrics?.fps);
+        if (Number.isFinite(fpsValue)) {
+          const sampleTimestamp = Number.isFinite(detail.timestamp) ? detail.timestamp : Date.now();
+          updateRuntimeMetrics(
+            {
+              fps: fpsValue,
+              fpsSampleAt: sampleTimestamp,
+            },
+            'performance',
+          );
         }
       } catch (error) {
         globalScope?.console?.debug?.('Failed to record performance metrics sample.', error);
@@ -17327,6 +17618,7 @@
     'audio-settings-changed',
     'control-map-changed',
     'keybindings-changed',
+    RUNTIME_METRICS_EVENT_TYPE,
   ]);
 
   const EVENT_SOURCING_IMMEDIATE_FLUSH_TYPES = new Set([
@@ -18019,6 +18311,7 @@
   }
 
   function drainEventQueueViaBeacon(reason = 'unload') {
+    dispatchRuntimeMetrics(reason);
     if (!eventSourcingState.enabled || !eventSourcingState.endpoint || !eventSourcingState.queue.length) {
       return;
     }
@@ -18098,6 +18391,7 @@
     const enabled = Boolean(endpointCandidate && (hasFetch || hasBeacon));
     eventSourcingState.enabled = enabled;
     eventSourcingState.endpoint = enabled ? endpointCandidate : null;
+    setRuntimeMetricsEventSourcingEnabled(enabled);
     if (!enabled) {
       const clearFn =
         typeof scope?.clearTimeout === 'function'
@@ -18687,6 +18981,30 @@
   function handleAssetAvailabilityOverlay(detail = {}) {
     const missing = Array.isArray(detail?.missing) ? detail.missing.length : 0;
     const total = Number.isFinite(detail?.total) ? detail.total : null;
+    const reachable = Number.isFinite(detail?.reachable) ? detail.reachable : null;
+    const inlineCount = Number.isFinite(detail?.inline) ? detail.inline : null;
+    let percent = null;
+    if (Number.isFinite(reachable) && total !== null) {
+      if (total > 0) {
+        const clampedReachable = Math.max(0, Math.min(total, reachable));
+        percent = (clampedReachable / total) * 100;
+      } else if (total === 0) {
+        percent = 100;
+      }
+    }
+    const availabilityTimestamp = Number.isFinite(detail?.timestamp) ? detail.timestamp : Date.now();
+    updateRuntimeMetrics(
+      {
+        assetLoadPercent: percent,
+        assetSampleAt: availabilityTimestamp,
+        assetMissing: missing,
+        assetTotal: total,
+        assetStatus:
+          typeof detail?.status === 'string' && detail.status.trim().length ? detail.status.trim() : null,
+        assetInlineCount: inlineCount,
+      },
+      'assets',
+    );
     if (detail?.status === 'skipped') {
       showEventOverlay({
         title: 'Asset availability skipped',
@@ -22406,6 +22724,7 @@
       centralLogStore.subscribe((entry) => {
         try {
           errorRateCircuitBreaker.record(entry);
+          scheduleRuntimeMetricsFlush('error-rate');
         } catch (error) {
           globalScope?.console?.debug?.('Error rate circuit listener failed.', error);
         }
