@@ -5505,9 +5505,18 @@
       if (pointerTypeRaw === 'touch') {
         recordUserActivity('pointer-touch');
         scheduleInputMode('touch', { scope, source: 'pointer-event:touch' });
-      } else if (pointerTypeRaw === 'mouse' || pointerTypeRaw === 'pen') {
-        recordUserActivity(`pointer-${pointerTypeRaw}`);
-        scheduleInputMode('pointer', { scope, source: `pointer-event:${pointerTypeRaw}` });
+      } else if (pointerTypeRaw === 'pen') {
+        recordUserActivity('pointer-pen');
+        const environment = detectMobileEnvironment(scope);
+        const prefersTouch = Boolean(
+          environment?.isMobile || environment?.coarsePointer || environment?.touchCapable || environment?.hoverNone
+        );
+        const targetMode = prefersTouch ? 'touch' : 'pointer';
+        const source = prefersTouch ? 'pointer-event:pen-touch' : 'pointer-event:pen';
+        scheduleInputMode(targetMode, { scope, source });
+      } else if (pointerTypeRaw === 'mouse') {
+        recordUserActivity('pointer-mouse');
+        scheduleInputMode('pointer', { scope, source: 'pointer-event:mouse' });
       }
     };
 
@@ -24343,7 +24352,7 @@
     }
     const navigatorRef = scope?.navigator || globalScope?.navigator || null;
     if (navigatorRef && typeof navigatorRef.maxTouchPoints === 'number') {
-      return navigatorRef.maxTouchPoints > 1;
+      return navigatorRef.maxTouchPoints > 0;
     }
     return false;
   }
@@ -24353,7 +24362,7 @@
     const userAgent = typeof navigatorRef?.userAgent === 'string' ? navigatorRef.userAgent : '';
     const maxTouchPoints = typeof navigatorRef?.maxTouchPoints === 'number' ? navigatorRef.maxTouchPoints : 0;
     const coarsePointer = hasCoarsePointer(scope);
-    const touchCapable = maxTouchPoints > 1;
+    const touchCapable = maxTouchPoints > 0;
     const userAgentDataMobile =
       typeof navigatorRef?.userAgentData?.mobile === 'boolean' ? navigatorRef.userAgentData.mobile : null;
     let hoverNone = false;

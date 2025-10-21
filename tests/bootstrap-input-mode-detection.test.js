@@ -110,6 +110,29 @@ describe('bootstrap input mode detection', () => {
     expect(getOverlayScheme(documentStub)).toBe('pointer');
   });
 
+  it('keeps touch mode active when pen pointer events are observed on coarse devices', () => {
+    const { sandbox, windowStub, documentStub } = createBootstrapSandbox();
+    windowStub.navigator.maxTouchPoints = 1;
+    setupMatchMedia(windowStub, {
+      '(pointer: coarse)': true,
+      '(any-pointer: coarse)': true,
+      '(hover: none)': true,
+      '(any-hover: none)': true,
+    });
+
+    evaluateBootstrapScript(sandbox);
+
+    const pointerCall = documentStub.addEventListener.mock.calls.find(([type]) => type === 'pointerdown');
+    expect(pointerCall).toBeDefined();
+    const pointerHandler = pointerCall[1];
+    pointerHandler({ pointerType: 'pen' });
+
+    expect(getLatestInputModeCall(documentStub)).toBe('touch');
+    expect(getToggleCall(documentStub, 'input-touch')).toBe(true);
+    expect(getToggleCall(documentStub, 'input-pointer')).toBe(false);
+    expect(getOverlayScheme(documentStub)).toBe('touch');
+  });
+
   it('responds to coarse pointer media query changes', () => {
     const { sandbox, windowStub, documentStub } = createBootstrapSandbox();
     windowStub.navigator.maxTouchPoints = 0;
