@@ -147,4 +147,84 @@ describe('event sourcing', () => {
     expect(recordedTypes.has('control-map-changed')).toBe(true);
     expect(recordedTypes.has('keybindings-changed')).toBe(true);
   });
+
+  it('attaches reproduction artifacts to error events', async () => {
+    const { sandbox, windowStub, timers } = createBootstrapSandbox({
+      appConfig: { apiBaseUrl },
+    });
+
+    const fetchSpy = vi.fn(() => Promise.resolve({ ok: true, status: 200 }));
+    sandbox.window.fetch = fetchSpy;
+    sandbox.fetch = fetchSpy;
+
+    evaluateBootstrapScript(sandbox);
+
+    await flushMicrotasks();
+    await flushMicrotasks();
+
+    windowStub.InfiniteRails.logs.record({ category: 'runtime', message: 'Pre-error log entry' });
+    windowStub.InfiniteRails.diagnostics.record('system', 'Test diagnostic entry', {
+      issue: 'pre-error-check',
+    });
+    windowStub.InfiniteRails.replayBuffer.record(
+      'dom:click',
+      { target: { id: 'startButton' } },
+      { timestamp: Date.now() },
+    );
+
+    const replaySnapshot = windowStub.InfiniteRails.replayBuffer.snapshot();
+    expect(Array.isArray(replaySnapshot)).toBe(true);
+    expect(replaySnapshot.length).toBeGreaterThan(0);
+    windowStub.dispatchEvent(
+      new windowStub.CustomEvent('infinite-rails:started', {
+        detail: { summary: { id: 'run-1', name: 'Explorer One' }, timestamp: Date.now() },
+      }),
+    );
+
+    windowStub.dispatchEvent(
+      new windowStub.CustomEvent('infinite-rails:start-error', {
+        detail: { message: 'Renderer initialisation failed.' },
+      }),
+    );
+
+    const runAllTimers = () => {
+      const handlers = Array.from(timers.values());
+      timers.clear();
+      handlers.forEach((handler) => {
+        if (typeof handler === 'function') {
+          handler();
+        }
+      });
+    };
+
+    runAllTimers();
+    await flushMicrotasks();
+    await flushMicrotasks();
+    runAllTimers();
+    await flushMicrotasks();
+    await flushMicrotasks();
+
+    const eventsEndpoint = `${apiBaseUrl}/events`;
+    const eventCalls = fetchSpy.mock.calls.filter(([url]) => url === eventsEndpoint);
+    expect(eventCalls.length).toBeGreaterThan(0);
+
+    const [, init] = eventCalls[eventCalls.length - 1];
+    const payload = JSON.parse(init.body);
+    const recorded = payload.events.find((entry) => entry.type === 'start-error');
+    expect(recorded).toBeTruthy();
+    const artifacts = recorded.detail?.artifacts;
+    expect(artifacts).toBeTruthy();
+    expect(typeof artifacts.traceSessionId).toBe('string');
+    expect(artifacts.snapshotChunks && typeof artifacts.snapshotChunks === 'object').toBe(true);
+    const chunkCount = Number(artifacts.snapshotChunks.length) || 0;
+    expect(chunkCount).toBeGreaterThan(0);
+    const reconstructed = Array.from({ length: chunkCount }, (_, index) => artifacts.snapshotChunks[`c${index}`] || '').join('');
+    const snapshot = JSON.parse(reconstructed);
+    expect(Array.isArray(snapshot.userActionReplay)).toBe(true);
+    expect(snapshot.userActionReplay.length).toBeGreaterThan(0);
+    expect(Array.isArray(snapshot.centralLog)).toBe(true);
+    expect(snapshot.centralLog.length).toBeGreaterThan(0);
+    expect(Array.isArray(snapshot.liveDiagnostics)).toBe(true);
+    expect(snapshot.liveDiagnostics.length).toBeGreaterThan(0);
+  });
 });
