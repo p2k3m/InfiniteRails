@@ -14670,9 +14670,9 @@
       const message =
         typeof detail?.message === 'string' && detail.message.trim().length
           ? detail.message.trim()
-          : 'Leaderboard offline — progress saved locally.';
+          : 'Offline session active — runs saved locally. Cloud sync will resume when the connection returns.';
       bootstrapOverlay.setDiagnostic('backend', {
-        status: 'error',
+        status: 'warning',
         message,
       });
     });
@@ -15801,9 +15801,11 @@
     const summary =
       typeof context?.message === 'string' && context.message.trim().length ? context.message.trim() : '';
     const formattedSummary = summary.replace(/[。\uFF0E\.]+$/u, '');
+    const fallbackOfflineMessage =
+      'Offline session active — runs saved locally until the leaderboard service recovers.';
     const message = formattedSummary
-      ? `Leaderboard offline — ${formattedSummary}.`
-      : 'Leaderboard offline — runs will remain on this device.';
+      ? `Offline session active — ${formattedSummary}. We'll sync once services respond.`
+      : fallbackOfflineMessage;
     if (!identityState.backendValidation || typeof identityState.backendValidation !== 'object') {
       identityState.backendValidation = {};
     }
@@ -15830,7 +15832,7 @@
     updateScoreboardStatus(message, { offline: true });
     if (typeof bootstrapOverlay?.setDiagnostic === 'function') {
       bootstrapOverlay.setDiagnostic('backend', {
-        status: 'error',
+        status: 'warning',
         message,
       });
     }
@@ -17016,7 +17018,10 @@
         return `Pointer lock fallback engaged (${reason}).`;
       }
       case 'score-sync-offline':
-        return summaryMessage(detail?.message, 'Leaderboard offline — progress saved locally.');
+        return summaryMessage(
+          detail?.message,
+          'Offline session active — runs saved locally. Cloud sync will resume when the connection returns.',
+        );
       case 'score-sync-restored':
         return summaryMessage(detail?.message, 'Leaderboard connection restored.');
       case 'renderer-failure': {
@@ -21869,7 +21874,7 @@
     const text =
       typeof message === 'string' && message.trim().length
         ? message.trim()
-        : 'Leaderboard offline — runs stored locally until connection returns.';
+        : 'Offline session active — runs stored locally. Cloud sync will resume when the connection returns.';
     if (scoreSyncWarningMessageEl) {
       scoreSyncWarningMessageEl.textContent = text;
     } else {
@@ -22033,7 +22038,7 @@
     }
 
     function getOfflineMessage() {
-      return 'Offline/Recovery Mode — waiting for services to stabilise.';
+      return 'Offline/Recovery Mode — full offline session active. Cloud sync will resume once services stabilise.';
     }
 
     function applyTripEffects(kind, detail) {
@@ -22043,7 +22048,7 @@
       suspendLiveFeatures(kind, detail);
       if (typeof bootstrapOverlay?.setDiagnostic === 'function') {
         bootstrapOverlay.setDiagnostic('backend', {
-          status: 'error',
+          status: 'warning',
           message,
         });
       }
@@ -23341,7 +23346,8 @@
   if (typeof globalScope.addEventListener === 'function') {
     globalScope.addEventListener('infinite-rails:score-sync-offline', (event) => {
       const detail = event?.detail ?? {};
-      const fallback = 'Leaderboard offline — runs stored locally until connection returns.';
+      const fallback =
+        'Offline session active — runs stored locally. Cloud sync will resume when the connection returns.';
       const message = deriveBackendMessageFromDetail(detail, fallback);
       networkCircuitBreaker.recordFailure('api', {
         source: detail.source ?? 'score-sync',
@@ -23354,7 +23360,7 @@
       updateScoreboardStatus(finalMessage, { offline: true });
       showGlobalScoreSyncWarning(finalMessage);
       bootstrapOverlay.setDiagnostic('backend', {
-        status: 'error',
+        status: 'warning',
         message: finalMessage,
       });
       stopUptimeHeartbeat('score-sync-offline');
