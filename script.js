@@ -16840,6 +16840,76 @@
       }
       return fallback;
     };
+    const capitalise = (text) => {
+      if (typeof text !== 'string') {
+        return '';
+      }
+      const trimmed = text.trim();
+      if (!trimmed.length) {
+        return '';
+      }
+      return `${trimmed.charAt(0).toUpperCase()}${trimmed.slice(1)}`;
+    };
+    const formatReasonLabel = (value, fallback) => {
+      const raw =
+        typeof value === 'string' && value.trim().length
+          ? value.trim()
+          : typeof fallback === 'string'
+            ? fallback
+            : '';
+      if (!raw) {
+        return null;
+      }
+      const friendly = raw.replace(/[-_]+/g, ' ').trim();
+      if (!friendly.length) {
+        return null;
+      }
+      return capitalise(friendly);
+    };
+    const formatKindLabel = (value, fallback = 'entity') => {
+      const raw =
+        typeof value === 'string' && value.trim().length ? value.trim() : typeof fallback === 'string' ? fallback : '';
+      if (!raw) {
+        return 'Entity';
+      }
+      const friendly = raw.replace(/[-_]+/g, ' ').trim();
+      if (!friendly.length) {
+        return 'Entity';
+      }
+      return capitalise(friendly);
+    };
+    const formatInteger = (value) => {
+      if (!Number.isFinite(value)) {
+        return null;
+      }
+      const rounded = Math.round(value);
+      if (!Number.isFinite(rounded)) {
+        return null;
+      }
+      try {
+        return typeof rounded.toLocaleString === 'function' ? rounded.toLocaleString() : String(rounded);
+      } catch (error) {
+        return String(rounded);
+      }
+    };
+    const resolveErrorSummary = (context) => {
+      if (!context || typeof context !== 'object') {
+        return null;
+      }
+      const candidates = [
+        context.errorMessage,
+        context.message,
+        context.errorName,
+        context?.error?.message,
+        context?.error?.reason,
+      ];
+      for (const candidate of candidates) {
+        if (typeof candidate === 'string' && candidate.trim().length) {
+          return candidate.trim();
+        }
+      }
+      return null;
+    };
     switch (type) {
       case 'started': {
         const label = extractDimensionLabel(detail) || 'Origin Dimension';
@@ -16862,6 +16932,47 @@
       case 'portal-activated': {
         const label = extractDimensionLabel(detail) || 'next dimension';
         return `Portal ignited — gateway to ${label} active.`;
+      }
+      case 'world-generation-start': {
+        const dimensionLabel = extractDimensionLabel(detail) || 'new dimension';
+        const reasonLabel = formatReasonLabel(detail?.reason, null);
+        const reasonSuffix = reasonLabel ? ` (${reasonLabel})` : '';
+        return `World generation started — calibrating ${capitalise(dimensionLabel)}${reasonSuffix}.`;
+      }
+      case 'world-generation-complete': {
+        const detailContext = detail && typeof detail === 'object' ? detail : {};
+        const dimensionLabel = capitalise(extractDimensionLabel(detailContext) || 'dimension');
+        const explicitReasonLabel = formatReasonLabel(detailContext.reason, null);
+        const failureReasonLabel = formatReasonLabel(detailContext.reason, 'world generation');
+        if (detailContext.error) {
+          const errorSummary =
+            resolveErrorSummary(detailContext) ||
+            resolveErrorSummary(detailContext.error) ||
+            'Check renderer diagnostics for details.';
+          const suffix = errorSummary.endsWith('.') ? errorSummary : `${errorSummary}.`;
+          return `World generation failed — ${dimensionLabel} (${failureReasonLabel}). ${suffix}`;
+        }
+        const chunkCountLabel =
+          formatInteger(detailContext.chunkCount) ??
+          formatInteger(detailContext.summary?.chunkCount);
+        const voxelCountLabel =
+          formatInteger(detailContext.voxels) ??
+          formatInteger(detailContext.summary?.voxels) ??
+          formatInteger(detailContext.summary?.voxelsUsed);
+        const durationLabel = formatInteger(detailContext.durationMs);
+        const stats = [];
+        if (chunkCountLabel) {
+          stats.push(`${chunkCountLabel} chunks`);
+        }
+        if (voxelCountLabel) {
+          stats.push(`${voxelCountLabel} voxels`);
+        }
+        if (durationLabel) {
+          stats.push(`${durationLabel}ms`);
+        }
+        const statsSuffix = stats.length ? ` (${stats.join(', ')})` : '';
+        const reasonSuffix = explicitReasonLabel ? ` (${explicitReasonLabel})` : '';
+        return `World generation complete — ${dimensionLabel} ready${statsSuffix}${reasonSuffix}.`;
       }
       case 'victory':
         return 'Eternal Ingot secured — mission accomplished!';
@@ -16983,6 +17094,14 @@
           return 'Player defeated — respawn initiated.';
         }
         return fragments.join(' ');
+      }
+      case 'ai-attachment-failed': {
+        const detailContext = detail && typeof detail === 'object' ? detail : {};
+        const kindLabel = formatKindLabel(detailContext.kind);
+        const reasonLabel = formatReasonLabel(detailContext.reason, 'unknown issue');
+        const errorSummary = resolveErrorSummary(detailContext) || 'Check diagnostics for details.';
+        const suffix = errorSummary.endsWith('.') ? errorSummary : `${errorSummary}.`;
+        return `AI attachment failed — ${kindLabel} (${reasonLabel}). ${suffix}`;
       }
       case 'debug-mode':
         return detail?.enabled
@@ -17135,6 +17254,8 @@
       'dimension-advanced',
       'portal-ready',
       'portal-activated',
+      'world-generation-start',
+      'world-generation-complete',
       'victory',
       'asset-fallback',
       'asset-fetch-start',
@@ -17147,6 +17268,7 @@
       'score-sync-restored',
       'renderer-failure',
       'audio-error',
+      'ai-attachment-failed',
       'identity-change',
       'audio-settings-changed',
       'control-map-changed',
@@ -17173,6 +17295,8 @@
     'dimension-transition-guard',
     'portal-ready',
     'portal-activated',
+    'world-generation-start',
+    'world-generation-complete',
     'victory',
     'renderer-failure',
     'asset-fallback',
@@ -17184,6 +17308,7 @@
     'score-updated',
     'score-sync-offline',
     'score-sync-restored',
+    'ai-attachment-failed',
     'identity-change',
     'audio-settings-changed',
     'control-map-changed',
