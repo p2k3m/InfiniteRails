@@ -29,4 +29,32 @@ describe('S3/CloudFront asset permission audit', () => {
     const templateDocument = loadTemplateDocument();
     expect(describeBucketPolicyIssues(templateDocument)).toEqual([]);
   });
+
+  it('accepts a public-read bucket policy that still scopes access to asset prefixes', () => {
+    const templateDocument = {
+      Resources: {
+        AssetsBucketPolicy: {
+          Properties: {
+            PolicyDocument: {
+              Statement: [
+                {
+                  Sid: 'AllowPublicAssetRead',
+                  Effect: 'Allow',
+                  Principal: '*',
+                  Action: 's3:GetObject',
+                  Resource: [
+                    '${AssetsBucket.Arn}/assets/*',
+                    '${AssetsBucket.Arn}/textures/*',
+                    '${AssetsBucket.Arn}/audio/*',
+                  ],
+                },
+              ],
+            },
+          },
+        },
+      },
+    };
+
+    expect(describeBucketPolicyIssues(templateDocument)).toEqual([]);
+  });
 });

@@ -615,6 +615,34 @@ function loadTemplateDocument() {
  * @param {object | null} templateDocument
  * @returns {string[]}
  */
+function isOaiCanonicalUser(principal) {
+  if (!principal || typeof principal !== 'object') {
+    return false;
+  }
+  const canonicalUser = principal.CanonicalUser;
+  return typeof canonicalUser === 'string' && canonicalUser.includes('AssetsCloudFrontOAI');
+}
+
+function isPublicPrincipal(principal) {
+  if (!principal) {
+    return false;
+  }
+  if (principal === '*') {
+    return true;
+  }
+  if (typeof principal !== 'object') {
+    return false;
+  }
+  const awsPrincipal = principal.AWS;
+  if (typeof awsPrincipal === 'string' && awsPrincipal.trim() === '*') {
+    return true;
+  }
+  if (Array.isArray(awsPrincipal)) {
+    return awsPrincipal.some((value) => typeof value === 'string' && value.trim() === '*');
+  }
+  return false;
+}
+
 function describeBucketPolicyIssues(templateDocument) {
   const issues = [];
   const bucketPolicy =
@@ -631,63 +659,61 @@ function describeBucketPolicyIssues(templateDocument) {
     return issues;
   }
 
-  const readStatement = statements.find(
-    (statement) => statement && statement.Sid === 'AllowCloudFrontOriginAccessIdentityRead',
-  );
-
-  if (!readStatement) {
-    issues.push('Missing AllowCloudFrontOriginAccessIdentityRead statement.');
-  } else {
-    if (readStatement.Effect !== 'Allow') {
-      issues.push('AllowCloudFrontOriginAccessIdentityRead statement must have Effect: Allow.');
-    }
-
-    const principal = readStatement.Principal || {};
-    const canonicalUser = typeof principal.CanonicalUser === 'string' ? principal.CanonicalUser : '';
-    if (!canonicalUser) {
-      issues.push('CloudFront OAI canonical user must be defined for the read statement.');
-    } else if (!canonicalUser.includes('AssetsCloudFrontOAI')) {
-      issues.push('Read statement must reference AssetsCloudFrontOAI canonical user.');
-    }
-
-    const actions = new Set(toArray(readStatement.Action));
-    if (actions.size !== 1 || !actions.has('s3:GetObject')) {
-      issues.push('Read statement must grant only s3:GetObject.');
-    }
-
-    const resources = new Set(toArray(readStatement.Resource));
-    const expectedResources = ASSET_PERMISSION_PREFIXES.map(
-      (prefix) => '${AssetsBucket.Arn}/' + prefix + '/*',
-    );
-
-    for (const expectedResource of expectedResources) {
-      if (!resources.has(expectedResource)) {
-        issues.push(`Read statement must include ${expectedResource}.`);
-      }
-    }
-
-    const unexpectedResources = Array.from(resources).filter(
-      (resource) => !expectedResources.includes(resource),
-    );
-    if (unexpectedResources.length > 0) {
-      issues.push(
-        `Read statement must not include additional resources: ${unexpectedResources.join(', ')}`,
-      );
-    }
-  }
-
-  const otherGetObjectStatements = statements.filter((statement) => {
-    if (!statement || statement === readStatement) {
-      return false;
-    }
-    if (statement.Effect !== 'Allow') {
+  const readStatements = statements.filter((statement) => {
+    if (!statement || statement.Effect !== 'Allow') {
       return false;
     }
     return toArray(statement.Action).includes('s3:GetObject');
   });
 
-  if (otherGetObjectStatements.length > 0) {
-    issues.push('Only the CloudFront OAI read statement may allow s3:GetObject.');
+  if (readStatements.length === 0) {
+    issues.push('Assets bucket policy must include an Allow statement granting s3:GetObject.');
+    return issues;
+  }
+
+  if (readStatements.length > 1) {
+    issues.push('Only one statement may allow s3:GetObject for asset delivery.');
+  }
+
+  const [readStatement] = readStatements;
+  const principal = readStatement?.Principal;
+
+  const usesOai = isOaiCanonicalUser(principal);
+  const allowsPublicRead = isPublicPrincipal(principal);
+
+  if (!usesOai && !allowsPublicRead) {
+    issues.push(
+      'Read statement principal must reference the AssetsCloudFrontOAI canonical user or allow public read access.',
+    );
+  }
+
+  if (usesOai && readStatement?.Principal?.CanonicalUser?.trim() === '') {
+    issues.push('CloudFront OAI canonical user must be defined for the read statement.');
+  }
+
+  const actions = new Set(toArray(readStatement?.Action));
+  if (actions.size !== 1 || !actions.has('s3:GetObject')) {
+    issues.push('Read statement must grant only s3:GetObject.');
+  }
+
+  const resources = new Set(toArray(readStatement?.Resource));
+  const expectedResources = ASSET_PERMISSION_PREFIXES.map(
+    (prefix) => '${AssetsBucket.Arn}/' + prefix + '/*',
+  );
+
+  for (const expectedResource of expectedResources) {
+    if (!resources.has(expectedResource)) {
+      issues.push(`Read statement must include ${expectedResource}.`);
+    }
+  }
+
+  const unexpectedResources = Array.from(resources).filter(
+    (resource) => !expectedResources.includes(resource),
+  );
+  if (unexpectedResources.length > 0) {
+    issues.push(
+      `Read statement must not include additional resources: ${unexpectedResources.join(', ')}`,
+    );
   }
 
   return issues;

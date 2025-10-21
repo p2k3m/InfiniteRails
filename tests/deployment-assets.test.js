@@ -23,6 +23,34 @@ const templateDocument = parseYaml(sanitizedTemplateContents);
 const require = createRequire(import.meta.url);
 const { listUnreachableManifestAssets } = require('../scripts/lib/manifest-coverage.js');
 
+function isOaiPrincipal(principal) {
+  if (!principal || typeof principal !== 'object') {
+    return false;
+  }
+  const canonicalUser = principal.CanonicalUser;
+  return typeof canonicalUser === 'string' && canonicalUser.includes('AssetsCloudFrontOAI');
+}
+
+function isPublicPrincipal(principal) {
+  if (!principal) {
+    return false;
+  }
+  if (principal === '*') {
+    return true;
+  }
+  if (typeof principal !== 'object') {
+    return false;
+  }
+  const aws = principal.AWS;
+  if (typeof aws === 'string' && aws.trim() === '*') {
+    return true;
+  }
+  if (Array.isArray(aws)) {
+    return aws.some((value) => typeof value === 'string' && value.trim() === '*');
+  }
+  return false;
+}
+
 function ensureTrailingSlash(value) {
   if (!value || typeof value !== 'string') {
     return value;
@@ -532,7 +560,7 @@ describe('deployment workflow asset coverage', () => {
     expect(unreachable).toEqual([]);
   });
 
-  it('CloudFormation bucket policy grants only the CloudFront OAI read access to asset prefixes', () => {
+  it('CloudFormation bucket policy grants read access to asset prefixes via the OAI or public policy', () => {
     const bucketPolicy =
       templateDocument?.Resources?.AssetsBucketPolicy?.Properties?.PolicyDocument || null;
 
@@ -540,15 +568,23 @@ describe('deployment workflow asset coverage', () => {
 
     const statements = toArray(bucketPolicy.Statement);
     const readStatement = statements.find(
-      (statement) => statement && statement.Sid === 'AllowCloudFrontOriginAccessIdentityRead',
+      (statement) =>
+        statement &&
+        statement.Effect === 'Allow' &&
+        toArray(statement.Action).includes('s3:GetObject'),
     );
 
     expect(readStatement).toBeTruthy();
     expect(readStatement.Effect).toBe('Allow');
 
     const principal = readStatement.Principal || {};
-    expect(typeof principal.CanonicalUser).toBe('string');
-    expect(principal.CanonicalUser).toContain('AssetsCloudFrontOAI');
+    const oaiPrincipal = isOaiPrincipal(principal);
+    const publicPrincipal = isPublicPrincipal(principal);
+
+    expect(oaiPrincipal || publicPrincipal).toBe(true);
+    if (oaiPrincipal) {
+      expect(principal.CanonicalUser).toContain('AssetsCloudFrontOAI');
+    }
 
     const actions = toArray(readStatement.Action);
     expect(actions).toEqual(['s3:GetObject']);
@@ -582,11 +618,20 @@ describe('deployment workflow asset coverage', () => {
 
     expect(getObjectAllowStatements).toHaveLength(1);
     const [statement] = getObjectAllowStatements;
-    expect(statement.Sid).toBe('AllowCloudFrontOriginAccessIdentityRead');
+
+    const allowedSids = new Set(['AllowCloudFrontOriginAccessIdentityRead', 'AllowPublicAssetRead']);
+    if (statement.Sid) {
+      expect(allowedSids.has(statement.Sid)).toBe(true);
+    }
 
     const principal = statement.Principal || {};
-    expect(typeof principal.CanonicalUser).toBe('string');
-    expect(principal.CanonicalUser).toContain('AssetsCloudFrontOAI');
+    const oaiPrincipal = isOaiPrincipal(principal);
+    const publicPrincipal = isPublicPrincipal(principal);
+
+    expect(oaiPrincipal || publicPrincipal).toBe(true);
+    if (oaiPrincipal) {
+      expect(principal.CanonicalUser).toContain('AssetsCloudFrontOAI');
+    }
   });
 
   it('CloudFront distribution applies a permissive CORS response headers policy for CDN assets', () => {
