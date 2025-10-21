@@ -25656,8 +25656,19 @@
     if (!config || typeof config !== 'object') {
       return false;
     }
-    const windowScope = typeof window !== 'undefined' ? window : null;
-    if (!windowScope || typeof windowScope.WebGL2RenderingContext !== 'undefined') {
+    const windowScope =
+      typeof globalScope !== 'undefined'
+        ? globalScope
+        : typeof window !== 'undefined'
+          ? window
+          : null;
+    if (!windowScope) {
+      return false;
+    }
+    if (!('WebGL2RenderingContext' in windowScope)) {
+      return false;
+    }
+    if (typeof windowScope.WebGL2RenderingContext === 'function') {
       return false;
     }
     const error = new Error(
