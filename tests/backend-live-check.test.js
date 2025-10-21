@@ -35,7 +35,7 @@ describe('backend live-check', () => {
     expect(identityState.backendValidation?.performed).toBe(true);
     expect(identityState.backendValidation?.ok).toBe(false);
     expect(identityState.backendValidation?.detail?.reason).toBe('fetch-unavailable');
-    expect(identityState.backendValidation?.detail?.message).toContain('Leaderboard offline');
+    expect(identityState.backendValidation?.detail?.message).toContain('Offline session active');
 
     expect(scoreboardStatus.dataset.offline).toBe('true');
 
@@ -74,7 +74,7 @@ describe('backend live-check', () => {
     expect(backendState.success).toBe(false);
 
     expect(scoreboardStatus.dataset.offline).toBe('true');
-    expect(scoreboardStatus.textContent).toContain('Leaderboard offline');
+    expect(scoreboardStatus.textContent).toContain('Offline session active');
   });
 
   it('pings each required backend endpoint before boot and falls back to offline mode when any fail', async () => {
@@ -137,7 +137,7 @@ describe('backend live-check', () => {
     expect(identityState.scoreboardOffline).toBe(true);
 
     expect(scoreboardStatus.dataset.offline).toBe('true');
-    expect(scoreboardStatus.textContent).toContain('Leaderboard offline');
+    expect(scoreboardStatus.textContent).toContain('Offline session active');
     expect(scoreboardStatus.textContent).toContain('POST /users returned 500');
   });
 
@@ -181,7 +181,7 @@ describe('backend live-check', () => {
     expect(result).toBe(false);
 
     expect(scoreboardStatus.dataset.offline).toBe('true');
-    expect(scoreboardStatus.textContent).toContain('Leaderboard offline');
+    expect(scoreboardStatus.textContent).toContain('Offline session active');
     expect(scoreboardStatus.textContent).toContain('Users endpoint not configured');
   });
 
