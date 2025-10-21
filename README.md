@@ -368,6 +368,15 @@ To confirm nothing blocks the experience from loading:
 1. Run `aws s3api get-bucket-policy --bucket <bucket>` and ensure the `Principal` is either the CloudFront OAI canonical user (for example `arn:aws:iam::cloudfront:user/CloudFront Origin Access Identity E3ABC123`) or the CloudFront service principal (`cloudfront.amazonaws.com`) with the expected `AWS:SourceArn` condition if you are using an OAC. The statement must only grant `s3:GetObject` to the explicit site bundles plus `assets/*`, `textures/*`, `audio/*`, and `vendor/*`.
 2. Run `node scripts/validate-asset-manifest.js` locally. The validator fails if any file under `assets/`, `textures/`, or `audio/` lacks world-readable permissions or if the deploy workflow omits a prefix.
 3. Pick a representative asset (for example `assets/steve.gltf` or `assets/audio-samples.json`) and fetch it anonymously through CloudFront: `curl -I https://<distribution-domain>/assets/steve.gltf`. A `200` response confirms CloudFront can reach the object.
+4. Exercise multiple asset categories—GLTF models, textures, and audio clips—to ensure every prefix is readable. A quick sanity pass looks like:
+
+   ```bash
+   curl -I "https://<distribution-domain>/assets/portal.gltf"
+   curl -I "https://<distribution-domain>/textures/grass.png"
+   curl -I "https://<distribution-domain>/audio/theme.mp3"
+   ```
+
+   Replace the filenames with real objects from your manifest. Each command must return `200`; any `403` indicates that the bucket policy still blocks the CDN.
 
 If the curl test returns `403`, revisit the bucket policy or OAI bindings until the CDN can retrieve every static asset.
 

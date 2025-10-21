@@ -39,10 +39,26 @@ When every request to `d3gj6x3ityfh5o.cloudfront.net/*.js` (or other static asse
        "arn:aws:s3:::infinite-rails-prod-assets/assets/*",
        "arn:aws:s3:::infinite-rails-prod-assets/textures/*",
        "arn:aws:s3:::infinite-rails-prod-assets/audio/*",
-       "arn:aws:s3:::infinite-rails-prod-assets/vendor/*"
+      "arn:aws:s3:::infinite-rails-prod-assets/vendor/*"
+    ]
+   }
+   ```
+   If you temporarily need world-readable access (for example, to debug a sandbox bucket without CloudFront), swap the principal for `"*"` or `{"AWS": "*"}` but keep the resource list identical so only the expected prefixes remain public:
+
+   ```json
+   {
+     "Sid": "AllowPublicAssetRead",
+     "Effect": "Allow",
+     "Principal": "*",
+     "Action": "s3:GetObject",
+     "Resource": [
+       "arn:aws:s3:::infinite-rails-prod-assets/assets/*",
+       "arn:aws:s3:::infinite-rails-prod-assets/textures/*",
+       "arn:aws:s3:::infinite-rails-prod-assets/audio/*"
      ]
    }
    ```
+   Remember to restore the OAI/OAC principal before leaving the bucket unattended in production.
 3. If the distribution uses an Origin Access Control, the principal should be the service principal `cloudfront.amazonaws.com` with the appropriate signing condition block. Update the policy accordingly and redeploy.
 
 ### 2.3 Validate S3 Block Public Access
@@ -67,6 +83,15 @@ When every request to `d3gj6x3ityfh5o.cloudfront.net/*.js` (or other static asse
 - If the bucket relies on an OAI/OAC, fetch the files through CloudFront: `curl -I https://d3gj6x3ityfh5o.cloudfront.net/assets/steve.gltf`.
 - If you temporarily bypass the OAI requirement outside the automated workflow (for example, while testing a sandbox bucket), fetch directly from S3 with anonymous credentials: `curl -I https://infinite-rails-prod-assets.s3.${AWS_REGION}.amazonaws.com/assets/steve.gltf`.
 - All requests must return `200` responses. A `403` or `404` indicates the OAI grant is missing a required prefix or that the object ACL blocked access. Update the policy or re-upload the object until every asset path responds successfully, then restore the OAI restrictions.
+- Run a quick multi-asset sweep with `curl` so you cover models, textures, and audio in one pass:
+
+  ```bash
+  curl -I "https://d3gj6x3ityfh5o.cloudfront.net/assets/portal.gltf"
+  curl -I "https://d3gj6x3ityfh5o.cloudfront.net/textures/grass.png"
+  curl -I "https://d3gj6x3ityfh5o.cloudfront.net/audio/theme.mp3"
+  ```
+
+  Swap the filenames for items that exist in your manifest. Every request should succeed with `200 OK`.
 
 ## 3. Validate the CloudFront Origin Access Identity / Control
 
