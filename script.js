@@ -17592,6 +17592,214 @@
     refreshEventLogDebugDetails();
   }
 
+  const EVENT_REPRODUCTION_CAPTURE_TYPES = new Set([
+    'start-error',
+    'initialisation-error',
+    'renderer-failure',
+    'asset-load-failure',
+  ]);
+
+  const EVENT_REPRODUCTION_SNAPSHOT_VERSION = 1;
+
+  function limitEntries(entries, limit) {
+    if (!Array.isArray(entries) || entries.length === 0) {
+      return [];
+    }
+    const startIndex = Math.max(0, entries.length - Math.max(0, limit));
+    return entries.slice(startIndex);
+  }
+
+  function buildEventLogHistorySnapshot(limit = 40) {
+    const history = Array.isArray(eventLogState?.history) ? eventLogState.history : [];
+    if (!history.length) {
+      return null;
+    }
+    return limitEntries(history, limit).map((entry) => ({
+      type: entry?.type ?? null,
+      timestamp: entry?.timestamp ?? null,
+      message: entry?.message ?? null,
+      detail: entry?.detail ?? null,
+    }));
+  }
+
+  function buildCentralLogSnapshot(limit = 60) {
+    if (typeof centralLogStore?.getEntries !== 'function') {
+      return null;
+    }
+    const entries = centralLogStore.getEntries();
+    if (!Array.isArray(entries) || !entries.length) {
+      return null;
+    }
+    return limitEntries(entries, limit).map((entry) => ({
+      id: entry?.id ?? null,
+      category: entry?.category ?? null,
+      scope: entry?.scope ?? null,
+      level: entry?.level ?? null,
+      message: entry?.message ?? null,
+      origin: entry?.origin ?? null,
+      timestamp: entry?.timestamp ?? null,
+      traceId: entry?.traceId ?? null,
+      sessionId: entry?.sessionId ?? null,
+    }));
+  }
+
+  function buildDiagnosticOverlaySnapshot(limit = 60) {
+    if (typeof bootstrapOverlay?.getLogEntries !== 'function') {
+      return null;
+    }
+    const entries = bootstrapOverlay.getLogEntries();
+    if (!Array.isArray(entries) || !entries.length) {
+      return null;
+    }
+    return limitEntries(entries, limit).map((entry) => ({
+      scope: entry?.scope ?? null,
+      level: entry?.level ?? null,
+      message: entry?.message ?? null,
+      timestamp: entry?.timestamp ?? null,
+      traceId: entry?.traceId ?? null,
+      sessionId: entry?.sessionId ?? null,
+    }));
+  }
+
+  function buildLiveDiagnosticsSnapshot(limit = 30) {
+    if (typeof getLiveDiagnosticsEntriesSnapshot !== 'function') {
+      return null;
+    }
+    const entries = getLiveDiagnosticsEntriesSnapshot();
+    if (!Array.isArray(entries) || !entries.length) {
+      return null;
+    }
+    return limitEntries(entries, limit).map((entry) => ({
+      id: entry?.id ?? null,
+      type: entry?.type ?? null,
+      label: entry?.label ?? null,
+      message: entry?.message ?? null,
+      detail: entry?.detail ?? null,
+      level: entry?.level ?? null,
+      timestamp: entry?.timestamp ?? null,
+    }));
+  }
+
+  function buildUserActionReplaySnapshotForSourcing(limit = USER_ACTION_REPLAY_MAX_ENTRIES) {
+    if (typeof getUserActionReplaySnapshot !== 'function') {
+      return [];
+    }
+    const snapshot = getUserActionReplaySnapshot(limit);
+    return Array.isArray(snapshot) ? snapshot : [];
+  }
+
+  function serialiseEventReproductionSnapshot(payload) {
+    try {
+      return JSON.stringify(payload);
+    } catch (error) {
+      try {
+        return JSON.stringify({
+          error: 'artifact-serialisation-failed',
+          message: error?.message ?? String(error ?? 'unknown-error'),
+        });
+      } catch (stringifyError) {
+        return '{"error":"artifact-serialisation-unavailable"}';
+      }
+    }
+  }
+
+  function chunkString(value, chunkSize = 500, maxChunks = 10) {
+    if (typeof value !== 'string' || !value.length) {
+      return [];
+    }
+    const safeSize = Math.max(1, chunkSize);
+    const limit = Math.max(1, maxChunks);
+    const chunks = [];
+    for (let index = 0; index < value.length && chunks.length < limit; index += safeSize) {
+      const slice = value.slice(index, index + safeSize);
+      if (slice.length) {
+        chunks.push(slice);
+      }
+    }
+    return chunks;
+  }
+
+  function buildEventReproductionArtifacts() {
+    const artifacts = {};
+    const eventLog = buildEventLogHistorySnapshot();
+    if (eventLog) {
+      artifacts.eventLog = eventLog;
+    }
+    const centralLog = buildCentralLogSnapshot(6);
+    if (centralLog) {
+      artifacts.centralLog = centralLog;
+    }
+    const diagnosticLog = buildDiagnosticOverlaySnapshot(6);
+    if (diagnosticLog) {
+      artifacts.diagnosticLog = diagnosticLog;
+    }
+    const liveDiagnostics = buildLiveDiagnosticsSnapshot(6);
+    if (liveDiagnostics) {
+      artifacts.liveDiagnostics = liveDiagnostics;
+    }
+    const userReplay = buildUserActionReplaySnapshotForSourcing();
+    artifacts.userActionReplay = userReplay;
+    if (lastRendererFailureDetail) {
+      artifacts.lastRendererFailure = serialiseEventDetail(lastRendererFailureDetail);
+    }
+    const sessionId =
+      typeof traceManager?.sessionId === 'string' && traceManager.sessionId.trim().length
+        ? traceManager.sessionId.trim()
+        : null;
+    if (sessionId) {
+      artifacts.traceSessionId = sessionId;
+    }
+    const snapshotPayload = {
+      version: EVENT_REPRODUCTION_SNAPSHOT_VERSION,
+      capturedAt: new Date().toISOString(),
+      traceSessionId: sessionId,
+      eventLog: eventLog ?? [],
+      centralLog: centralLog ?? [],
+      diagnosticLog: diagnosticLog ?? [],
+      liveDiagnostics: liveDiagnostics ?? [],
+      userActionReplay: userReplay,
+    };
+    artifacts.snapshotVersion = EVENT_REPRODUCTION_SNAPSHOT_VERSION;
+    const serialisedSnapshot = serialiseEventReproductionSnapshot(snapshotPayload);
+    const snapshotChunks = chunkString(serialisedSnapshot);
+    if (snapshotChunks.length) {
+      const chunkObject = {};
+      for (let index = 0; index < snapshotChunks.length; index += 1) {
+        const key = `c${index}`;
+        chunkObject[key] = snapshotChunks[index];
+      }
+      chunkObject.length = snapshotChunks.length;
+      artifacts.snapshotChunks = chunkObject;
+      artifacts.snapshotPreview = snapshotChunks[0];
+    } else {
+      artifacts.snapshotPreview = serialisedSnapshot.slice(0, EVENT_SOURCING_MAX_STRING_LENGTH);
+      artifacts.snapshotChunks = { length: 0 };
+    }
+    return Object.keys(artifacts).length ? artifacts : null;
+  }
+
+  function maybeAugmentDetailWithReproductionArtifacts(type, detail) {
+    if (!EVENT_REPRODUCTION_CAPTURE_TYPES.has(type)) {
+      return detail;
+    }
+    const artifacts = buildEventReproductionArtifacts();
+    if (!artifacts) {
+      return detail;
+    }
+    let baseDetail;
+    if (detail && typeof detail === 'object') {
+      baseDetail = Array.isArray(detail) ? detail.slice() : { ...detail };
+    } else {
+      baseDetail = {};
+    }
+    const existingArtifacts =
+      baseDetail.artifacts && typeof baseDetail.artifacts === 'object'
+        ? { ...baseDetail.artifacts }
+        : {};
+    baseDetail.artifacts = { ...existingArtifacts, ...artifacts };
+    return baseDetail;
+  }
+
   const EVENT_SOURCING_CAPTURE_TYPES = new Set([
     'started',
     'start-error',
@@ -18360,7 +18568,8 @@
       return;
     }
     try {
-      const entry = sanitiseEventEntry(type, detail);
+      const enrichedDetail = maybeAugmentDetailWithReproductionArtifacts(type, detail);
+      const entry = sanitiseEventEntry(type, enrichedDetail);
       if (!entry) {
         return;
       }
