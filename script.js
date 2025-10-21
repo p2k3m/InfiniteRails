@@ -2542,6 +2542,10 @@
       rendererMode: globalScope?.InfiniteRails?.rendererMode ?? null,
       sessionId: typeof traceManager?.sessionId === 'string' ? traceManager.sessionId : null,
     };
+    const userActions = getUserActionReplaySnapshot(60);
+    if (userActions.length) {
+      snapshot.userActions = userActions;
+    }
     if (Number.isFinite(context.timestamp)) {
       try {
         snapshot.triggeredAt = new Date(context.timestamp).toISOString();
@@ -8623,6 +8627,556 @@
   }
 
   installInputLatencySampler();
+
+  const USER_ACTION_REPLAY_MAX_ENTRIES = 120;
+  const USER_ACTION_REPLAY_DATASET_KEYS = Object.freeze([
+    'action',
+    'diagnosticAction',
+    'recoveryAction',
+    'supportAction',
+    'command',
+    'hudAction',
+    'analyticsAction',
+    'fallbackAction',
+    'shortcutAction',
+  ]);
+  const USER_ACTION_REPLAY_ACTION_SELECTOR =
+    'button, a, input[type="button"], input[type="submit"], input[type="reset"], [role="button"], [data-action], [data-diagnostic-action], [data-recovery-action]';
+
+  const userActionReplayState = {
+    buffer: [],
+    maxEntries: USER_ACTION_REPLAY_MAX_ENTRIES,
+    installed: false,
+    detachListeners: null,
+  };
+
+  function truncateReplayString(value, maxLength = 160) {
+    if (typeof value !== 'string') {
+      return null;
+    }
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return null;
+    }
+    if (trimmed.length > maxLength) {
+      return `${trimmed.slice(0, Math.max(0, maxLength - 1))}…`;
+    }
+    return trimmed;
+  }
+
+  function collapseReplayWhitespace(value) {
+    if (typeof value !== 'string') {
+      return '';
+    }
+    return value.replace(/\s+/g, ' ');
+  }
+
+  function isTextEntryElement(element) {
+    if (!element || typeof element !== 'object') {
+      return false;
+    }
+    if (element.isContentEditable) {
+      return true;
+    }
+    const tag = typeof element.tagName === 'string' ? element.tagName.toLowerCase() : '';
+    if (tag === 'textarea') {
+      return true;
+    }
+    if (tag === 'input') {
+      const type = typeof element.type === 'string' ? element.type.toLowerCase() : 'text';
+      const excluded = new Set([
+        'button',
+        'checkbox',
+        'color',
+        'file',
+        'hidden',
+        'image',
+        'radio',
+        'range',
+        'reset',
+        'submit',
+      ]);
+      return !excluded.has(type);
+    }
+    return false;
+  }
+
+  function hasReplayActionDataset(element) {
+    if (!element || typeof element !== 'object') {
+      return false;
+    }
+    const dataset = element.dataset || {};
+    for (let index = 0; index < USER_ACTION_REPLAY_DATASET_KEYS.length; index += 1) {
+      const key = USER_ACTION_REPLAY_DATASET_KEYS[index];
+      const value = dataset?.[key];
+      if (typeof value === 'string' && value.trim().length) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function findActionableReplayElement(element) {
+    if (!element || typeof element !== 'object') {
+      return null;
+    }
+    if (typeof element.closest === 'function') {
+      try {
+        const closest = element.closest(USER_ACTION_REPLAY_ACTION_SELECTOR);
+        if (closest) {
+          return closest;
+        }
+      } catch (error) {}
+    }
+    let current = element;
+    let depth = 0;
+    while (current && depth < 8) {
+      if (hasReplayActionDataset(current)) {
+        return current;
+      }
+      current = current.parentElement || current.parentNode || null;
+      depth += 1;
+    }
+    return element;
+  }
+
+  function summariseElementForReplay(element) {
+    if (!element || typeof element !== 'object') {
+      return null;
+    }
+    const summary = {};
+    const tag = typeof element.tagName === 'string' ? element.tagName.toLowerCase() : null;
+    if (tag) {
+      summary.tag = tag;
+    }
+    if (typeof element.id === 'string' && element.id) {
+      summary.id = element.id;
+    }
+    let classNames = [];
+    try {
+      if (element.classList && typeof element.classList.forEach === 'function') {
+        element.classList.forEach((name) => {
+          if (name && classNames.length < 6) {
+            classNames.push(name);
+          }
+        });
+      } else if (typeof element.className === 'string') {
+        classNames = element.className
+          .split(/\s+/)
+          .filter((name) => name && classNames.length < 6);
+      }
+    } catch (error) {}
+    if (classNames.length) {
+      summary.classes = classNames;
+    }
+    if (typeof element.getAttribute === 'function') {
+      const role = element.getAttribute('role');
+      if (role) {
+        summary.role = truncateReplayString(role, 60);
+      }
+      const ariaLabel = element.getAttribute('aria-label');
+      if (ariaLabel) {
+        const collapsed = collapseReplayWhitespace(ariaLabel);
+        summary.ariaLabel = truncateReplayString(collapsed, 160);
+      }
+      const title = element.getAttribute('title');
+      if (title) {
+        summary.title = truncateReplayString(collapseReplayWhitespace(title), 160);
+      }
+      if (tag === 'a') {
+        const href = element.getAttribute('href');
+        if (href) {
+          summary.href = truncateReplayString(href, 160);
+        }
+      }
+      if (tag === 'button') {
+        const type = element.getAttribute('type');
+        if (type) {
+          summary.buttonType = truncateReplayString(type, 40);
+        }
+      }
+    }
+    if (typeof element.type === 'string' && element.type) {
+      summary.inputType = truncateReplayString(element.type, 40);
+    }
+    if (typeof element.name === 'string' && element.name) {
+      summary.name = truncateReplayString(element.name, 80);
+    }
+    if (typeof element.disabled === 'boolean') {
+      summary.disabled = element.disabled;
+    }
+    if (typeof element.readOnly === 'boolean') {
+      summary.readonly = element.readOnly;
+    }
+    if (typeof element.checked === 'boolean') {
+      summary.checked = element.checked;
+    }
+    if (typeof element.value === 'string' && (tag === 'input' || tag === 'textarea')) {
+      summary.valueLength = element.value.length;
+    }
+    const datasetSummary = {};
+    const dataset = element.dataset || {};
+    USER_ACTION_REPLAY_DATASET_KEYS.forEach((key) => {
+      const value = dataset?.[key];
+      if (typeof value === 'string' && value.trim().length) {
+        datasetSummary[key] = truncateReplayString(value, 120);
+      }
+    });
+    if (Object.keys(datasetSummary).length) {
+      summary.dataset = datasetSummary;
+    }
+    const textContent = typeof element.textContent === 'string' ? element.textContent : null;
+    if (textContent && textContent.trim()) {
+      const bounded = textContent.length > 400 ? textContent.slice(0, 400) : textContent;
+      const collapsed = collapseReplayWhitespace(bounded).trim();
+      if (collapsed) {
+        summary.text = truncateReplayString(collapsed, 160);
+      }
+    }
+    if (typeof element.closest === 'function') {
+      try {
+        const panel = element.closest('[data-panel]');
+        if (panel && typeof panel.getAttribute === 'function') {
+          const panelId = panel.getAttribute('data-panel');
+          if (panelId) {
+            summary.panel = truncateReplayString(panelId, 80);
+          }
+        }
+      } catch (error) {}
+    }
+    return Object.keys(summary).length ? summary : null;
+  }
+
+  function sanitiseReplayDetail(detail) {
+    if (typeof detail === 'undefined') {
+      return undefined;
+    }
+    if (detail === null) {
+      return null;
+    }
+    if (typeof detail === 'string' || typeof detail === 'number' || typeof detail === 'boolean') {
+      return detail;
+    }
+    try {
+      return JSON.parse(JSON.stringify(detail));
+    } catch (error) {
+      return sanitiseDetailForLogging(detail) ?? null;
+    }
+  }
+
+  function cloneReplayDetail(detail) {
+    const sanitised = sanitiseReplayDetail(detail);
+    if (typeof sanitised === 'undefined') {
+      return undefined;
+    }
+    if (sanitised === null) {
+      return null;
+    }
+    if (typeof sanitised === 'string' || typeof sanitised === 'number' || typeof sanitised === 'boolean') {
+      return sanitised;
+    }
+    try {
+      return JSON.parse(JSON.stringify(sanitised));
+    } catch (error) {
+      return sanitiseDetailForLogging(sanitised) ?? null;
+    }
+  }
+
+  function normaliseReplayKey(event) {
+    if (!event || typeof event.key !== 'string') {
+      return null;
+    }
+    const trimmed = event.key.trim();
+    if (!trimmed) {
+      return null;
+    }
+    if (trimmed.length === 1 && isTextEntryElement(event.target)) {
+      return '[character]';
+    }
+    if (trimmed === ' ') {
+      return 'Space';
+    }
+    if (trimmed === 'Unidentified') {
+      return null;
+    }
+    return trimmed;
+  }
+
+  function recordUserActionForReplay(type, detail = undefined, options = {}) {
+    const entryType = typeof type === 'string' && type.trim().length ? type.trim() : 'unknown';
+    const timestamp = Number.isFinite(options.timestamp) ? Number(options.timestamp) : Date.now();
+    const entry = { type: entryType, timestamp };
+    if (typeof options.source === 'string' && options.source.trim().length) {
+      entry.source = options.source.trim();
+    }
+    if (Number.isFinite(options.relativeTime)) {
+      entry.relativeTime = Number(options.relativeTime);
+    }
+    const sanitisedDetail = sanitiseReplayDetail(detail);
+    if (typeof sanitisedDetail !== 'undefined') {
+      entry.detail = sanitisedDetail;
+    }
+    userActionReplayState.buffer.push(entry);
+    if (userActionReplayState.buffer.length > userActionReplayState.maxEntries) {
+      userActionReplayState.buffer.splice(
+        0,
+        userActionReplayState.buffer.length - userActionReplayState.maxEntries,
+      );
+    }
+    return entry;
+  }
+
+  function clearUserActionReplayBuffer() {
+    userActionReplayState.buffer.splice(0, userActionReplayState.buffer.length);
+    return userActionReplayState.buffer;
+  }
+
+  function getUserActionReplaySnapshot(limit = userActionReplayState.maxEntries) {
+    const maxEntries = Number.isFinite(limit) && limit >= 0 ? Math.floor(limit) : userActionReplayState.maxEntries;
+    const buffer = userActionReplayState.buffer;
+    if (!buffer.length) {
+      return [];
+    }
+    const startIndex = buffer.length > maxEntries ? buffer.length - maxEntries : 0;
+    const slice = buffer.slice(startIndex);
+    return slice.map((entry) => {
+      const snapshot = {
+        type: entry.type,
+        timestamp: entry.timestamp,
+      };
+      if (typeof entry.source === 'string') {
+        snapshot.source = entry.source;
+      }
+      if (Number.isFinite(entry.relativeTime)) {
+        snapshot.relativeTime = entry.relativeTime;
+      }
+      if (Object.prototype.hasOwnProperty.call(entry, 'detail')) {
+        const clonedDetail = cloneReplayDetail(entry.detail);
+        if (typeof clonedDetail !== 'undefined') {
+          snapshot.detail = clonedDetail;
+        }
+      }
+      return snapshot;
+    });
+  }
+
+  function buildPointerReplayDetail(event) {
+    if (!event || typeof event !== 'object') {
+      return null;
+    }
+    const detail = { eventType: typeof event.type === 'string' ? event.type : 'pointer' };
+    const pointerType = typeof event.pointerType === 'string' ? event.pointerType.toLowerCase() : '';
+    if (pointerType) {
+      detail.pointerType = pointerType;
+    }
+    if (Number.isFinite(event.button)) {
+      detail.button = event.button;
+    }
+    if (Number.isFinite(event.buttons)) {
+      detail.buttons = event.buttons;
+    }
+    if (Number.isFinite(event.detail) && event.detail !== 0) {
+      detail.clickCount = event.detail;
+    }
+    const coords = {};
+    if (Number.isFinite(event.clientX)) {
+      coords.clientX = Math.round(event.clientX);
+    }
+    if (Number.isFinite(event.clientY)) {
+      coords.clientY = Math.round(event.clientY);
+    }
+    if (Number.isFinite(event.screenX)) {
+      coords.screenX = Math.round(event.screenX);
+    }
+    if (Number.isFinite(event.screenY)) {
+      coords.screenY = Math.round(event.screenY);
+    }
+    if (Number.isFinite(event.pageX)) {
+      coords.pageX = Math.round(event.pageX);
+    }
+    if (Number.isFinite(event.pageY)) {
+      coords.pageY = Math.round(event.pageY);
+    }
+    if (Object.keys(coords).length) {
+      detail.position = coords;
+    }
+    const modifiers = [];
+    if (event.altKey) {
+      modifiers.push('alt');
+    }
+    if (event.ctrlKey) {
+      modifiers.push('ctrl');
+    }
+    if (event.metaKey) {
+      modifiers.push('meta');
+    }
+    if (event.shiftKey) {
+      modifiers.push('shift');
+    }
+    if (modifiers.length) {
+      detail.modifiers = modifiers;
+    }
+    if (typeof event.isPrimary === 'boolean') {
+      detail.primary = event.isPrimary;
+    }
+    if (Number.isFinite(event.pressure) && event.pressure > 0) {
+      const clampedPressure = Math.min(Math.max(event.pressure, 0), 1);
+      detail.pressure = Number(clampedPressure.toFixed(3));
+    }
+    detail.trusted = event.isTrusted === true;
+    const target = event.target || null;
+    const actionable = findActionableReplayElement(target);
+    const targetSummary = summariseElementForReplay(target);
+    if (targetSummary) {
+      detail.target = targetSummary;
+    }
+    if (actionable && actionable !== target) {
+      const actionableSummary = summariseElementForReplay(actionable);
+      if (actionableSummary) {
+        detail.actionTarget = actionableSummary;
+      }
+    }
+    return detail;
+  }
+
+  function buildKeyboardReplayDetail(event) {
+    if (!event || typeof event !== 'object') {
+      return null;
+    }
+    const detail = { eventType: typeof event.type === 'string' ? event.type : 'keyboard' };
+    const key = normaliseReplayKey(event);
+    if (key) {
+      detail.key = key;
+    }
+    const code = typeof event.code === 'string' && event.code.trim().length ? event.code.trim() : null;
+    if (code) {
+      detail.code = code;
+    }
+    if (Number.isFinite(event.location) && event.location !== 0) {
+      detail.location = event.location;
+    }
+    if (event.repeat) {
+      detail.repeat = true;
+    }
+    const modifiers = [];
+    if (event.altKey) {
+      modifiers.push('alt');
+    }
+    if (event.ctrlKey) {
+      modifiers.push('ctrl');
+    }
+    if (event.metaKey) {
+      modifiers.push('meta');
+    }
+    if (event.shiftKey) {
+      modifiers.push('shift');
+    }
+    if (modifiers.length) {
+      detail.modifiers = modifiers;
+    }
+    detail.trusted = event.isTrusted === true;
+    if (isTextEntryElement(event.target)) {
+      detail.textEntry = true;
+    }
+    const target = event.target || null;
+    const actionable = findActionableReplayElement(target);
+    const targetSummary = summariseElementForReplay(target);
+    if (targetSummary) {
+      detail.target = targetSummary;
+    }
+    if (actionable && actionable !== target) {
+      const actionableSummary = summariseElementForReplay(actionable);
+      if (actionableSummary) {
+        detail.actionTarget = actionableSummary;
+      }
+    }
+    return detail;
+  }
+
+  function installUserActionReplayListeners(scope = globalScope, doc = documentRef) {
+    if (userActionReplayState.installed) {
+      return;
+    }
+    const removers = [];
+    const pointerHandler = (event) => {
+      const detail = buildPointerReplayDetail(event);
+      const relative = normaliseEventTimestamp(event?.timeStamp);
+      const absoluteTimestamp = Number.isFinite(relative)
+        ? performanceNavigationStart + relative
+        : Date.now();
+      recordUserActionForReplay(`dom:${event?.type || 'pointer'}`, detail, {
+        timestamp: absoluteTimestamp,
+        relativeTime: Number.isFinite(relative) ? relative : undefined,
+        source: detail?.pointerType ? `pointer:${detail.pointerType}` : 'pointer',
+      });
+    };
+    const pointerEvents = ['pointerdown', 'pointerup', 'click', 'contextmenu'];
+    if (doc?.addEventListener) {
+      pointerEvents.forEach((type) => {
+        try {
+          doc.addEventListener(type, pointerHandler, { capture: true, passive: true });
+          removers.push(() => {
+            try {
+              doc.removeEventListener(type, pointerHandler, true);
+            } catch (error) {}
+          });
+        } catch (error) {}
+      });
+    }
+    const keyboardHandler = (event) => {
+      if (!event || typeof event.type !== 'string') {
+        return;
+      }
+      if (event.type !== 'keydown') {
+        return;
+      }
+      const detail = buildKeyboardReplayDetail(event);
+      const relative = normaliseEventTimestamp(event?.timeStamp);
+      const absoluteTimestamp = Number.isFinite(relative)
+        ? performanceNavigationStart + relative
+        : Date.now();
+      recordUserActionForReplay(`dom:${event.type}`, detail, {
+        timestamp: absoluteTimestamp,
+        relativeTime: Number.isFinite(relative) ? relative : undefined,
+        source: 'keyboard',
+      });
+    };
+    if (scope?.addEventListener) {
+      try {
+        scope.addEventListener('keydown', keyboardHandler, { capture: true });
+        removers.push(() => {
+          try {
+            scope.removeEventListener('keydown', keyboardHandler, true);
+          } catch (error) {}
+        });
+      } catch (error) {}
+    }
+    userActionReplayState.detachListeners = () => {
+      removers.forEach((dispose) => {
+        try {
+          dispose();
+        } catch (error) {}
+      });
+      userActionReplayState.detachListeners = null;
+      userActionReplayState.installed = false;
+    };
+    userActionReplayState.installed = true;
+  }
+
+  installUserActionReplayListeners();
+
+  if (globalScope) {
+    try {
+      globalScope.InfiniteRails = globalScope.InfiniteRails || {};
+      const replayApi = globalScope.InfiniteRails.replayBuffer || {};
+      replayApi.record = recordUserActionForReplay;
+      replayApi.snapshot = getUserActionReplaySnapshot;
+      replayApi.clear = clearUserActionReplayBuffer;
+      globalScope.InfiniteRails.replayBuffer = replayApi;
+    } catch (replayExposeError) {
+      globalScope?.console?.debug?.('Failed to expose replay buffer helpers.', replayExposeError);
+    }
+  }
 
   function resetPerformanceSamplerForExperience() {
     if (Number.isFinite(performanceSamplerState.boot.completedAt)) {
@@ -18374,6 +18928,7 @@
       debugMode: isDebugModeEnabled(),
       userAgent: scope?.navigator?.userAgent ?? null,
       eventLog: history,
+      userActionReplay: getUserActionReplaySnapshot(),
       diagnosticLog:
         typeof bootstrapOverlay?.getLogEntries === 'function'
           ? bootstrapOverlay.getLogEntries()
@@ -26279,6 +26834,13 @@
         initialiseFallbackShortcutControls(options.scope ?? globalScope, options.doc ?? documentRef);
       hooks.getFallbackShortcutState = () => cloneFallbackShortcutState();
       hooks.getLocalGameplayState = () => localGameplayState;
+      hooks.getUserActionReplayBuffer = (options = {}) =>
+        getUserActionReplaySnapshot(
+          Number.isFinite(options.limit) ? Number(options.limit) : undefined,
+        );
+      hooks.recordUserActionReplay = (type, detail, options = {}) =>
+        recordUserActionForReplay(type, detail, options || {});
+      hooks.clearUserActionReplayBuffer = () => clearUserActionReplayBuffer();
       hooks.setAudioMuted = (value, options = {}) =>
         setAudioMuted(value, { ...options, source: options.source ?? 'test-hook', persist: options.persist });
       hooks.setAudioChannelVolume = (channel, value, options = {}) =>
