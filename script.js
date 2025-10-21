@@ -19584,6 +19584,261 @@
     return copied;
   }
 
+  function performEmergencyShutdown({
+    source = 'support-action',
+    reason = 'support-emergency-shutdown',
+    mode = null,
+    showHud = true,
+    dispatchEvents = true,
+  } = {}) {
+    const scope = typeof globalScope !== 'undefined' ? globalScope : globalThis;
+    const rendererMode = normaliseRendererModeInput(mode) ?? getActiveRendererMode();
+    const detail = { source, reason, mode: rendererMode ?? null };
+    const overlay = getBootstrapOverlayController();
+    const dispatchLifecycleEvent = (phase, extra = {}) => {
+      if (!dispatchEvents || typeof scope?.dispatchEvent !== 'function') {
+        return;
+      }
+      const EventCtor = scope.CustomEvent || (typeof CustomEvent === 'function' ? CustomEvent : null);
+      if (typeof EventCtor !== 'function') {
+        return;
+      }
+      try {
+        scope.dispatchEvent(
+          new EventCtor('infinite-rails:emergency-shutdown', {
+            detail: { ...detail, phase, ...extra },
+          }),
+        );
+      } catch (error) {
+        scope?.console?.debug?.('Failed to dispatch emergency shutdown lifecycle event.', error);
+      }
+    };
+
+    dispatchLifecycleEvent('begin');
+    if (typeof logDiagnosticsEvent === 'function') {
+      logDiagnosticsEvent('ui', 'Emergency shutdown triggered; halting renderer.', {
+        level: 'error',
+        detail,
+      });
+    } else if (typeof centralLogStore?.record === 'function') {
+      centralLogStore.record({
+        category: 'ui',
+        scope: 'support-controls',
+        level: 'error',
+        origin: 'emergency-shutdown',
+        message: 'Emergency shutdown triggered; halting renderer.',
+        detail,
+      });
+    }
+
+    if (showHud && typeof showHudAlert === 'function') {
+      try {
+        showHudAlert({
+          title: 'Emergency shutdown',
+          message: 'Renderer halted to contain a fatal error.',
+          severity: 'error',
+          autoHideMs: 9000,
+        });
+      } catch (error) {
+        scope?.console?.debug?.('Unable to display emergency shutdown HUD alert.', error);
+      }
+    }
+
+    try {
+      overlay?.setDiagnostic?.('renderer', {
+        status: 'error',
+        message: 'Renderer halted by emergency shutdown.',
+      });
+      overlay?.setDiagnostic?.('assets', {
+        status: 'warning',
+        message: 'Asset streaming paused until restart.',
+      });
+    } catch (error) {
+      scope?.console?.debug?.('Failed to update diagnostics overlay for emergency shutdown.', error);
+    }
+
+    const shutdownPromise = typeof teardownActiveExperience === 'function'
+      ? Promise.resolve().then(() =>
+          teardownActiveExperience({
+            mode: rendererMode ?? undefined,
+            reason: `${reason}:teardown`,
+          }),
+        )
+      : Promise.resolve({ instance: null, stopped: false, destroyed: false });
+
+    return shutdownPromise
+      .then((result) => {
+        dispatchLifecycleEvent('complete', { result });
+        return result;
+      })
+      .catch((error) => {
+        const errorDetail = error instanceof Error ? { message: error.message, name: error.name } : { message: String(error) };
+        dispatchLifecycleEvent('failed', { error: errorDetail });
+        scope?.console?.error?.('Emergency shutdown failed.', error);
+        throw error;
+      });
+  }
+
+  function performSafeRestart({
+    source = 'support-action',
+    reason = 'support-safe-restart',
+    mode = null,
+    showHud = true,
+    reloadPlugins = true,
+    ensurePlugins = true,
+    dispatchEvents = true,
+  } = {}) {
+    const scope = typeof globalScope !== 'undefined' ? globalScope : globalThis;
+    const rendererMode = normaliseRendererModeInput(mode) ?? getActiveRendererMode();
+    const detail = {
+      source,
+      reason,
+      mode: rendererMode ?? null,
+      reloadPlugins: reloadPlugins !== false,
+      ensurePlugins: ensurePlugins !== false,
+    };
+    const overlay = getBootstrapOverlayController();
+    const dispatchLifecycleEvent = (phase, extra = {}) => {
+      if (!dispatchEvents || typeof scope?.dispatchEvent !== 'function') {
+        return;
+      }
+      const EventCtor = scope.CustomEvent || (typeof CustomEvent === 'function' ? CustomEvent : null);
+      if (typeof EventCtor !== 'function') {
+        return;
+      }
+      try {
+        scope.dispatchEvent(
+          new EventCtor('infinite-rails:safe-restart', {
+            detail: { ...detail, phase, ...extra },
+          }),
+        );
+      } catch (error) {
+        scope?.console?.debug?.('Failed to dispatch safe restart lifecycle event.', error);
+      }
+    };
+
+    dispatchLifecycleEvent('begin');
+    if (typeof logDiagnosticsEvent === 'function') {
+      logDiagnosticsEvent('ui', 'Safe restart requested; recycling renderer.', {
+        level: 'warning',
+        detail,
+      });
+    } else if (typeof centralLogStore?.record === 'function') {
+      centralLogStore.record({
+        category: 'ui',
+        scope: 'support-controls',
+        level: 'warning',
+        origin: 'safe-restart',
+        message: 'Safe restart requested; recycling renderer.',
+        detail,
+      });
+    }
+
+    if (showHud && typeof showHudAlert === 'function') {
+      try {
+        showHudAlert({
+          title: 'Restarting experience',
+          message: 'Halting renderer and reloading modules…',
+          severity: 'warning',
+          autoHideMs: 9000,
+        });
+      } catch (error) {
+        scope?.console?.debug?.('Unable to display safe restart HUD alert.', error);
+      }
+    }
+
+    try {
+      overlay?.setDiagnostic?.('renderer', {
+        status: 'warning',
+        message: 'Restarting renderer after fatal error…',
+      });
+    } catch (error) {
+      scope?.console?.debug?.('Failed to update diagnostics overlay for safe restart.', error);
+    }
+
+    return performEmergencyShutdown({
+      source,
+      reason: `${reason}:shutdown`,
+      mode: rendererMode ?? undefined,
+      showHud: false,
+      dispatchEvents,
+    })
+      .catch((error) => {
+        const errorDetail = error instanceof Error ? { message: error.message, name: error.name } : { message: String(error) };
+        dispatchLifecycleEvent('failed', { phase: 'shutdown', error: errorDetail });
+        throw error;
+      })
+      .then(() => {
+        if (typeof reloadActiveRenderer === 'function') {
+          return reloadActiveRenderer({
+            mode: rendererMode ?? undefined,
+            reason: `${reason}:reload`,
+            reloadPlugins,
+            ensurePlugins,
+            restart: true,
+          });
+        }
+        const hardReload = scope?.location?.reload;
+        if (typeof hardReload === 'function') {
+          hardReload.call(scope.location);
+        }
+        return null;
+      })
+      .then((experience) => {
+        try {
+          overlay?.setDiagnostic?.('renderer', {
+            status: 'success',
+            message: 'Renderer restarted successfully.',
+          });
+          overlay?.setDiagnostic?.('assets', {
+            status: 'success',
+            message: 'Asset streaming resumed.',
+          });
+        } catch (error) {
+          scope?.console?.debug?.('Failed to update diagnostics overlay after safe restart.', error);
+        }
+        if (showHud && typeof showHudAlert === 'function') {
+          try {
+            showHudAlert({
+              title: 'Experience restarted',
+              message: 'Renderer recovered successfully.',
+              severity: 'success',
+              autoHideMs: 7000,
+            });
+          } catch (error) {
+            scope?.console?.debug?.('Unable to display safe restart success HUD alert.', error);
+          }
+        }
+        dispatchLifecycleEvent('complete', { experience: experience ?? null });
+        return experience ?? null;
+      })
+      .catch((error) => {
+        const errorDetail = error instanceof Error ? { message: error.message, name: error.name } : { message: String(error) };
+        dispatchLifecycleEvent('failed', { phase: 'restart', error: errorDetail });
+        if (showHud && typeof showHudAlert === 'function') {
+          try {
+            showHudAlert({
+              title: 'Restart failed',
+              message: 'Reload the page manually to continue.',
+              severity: 'error',
+              autoHideMs: 9000,
+            });
+          } catch (displayError) {
+            scope?.console?.debug?.('Unable to display safe restart failure HUD alert.', displayError);
+          }
+        }
+        try {
+          overlay?.setDiagnostic?.('renderer', {
+            status: 'error',
+            message: 'Restart failed. Manual intervention required.',
+          });
+        } catch (overlayError) {
+          scope?.console?.debug?.('Failed to update diagnostics overlay after safe restart failure.', overlayError);
+        }
+        throw error;
+      });
+  }
+
   function performDiagnosticsEmergencyReloadAll({
     control = null,
     source = 'support-action',
@@ -27279,6 +27534,8 @@
     try {
       const hooks = globalScope.__INFINITE_RAILS_TEST_HOOKS__ || (globalScope.__INFINITE_RAILS_TEST_HOOKS__ = {});
       hooks.ensureSimpleExperience = ensureSimpleExperience;
+      hooks.performEmergencyShutdown = (options = {}) => performEmergencyShutdown(options);
+      hooks.performSafeRestart = (options = {}) => performSafeRestart(options);
       hooks.ensureBackendLiveCheck = ensureBackendLiveCheck;
       hooks.performBackendLiveCheck = performBackendLiveCheck;
       hooks.ensureAudioAssetLiveTest = ensureAudioAssetLiveTest;
@@ -28489,9 +28746,31 @@
           : 'api-reload-all',
       showHud: options.showHud !== false,
     });
+  supportApi.emergencyShutdown = (options = {}) =>
+    performEmergencyShutdown({
+      ...options,
+      source:
+        typeof options.source === 'string' && options.source.trim().length
+          ? options.source.trim()
+          : 'api-emergency-shutdown',
+    });
+  supportApi.safeRestart = (options = {}) =>
+    performSafeRestart({
+      ...options,
+      source:
+        typeof options.source === 'string' && options.source.trim().length
+          ? options.source.trim()
+          : 'api-safe-restart',
+    });
   globalScope.InfiniteRails.support = supportApi;
   if (typeof globalScope.InfiniteRails.reloadAll !== 'function') {
     globalScope.InfiniteRails.reloadAll = (options = {}) => supportApi.reloadAll(options);
+  }
+  if (typeof globalScope.InfiniteRails.emergencyShutdown !== 'function') {
+    globalScope.InfiniteRails.emergencyShutdown = (options = {}) => supportApi.emergencyShutdown(options);
+  }
+  if (typeof globalScope.InfiniteRails.safeRestart !== 'function') {
+    globalScope.InfiniteRails.safeRestart = (options = {}) => supportApi.safeRestart(options);
   }
 
   const assetsApi = globalScope.InfiniteRails.assets || {};
