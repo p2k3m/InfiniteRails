@@ -247,9 +247,9 @@ describe('default renderer Three.js bootstrap', () => {
     global.document = originalDocument;
   });
 
-  it('includes only bundled Three.js asset candidates', () => {
-    expect(scriptSource).toContain(`createAssetUrlCandidates('${vendorThreeManifestUrl}', {`);
-    expect(scriptSource).toContain("preloadedSelector: 'script[data-preload-three]'");
+  it('targets the bundled Three.js asset directly', () => {
+    expect(scriptSource).toContain('const THREE_SCRIPT_URL = applyAssetVersionTag(');
+    expect(scriptSource).toContain(`'${vendorThreeManifestUrl}',`);
     expect(scriptSource).not.toContain("'https://unpkg.com/three");
     expect(scriptSource).not.toContain("'https://cdn.jsdelivr.net/npm/three");
   });
