@@ -6557,6 +6557,7 @@
       return manifestAssetCheckState.promise;
     }
     const scope = typeof globalScope !== 'undefined' ? globalScope : globalThis;
+    const failFast = options.failFast === true;
     const fetchImpl =
       (typeof scope.fetch === 'function' && scope.fetch.bind(scope)) ||
       (typeof fetch === 'function' ? fetch : null);
@@ -6874,10 +6875,40 @@
             reachable: summarySnapshot.reachable,
           });
         }
+        if (failFast && status === 'missing' && missing.length > 0) {
+          const manifestSummaryDetail = {
+            reason: 'manifest-assets-missing',
+            missing: missing.map((entry) => ({
+              path: entry.path,
+              status: entry.status,
+              note: entry.note,
+            })),
+            totalMissing: missing.length,
+            manifestUrl: manifestRequestUrl,
+          };
+          const failFastError = new Error(
+            `Manifest assets missing from CDN/S3 deployment (${missing.length} unresolved). Sync asset-manifest.json before relaunching.`,
+          );
+          failFastError.name = 'ManifestAssetAvailabilityError';
+          failFastError.code = 'MANIFEST_ASSETS_MISSING';
+          failFastError.detail = manifestSummaryDetail;
+          failFastError.summary = summarySnapshot;
+          failFastError.isManifestAssetFailFast = true;
+          throw failFastError;
+        }
         return summarySnapshot;
       })
       .catch((error) => {
         manifestAssetCheckState.promise = null;
+        if (failFast && error && error.isManifestAssetFailFast) {
+          if (scope.console?.error) {
+            scope.console.error('Manifest asset availability fail-fast triggered.', {
+              message: error.message,
+              detail: error.detail || null,
+            });
+          }
+          throw error;
+        }
         const now = new Date().toISOString();
         updateManifestAssetCheckState({
           status: 'error',
@@ -28625,12 +28656,32 @@
         if (runningFromFileProtocol) {
           markManifestAssetCheckSkipped('offline-mode');
         } else if (typeof startManifestAssetAvailabilityCheck === 'function') {
+          markBootPhaseActive('assets', 'Checking manifest asset availability…');
           try {
-            startManifestAssetAvailabilityCheck();
-          } catch (error) {
-            if (scope.console?.debug) {
-              scope.console.debug('Failed to initiate manifest asset availability check during bootstrap.', error);
+            const manifestSummary = await startManifestAssetAvailabilityCheck({ failFast: true });
+            if (manifestSummary?.status === 'ok') {
+              markBootPhaseActive('assets', 'Manifest assets verified. Continuing checks…');
+            } else if (manifestSummary?.status === 'skipped') {
+              markBootPhaseWarning('assets', 'Manifest asset availability check skipped.');
+            } else if (manifestSummary?.status === 'error') {
+              markBootPhaseWarning('assets', 'Manifest asset availability check failed. Continuing with cached assets.');
             }
+          } catch (error) {
+            if (error?.isManifestAssetFailFast) {
+              const missingCount =
+                Number.isFinite(error?.detail?.totalMissing)
+                  ? Number(error.detail.totalMissing)
+                  : Array.isArray(error?.summary?.missing)
+                    ? error.summary.missing.length
+                    : null;
+              const message = missingCount && missingCount > 0
+                ? `Manifest asset availability check failed — ${missingCount} asset${missingCount === 1 ? '' : 's'} missing.`
+                : 'Manifest asset availability check failed — required assets are missing.';
+              markBootPhaseError('assets', message);
+            } else {
+              markBootPhaseWarning('assets', 'Manifest asset availability check failed.');
+            }
+            throw error;
           }
         }
         if (startSimple) {
