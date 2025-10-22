@@ -127,9 +127,19 @@ describe('simple experience steve model loading', () => {
     try {
       await experience.loadPlayerCharacter();
 
-      expect(errorSpy).toHaveBeenCalledWith(
-        expect.stringContaining('Player model missing animation channel(s): Idle, Walk'),
-      );
+      expect(errorSpy).not.toHaveBeenCalled();
+      expect(warnSpy).not.toHaveBeenCalled();
+      const failureCount = experience.assetFailureCounts.get('steve') || 0;
+      expect(failureCount).toBeGreaterThan(0);
+      const issueMessages = Array.isArray(experience.majorIssueLog)
+        ? experience.majorIssueLog.map((entry) => entry?.message || '')
+        : [];
+      expect(
+        issueMessages.some((message) =>
+          message.includes('Explorer avatar animation data incomplete') ||
+          message.includes('Explorer avatar unavailable'),
+        ),
+      ).toBe(true);
       expect(experience.playerAvatar).toBeTruthy();
       expect(experience.playerAvatar.userData?.placeholder).toBe(true);
       expect(experience.playerAvatar.userData?.placeholderSource).toBe('missing-animations');
