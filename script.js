@@ -1,2 +1,19 @@
-    'vendor/three.min.js?v=030c75d4e909.015ba65800d2-dirty',
-    const candidates = createAssetUrlCandidates('vendor/GLTFLoader.js?v=0e92b0589a2a.015ba65800d2-dirty');
+'use strict';
+
+function ensureTrailingSlash(value) {
+  if (typeof value !== 'string') {
+    return value;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return trimmed;
+  }
+  return trimmed.endsWith('/') ? trimmed : `${trimmed}/`;
+}
+
+const PRODUCTION_ASSET_ROOT = ensureTrailingSlash('https://d3gj6x3ityfh5o.cloudfront.net/');
+
+module.exports = {
+  PRODUCTION_ASSET_ROOT,
+  ensureTrailingSlash,
+};
