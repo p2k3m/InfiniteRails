@@ -11,6 +11,7 @@
           { key: 'assets', label: 'Assets', defaultMessage: 'Waiting for asset checks…' },
           { key: 'ui', label: 'UI', defaultMessage: 'Preparing interface…' },
           { key: 'gltf', label: 'GLTF', defaultMessage: 'Waiting for model preload…' },
+          { key: 'audio', label: 'Audio', defaultMessage: 'Validating audio samples…' },
           { key: 'controls', label: 'Controls', defaultMessage: 'Binding input controls…' },
         ];
         var bootStatusConfigMap = bootStatusPhases.reduce(function (acc, config) {
