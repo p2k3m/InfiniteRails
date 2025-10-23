@@ -148,4 +148,31 @@ describe('simple experience input handlers', () => {
 
     expect(recoverySpy).toHaveBeenCalledWith('keyboard-escape');
   });
+
+  it('observes input bindings and validates keyboard and mouse propagation', () => {
+    const { experience } = createInputTestExperience();
+    experience.pointerLocked = false;
+    experience.getPointerLockElement = vi.fn(() => null);
+    experience.beginPointerFallbackDrag = vi.fn();
+    experience.updatePointerHintForInputMode = vi.fn();
+    experience.attemptPointerLock = vi.fn();
+    experience.mineBlock = vi.fn();
+    experience.placeBlock = vi.fn();
+
+    const observation = experience.observeInputBindings({ reason: 'unit-test' });
+
+    expect(observation.reason).toBe('unit-test');
+    expect(observation.bound).toBe(true);
+    expect(observation.coverage.keyboard).toBe(true);
+    expect(observation.coverage.mouse).toBe(true);
+    expect(observation.coverage.touch).toBe(true);
+    expect(observation.propagation.keydown.handled).toBe(true);
+    expect(observation.propagation.keydown.flagged).toBe(true);
+    expect(observation.propagation.click.handled).toBe(true);
+    expect(observation.propagation.click.prevented).toBe(true);
+    expect(observation.propagation.click.effects.pointerLock).toBe(true);
+    expect(observation.propagation.click.effects.mine).toBe(true);
+    expect(observation.bindingFailures).toEqual([]);
+    expect(experience.lastInputBindingObservation?.reason).toBe('unit-test');
+  });
 });
