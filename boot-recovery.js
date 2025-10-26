@@ -164,3 +164,284 @@
     triggerBootReload,
   };
 })(this);
+
+(function installDefaultAudioFallback(globalScope) {
+  const scope =
+    globalScope ||
+    (typeof window !== 'undefined'
+      ? window
+      : typeof globalThis !== 'undefined'
+        ? globalThis
+        : null);
+  if (!scope || scope.__INFINITE_RAILS_AUDIO_FALLBACK__) {
+    return;
+  }
+
+  scope.__INFINITE_RAILS_AUDIO_FALLBACK__ = true;
+
+  const consoleRef = scope.console || (typeof console !== 'undefined' ? console : null);
+  const eventTarget =
+    typeof scope.addEventListener === 'function'
+      ? scope
+      : typeof scope.document?.addEventListener === 'function'
+        ? scope.document
+        : null;
+
+  if (!eventTarget) {
+    return;
+  }
+
+  function createBeepDataUri() {
+    const sampleRate = 8000;
+    const samples = 1200;
+    const frequency = 880;
+    const amplitude = 0.6;
+    const headerSize = 44;
+    const dataSize = samples * 2;
+    const buffer = new ArrayBuffer(headerSize + dataSize);
+    const view = new DataView(buffer);
+
+    const writeString = (offset, text) => {
+      for (let index = 0; index < text.length; index += 1) {
+        view.setUint8(offset + index, text.charCodeAt(index));
+      }
+    };
+
+    writeString(0, 'RIFF');
+    view.setUint32(4, headerSize + dataSize - 8, true);
+    writeString(8, 'WAVE');
+    writeString(12, 'fmt ');
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, 1, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * 2, true);
+    view.setUint16(32, 2, true);
+    view.setUint16(34, 16, true);
+    writeString(36, 'data');
+    view.setUint32(40, dataSize, true);
+
+    const dataView = new DataView(buffer, headerSize);
+    for (let sampleIndex = 0; sampleIndex < samples; sampleIndex += 1) {
+      const rawSample = Math.sin((2 * Math.PI * frequency * sampleIndex) / sampleRate);
+      const bounded = Math.max(-1, Math.min(1, rawSample * amplitude));
+      dataView.setInt16(sampleIndex * 2, bounded * 0x7fff, true);
+    }
+
+    const bytes = new Uint8Array(buffer);
+    let binary = '';
+    const chunkSize = 0x8000;
+    for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+      const slice = bytes.subarray(offset, offset + chunkSize);
+      binary += String.fromCharCode(...slice);
+    }
+
+    if (typeof btoa === 'function') {
+      return `data:audio/wav;base64,${btoa(binary)}`;
+    }
+
+    if (typeof Buffer !== 'undefined') {
+      return `data:audio/wav;base64,${Buffer.from(bytes).toString('base64')}`;
+    }
+
+    return 'data:audio/wav;base64,';
+  }
+
+  const beepDataUri = createBeepDataUri();
+  const audioCtor = scope.Audio;
+  const fallbackPool = [];
+
+  const acquireFallbackAudio = () => {
+    if (typeof audioCtor !== 'function') {
+      return null;
+    }
+
+    const reusable = fallbackPool.find((entry) => entry && typeof entry.pause === 'function' && entry.paused !== false);
+    if (reusable) {
+      return reusable;
+    }
+
+    try {
+      const element = new audioCtor(beepDataUri);
+      element.preload = 'auto';
+      element.loop = false;
+      element.volume = 0.6;
+      if (element.dataset) {
+        element.dataset.infiniteRailsAudioFallback = 'beep';
+      }
+      const resetPlayback = () => {
+        try {
+          element.currentTime = 0;
+        } catch (error) {
+          if (consoleRef && typeof consoleRef.debug === 'function') {
+            consoleRef.debug('Failed to reset fallback beep playback position.', error);
+          }
+        }
+      };
+      element.addEventListener('ended', resetPlayback);
+      element.addEventListener('error', resetPlayback);
+      fallbackPool.push(element);
+      return element;
+    } catch (error) {
+      if (consoleRef && typeof consoleRef.debug === 'function') {
+        consoleRef.debug('Unable to create fallback Audio element.', error);
+      }
+    }
+
+    return null;
+  };
+
+  const playFallbackBeep = (detail = {}) => {
+    const element = acquireFallbackAudio();
+    if (!element) {
+      return false;
+    }
+
+    const normalisedVolume = Math.max(0, Math.min(1, Number(detail.volume)));
+    if (Number.isFinite(normalisedVolume)) {
+      element.volume = normalisedVolume;
+    }
+
+    try {
+      element.currentTime = 0;
+    } catch (error) {}
+
+    const result = typeof element.play === 'function' ? element.play() : null;
+    if (result && typeof result.catch === 'function') {
+      result.catch((error) => {
+        if (consoleRef && typeof consoleRef.debug === 'function') {
+          consoleRef.debug('Fallback beep playback failed.', error);
+        }
+      });
+    }
+    return true;
+  };
+
+  const normaliseName = (value) => {
+    if (typeof value !== 'string') {
+      return '';
+    }
+    const trimmed = value.trim();
+    return trimmed.length ? trimmed : '';
+  };
+
+  const buildDetailSummary = (detail, message) => {
+    const summary = {
+      code: typeof detail.code === 'string' ? detail.code : undefined,
+      requestedName: normaliseName(detail.requestedName),
+      resolvedName: normaliseName(detail.resolvedName),
+      fallbackActive: true,
+      missingSample: detail.missingSample === true,
+      message,
+    };
+    if (detail.fallbackBeep && typeof detail.fallbackBeep === 'object') {
+      summary.fallbackBeep = detail.fallbackBeep;
+    }
+    return summary;
+  };
+
+  const reportFallback = (detail, message) => {
+    if (consoleRef && typeof consoleRef.error === 'function') {
+      try {
+        consoleRef.error(message, detail);
+      } catch (error) {
+        consoleRef.error(message);
+      }
+    }
+
+    const overlay = scope.bootstrapOverlay;
+    if (!overlay) {
+      return;
+    }
+
+    const summary = buildDetailSummary(detail, message);
+
+    if (typeof overlay.showError === 'function') {
+      try {
+        overlay.showError({ title: 'Missing audio sample', message, detail: summary });
+      } catch (error) {
+        if (consoleRef && typeof consoleRef.debug === 'function') {
+          consoleRef.debug('Failed to present audio fallback overlay error.', error);
+        }
+      }
+    }
+
+    if (typeof overlay.setDiagnostic === 'function') {
+      try {
+        overlay.setDiagnostic('audio', { status: 'error', message, detail: summary });
+      } catch (error) {
+        if (consoleRef && typeof consoleRef.debug === 'function') {
+          consoleRef.debug('Failed to set audio diagnostic entry.', error);
+        }
+      }
+    }
+
+    if (typeof overlay.logEvent === 'function') {
+      try {
+        overlay.logEvent('audio', message, { level: 'error', detail: summary });
+      } catch (error) {
+        if (consoleRef && typeof consoleRef.debug === 'function') {
+          consoleRef.debug('Failed to log audio fallback event.', error);
+        }
+      }
+    }
+  };
+
+  const handleAudioError = (event) => {
+    const detail = event?.detail && typeof event.detail === 'object' ? event.detail : {};
+    if (detail.__defaultAudioFallbackHandled) {
+      return;
+    }
+
+    const code = typeof detail.code === 'string' ? detail.code : '';
+    const missingSample = detail.missingSample === true || code === 'missing-sample';
+    const playbackFailure = detail.loadFailed === true || code === 'playback-failed';
+    if (!missingSample && !playbackFailure) {
+      return;
+    }
+
+    detail.__defaultAudioFallbackHandled = true;
+    detail.fallbackActive = true;
+    if (missingSample) {
+      detail.missingSample = true;
+    }
+    if (!detail.fallbackBeep || typeof detail.fallbackBeep !== 'object') {
+      detail.fallbackBeep = { source: 'default', dataUri: beepDataUri };
+    }
+
+    const resolvedName = normaliseName(detail.resolvedName);
+    const requestedName = normaliseName(detail.requestedName);
+    const sampleName = resolvedName || requestedName || 'audio sample';
+    const reason = missingSample ? 'is unavailable' : 'could not be loaded';
+    const message = `Audio sample "${sampleName}" ${reason}. Playing fallback beep instead.`;
+    detail.fallbackMessage = message;
+
+    reportFallback(detail, message);
+    playFallbackBeep(detail);
+  };
+
+  eventTarget.addEventListener('infinite-rails:audio-error', handleAudioError, { passive: true });
+
+  const exposeFallbackApi = () => {
+    const existing = scope.InfiniteRails && scope.InfiniteRails.audioFallback;
+    const api = {
+      getBeepDataUri: () => beepDataUri,
+      playBeep: (options) => playFallbackBeep(options || {}),
+      handleAudioError: (detail) => handleAudioError({ detail: detail || {} }),
+    };
+
+    if (!scope.InfiniteRails || typeof scope.InfiniteRails !== 'object') {
+      scope.InfiniteRails = {};
+    }
+
+    if (existing && typeof existing === 'object') {
+      existing.getBeepDataUri = api.getBeepDataUri;
+      existing.playBeep = api.playBeep;
+      existing.handleAudioError = api.handleAudioError;
+    } else {
+      scope.InfiniteRails.audioFallback = api;
+    }
+  };
+
+  exposeFallbackApi();
+})(this);
