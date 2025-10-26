@@ -99,6 +99,9 @@ describe('backend live-check', () => {
       if (url === `${apiBaseUrl}/scores` && method === 'POST') {
         return Promise.resolve({ ok: true, status: 200 });
       }
+      if (url === `${apiBaseUrl}/users` && method === 'GET') {
+        return Promise.resolve({ ok: true, status: 200 });
+      }
       if (url === `${apiBaseUrl}/users` && method === 'POST') {
         return Promise.resolve({ ok: false, status: 500 });
       }
@@ -121,6 +124,7 @@ describe('backend live-check', () => {
       expect.arrayContaining([
         `GET ${apiBaseUrl}/scores`,
         `POST ${apiBaseUrl}/scores`,
+        `GET ${apiBaseUrl}/users`,
         `POST ${apiBaseUrl}/users`,
         `POST ${apiBaseUrl}/events`,
       ]),
@@ -210,6 +214,9 @@ describe('backend live-check', () => {
         return Promise.resolve({ ok: true, status: 200 });
       }
       if (url === `${apiBaseUrl}/scores` && method === 'POST') {
+        return Promise.resolve({ ok: true, status: 200 });
+      }
+      if (url === `${apiBaseUrl}/users` && method === 'GET') {
         return Promise.resolve({ ok: true, status: 200 });
       }
       if (url === `${apiBaseUrl}/users` && method === 'POST') {
