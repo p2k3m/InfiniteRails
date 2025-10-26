@@ -1,3 +1,21 @@
+  function ensureTrailingSlash(value) {
+    const raw = typeof value === 'string' ? value.trim() : '';
+    if (!raw) {
+      return '';
+    }
+    if (typeof URL === 'function') {
+      try {
+        const normalised = new URL(raw).toString();
+        return normalised.endsWith('/') ? normalised : `${normalised}/`;
+      } catch (error) {}
+    }
+    return raw.endsWith('/') ? raw : `${raw}/`;
+  }
+
+  const PRODUCTION_ASSET_ROOT = ensureTrailingSlash(
+    'https://d3gj6x3ityfh5o.cloudfront.net/',
+  );
+
   const essentialPanelFallbackState = {
     active: false,
     cleanupFns: [],
