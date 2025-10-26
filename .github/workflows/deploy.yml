@@ -144,6 +144,7 @@ jobs:
             --include "controls.config.js" \
             --include "downlevel-polyfills.js" \
             --include "bootstrap-fallback.js" \
+            --include "boot-recovery.js" \
             --include "portal-mechanics.js" \
             --include "scoreboard-utils.js" \
             --include "assets/**" \
