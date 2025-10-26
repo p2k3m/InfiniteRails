@@ -1,3 +1,16 @@
+function ensureTrailingSlash(value) {
+  if (!value || typeof value !== 'string') {
+    return value;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return trimmed;
+  }
+  return trimmed.endsWith('/') ? trimmed : `${trimmed}/`;
+}
+
+const PRODUCTION_ASSET_ROOT = ensureTrailingSlash('https://d3gj6x3ityfh5o.cloudfront.net/');
+
     message = 'An unexpected error occurred. Open Diagnostics → Recovery to run “Safe Restart”.',
       userMessage: 'The game failed to initialise. Open Diagnostics → Recovery and run “Safe Restart”.',
       diagnosticMessage: 'Bootstrap sequence failed. Run Safe Restart from Diagnostics.',
