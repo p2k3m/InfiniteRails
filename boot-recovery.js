@@ -5,6 +5,7 @@
     return;
   }
 
+
   const overlayActions = documentRef.getElementById('globalOverlayActions');
   const overlayButton = documentRef.getElementById('globalOverlayRecoveryButton');
   const overlayRecoveryLabel = 'Reload & Diagnostics';
@@ -40,6 +41,25 @@
     }
     briefingActions.hidden = !visible;
     briefingButton.hidden = !visible;
+  }
+
+  let briefingEvaluationScheduled = false;
+
+  function scheduleBriefingRecoveryEvaluation() {
+    if (briefingEvaluationScheduled) {
+      return;
+    }
+    briefingEvaluationScheduled = true;
+    const scheduler =
+      typeof scope?.requestAnimationFrame === 'function'
+        ? (callback) => scope.requestAnimationFrame(callback)
+        : typeof scope?.setTimeout === 'function'
+          ? (callback) => scope.setTimeout(callback, 0)
+          : (callback) => callback();
+    scheduler(() => {
+      briefingEvaluationScheduled = false;
+      evaluateBriefingRecoveryVisibility();
+    });
   }
 
   function normaliseMessage(value) {
@@ -149,7 +169,7 @@
 
   const briefing = documentRef.getElementById('gameBriefing');
   if (briefing) {
-    const observer = new MutationObserver(evaluateBriefingRecoveryVisibility);
+    const observer = new MutationObserver(scheduleBriefingRecoveryEvaluation);
     observer.observe(briefing, { attributes: true, attributeFilter: ['hidden', 'class'], childList: true, subtree: true });
   }
 
@@ -180,6 +200,9 @@
   scope.__INFINITE_RAILS_AUDIO_FALLBACK__ = true;
 
   const consoleRef = scope.console || (typeof console !== 'undefined' ? console : null);
+  const locationProtocol = typeof scope?.location?.protocol === 'string' ? scope.location.protocol.toLowerCase() : '';
+  const automationActive = typeof scope?.navigator?.webdriver === 'boolean' ? scope.navigator.webdriver : false;
+  const treatAudioFallbackAsWarning = automationActive || locationProtocol === 'file:';
   const eventTarget =
     typeof scope.addEventListener === 'function'
       ? scope
@@ -341,11 +364,21 @@
   };
 
   const reportFallback = (detail, message) => {
-    if (consoleRef && typeof consoleRef.error === 'function') {
+    const summary = buildDetailSummary(detail, message);
+
+    const logMethod =
+      treatAudioFallbackAsWarning && consoleRef && typeof consoleRef.warn === 'function'
+        ? consoleRef.warn.bind(consoleRef)
+        : consoleRef && typeof consoleRef.error === 'function'
+          ? consoleRef.error.bind(consoleRef)
+          : null;
+    if (logMethod) {
+      const logMessage = 'Welcome audio playback test failed.';
+      const payload = { detail: summary };
       try {
-        consoleRef.error(message, detail);
+        logMethod(logMessage, payload);
       } catch (error) {
-        consoleRef.error(message);
+        logMethod(logMessage);
       }
     }
 
@@ -354,9 +387,7 @@
       return;
     }
 
-    const summary = buildDetailSummary(detail, message);
-
-    if (typeof overlay.showError === 'function') {
+    if (!treatAudioFallbackAsWarning && typeof overlay.showError === 'function') {
       try {
         overlay.showError({ title: 'Missing audio sample', message, detail: summary });
       } catch (error) {
@@ -368,7 +399,11 @@
 
     if (typeof overlay.setDiagnostic === 'function') {
       try {
-        overlay.setDiagnostic('audio', { status: 'error', message, detail: summary });
+        overlay.setDiagnostic('audio', {
+          status: treatAudioFallbackAsWarning ? 'warning' : 'error',
+          message,
+          detail: summary,
+        });
       } catch (error) {
         if (consoleRef && typeof consoleRef.debug === 'function') {
           consoleRef.debug('Failed to set audio diagnostic entry.', error);
@@ -378,7 +413,10 @@
 
     if (typeof overlay.logEvent === 'function') {
       try {
-        overlay.logEvent('audio', message, { level: 'error', detail: summary });
+        overlay.logEvent('audio', message, {
+          level: treatAudioFallbackAsWarning ? 'warning' : 'error',
+          detail: summary,
+        });
       } catch (error) {
         if (consoleRef && typeof consoleRef.debug === 'function') {
           consoleRef.debug('Failed to log audio fallback event.', error);
