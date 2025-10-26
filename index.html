@@ -204,6 +204,11 @@
                 <span class="game-briefing__keys" id="briefingPlaceKeys">Q · R</span>
               </div>
             </div>
+            <div class="game-briefing__support" id="gameBriefingSupportActions" hidden>
+              <button type="button" class="game-briefing__support-button" id="gameBriefingRecoveryButton" hidden>
+                Reload &amp; Diagnostics
+              </button>
+            </div>
             <button type="button" class="game-briefing__dismiss" id="dismissBriefing">Begin the run</button>
           </div>
         </div>
@@ -1882,6 +1887,7 @@
     </footer>
 
     <script src="assets/offline-assets.js?v=9be2b637059b.2adb1ccde54a-dirty" defer></script>
+    <script src="boot-recovery.js" defer></script>
     <script src="script.js?v=30fe496ae7dd.2adb1ccde54a-dirty" defer></script>
     <div class="caption-layer" id="captionOverlay" role="status" aria-live="assertive" aria-atomic="true" hidden>
       <p class="caption-layer__text" id="captionOverlayText"></p>
