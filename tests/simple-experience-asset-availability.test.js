@@ -11,11 +11,13 @@ describe('SimpleExperience critical asset availability', () => {
     experience.collectCriticalModelEntries = vi.fn(() => [
       { key: 'steve', url: 'https://assets.example.com/steve.gltf' },
     ]);
+    experience.collectCriticalAudioSampleNames = vi.fn(() => ['bubble']);
 
     const sourceMap = {
       'texture:grass': ['https://assets.example.com/grass.png'],
       'texture:missing-texture': ['https://assets.example.com/missing.png'],
       steve: ['https://assets.example.com/steve.gltf'],
+      'audio:bubble': ['https://assets.example.com/audio/bubble.mp3'],
     };
 
     experience.resolveAssetSourceCandidates = vi.fn((key) => {
@@ -36,6 +38,9 @@ describe('SimpleExperience critical asset availability', () => {
         }
         return Promise.resolve({ ok: true, status: 206, type: 'basic' });
       }
+      if (url.includes('bubble.mp3')) {
+        return Promise.resolve({ ok: false, status: 404, type: 'basic' });
+      }
       return Promise.resolve({ ok: false, status: 500, type: 'basic' });
     });
 
@@ -48,8 +53,11 @@ describe('SimpleExperience critical asset availability', () => {
     expect(fetchMock).toHaveBeenCalled();
     expect(summary.status).toBe('missing');
     expect(summary.missing).toContain('texture:missing-texture');
+    expect(summary.missing).toContain('audio:bubble');
     expect(summary.reachable).toBeGreaterThanOrEqual(2);
     expect(consoleWarn).toHaveBeenCalled();
+    const warningMessages = consoleWarn.mock.calls.map(([message]) => String(message));
+    expect(warningMessages.some((message) => message.includes('Audio availability check detected'))).toBe(true);
 
     consoleWarn.mockRestore();
     consoleInfo.mockRestore();
