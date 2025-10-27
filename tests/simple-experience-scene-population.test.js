@@ -222,6 +222,9 @@ describe('simple experience scene population', () => {
     expect(summary.steve.present).toBe(true);
     expect(summary.mobs.present).toBe(true);
     expect(summary.mobs.total).toBeGreaterThan(0);
+    expect(summary.interactive.present).toBe(true);
+    expect(summary.interactive.chestCount).toBeGreaterThan(0);
+    expect(summary.interactive.groups.chestsAttached).toBe(true);
     expect(experience.terrainChunkGroups.length).toBeGreaterThan(0);
     expect(experience.chestGroup).toBeTruthy();
     expect(experience.chestGroup.children.length).toBeGreaterThan(0);
