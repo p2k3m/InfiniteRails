@@ -2,6 +2,9 @@ name: Auto pipeline fixer
 
 on:
   workflow_run:
+    workflows:
+      - Deploy to AWS
+      - Per-commit asset audit
     types:
       - completed
 
