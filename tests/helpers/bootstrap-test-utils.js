@@ -442,6 +442,15 @@ export function evaluateBootstrapScript(sandbox) {
   vm.runInContext(source, sandbox);
 }
 
+export function evaluateBootRecoveryScript(sandbox) {
+  const __filename = fileURLToPath(import.meta.url);
+  const __dirname = path.dirname(__filename);
+  const scriptPath = path.resolve(__dirname, '..', '..', 'boot-recovery.js');
+  const source = fs.readFileSync(scriptPath, 'utf8');
+  vm.createContext(sandbox);
+  vm.runInContext(source, sandbox);
+}
+
 export async function flushMicrotasks() {
   await Promise.resolve();
   await Promise.resolve();
