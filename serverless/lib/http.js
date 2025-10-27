@@ -33,7 +33,7 @@ const DEFAULT_HEADERS = {
   ...SECURITY_HEADERS,
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'Content-Type,Authorization,X-Requested-With',
-  'Access-Control-Allow-Methods': 'OPTIONS,GET,POST',
+  'Access-Control-Allow-Methods': 'OPTIONS,GET,POST,HEAD',
 };
 
 function mergeHeaders(base, extra) {

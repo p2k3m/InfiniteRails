@@ -9,6 +9,7 @@ This directory packages the optional AWS backend that powers Google-authenticate
 - **UsersTable** – Pay-per-request DynamoDB table storing explorer profiles.
 - **ScoresTable** – Pay-per-request DynamoDB table storing leaderboard entries. A GSI named `ScoreIndex` keeps the highest scores at the top by sorting on the negated score.
 - **DiagnosticsFunction (`/diagnostics`, POST)** – Captures critical runtime diagnostics emitted by the browser client. When the handler observes repeated boot or asset failures from multiple sessions within a short window it publishes an incident notification email to the support contact.
+- **HealthFunction (`/health`, GET & HEAD)** – Exposes a lightweight JSON heartbeat so operators can monitor deployment metadata, configuration coverage, and Lambda uptime.
 - **IncidentCountersTable** – Pay-per-request DynamoDB table that aggregates recent critical incidents for boot and asset scopes with TTL-backed session tracking and notification cooldown metadata.
 - **IncidentNotificationsTopic** – SNS topic wired to the support email address. Diagnostics ingestion publishes to this topic when the critical incident threshold is met.
 
