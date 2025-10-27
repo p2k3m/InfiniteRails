@@ -44,14 +44,23 @@
             <span data-error-count>0</span>
           </span>
         </div>
-        <button
-          type="button"
-          class="error-console__dismiss"
-          data-error-dismiss
-          aria-label="Dismiss error console"
-        >
-          <span aria-hidden="true">×</span>
-        </button>
+        <div class="error-console__actions">
+          <button
+            type="button"
+            class="error-console__download"
+            data-error-download
+          >
+            Download Session Log
+          </button>
+          <button
+            type="button"
+            class="error-console__dismiss"
+            data-error-dismiss
+            aria-label="Dismiss error console"
+          >
+            <span aria-hidden="true">×</span>
+          </button>
+        </div>
       </div>
       <div class="error-console__body">
         <ul class="error-console__list" data-error-console-list role="list"></ul>

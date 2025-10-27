@@ -41,6 +41,104 @@ const PRODUCTION_ASSET_ROOT = ensureTrailingSlash('https://d3gj6x3ityfh5o.cloudf
 
   const countRef = overlay.querySelector('[data-error-count]');
   const dismissButton = overlay.querySelector('[data-error-dismiss]');
+  const downloadButton = overlay.querySelector('[data-error-download]');
+  const MAX_ERROR_HISTORY = 200;
+  const MAX_ACTION_HISTORY = 240;
+  const MAX_DIAGNOSTIC_HISTORY = 200;
+
+  const sessionState = {
+    errors: [],
+    actions: [],
+    diagnostics: [],
+    lastDownload: null,
+  };
+
+  const namespace =
+    scope.InfiniteRails && typeof scope.InfiniteRails === 'object'
+      ? scope.InfiniteRails
+      : (scope.InfiniteRails = {});
+  const logsApi =
+    namespace.logs && typeof namespace.logs === 'object' ? namespace.logs : {};
+
+  const pushWithLimit = (collection, entry, limit) => {
+    if (!Array.isArray(collection)) {
+      return;
+    }
+    collection.push(entry);
+    if (collection.length > limit) {
+      collection.splice(0, collection.length - limit);
+    }
+  };
+
+  const toIsoString = (value) => {
+    try {
+      if (value instanceof Date) {
+        return value.toISOString();
+      }
+      if (typeof value === 'number' && Number.isFinite(value)) {
+        return new Date(value).toISOString();
+      }
+      if (typeof value === 'string' && value.trim().length) {
+        const parsed = new Date(value);
+        if (!Number.isNaN(parsed.getTime())) {
+          return parsed.toISOString();
+        }
+      }
+      return new Date().toISOString();
+    } catch (error) {
+      try {
+        return new Date().toISOString();
+      } catch (secondaryError) {
+        return String(value);
+      }
+    }
+  };
+
+  function cloneForSnapshot(value, depth = 0, seen = new WeakSet()) {
+    if (value == null) {
+      return null;
+    }
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+      return value;
+    }
+    if (value instanceof Date) {
+      return value.toISOString();
+    }
+    if (value instanceof Error) {
+      return {
+        name: value.name,
+        message: value.message,
+        stack: typeof value.stack === 'string' ? value.stack : undefined,
+      };
+    }
+    if (typeof value === 'function') {
+      return `[Function ${value.name || 'anonymous'}]`;
+    }
+    if (depth > 4) {
+      return Object.prototype.toString.call(value);
+    }
+    if (Array.isArray(value)) {
+      return value.slice(0, 100).map((item) => cloneForSnapshot(item, depth + 1, seen));
+    }
+    if (typeof value === 'object') {
+      if (seen.has(value)) {
+        return '[Circular]';
+      }
+      seen.add(value);
+      const output = {};
+      for (const key of Object.keys(value)) {
+        output[key] = cloneForSnapshot(value[key], depth + 1, seen);
+      }
+      seen.delete(value);
+      return output;
+    }
+    try {
+      return JSON.parse(JSON.stringify(value));
+    } catch (error) {
+      return String(value);
+    }
+  }
+
   const maxEntries = 20;
   let totalCount = 0;
   let dismissedUntilNextError = false;
@@ -89,6 +187,173 @@ const PRODUCTION_ASSET_ROOT = ensureTrailingSlash('https://d3gj6x3ityfh5o.cloudf
       return `${value.slice(0, 6000)}…`;
     }
     return value;
+  };
+
+  const storeSessionError = (entry) => {
+    const snapshot = {
+      source: ensureString(entry.source) || 'Console',
+      message: ensureString(entry.message) || 'An unknown error occurred.',
+      detail: trimDetail(entry.detail || ''),
+      timestamp: entry.timestamp instanceof Date ? entry.timestamp : new Date(entry.timestamp ?? Date.now()),
+    };
+    pushWithLimit(sessionState.errors, snapshot, MAX_ERROR_HISTORY);
+    return snapshot;
+  };
+
+  const storeSessionAction = (action, detail = {}, metadata = {}) => {
+    const snapshot = {
+      action: ensureString(action) || 'unknown-action',
+      detail: cloneForSnapshot(detail),
+      metadata: cloneForSnapshot(metadata),
+      timestamp: new Date(),
+    };
+    pushWithLimit(sessionState.actions, snapshot, MAX_ACTION_HISTORY);
+    return snapshot;
+  };
+
+  const storeSessionDiagnostic = (category, message, detail = {}) => {
+    const snapshot = {
+      category: ensureString(category) || 'general',
+      message: ensureString(message) || 'Diagnostic update recorded.',
+      detail: cloneForSnapshot(detail),
+      timestamp: new Date(),
+    };
+    pushWithLimit(sessionState.diagnostics, snapshot, MAX_DIAGNOSTIC_HISTORY);
+    return snapshot;
+  };
+
+  const snapshotErrors = () =>
+    sessionState.errors.map((entry) => ({
+      source: entry.source,
+      message: entry.message,
+      detail: entry.detail,
+      timestamp: entry.timestamp instanceof Date ? entry.timestamp.toISOString() : toIsoString(entry.timestamp),
+    }));
+
+  const snapshotActions = () =>
+    sessionState.actions.map((entry) => ({
+      action: entry.action,
+      detail: cloneForSnapshot(entry.detail),
+      metadata: cloneForSnapshot(entry.metadata),
+      timestamp: entry.timestamp instanceof Date ? entry.timestamp.toISOString() : toIsoString(entry.timestamp),
+    }));
+
+  const snapshotDiagnostics = () =>
+    sessionState.diagnostics.map((entry) => ({
+      category: entry.category,
+      message: entry.message,
+      detail: cloneForSnapshot(entry.detail),
+      timestamp: entry.timestamp instanceof Date ? entry.timestamp.toISOString() : toIsoString(entry.timestamp),
+    }));
+
+  const buildSessionMetadata = () => ({
+    url: typeof scope.location?.href === 'string' ? scope.location.href : null,
+    userAgent: typeof scope.navigator?.userAgent === 'string' ? scope.navigator.userAgent : null,
+    errorCount: sessionState.errors.length,
+    actionCount: sessionState.actions.length,
+    diagnosticCount: sessionState.diagnostics.length,
+  });
+
+  const exportSessionLog = (options = {}) => {
+    const generatedAt = new Date();
+    const includeDiagnostics = options.includeDiagnostics !== false;
+    const snapshot = {
+      version: 1,
+      generatedAt: generatedAt.toISOString(),
+      metadata: buildSessionMetadata(),
+      errors: snapshotErrors(),
+      actions: snapshotActions(),
+      diagnostics: includeDiagnostics ? snapshotDiagnostics() : [],
+    };
+    return snapshot;
+  };
+
+  const triggerSessionLogDownload = (options = {}) => {
+    const result = exportSessionLog(options);
+    const json = JSON.stringify(result, null, 2);
+    const timestampLabel = result.generatedAt.replace(/[:.]/g, '-');
+    const filename =
+      typeof options.filename === 'string' && options.filename.trim().length
+        ? options.filename.trim()
+        : `infinite-rails-session-log-${timestampLabel}.json`;
+
+    let href = null;
+    let revoke = null;
+
+    if (typeof Blob === 'function' && scope.URL && typeof scope.URL.createObjectURL === 'function') {
+      try {
+        const blob = new Blob([json], { type: 'application/json' });
+        href = scope.URL.createObjectURL(blob);
+        revoke = () => {
+          try {
+            scope.URL.revokeObjectURL(href);
+          } catch (error) {
+            if (scope.console && typeof scope.console.debug === 'function') {
+              scope.console.debug('Failed to revoke session log object URL.', error);
+            }
+          }
+        };
+      } catch (error) {
+        if (scope.console && typeof scope.console.debug === 'function') {
+          scope.console.debug('Falling back to data URI for session log.', error);
+        }
+      }
+    }
+
+    if (!href) {
+      href = `data:application/json;charset=utf-8,${encodeURIComponent(json)}`;
+    }
+
+    if (documentRef && typeof documentRef.createElement === 'function') {
+      const anchor = documentRef.createElement('a');
+      if (anchor) {
+        try {
+          if (typeof anchor.setAttribute === 'function') {
+            anchor.setAttribute('href', href);
+            anchor.setAttribute('download', filename);
+          } else {
+            anchor.href = href;
+            anchor.download = filename;
+          }
+          if (typeof anchor.click === 'function') {
+            anchor.click();
+          } else if (anchor.dispatchEvent) {
+            try {
+              const MouseEventCtor = scope.MouseEvent || scope.Event;
+              if (typeof MouseEventCtor === 'function') {
+                anchor.dispatchEvent(new MouseEventCtor('click', { bubbles: true, cancelable: true }));
+              } else {
+                anchor.dispatchEvent({ type: 'click' });
+              }
+            } catch (error) {
+              anchor.dispatchEvent({ type: 'click' });
+            }
+          }
+        } catch (error) {
+          if (scope.console && typeof scope.console.error === 'function') {
+            scope.console.error('Failed to trigger session log download.', error);
+          }
+        }
+      }
+    }
+
+    if (revoke) {
+      const schedule = typeof scope.setTimeout === 'function' ? scope.setTimeout.bind(scope) : null;
+      if (schedule) {
+        schedule(revoke, 2000);
+      } else {
+        revoke();
+      }
+    }
+
+    sessionState.lastDownload = {
+      snapshot: result,
+      json,
+      href,
+      filename,
+    };
+
+    return { snapshot: result, json, href, filename };
   };
 
   const timeFormatter =
@@ -217,6 +482,7 @@ const PRODUCTION_ASSET_ROOT = ensureTrailingSlash('https://d3gj6x3ityfh5o.cloudf
       detail: trimDetail(detail || ''),
       timestamp: new Date(),
     };
+    storeSessionError(entry);
     appendEntry(entry);
   };
 
@@ -298,14 +564,74 @@ const PRODUCTION_ASSET_ROOT = ensureTrailingSlash('https://d3gj6x3ityfh5o.cloudf
     scope.addEventListener('unhandledrejection', captureUnhandledRejection);
   }
 
+  logsApi.getEntries = () => snapshotErrors();
+  logsApi.getActions = () => snapshotActions();
+  logsApi.getDiagnostics = () => snapshotDiagnostics();
+  logsApi.recordAction = (action, detail = {}, metadata = {}) => {
+    return storeSessionAction(action, detail, metadata);
+  };
+  logsApi.recordDiagnostic = (category, message, detail = {}) => {
+    return storeSessionDiagnostic(category, message, detail);
+  };
+  logsApi.recordError = (message, options = {}) => {
+    recordEntry({
+      source: ensureString(options.source) || 'Manual',
+      message: ensureString(message),
+      detail: ensureString(options.detail),
+    });
+  };
+  logsApi.record = logsApi.recordError;
+  logsApi.exportSessionLog = (options = {}) => exportSessionLog(options);
+  logsApi.downloadSessionLog = (options = {}) => triggerSessionLogDownload(options);
+  logsApi.getLastDownloadMetadata = () => {
+    if (!sessionState.lastDownload) {
+      return null;
+    }
+    try {
+      return JSON.parse(JSON.stringify(sessionState.lastDownload));
+    } catch (error) {
+      return {
+        filename: sessionState.lastDownload.filename,
+        href: sessionState.lastDownload.href,
+        snapshot: sessionState.lastDownload.snapshot,
+        json: sessionState.lastDownload.json,
+      };
+    }
+  };
+
+  namespace.logs = logsApi;
+
+  const handleDownloadClick = (event) => {
+    if (event?.preventDefault) {
+      event.preventDefault();
+    }
+    try {
+      showOverlay(true);
+      logsApi.downloadSessionLog();
+    } catch (error) {
+      if (scope.console && typeof scope.console.error === 'function') {
+        scope.console.error('Failed to download session log.', error);
+      }
+    }
+  };
+
+  if (downloadButton && typeof downloadButton.addEventListener === 'function') {
+    downloadButton.addEventListener('click', handleDownloadClick);
+  }
+
+  const testHooks = scope.__INFINITE_RAILS_TEST_HOOKS__ ?? {};
+  testHooks.getErrorConsoleEntries = snapshotErrors;
+  testHooks.getSessionLogSnapshot = (options) => exportSessionLog(options);
+  testHooks.triggerSessionLogDownload = (options) => triggerSessionLogDownload(options);
+  scope.__INFINITE_RAILS_TEST_HOOKS__ = testHooks;
+
   scope.__INFINITE_RAILS_ERROR_CONSOLE__ = {
     record: (message, options = {}) => {
-      recordEntry({
-        source: ensureString(options.source) || 'Manual',
-        message: ensureString(message),
-        detail: ensureString(options.detail),
-      });
+      logsApi.recordError(message, options);
     },
+    exportSessionLog: (options = {}) => exportSessionLog(options),
+    downloadSessionLog: (options = {}) => triggerSessionLogDownload(options),
+    getEntries: () => snapshotErrors(),
   };
 })(typeof window !== 'undefined' ? window : undefined);
 

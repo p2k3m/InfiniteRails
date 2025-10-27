@@ -249,6 +249,39 @@ body[data-color-mode='light'] {
   font-weight: 600;
 }
 
+.error-console__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.error-console__download {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.35rem 0.9rem;
+  border: none;
+  border-radius: 999px;
+  background: rgba(148, 220, 196, 0.18);
+  color: var(--text-primary);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition: background 0.2s ease, color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.error-console__download:hover,
+.error-console__download:focus-visible {
+  background: rgba(148, 220, 196, 0.32);
+  color: var(--text-strong, #fff);
+  outline: none;
+}
+
+.error-console__download:focus-visible {
+  box-shadow: 0 0 0 2px rgba(63, 169, 245, 0.55);
+}
+
 .error-console__title {
   color: var(--text-primary);
 }
