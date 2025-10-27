@@ -11,6 +11,413 @@ function ensureTrailingSlash(value) {
 
 const PRODUCTION_ASSET_ROOT = ensureTrailingSlash('https://d3gj6x3ityfh5o.cloudfront.net/');
 
+(function setupFetchCircuitBreaker(globalScope) {
+  const scope =
+    typeof globalScope !== 'undefined'
+      ? globalScope
+      : typeof window !== 'undefined'
+        ? window
+        : typeof globalThis !== 'undefined'
+          ? globalThis
+          : null;
+  if (!scope) {
+    return;
+  }
+
+  if (scope.__INFINITE_RAILS_FETCH_CIRCUIT__) {
+    return;
+  }
+
+  const nativeFetch =
+    typeof scope.fetch === 'function'
+      ? scope.fetch
+      : typeof scope.window?.fetch === 'function'
+        ? scope.window.fetch
+        : null;
+  if (typeof nativeFetch !== 'function') {
+    return;
+  }
+
+  const appConfig = scope.APP_CONFIG ?? {};
+  const circuitConfig = appConfig.fetchCircuitBreaker ?? {};
+
+  const normalisePositiveInteger = (value, fallback) => {
+    if (Number.isFinite(value)) {
+      const numeric = Number(value);
+      if (numeric >= 0) {
+        return Math.floor(numeric);
+      }
+    }
+    return fallback;
+  };
+
+  const failureThreshold = Math.max(1, normalisePositiveInteger(circuitConfig.threshold, 3));
+  const failureWindowMs = Math.max(1000, normalisePositiveInteger(circuitConfig.windowMs, 15000));
+
+  const state = {
+    threshold: failureThreshold,
+    windowMs: failureWindowMs,
+    failureLog: new Map(),
+    trippedCategories: new Set(),
+    lastFailureAt: null,
+    trippedAt: null,
+    lastFailureDetail: new Map(),
+  };
+
+  const toLowerCase = (value) => (typeof value === 'string' ? value.toLowerCase() : '');
+
+  const assetRoot = typeof appConfig.assetRoot === 'string' ? appConfig.assetRoot : null;
+  const apiBaseUrl = typeof appConfig.apiBaseUrl === 'string' ? appConfig.apiBaseUrl : null;
+
+  const toAbsoluteUrl = (resource) => {
+    if (typeof resource === 'string') {
+      return resource;
+    }
+    if (resource && typeof resource.url === 'string') {
+      return resource.url;
+    }
+    return '';
+  };
+
+  const getHeaderValue = (headers, name) => {
+    if (!headers) {
+      return null;
+    }
+    const lowerName = name.toLowerCase();
+    if (typeof headers.get === 'function') {
+      const value = headers.get(name);
+      return typeof value === 'string' ? value : null;
+    }
+    if (Array.isArray(headers)) {
+      for (const entry of headers) {
+        if (!entry) {
+          continue;
+        }
+        if (Array.isArray(entry)) {
+          const [key, value] = entry;
+          if (typeof key === 'string' && key.toLowerCase() === lowerName) {
+            return typeof value === 'string' ? value : String(value ?? '');
+          }
+        } else if (typeof entry === 'object') {
+          const key = Object.keys(entry)[0];
+          if (typeof key === 'string' && key.toLowerCase() === lowerName) {
+            return typeof entry[key] === 'string' ? entry[key] : String(entry[key] ?? '');
+          }
+        }
+      }
+      return null;
+    }
+    const normalised = typeof headers === 'object' ? headers : {};
+    for (const [key, value] of Object.entries(normalised)) {
+      if (typeof key === 'string' && key.toLowerCase() === lowerName) {
+        return typeof value === 'string' ? value : String(value ?? '');
+      }
+    }
+    return null;
+  };
+
+  const normaliseCategory = (value) => {
+    const label = toLowerCase(value).trim();
+    if (!label) {
+      return null;
+    }
+    if (label === 'asset' || label === 'assets') {
+      return 'assets';
+    }
+    if (label === 'api' || label === 'apis') {
+      return 'api';
+    }
+    if (label === 'model' || label === 'models') {
+      return 'models';
+    }
+    return null;
+  };
+
+  const inferCategory = (resource, init) => {
+    const override = (() => {
+      const direct = normaliseCategory(init?.infiniteRailsScope ?? init?.scope);
+      if (direct) {
+        return direct;
+      }
+      const headerOverride = normaliseCategory(
+        getHeaderValue(init?.headers, 'X-Infinite-Rails-Fetch-Scope') ??
+          getHeaderValue(init?.headers, 'X-Fetch-Scope'),
+      );
+      if (headerOverride) {
+        return headerOverride;
+      }
+      if (resource && typeof resource === 'object') {
+        const requestScope = normaliseCategory(resource.infiniteRailsScope ?? resource.scope);
+        if (requestScope) {
+          return requestScope;
+        }
+        if (typeof resource.headers === 'object') {
+          const headerScope = normaliseCategory(
+            getHeaderValue(resource.headers, 'X-Infinite-Rails-Fetch-Scope') ??
+              getHeaderValue(resource.headers, 'X-Fetch-Scope'),
+          );
+          if (headerScope) {
+            return headerScope;
+          }
+        }
+      }
+      return null;
+    })();
+    if (override) {
+      return override;
+    }
+
+    const absoluteUrl = toAbsoluteUrl(resource);
+    if (!absoluteUrl) {
+      return 'api';
+    }
+
+    const lowerUrl = absoluteUrl.toLowerCase();
+    if (assetRoot && lowerUrl.startsWith(assetRoot.toLowerCase())) {
+      return 'assets';
+    }
+    if (apiBaseUrl && lowerUrl.startsWith(apiBaseUrl.toLowerCase())) {
+      return 'api';
+    }
+    if (/(?:^|\/)api\//.test(lowerUrl)) {
+      return 'api';
+    }
+    if (/\.glb(?:[?#]|$)|\.gltf(?:[?#]|$)/.test(lowerUrl)) {
+      return 'models';
+    }
+    if (/\.(?:png|jpe?g|gif|webp|mp3|ogg|wav|m4a|json|js|css|wasm)(?:[?#]|$)/.test(lowerUrl)) {
+      return 'assets';
+    }
+    return 'api';
+  };
+
+  const shouldBypassCircuit = (category, init) => {
+    if (!init) {
+      return false;
+    }
+    if (init.infiniteRailsBypassCircuit === true || init.bypassCircuit === true) {
+      return true;
+    }
+    const headerValue = getHeaderValue(init.headers, 'X-Infinite-Rails-Circuit-Bypass');
+    if (headerValue && headerValue.toLowerCase() === 'true') {
+      return true;
+    }
+    if (Array.isArray(init.tags) && init.tags.includes('allow-fetch-circuit-bypass')) {
+      return true;
+    }
+    return false;
+  };
+
+  const pruneFailures = (category, now) => {
+    const bucket = state.failureLog.get(category);
+    if (!bucket) {
+      return;
+    }
+    const cutoff = now - state.windowMs;
+    while (bucket.length && bucket[0].timestamp < cutoff) {
+      bucket.shift();
+    }
+    if (bucket.length === 0) {
+      state.failureLog.delete(category);
+    }
+  };
+
+  const markCircuitBodyState = (category) => {
+    const body = scope.document?.body ?? null;
+    if (!body) {
+      return;
+    }
+    if (!body.dataset) {
+      body.dataset = {};
+    }
+    body.dataset.fetchCircuit = 'true';
+    body.dataset.fetchCircuitCategory = category;
+    if (typeof body.setAttribute === 'function') {
+      body.setAttribute('data-fetch-circuit', 'true');
+      body.setAttribute('data-fetch-circuit-category', category);
+    }
+  };
+
+  const clearCircuitBodyState = () => {
+    const body = scope.document?.body ?? null;
+    if (!body) {
+      return;
+    }
+    if (body.dataset) {
+      delete body.dataset.fetchCircuit;
+      delete body.dataset.fetchCircuitCategory;
+    }
+    if (typeof body.removeAttribute === 'function') {
+      body.removeAttribute('data-fetch-circuit');
+      body.removeAttribute('data-fetch-circuit-category');
+    }
+  };
+
+  const dispatchCircuitEvent = (type, detail) => {
+    const eventDetail = { detail };
+    const CustomEventCtor = scope.CustomEvent ?? (typeof CustomEvent !== 'undefined' ? CustomEvent : null);
+    if (CustomEventCtor) {
+      try {
+        const eventInstance = new CustomEventCtor(type, { detail, bubbles: false, cancelable: false });
+        if (scope.document && typeof scope.document.dispatchEvent === 'function') {
+          scope.document.dispatchEvent(eventInstance);
+          return;
+        }
+        if (typeof scope.dispatchEvent === 'function') {
+          scope.dispatchEvent(eventInstance);
+          return;
+        }
+      } catch (error) {
+        // Fall back to synthetic event below.
+      }
+    }
+    if (scope.document && typeof scope.document.dispatchEvent === 'function') {
+      try {
+        scope.document.dispatchEvent({ type, ...eventDetail });
+      } catch (error) {
+        // Swallow — non-critical telemetry.
+      }
+    }
+  };
+
+  const tripCircuit = (category, info) => {
+    if (state.trippedCategories.has(category)) {
+      return;
+    }
+    state.trippedCategories.add(category);
+    state.trippedAt = Date.now();
+    state.lastFailureDetail.set(category, info);
+    markCircuitBodyState(category);
+    if (scope.console && typeof scope.console.warn === 'function') {
+      scope.console.warn(`Fetch circuit breaker tripped for ${category} requests.`, info?.error ?? info?.response ?? info);
+    }
+    dispatchCircuitEvent('infinite-rails:fetch-circuit-tripped', {
+      category,
+      info,
+      threshold: state.threshold,
+      windowMs: state.windowMs,
+    });
+  };
+
+  const recordFailure = (category, info) => {
+    const now = Date.now();
+    const bucket = state.failureLog.get(category) ?? [];
+    bucket.push({ timestamp: now, info });
+    if (bucket.length > state.threshold + 5) {
+      bucket.splice(0, bucket.length - (state.threshold + 5));
+    }
+    state.failureLog.set(category, bucket);
+    state.lastFailureAt = now;
+    state.lastFailureDetail.set(category, info);
+    pruneFailures(category, now);
+    if (bucket.length > state.threshold) {
+      tripCircuit(category, info);
+    }
+  };
+
+  const recordSuccess = (category) => {
+    pruneFailures(category, Date.now());
+  };
+
+  const wrappedFetch = (resource, init) => {
+    const category = inferCategory(resource, init);
+    const bypass = shouldBypassCircuit(category, init);
+    if (!bypass && state.trippedCategories.has(category)) {
+      const error = new Error(`Fetch circuit breaker tripped for ${category} requests.`);
+      error.name = 'FetchCircuitTrippedError';
+      error.circuitCategory = category;
+      error.fetchResource = resource;
+      error.fetchInit = init;
+      return Promise.reject(error);
+    }
+
+    let fetchResult;
+    try {
+      fetchResult = nativeFetch.call(scope, resource, init);
+    } catch (error) {
+      recordFailure(category, { error, phase: 'invoke', resource, init });
+      throw error;
+    }
+
+    if (!fetchResult || typeof fetchResult.then !== 'function') {
+      return fetchResult;
+    }
+
+    return Promise.resolve(fetchResult)
+      .then((response) => {
+        if (!response || typeof response.ok !== 'boolean') {
+          recordFailure(category, { response, phase: 'invalid-response', resource, init });
+          return response;
+        }
+        if (!response.ok) {
+          recordFailure(category, {
+            response,
+            status: response.status,
+            statusText: response.statusText,
+            phase: 'http',
+            resource,
+            init,
+          });
+        } else {
+          recordSuccess(category);
+        }
+        return response;
+      })
+      .catch((error) => {
+        recordFailure(category, { error, phase: 'rejection', resource, init });
+        throw error;
+      });
+  };
+
+  const resetCircuit = () => {
+    state.failureLog.clear();
+    state.trippedCategories.clear();
+    state.lastFailureAt = null;
+    state.trippedAt = null;
+    state.lastFailureDetail.clear();
+    clearCircuitBodyState();
+  };
+
+  const hooks = scope.__INFINITE_RAILS_TEST_HOOKS__ ?? {};
+  hooks.getFetchCircuitState = () => ({
+    threshold: state.threshold,
+    windowMs: state.windowMs,
+    tripped: state.trippedCategories.size > 0,
+    trippedCategories: Array.from(state.trippedCategories),
+    lastFailureAt: state.lastFailureAt,
+    trippedAt: state.trippedAt,
+    failureCounts: Object.fromEntries(Array.from(state.failureLog.entries(), ([key, entries]) => [key, entries.length])),
+  });
+  hooks.isFetchCircuitTripped = (category) => state.trippedCategories.has(normaliseCategory(category) ?? category);
+  hooks.resetFetchCircuitBreaker = () => {
+    resetCircuit();
+  };
+  hooks.tripFetchCircuit = (category) => {
+    const resolved = normaliseCategory(category) ?? 'api';
+    tripCircuit(resolved, { phase: 'manual' });
+  };
+  scope.__INFINITE_RAILS_TEST_HOOKS__ = hooks;
+
+  scope.__INFINITE_RAILS_FETCH_CIRCUIT__ = {
+    originalFetch: nativeFetch,
+    state,
+    reset: resetCircuit,
+  };
+
+  try {
+    Object.defineProperty(wrappedFetch, 'name', { value: 'fetch', configurable: true });
+  } catch (error) {
+    // Ignore if we cannot redefine the function name.
+  }
+
+  if (typeof scope.fetch === 'function') {
+    scope.fetch = wrappedFetch;
+  }
+  if (scope.window && typeof scope.window.fetch === 'function') {
+    scope.window.fetch = wrappedFetch;
+  }
+})(typeof window !== 'undefined' ? window : typeof globalThis !== 'undefined' ? globalThis : undefined);
+
 (function applyProductionAssetRoot(globalScope) {
   if (!globalScope || typeof globalScope !== 'object') {
     return;
