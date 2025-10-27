@@ -171,7 +171,7 @@ Resources:
     Properties:
       StageName: Prod
       Cors:
-        AllowMethods: "'OPTIONS,GET,POST'"
+        AllowMethods: "'OPTIONS,GET,POST,HEAD'"
         AllowHeaders: "'Content-Type,Authorization,X-Requested-With'"
         AllowOrigin: "'*'"
 
@@ -421,6 +421,31 @@ Resources:
           Properties:
             RestApiId: !Ref ApiGateway
             Path: /diagnostics
+            Method: options
+
+  HealthFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./
+      Handler: handlers/health.handler
+      Events:
+        GetHealth:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGateway
+            Path: /health
+            Method: get
+        HeadHealth:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGateway
+            Path: /health
+            Method: head
+        OptionsHealth:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGateway
+            Path: /health
             Method: options
 
 Outputs:
