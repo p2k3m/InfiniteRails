@@ -864,6 +864,16 @@ const PRODUCTION_ASSET_ROOT = ensureTrailingSlash('https://d3gj6x3ityfh5o.cloudf
     return fallback;
   };
 
+  const normalisePositiveNumber = (value, fallback) => {
+    if (Number.isFinite(value)) {
+      const numeric = Number(value);
+      if (numeric > 0) {
+        return numeric;
+      }
+    }
+    return fallback;
+  };
+
   const failureThreshold = Math.max(1, normalisePositiveInteger(circuitConfig.threshold, 3));
   const failureWindowMs = Math.max(1000, normalisePositiveInteger(circuitConfig.windowMs, 15000));
 
@@ -876,6 +886,42 @@ const PRODUCTION_ASSET_ROOT = ensureTrailingSlash('https://d3gj6x3ityfh5o.cloudf
     trippedAt: null,
     lastFailureDetail: new Map(),
   };
+
+  const assetRetryOptions = appConfig.assetRetryQueue ?? {};
+  const assetRetryBaseDelayMs = Math.max(1000, normalisePositiveInteger(assetRetryOptions.baseDelayMs, 5000));
+  const assetRetryMaxDelayMs = Math.max(
+    assetRetryBaseDelayMs,
+    normalisePositiveInteger(assetRetryOptions.maxDelayMs, 60000),
+  );
+  const assetRetryBackoffMultiplier = normalisePositiveNumber(assetRetryOptions.backoffMultiplier, 2);
+  const assetRetryJitterRatio = Math.max(
+    0,
+    Math.min(0.5, normalisePositiveNumber(assetRetryOptions.jitterRatio, 0.25)),
+  );
+  const assetRetryMaxAttempts = normalisePositiveInteger(assetRetryOptions.maxAttempts, 0);
+
+  const setTimeoutRef =
+    typeof scope.setTimeout === 'function'
+      ? scope.setTimeout.bind(scope)
+      : typeof setTimeout === 'function'
+        ? setTimeout
+        : null;
+  const clearTimeoutRef =
+    typeof scope.clearTimeout === 'function'
+      ? scope.clearTimeout.bind(scope)
+      : typeof clearTimeout === 'function'
+        ? clearTimeout
+        : null;
+  const RequestCtor =
+    typeof scope.Request === 'function'
+      ? scope.Request
+      : typeof scope.window?.Request === 'function'
+        ? scope.window.Request
+        : typeof Request === 'function'
+          ? Request
+          : null;
+
+  const assetRetryQueue = ensureAssetRetryQueue();
 
   const toLowerCase = (value) => (typeof value === 'string' ? value.toLowerCase() : '');
 
@@ -928,6 +974,326 @@ const PRODUCTION_ASSET_ROOT = ensureTrailingSlash('https://d3gj6x3ityfh5o.cloudf
     }
     return null;
   };
+
+  function ensureAssetRetryQueue() {
+    if (scope.__INFINITE_RAILS_ASSET_RETRY_QUEUE__) {
+      return scope.__INFINITE_RAILS_ASSET_RETRY_QUEUE__;
+    }
+    if (!setTimeoutRef || !clearTimeoutRef) {
+      return null;
+    }
+    const entries = new Map();
+    const queueState = {
+      entries,
+      schedule(url, options = {}) {
+        if (!url || typeof options.createRequest !== 'function') {
+          return;
+        }
+        const existing = entries.get(url);
+        const entry = existing ?? {
+          attempts: 0,
+          nextDelay: assetRetryBaseDelayMs,
+          timerId: null,
+          lastFailureAt: Date.now(),
+          context: {},
+        };
+        entry.requestFactory = options.createRequest;
+        entry.shouldRetryResponse = typeof options.shouldRetryResponse === 'function'
+          ? options.shouldRetryResponse
+          : null;
+        entry.shouldRetryError = typeof options.shouldRetryError === 'function'
+          ? options.shouldRetryError
+          : null;
+        entry.onSuccess = typeof options.onSuccess === 'function' ? options.onSuccess : null;
+        entry.onGiveUp = typeof options.onGiveUp === 'function' ? options.onGiveUp : null;
+        entry.context = {
+          ...(entry.context || {}),
+          ...(options.context || {}),
+        };
+        entry.lastFailureAt = Date.now();
+        entries.set(url, entry);
+        if (assetRetryMaxAttempts > 0 && entry.attempts >= assetRetryMaxAttempts) {
+          return;
+        }
+        if (entry.timerId) {
+          return;
+        }
+        const jitterOffset = assetRetryJitterRatio > 0
+          ? Math.round(entry.nextDelay * assetRetryJitterRatio * Math.random())
+          : 0;
+        const delay = entry.nextDelay + jitterOffset;
+        entry.timerId = setTimeoutRef(() => {
+          entry.timerId = null;
+          const attemptIndex = entry.attempts + 1;
+          let result;
+          try {
+            result = entry.requestFactory();
+          } catch (error) {
+            entry.attempts = attemptIndex;
+            entry.lastError = error;
+            const shouldRetryError = entry.shouldRetryError ? entry.shouldRetryError(error) : false;
+            if (shouldRetryError && (assetRetryMaxAttempts === 0 || entry.attempts < assetRetryMaxAttempts)) {
+              entry.nextDelay = Math.min(
+                assetRetryMaxDelayMs,
+                Math.max(assetRetryBaseDelayMs, Math.round(entry.nextDelay * assetRetryBackoffMultiplier)),
+              );
+              queueState.schedule(url, options);
+            } else {
+              queueState.clear(url);
+              if (entry.onGiveUp) {
+                try {
+                  entry.onGiveUp({ error });
+                } catch (hookError) {
+                  // ignore hook failures
+                }
+              }
+            }
+            return;
+          }
+
+          Promise.resolve(result)
+            .then((response) => {
+              entry.attempts = attemptIndex;
+              entry.lastResponse = response;
+              if (response && typeof response.ok === 'boolean' && response.ok) {
+                queueState.clear(url);
+                if (entry.onSuccess) {
+                  try {
+                    entry.onSuccess(response);
+                  } catch (hookError) {
+                    // ignore hook failures
+                  }
+                }
+                return;
+              }
+              const shouldRetryResponse = entry.shouldRetryResponse
+                ? entry.shouldRetryResponse(response)
+                : false;
+              if (shouldRetryResponse && (assetRetryMaxAttempts === 0 || entry.attempts < assetRetryMaxAttempts)) {
+                entry.nextDelay = Math.min(
+                  assetRetryMaxDelayMs,
+                  Math.max(assetRetryBaseDelayMs, Math.round(entry.nextDelay * assetRetryBackoffMultiplier)),
+                );
+                queueState.schedule(url, options);
+              } else {
+                queueState.clear(url);
+                if (entry.onGiveUp) {
+                  try {
+                    entry.onGiveUp({ response });
+                  } catch (hookError) {
+                    // ignore hook failures
+                  }
+                }
+              }
+            })
+            .catch((error) => {
+              entry.attempts = attemptIndex;
+              entry.lastError = error;
+              const shouldRetryError = entry.shouldRetryError ? entry.shouldRetryError(error) : false;
+              if (shouldRetryError && (assetRetryMaxAttempts === 0 || entry.attempts < assetRetryMaxAttempts)) {
+                entry.nextDelay = Math.min(
+                  assetRetryMaxDelayMs,
+                  Math.max(assetRetryBaseDelayMs, Math.round(entry.nextDelay * assetRetryBackoffMultiplier)),
+                );
+                queueState.schedule(url, options);
+              } else {
+                queueState.clear(url);
+                if (entry.onGiveUp) {
+                  try {
+                    entry.onGiveUp({ error });
+                  } catch (hookError) {
+                    // ignore hook failures
+                  }
+                }
+              }
+            });
+        }, delay);
+      },
+      clear(url) {
+        if (!url) {
+          return;
+        }
+        const entry = entries.get(url);
+        if (!entry) {
+          return;
+        }
+        if (entry.timerId && clearTimeoutRef) {
+          clearTimeoutRef(entry.timerId);
+        }
+        entries.delete(url);
+      },
+      clearAll() {
+        for (const url of Array.from(entries.keys())) {
+          queueState.clear(url);
+        }
+      },
+    };
+
+    scope.__INFINITE_RAILS_ASSET_RETRY_QUEUE__ = queueState;
+    return queueState;
+  }
+
+  function sanitiseRetryInit(init) {
+    if (!init || typeof init !== 'object') {
+      return undefined;
+    }
+    const clone = { ...init };
+    if ('signal' in clone) {
+      delete clone.signal;
+    }
+    if ('body' in clone) {
+      delete clone.body;
+    }
+    return Object.keys(clone).length ? clone : undefined;
+  }
+
+  function createRetryRequestFactory(resource, init) {
+    if (typeof nativeFetch !== 'function') {
+      return null;
+    }
+    const safeInit = sanitiseRetryInit(init);
+    if (RequestCtor && resource instanceof RequestCtor) {
+      return () => {
+        try {
+          return nativeFetch.call(scope, resource.clone());
+        } catch (cloneError) {
+          try {
+            return nativeFetch.call(scope, new RequestCtor(resource, safeInit));
+          } catch (requestError) {
+            return nativeFetch.call(scope, resource, safeInit);
+          }
+        }
+      };
+    }
+    if (resource && typeof resource.clone === 'function') {
+      return () => {
+        try {
+          return nativeFetch.call(scope, resource.clone());
+        } catch (cloneError) {
+          return nativeFetch.call(scope, resource, safeInit);
+        }
+      };
+    }
+    return () => nativeFetch.call(scope, resource, safeInit);
+  }
+
+  function shouldRetryAssetResponse(response, url) {
+    if (!response || typeof response.status !== 'number') {
+      return false;
+    }
+    const status = Number(response.status);
+    if (status !== 403 && status !== 404) {
+      return false;
+    }
+    if (typeof url === 'string' && /assetVersion=/i.test(url)) {
+      return true;
+    }
+    const cacheControl = getHeaderValue(response.headers, 'cache-control');
+    if (cacheControl) {
+      const lowered = cacheControl.toLowerCase();
+      if (
+        lowered.includes('must-revalidate') ||
+        lowered.includes('stale-while-revalidate') ||
+        lowered.includes('no-cache') ||
+        lowered.includes('max-age=0')
+      ) {
+        return true;
+      }
+    }
+    const edgeStatus =
+      getHeaderValue(response.headers, 'x-cache') || getHeaderValue(response.headers, 'cf-cache-status');
+    if (edgeStatus) {
+      const loweredStatus = edgeStatus.toLowerCase();
+      if (
+        loweredStatus.includes('error') ||
+        loweredStatus.includes('expired') ||
+        loweredStatus.includes('updating') ||
+        loweredStatus.includes('miss')
+      ) {
+        return true;
+      }
+    }
+    if (!response.headers) {
+      return true;
+    }
+    return false;
+  }
+
+  function shouldRetryAssetError(error) {
+    if (!error) {
+      return false;
+    }
+    const name = typeof error.name === 'string' ? error.name.toLowerCase() : '';
+    const message = typeof error.message === 'string' ? error.message.toLowerCase() : '';
+    const code = typeof error.code === 'string' ? String(error.code).toLowerCase() : '';
+    if (name.includes('abort') || name.includes('timeout')) {
+      return true;
+    }
+    if (code.includes('timeout') || code.includes('econnreset') || code.includes('etimedout')) {
+      return true;
+    }
+    if (message.includes('timeout') || message.includes('network') || message.includes('failed to fetch')) {
+      return true;
+    }
+    if (typeof error.status === 'number' && (error.status === 403 || error.status === 404)) {
+      return true;
+    }
+    return false;
+  }
+
+  function clearAssetRetry(url) {
+    if (!assetRetryQueue || !url) {
+      return;
+    }
+    assetRetryQueue.clear(url);
+  }
+
+  function maybeScheduleAssetRetry(detail) {
+    if (!assetRetryQueue || !detail) {
+      return;
+    }
+    if (detail.category !== 'assets') {
+      return;
+    }
+    const requestUrl = detail.requestUrl;
+    if (!requestUrl) {
+      return;
+    }
+    const requestFactory = createRetryRequestFactory(detail.resource, detail.init);
+    if (!requestFactory) {
+      return;
+    }
+    const context = {
+      phase: detail.phase ?? null,
+      status: detail.response?.status ?? null,
+      errorName: detail.error?.name ?? null,
+    };
+    if (detail.response) {
+      if (!shouldRetryAssetResponse(detail.response, requestUrl)) {
+        clearAssetRetry(requestUrl);
+        return;
+      }
+    } else if (detail.error) {
+      if (!shouldRetryAssetError(detail.error)) {
+        clearAssetRetry(requestUrl);
+        return;
+      }
+    } else {
+      return;
+    }
+    assetRetryQueue.schedule(requestUrl, {
+      createRequest: requestFactory,
+      context,
+      shouldRetryResponse: (response) => shouldRetryAssetResponse(response, requestUrl),
+      shouldRetryError: shouldRetryAssetError,
+      onSuccess: () => {
+        clearAssetRetry(requestUrl);
+      },
+      onGiveUp: () => {
+        clearAssetRetry(requestUrl);
+      },
+    });
+  }
 
   const normaliseCategory = (value) => {
     const label = toLowerCase(value).trim();
@@ -1155,10 +1521,19 @@ const PRODUCTION_ASSET_ROOT = ensureTrailingSlash('https://d3gj6x3ityfh5o.cloudf
     }
 
     let fetchResult;
+    const requestUrl = toAbsoluteUrl(resource);
     try {
       fetchResult = nativeFetch.call(scope, resource, init);
     } catch (error) {
       recordFailure(category, { error, phase: 'invoke', resource, init });
+      maybeScheduleAssetRetry({
+        category,
+        requestUrl,
+        resource,
+        init,
+        error,
+        phase: 'invoke',
+      });
       throw error;
     }
 
@@ -1181,13 +1556,32 @@ const PRODUCTION_ASSET_ROOT = ensureTrailingSlash('https://d3gj6x3ityfh5o.cloudf
             resource,
             init,
           });
+          maybeScheduleAssetRetry({
+            category,
+            requestUrl,
+            resource,
+            init,
+            response,
+            phase: 'http',
+          });
         } else {
           recordSuccess(category);
+          if (category === 'assets' && requestUrl) {
+            clearAssetRetry(requestUrl);
+          }
         }
         return response;
       })
       .catch((error) => {
         recordFailure(category, { error, phase: 'rejection', resource, init });
+        maybeScheduleAssetRetry({
+          category,
+          requestUrl,
+          resource,
+          init,
+          error,
+          phase: 'rejection',
+        });
         throw error;
       });
   };
@@ -1199,6 +1593,9 @@ const PRODUCTION_ASSET_ROOT = ensureTrailingSlash('https://d3gj6x3ityfh5o.cloudf
     state.trippedAt = null;
     state.lastFailureDetail.clear();
     clearCircuitBodyState();
+    if (assetRetryQueue) {
+      assetRetryQueue.clearAll();
+    }
   };
 
   const hooks = scope.__INFINITE_RAILS_TEST_HOOKS__ ?? {};
@@ -1218,6 +1615,27 @@ const PRODUCTION_ASSET_ROOT = ensureTrailingSlash('https://d3gj6x3ityfh5o.cloudf
   hooks.tripFetchCircuit = (category) => {
     const resolved = normaliseCategory(category) ?? 'api';
     tripCircuit(resolved, { phase: 'manual' });
+  };
+  hooks.getAssetRetryQueueState = () => {
+    if (!assetRetryQueue) {
+      return { size: 0, entries: [] };
+    }
+    return {
+      size: assetRetryQueue.entries.size,
+      entries: Array.from(assetRetryQueue.entries.entries(), ([url, entry]) => ({
+        url,
+        attempts: entry.attempts,
+        nextDelayMs: entry.nextDelay,
+        scheduled: Boolean(entry.timerId),
+        lastFailureAt: entry.lastFailureAt,
+        context: entry.context,
+      })),
+    };
+  };
+  hooks.clearAssetRetryQueue = () => {
+    if (assetRetryQueue) {
+      assetRetryQueue.clearAll();
+    }
   };
   scope.__INFINITE_RAILS_TEST_HOOKS__ = hooks;
 
