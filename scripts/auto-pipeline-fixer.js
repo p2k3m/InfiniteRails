@@ -7,23 +7,29 @@ const { spawn } = require('child_process');
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function ensureEnv() {
-  const required = ['GITHUB_TOKEN', 'GITHUB_REPOSITORY', 'OPENAI_API_KEY'];
-  const missing = required.filter((key) => !process.env[key] || !process.env[key].trim());
-  if (missing.length > 0) {
-    console.error(`Missing required environment variables: ${missing.join(', ')}`);
+  const required = ['GITHUB_TOKEN', 'GITHUB_REPOSITORY'];
+  const missingRequired = required.filter((key) => !process.env[key] || !process.env[key].trim());
+  if (missingRequired.length > 0) {
+    console.error(`Missing required environment variables: ${missingRequired.join(', ')}`);
     console.error('Ensure the workflow or runner exports these secrets before invoking the fixer.');
   }
-  return missing;
+
+  const hasOpenAiKey = Boolean(process.env.OPENAI_API_KEY && process.env.OPENAI_API_KEY.trim());
+  if (!hasOpenAiKey) {
+    console.warn('OPENAI_API_KEY is not set. Auto fixer will run in no-op mode.');
+  }
+
+  return { missingRequired, hasOpenAiKey };
 }
 
-const missingEnv = ensureEnv();
-if (missingEnv.length > 0) {
-  process.exit(1);
-}
+const { missingRequired, hasOpenAiKey } = ensureEnv();
+
+const githubToken = process.env.GITHUB_TOKEN ? process.env.GITHUB_TOKEN.trim() : null;
+const repo = process.env.GITHUB_REPOSITORY ? process.env.GITHUB_REPOSITORY.trim() : null;
 
 const config = {
-  repo: process.env.GITHUB_REPOSITORY,
-  githubToken: process.env.GITHUB_TOKEN.trim(),
+  repo,
+  githubToken,
   githubApiBase: process.env.GITHUB_API_URL || 'https://api.github.com',
   githubGraphqlUrl: process.env.GITHUB_GRAPHQL_URL || 'https://api.github.com/graphql',
   githubServerUrl: process.env.GITHUB_SERVER_URL || 'https://github.com',
@@ -35,6 +41,8 @@ const config = {
   mainRunTimeoutMs: Number(process.env.MAIN_RUN_TIMEOUT_MS || 30 * 60 * 1000),
   openaiModel: process.env.OPENAI_MODEL || 'gpt-4o-mini',
   openaiUrl: process.env.OPENAI_API_URL || 'https://api.openai.com/v1/chat/completions',
+  useOpenAi: hasOpenAiKey,
+  hasRequiredEnv: missingRequired.length === 0,
   maxLogLines: Number(process.env.MAX_LOG_LINES || 200),
   branchPrefix: process.env.AUTO_FIX_BRANCH_PREFIX || 'auto-fix/',
   autoMergeMethod: process.env.AUTO_MERGE_METHOD || 'SQUASH',
@@ -393,6 +401,16 @@ async function waitForMainRun(sha) {
 }
 
 async function main() {
+  if (!config.hasRequiredEnv) {
+    console.log('Missing GitHub credentials. Skipping automated fix attempt.');
+    return;
+  }
+
+  if (!config.useOpenAi) {
+    console.log('OPENAI_API_KEY is not available. Skipping automated fix attempt.');
+    return;
+  }
+
   const processedRuns = new Set();
   let attempt = 1;
   let run = await getInitialRun(processedRuns);
