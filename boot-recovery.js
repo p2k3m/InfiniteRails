@@ -19,12 +19,31 @@
     briefingButton.textContent = overlayRecoveryLabel;
   }
 
+  const leaderboardOverlay = documentRef.getElementById('leaderboardOverlay');
+  const leaderboardActions = documentRef.getElementById('leaderboardOverlayActions');
+  const leaderboardReloadButton = documentRef.getElementById('leaderboardOverlayReload');
+  const assetOverlayReloadButton = documentRef.getElementById('assetRecoveryReload');
+
   function refreshOverlayActionsVisibility() {
     if (!overlayActions) {
       return;
     }
     const hasVisibleChild = Array.from(overlayActions.children || []).some((child) => child.hidden !== true);
-    overlayActions.hidden = !hasVisibleChild;
+    const shouldHide = !hasVisibleChild;
+    if (overlayActions.hidden !== shouldHide) {
+      overlayActions.hidden = shouldHide;
+    }
+  }
+
+  function refreshLeaderboardActionsVisibility() {
+    if (!leaderboardActions) {
+      return;
+    }
+    const hasVisibleChild = Array.from(leaderboardActions.children || []).some((child) => child.hidden !== true);
+    const shouldHide = !hasVisibleChild;
+    if (leaderboardActions.hidden !== shouldHide) {
+      leaderboardActions.hidden = shouldHide;
+    }
   }
 
   function setOverlayRecoveryVisibility(visible) {
@@ -33,6 +52,14 @@
     }
     overlayButton.hidden = !visible;
     refreshOverlayActionsVisibility();
+  }
+
+  function setLeaderboardRecoveryVisibility(visible) {
+    if (!leaderboardReloadButton || !leaderboardActions) {
+      return;
+    }
+    leaderboardReloadButton.hidden = !visible;
+    refreshLeaderboardActionsVisibility();
   }
 
   function setBriefingRecoveryVisibility(visible) {
@@ -133,6 +160,20 @@
     setBriefingRecoveryVisibility(shouldShow);
   }
 
+  function evaluateLeaderboardRecoveryVisibility() {
+    if (!leaderboardOverlay || !leaderboardReloadButton) {
+      setLeaderboardRecoveryVisibility(false);
+      return;
+    }
+    const overlayVisible = leaderboardOverlay.hidden !== true;
+    const mode = String(leaderboardOverlay.getAttribute('data-mode') || '').trim().toLowerCase();
+    const fallbackActive = String(leaderboardOverlay.getAttribute('data-fallback-active') || '').trim().toLowerCase();
+    const modeIndicatesProblem = /error|offline|fail|warn|degrad|recover/.test(mode);
+    const fallbackIndicatesProblem = fallbackActive === 'true' || fallbackActive === '1' || fallbackActive === 'active';
+    const shouldShow = overlayVisible && (modeIndicatesProblem || fallbackIndicatesProblem);
+    setLeaderboardRecoveryVisibility(shouldShow);
+  }
+
   if (overlayButton) {
     overlayButton.addEventListener('click', (event) => {
       if (event?.preventDefault) {
@@ -142,12 +183,30 @@
     });
   }
 
+  if (assetOverlayReloadButton) {
+    assetOverlayReloadButton.addEventListener('click', (event) => {
+      if (event?.preventDefault) {
+        event.preventDefault();
+      }
+      triggerBootReload('asset-recovery');
+    });
+  }
+
   if (briefingButton) {
     briefingButton.addEventListener('click', (event) => {
       if (event?.preventDefault) {
         event.preventDefault();
       }
       triggerBootReload('mission-briefing-recovery');
+    });
+  }
+
+  if (leaderboardReloadButton) {
+    leaderboardReloadButton.addEventListener('click', (event) => {
+      if (event?.preventDefault) {
+        event.preventDefault();
+      }
+      triggerBootReload('leaderboard-recovery');
     });
   }
 
@@ -167,6 +226,21 @@
     observer.observe(uiStatusItem, { attributes: true, attributeFilter: ['data-status'] });
   }
 
+  if (leaderboardOverlay) {
+    const observer = new MutationObserver(evaluateLeaderboardRecoveryVisibility);
+    observer.observe(leaderboardOverlay, { attributes: true, attributeFilter: ['hidden', 'data-mode'] });
+  }
+
+  if (leaderboardActions) {
+    const observer = new MutationObserver(refreshLeaderboardActionsVisibility);
+    observer.observe(leaderboardActions, {
+      attributes: true,
+      attributeFilter: ['hidden', 'aria-hidden'],
+      childList: true,
+      subtree: true,
+    });
+  }
+
   const briefing = documentRef.getElementById('gameBriefing');
   if (briefing) {
     const observer = new MutationObserver(scheduleBriefingRecoveryEvaluation);
@@ -175,12 +249,15 @@
 
   evaluateOverlayRecoveryVisibility();
   evaluateBriefingRecoveryVisibility();
+  evaluateLeaderboardRecoveryVisibility();
 
   scope.__INFINITE_RAILS_BOOT_RECOVERY__ = {
     evaluateOverlayRecoveryVisibility,
     evaluateBriefingRecoveryVisibility,
     setOverlayRecoveryVisibility,
     setBriefingRecoveryVisibility,
+    evaluateLeaderboardRecoveryVisibility,
+    setLeaderboardRecoveryVisibility,
     triggerBootReload,
   };
 })(this);

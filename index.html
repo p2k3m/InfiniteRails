@@ -1630,7 +1630,16 @@
             <div class="compose-overlay__body">
               <h3 class="compose-overlay__title" id="leaderboardOverlayTitle">Syncing leaderboard</h3>
               <p class="compose-overlay__message" id="leaderboardOverlayMessage" aria-live="polite"></p>
-              <div class="compose-overlay__actions" id="leaderboardOverlayActions"></div>
+              <div class="compose-overlay__actions" id="leaderboardOverlayActions">
+                <button
+                  type="button"
+                  class="ghost compose-overlay__action"
+                  id="leaderboardOverlayReload"
+                  hidden
+                >
+                  Reload Leaderboard
+                </button>
+              </div>
             </div>
           </div>
         </div>
