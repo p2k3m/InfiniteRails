@@ -268,14 +268,24 @@ const PRODUCTION_ASSET_ROOT = ensureTrailingSlash('https://d3gj6x3ityfh5o.cloudf
           return;
         }
       } catch (error) {
-        // Fall back to synthetic event below.
+        if (scope.console && typeof scope.console.debug === 'function') {
+          scope.console.debug(
+            `dispatchCircuitEvent: CustomEvent dispatch failed for "${type}" — falling back to synthetic event dispatch.`,
+            error,
+          );
+        }
       }
     }
     if (scope.document && typeof scope.document.dispatchEvent === 'function') {
       try {
         scope.document.dispatchEvent({ type, ...eventDetail });
       } catch (error) {
-        // Swallow — non-critical telemetry.
+        if (scope.console && typeof scope.console.debug === 'function') {
+          scope.console.debug(
+            `dispatchCircuitEvent: Synthetic dispatch failed for "${type}" in fetch circuit telemetry handler.`,
+            error,
+          );
+        }
       }
     }
   };
@@ -407,7 +417,12 @@ const PRODUCTION_ASSET_ROOT = ensureTrailingSlash('https://d3gj6x3ityfh5o.cloudf
   try {
     Object.defineProperty(wrappedFetch, 'name', { value: 'fetch', configurable: true });
   } catch (error) {
-    // Ignore if we cannot redefine the function name.
+    if (scope.console && typeof scope.console.debug === 'function') {
+      scope.console.debug(
+        'wrapFetch: Unable to redefine wrapped fetch function name for fetch circuit diagnostics.',
+        error,
+      );
+    }
   }
 
   if (typeof scope.fetch === 'function') {
