@@ -298,9 +298,9 @@ async function createPullRequest(run, branchName, attempt, failureContext) {
     `Automated fix attempt ${attempt} for workflow run [#${run.id}](${run.html_url}).`,
     '',
     'Failure summary:',
-    '```
-' + failureContext.logExcerpt + '
-```',
+    '```',
+    failureContext.logExcerpt,
+    '```',
   ];
   const pullRequest = await githubRequest(`/repos/${config.repo}/pulls`, {
     method: 'POST',
