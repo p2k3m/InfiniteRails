@@ -53,6 +53,193 @@ const PRODUCTION_ASSET_ROOT = ensureTrailingSlash('https://d3gj6x3ityfh5o.cloudf
     lastDownload: null,
   };
 
+  const DEFAULT_REPLAY_LIMIT = 100;
+
+  const createReplayBuffer = (limit = DEFAULT_REPLAY_LIMIT) => {
+    const capacity = (() => {
+      const numericLimit = Number(limit);
+      if (!Number.isFinite(numericLimit) || numericLimit <= 0) {
+        return DEFAULT_REPLAY_LIMIT;
+      }
+      if (numericLimit > 1000) {
+        return 1000;
+      }
+      return Math.floor(numericLimit);
+    })();
+
+    const entries = new Array(capacity);
+    let writeIndex = 0;
+    let entryCount = 0;
+    let sequence = 0;
+
+    const toStoredEntry = (action, detail, metadata) => ({
+      id: ++sequence,
+      action: ensureString(action) || 'unknown-event',
+      detail: cloneForSnapshot(detail),
+      metadata: cloneForSnapshot(metadata),
+      timestamp: new Date(),
+    });
+
+    const toSnapshotEntry = (entry) => ({
+      id: entry.id,
+      action: entry.action,
+      detail: cloneForSnapshot(entry.detail),
+      metadata: cloneForSnapshot(entry.metadata),
+      timestamp:
+        entry.timestamp instanceof Date ? entry.timestamp.toISOString() : toIsoString(entry.timestamp),
+    });
+
+    const record = (action, detail = {}, metadata = {}) => {
+      const entry = toStoredEntry(action, detail, metadata);
+      entries[writeIndex] = entry;
+      writeIndex = (writeIndex + 1) % capacity;
+      if (entryCount < capacity) {
+        entryCount += 1;
+      }
+      return entry;
+    };
+
+    const snapshot = () => {
+      if (entryCount === 0) {
+        return [];
+      }
+      const result = [];
+      for (let offset = entryCount - 1; offset >= 0; offset -= 1) {
+        const index = (writeIndex - offset - 1 + capacity) % capacity;
+        const entry = entries[index];
+        if (!entry) {
+          continue;
+        }
+        result.push(toSnapshotEntry(entry));
+      }
+      return result;
+    };
+
+    const clear = () => {
+      for (let index = 0; index < entries.length; index += 1) {
+        entries[index] = undefined;
+      }
+      writeIndex = 0;
+      entryCount = 0;
+      sequence = 0;
+    };
+
+    const size = () => entryCount;
+
+    return {
+      record,
+      snapshot,
+      clear,
+      size,
+      get limit() {
+        return capacity;
+      },
+    };
+  };
+
+  const describeEventTarget = (target) => {
+    if (!target || typeof target !== 'object') {
+      return null;
+    }
+    const descriptor = {};
+    try {
+      if (typeof target.id === 'string' && target.id.trim().length) {
+        descriptor.id = target.id.trim();
+      }
+    } catch (error) {
+      // ignore lookup failures
+    }
+    try {
+      if (typeof target.tagName === 'string' && target.tagName.trim().length) {
+        descriptor.tag = target.tagName.trim().toLowerCase();
+      }
+    } catch (error) {
+      // ignore lookup failures
+    }
+    try {
+      if (typeof target.nodeName === 'string' && target.nodeName.trim().length) {
+        descriptor.node = target.nodeName.trim().toLowerCase();
+      }
+    } catch (error) {
+      // ignore lookup failures
+    }
+    try {
+      if (typeof target.dataset === 'object' && target.dataset) {
+        const dataset = {};
+        const keys = Object.keys(target.dataset).slice(0, 6);
+        keys.forEach((key) => {
+          const value = target.dataset[key];
+          if (typeof value === 'string' && value.trim().length) {
+            dataset[key] = value.trim();
+          }
+        });
+        if (Object.keys(dataset).length) {
+          descriptor.dataset = dataset;
+        }
+      }
+    } catch (error) {
+      // ignore lookup failures
+    }
+    return Object.keys(descriptor).length ? descriptor : null;
+  };
+
+  const replayBufferInternal = createReplayBuffer(DEFAULT_REPLAY_LIMIT);
+
+  const replayBufferApi = {
+    record(action, detail = {}, metadata = {}) {
+      return replayBufferInternal.record(action, detail, metadata);
+    },
+    snapshot() {
+      return replayBufferInternal.snapshot();
+    },
+    clear() {
+      replayBufferInternal.clear();
+    },
+    size() {
+      return replayBufferInternal.size();
+    },
+    get limit() {
+      return replayBufferInternal.limit;
+    },
+  };
+
+  const patchDispatchEvent = (target, origin) => {
+    if (!target || typeof target.dispatchEvent !== 'function') {
+      return;
+    }
+    const original = target.dispatchEvent;
+    if (original && original.__INFINITE_RAILS_REPLAY_PATCHED__) {
+      return;
+    }
+    const patched = function patchedDispatchEvent(event) {
+      if (event && typeof event.type === 'string' && event.type.startsWith('infinite-rails:')) {
+        try {
+          const detail = typeof event.detail === 'undefined' ? null : event.detail;
+          const metadata = {
+            origin,
+            bubbles: Boolean(event.bubbles),
+            cancelable: Boolean(event.cancelable),
+            composed: Boolean(event.composed),
+            defaultPrevented: Boolean(event.defaultPrevented),
+            timeStamp: Number.isFinite(event.timeStamp) ? event.timeStamp : null,
+            target: describeEventTarget(this),
+          };
+          replayBufferInternal.record(event.type, detail, metadata);
+        } catch (error) {
+          if (scope.console && typeof scope.console.debug === 'function') {
+            scope.console.debug('Failed to record replay buffer event.', error);
+          }
+        }
+      }
+      return original.apply(this, arguments);
+    };
+    patched.__INFINITE_RAILS_REPLAY_PATCHED__ = true;
+    target.dispatchEvent = patched;
+  };
+
+  patchDispatchEvent(scope, 'window');
+  patchDispatchEvent(documentRef, 'document');
+
   const namespace =
     scope.InfiniteRails && typeof scope.InfiniteRails === 'object'
       ? scope.InfiniteRails
@@ -264,6 +451,7 @@ const PRODUCTION_ASSET_ROOT = ensureTrailingSlash('https://d3gj6x3ityfh5o.cloudf
       errors: snapshotErrors(),
       actions: snapshotActions(),
       diagnostics: includeDiagnostics ? snapshotDiagnostics() : [],
+      userActionReplay: replayBufferApi.snapshot(),
     };
     return snapshot;
   };
@@ -600,6 +788,7 @@ const PRODUCTION_ASSET_ROOT = ensureTrailingSlash('https://d3gj6x3ityfh5o.cloudf
   };
 
   namespace.logs = logsApi;
+  namespace.replayBuffer = replayBufferApi;
 
   const handleDownloadClick = (event) => {
     if (event?.preventDefault) {
