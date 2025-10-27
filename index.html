@@ -27,6 +27,36 @@
         Leaderboard offline — runs stored locally until connection returns.
       </span>
     </div>
+    <div
+      class="error-console"
+      id="errorConsole"
+      role="log"
+      aria-live="assertive"
+      aria-hidden="true"
+      hidden
+      data-hint="Captured runtime errors appear here for quick diagnostics."
+    >
+      <div class="error-console__header">
+        <div class="error-console__title-group">
+          <span class="error-console__title">Error Console</span>
+          <span class="error-console__badge">
+            <span class="sr-only">Total errors mirrored:</span>
+            <span data-error-count>0</span>
+          </span>
+        </div>
+        <button
+          type="button"
+          class="error-console__dismiss"
+          data-error-dismiss
+          aria-label="Dismiss error console"
+        >
+          <span aria-hidden="true">×</span>
+        </button>
+      </div>
+      <div class="error-console__body">
+        <ul class="error-console__list" data-error-console-list role="list"></ul>
+      </div>
+    </div>
     <main class="main-layout">
       <aside
         class="objectives-panel"

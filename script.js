@@ -11,6 +11,304 @@ function ensureTrailingSlash(value) {
 
 const PRODUCTION_ASSET_ROOT = ensureTrailingSlash('https://d3gj6x3ityfh5o.cloudfront.net/');
 
+(function setupErrorConsoleOverlay(globalScope) {
+  const scope =
+    typeof globalScope !== 'undefined'
+      ? globalScope
+      : typeof window !== 'undefined'
+        ? window
+        : typeof globalThis !== 'undefined'
+          ? globalThis
+          : null;
+  if (!scope || scope.__INFINITE_RAILS_ERROR_CONSOLE__) {
+    return;
+  }
+
+  const documentRef = scope.document;
+  if (!documentRef || typeof documentRef.getElementById !== 'function') {
+    return;
+  }
+
+  const overlay = documentRef.getElementById('errorConsole');
+  if (!overlay) {
+    return;
+  }
+
+  const list = overlay.querySelector('[data-error-console-list]');
+  if (!list) {
+    return;
+  }
+
+  const countRef = overlay.querySelector('[data-error-count]');
+  const dismissButton = overlay.querySelector('[data-error-dismiss]');
+  const maxEntries = 20;
+  let totalCount = 0;
+  let dismissedUntilNextError = false;
+
+  const ensureString = (value) => {
+    if (value == null) {
+      return '';
+    }
+    if (typeof value === 'string') {
+      return value;
+    }
+    if (value instanceof Error) {
+      return value.message || value.name || 'Error';
+    }
+    if (typeof value === 'object') {
+      if (typeof value.message === 'string') {
+        return value.message;
+      }
+      try {
+        return JSON.stringify(value);
+      } catch (error) {
+        return Object.prototype.toString.call(value);
+      }
+    }
+    return String(value);
+  };
+
+  const extractStack = (value) => {
+    if (!value) {
+      return '';
+    }
+    if (value instanceof Error && typeof value.stack === 'string') {
+      return value.stack;
+    }
+    if (typeof value.stack === 'string') {
+      return value.stack;
+    }
+    return '';
+  };
+
+  const trimDetail = (value) => {
+    if (typeof value !== 'string') {
+      return '';
+    }
+    if (value.length > 6000) {
+      return `${value.slice(0, 6000)}…`;
+    }
+    return value;
+  };
+
+  const timeFormatter =
+    typeof Intl !== 'undefined' && typeof Intl.DateTimeFormat === 'function'
+      ? new Intl.DateTimeFormat(undefined, {
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+        })
+      : null;
+
+  const formatTimestamp = (timestamp) => {
+    try {
+      return timeFormatter ? timeFormatter.format(timestamp) : timestamp.toISOString();
+    } catch (error) {
+      return new Date(timestamp).toISOString();
+    }
+  };
+
+  const updateCount = () => {
+    if (countRef) {
+      countRef.textContent = String(totalCount);
+    }
+  };
+
+  const showOverlay = (force = false) => {
+    if (!force && dismissedUntilNextError) {
+      return;
+    }
+    overlay.hidden = false;
+    overlay.setAttribute('aria-hidden', 'false');
+    dismissedUntilNextError = false;
+  };
+
+  const hideOverlay = () => {
+    overlay.setAttribute('aria-hidden', 'true');
+    overlay.hidden = true;
+  };
+
+  dismissButton?.addEventListener('click', () => {
+    dismissedUntilNextError = true;
+    hideOverlay();
+  });
+
+  if (typeof scope.addEventListener === 'function') {
+    scope.addEventListener('keydown', (event) => {
+      if (!event) {
+        return;
+      }
+      if (event.key === 'Escape' && overlay.getAttribute('aria-hidden') === 'false') {
+        dismissedUntilNextError = true;
+        hideOverlay();
+      }
+    });
+  }
+
+  const createEntryElement = (entry) => {
+    const item = documentRef.createElement('li');
+    item.className = 'error-console__entry error-console__entry--new';
+
+    const header = documentRef.createElement('div');
+    header.className = 'error-console__entry-header';
+
+    const source = documentRef.createElement('span');
+    source.className = 'error-console__source';
+    source.textContent = entry.source;
+
+    const timeElement = documentRef.createElement('time');
+    timeElement.className = 'error-console__time';
+    timeElement.setAttribute('datetime', entry.timestamp.toISOString());
+    timeElement.textContent = formatTimestamp(entry.timestamp);
+
+    header.append(source, timeElement);
+
+    const message = documentRef.createElement('p');
+    message.className = 'error-console__message';
+    message.textContent = entry.message;
+
+    item.append(header, message);
+
+    if (entry.detail) {
+      const details = documentRef.createElement('details');
+      details.className = 'error-console__details';
+
+      const summary = documentRef.createElement('summary');
+      summary.textContent = 'View stack trace';
+
+      const pre = documentRef.createElement('pre');
+      pre.className = 'error-console__stack';
+      pre.textContent = entry.detail;
+
+      details.append(summary, pre);
+      item.append(details);
+    }
+
+    scope.setTimeout(() => {
+      item.classList.remove('error-console__entry--new');
+    }, 1200);
+
+    return item;
+  };
+
+  const appendEntry = (entry) => {
+    totalCount += 1;
+    updateCount();
+
+    const element = createEntryElement(entry);
+    if (list.firstChild) {
+      list.insertBefore(element, list.firstChild);
+    } else {
+      list.appendChild(element);
+    }
+
+    while (list.children.length > maxEntries) {
+      list.removeChild(list.lastChild);
+    }
+
+    showOverlay(true);
+  };
+
+  const recordEntry = ({ source, message, detail }) => {
+    const normalisedMessage = message ? message.trim() : '';
+    const entry = {
+      source: source || 'Console',
+      message: normalisedMessage || 'An unknown error occurred.',
+      detail: trimDetail(detail || ''),
+      timestamp: new Date(),
+    };
+    appendEntry(entry);
+  };
+
+  const captureConsoleError = (args) => {
+    const parts = [];
+    let stack = '';
+
+    for (const argument of args) {
+      const text = ensureString(argument);
+      if (text) {
+        parts.push(text);
+      }
+      if (!stack) {
+        stack = extractStack(argument);
+      }
+    }
+
+    const message = parts.join(' ').trim();
+    recordEntry({
+      source: 'Console',
+      message: message || 'Console error logged.',
+      detail: stack,
+    });
+  };
+
+  const captureRuntimeError = (event) => {
+    if (!event) {
+      return;
+    }
+    const message = ensureString(event.message) || 'Uncaught runtime error.';
+    let detail = extractStack(event.error);
+    if (!detail) {
+      const location = [event.filename, event.lineno, event.colno].filter(Boolean).join(':');
+      if (location) {
+        detail = location;
+      }
+    }
+    recordEntry({
+      source: 'Runtime',
+      message,
+      detail,
+    });
+  };
+
+  const captureUnhandledRejection = (event) => {
+    if (!event) {
+      return;
+    }
+    const reason = typeof event.reason !== 'undefined' ? event.reason : null;
+    const message = ensureString(reason) || 'Unhandled promise rejection.';
+    const detail = extractStack(reason);
+    recordEntry({
+      source: 'Promise',
+      message,
+      detail,
+    });
+  };
+
+  const consoleRef = scope.console ?? {};
+  const originalConsoleError =
+    consoleRef && typeof consoleRef.error === 'function' ? consoleRef.error.bind(consoleRef) : null;
+
+  if (consoleRef && typeof consoleRef === 'object') {
+    consoleRef.error = function errorInterceptor(...args) {
+      try {
+        captureConsoleError(args);
+      } catch (error) {
+        originalConsoleError?.('Failed to mirror console error:', error);
+      }
+      if (originalConsoleError) {
+        return originalConsoleError.apply(this, args);
+      }
+      return undefined;
+    };
+  }
+
+  if (typeof scope.addEventListener === 'function') {
+    scope.addEventListener('error', captureRuntimeError);
+    scope.addEventListener('unhandledrejection', captureUnhandledRejection);
+  }
+
+  scope.__INFINITE_RAILS_ERROR_CONSOLE__ = {
+    record: (message, options = {}) => {
+      recordEntry({
+        source: ensureString(options.source) || 'Manual',
+        message: ensureString(message),
+        detail: ensureString(options.detail),
+      });
+    },
+  };
+})(typeof window !== 'undefined' ? window : undefined);
+
 (function setupFetchCircuitBreaker(globalScope) {
   const scope =
     typeof globalScope !== 'undefined'
