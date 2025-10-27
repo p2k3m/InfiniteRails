@@ -33,7 +33,8 @@ const config = {
   githubApiBase: process.env.GITHUB_API_URL || 'https://api.github.com',
   githubGraphqlUrl: process.env.GITHUB_GRAPHQL_URL || 'https://api.github.com/graphql',
   githubServerUrl: process.env.GITHUB_SERVER_URL || 'https://github.com',
-  targetBranch: process.env.TARGET_BRANCH || 'main',
+  targetBranch: (process.env.TARGET_BRANCH || 'main').trim(),
+  targetEvent: process.env.TARGET_EVENT ? process.env.TARGET_EVENT.trim() : null,
   maxAttempts: Number(process.env.MAX_FIX_ATTEMPTS || 3),
   pollIntervalMs: Number(process.env.POLL_INTERVAL_MS || 60000),
   checkTimeoutMs: Number(process.env.CHECK_TIMEOUT_MS || 30 * 60 * 1000),
@@ -120,8 +121,17 @@ async function getInitialRun(processed) {
     if (!run) {
       throw new Error(`Workflow run ${config.targetRunId} not found`);
     }
-    if (run.head_branch !== config.targetBranch) {
-      console.warn(`Target run ${config.targetRunId} is on branch ${run.head_branch}; expected ${config.targetBranch}. Proceeding anyway.`);
+    if (run.event === 'pull_request') {
+      const baseBranch = run.pull_requests?.[0]?.base_branch || config.targetBranch;
+      if (baseBranch && baseBranch !== config.targetBranch) {
+        console.warn(
+          `Target run ${config.targetRunId} base branch is ${baseBranch}; expected ${config.targetBranch}. Proceeding anyway.`
+        );
+      }
+    } else if (run.head_branch !== config.targetBranch) {
+      console.warn(
+        `Target run ${config.targetRunId} is on branch ${run.head_branch}; expected ${config.targetBranch}. Proceeding anyway.`
+      );
     }
     if (run.conclusion && run.conclusion !== 'failure') {
       console.warn(`Target run ${config.targetRunId} concluded with ${run.conclusion}; searching for another failed run.`);
@@ -186,9 +196,19 @@ async function callLlmForPatch(run, failureContext, attempt) {
     role: 'system',
     content: 'You are an autonomous GitHub maintenance agent. Given CI failure context, you must generate a unified diff patch that resolves the failure. Reply with only the diff. Do not include prose, explanations, or code fences. The diff must apply cleanly with `git apply`.',
   };
+  const prDescriptor = (() => {
+    if (run.event !== 'pull_request' || !Array.isArray(run.pull_requests) || run.pull_requests.length === 0) {
+      return '';
+    }
+    const pr = run.pull_requests[0];
+    const number = pr.number ? `#${pr.number}` : 'unknown';
+    const head = pr.head_branch || pr.head_sha || 'unknown head';
+    const base = pr.base_branch || pr.base_sha || 'unknown base';
+    return `Pull request: ${number} (${head} -> ${base})\n`;
+  })();
   const userMessage = {
     role: 'user',
-    content: `Repository: ${config.repo}\nTarget branch: ${config.targetBranch}\nWorkflow run: ${run.name} (#${run.id})\nAttempt: ${attempt}\nFailure job: ${failureContext.job.name} (${failureContext.job.id})\nFailure summary:\n${failureContext.logSummary}\n\nGenerate a unified diff that fixes the failure. Ensure file paths are relative to the repository root.`,
+    content: `Repository: ${config.repo}\nTarget branch: ${config.targetBranch}\nWorkflow run: ${run.name} (#${run.id})\nWorkflow event: ${run.event}\n${prDescriptor}Attempt: ${attempt}\nFailure job: ${failureContext.job.name} (${failureContext.job.id})\nFailure summary:\n${failureContext.logSummary}\n\nGenerate a unified diff that fixes the failure. Ensure file paths are relative to the repository root.`,
   };
 
   const response = await fetch(config.openaiUrl, {
@@ -418,6 +438,17 @@ async function main() {
   if (!run) {
     console.log('No failed workflow runs detected on the target branch. Exiting.');
     return;
+  }
+
+  const eventType = config.targetEvent || run.event;
+  console.log(`Detected failed workflow run ${run.id} (${run.name}) triggered by ${eventType}.`);
+
+  if (run.event === 'pull_request') {
+    const prBaseBranch = run.pull_requests?.[0]?.base_branch;
+    if (prBaseBranch && prBaseBranch !== config.targetBranch) {
+      console.log(`Adjusting target branch from ${config.targetBranch} to PR base ${prBaseBranch}.`);
+      config.targetBranch = prBaseBranch;
+    }
   }
 
   while (attempt <= config.maxAttempts && run) {
