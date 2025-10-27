@@ -8,9 +8,14 @@
 
   const overlayActions = documentRef.getElementById('globalOverlayActions');
   const overlayButton = documentRef.getElementById('globalOverlayRecoveryButton');
+  const overlayStorageButton = documentRef.getElementById('globalOverlayClearStorageButton');
   const overlayRecoveryLabel = 'Reload & Diagnostics';
   if (overlayButton) {
     overlayButton.textContent = overlayRecoveryLabel;
+  }
+  const overlayStorageLabel = 'Clear Local Data';
+  if (overlayStorageButton) {
+    overlayStorageButton.textContent = overlayStorageLabel;
   }
 
   const briefingActions = documentRef.getElementById('gameBriefingSupportActions');
@@ -34,6 +39,206 @@
       overlayActions.hidden = shouldHide;
     }
   }
+
+  const BOOT_FAILURE_STORAGE_KEY = 'infinite-rails-boot-failure-count';
+  const BOOT_FAILURE_THRESHOLD = 2;
+  const BOOT_FAILURE_COUNT_MAX = 10;
+  const FAILURE_MESSAGE_PATTERN = /fail|error|panic|fatal|corrupt|stalled|halt|unable/;
+
+  let overlayFailureActive = false;
+  let bootFailureCount = 0;
+  let cachedLocalStorage = null;
+  let localStorageResolutionAttempted = false;
+
+  function resolveLocalStorage() {
+    if (localStorageResolutionAttempted) {
+      return cachedLocalStorage;
+    }
+    localStorageResolutionAttempted = true;
+    try {
+      const storageCandidate =
+        scope?.localStorage ??
+        scope?.window?.localStorage ??
+        (typeof scope?.globalThis?.localStorage !== 'undefined' ? scope.globalThis.localStorage : null);
+      if (!storageCandidate) {
+        cachedLocalStorage = null;
+        return cachedLocalStorage;
+      }
+      const probeKey = '__infinite-rails-boot-recovery__';
+      storageCandidate.setItem(probeKey, '1');
+      storageCandidate.removeItem(probeKey);
+      cachedLocalStorage = storageCandidate;
+    } catch (error) {
+      cachedLocalStorage = null;
+      if (scope?.console && typeof scope.console.debug === 'function') {
+        scope.console.debug('Boot recovery could not access localStorage.', error);
+      }
+    }
+    return cachedLocalStorage;
+  }
+
+  function clampFailureCount(value) {
+    if (!Number.isFinite(value)) {
+      return 0;
+    }
+    return Math.max(0, Math.min(BOOT_FAILURE_COUNT_MAX, Math.round(value)));
+  }
+
+  function loadFailureCount() {
+    const storage = resolveLocalStorage();
+    if (!storage) {
+      return 0;
+    }
+    try {
+      const raw = storage.getItem(BOOT_FAILURE_STORAGE_KEY);
+      if (!raw) {
+        return 0;
+      }
+      const parsed = JSON.parse(raw);
+      const count = clampFailureCount(parsed?.count);
+      if (count <= 0) {
+        storage.removeItem(BOOT_FAILURE_STORAGE_KEY);
+        return 0;
+      }
+      return count;
+    } catch (error) {
+      try {
+        storage.removeItem(BOOT_FAILURE_STORAGE_KEY);
+      } catch (removeError) {
+        // ignore removal errors
+      }
+      if (scope?.console && typeof scope.console.debug === 'function') {
+        scope.console.debug('Boot recovery discarded invalid boot failure state.', error);
+      }
+      return 0;
+    }
+  }
+
+  function persistFailureCount(count) {
+    const storage = resolveLocalStorage();
+    if (!storage) {
+      return;
+    }
+    const clamped = clampFailureCount(count);
+    try {
+      if (clamped <= 0) {
+        storage.removeItem(BOOT_FAILURE_STORAGE_KEY);
+      } else {
+        storage.setItem(
+          BOOT_FAILURE_STORAGE_KEY,
+          JSON.stringify({ count: clamped, updatedAt: Date.now() }),
+        );
+      }
+    } catch (error) {
+      if (scope?.console && typeof scope.console.debug === 'function') {
+        scope.console.debug('Boot recovery failed to persist boot failure state.', error);
+      }
+    }
+  }
+
+  function shouldOfferStorageReset() {
+    if (!overlayFailureActive) {
+      return false;
+    }
+    if (bootFailureCount < BOOT_FAILURE_THRESHOLD) {
+      return false;
+    }
+    return Boolean(resolveLocalStorage());
+  }
+
+  function refreshOverlayStorageVisibility() {
+    if (!overlayStorageButton || !overlayActions) {
+      return;
+    }
+    const shouldShow = shouldOfferStorageReset();
+    const nextHidden = !shouldShow;
+    if (overlayStorageButton.hidden !== nextHidden) {
+      overlayStorageButton.hidden = nextHidden;
+    }
+    refreshOverlayActionsVisibility();
+  }
+
+  function recordBootFailure(context = {}) {
+    const nextCount = clampFailureCount(bootFailureCount + 1);
+    if (nextCount !== bootFailureCount) {
+      bootFailureCount = nextCount;
+      persistFailureCount(bootFailureCount);
+    }
+    if (scope?.console && typeof scope.console.info === 'function') {
+      scope.console.info('Boot recovery recorded a renderer boot failure.', context);
+    }
+    refreshOverlayStorageVisibility();
+  }
+
+  function resetBootFailureState(context = {}) {
+    if (bootFailureCount === 0) {
+      return;
+    }
+    bootFailureCount = 0;
+    persistFailureCount(0);
+    if (scope?.console && typeof scope.console.debug === 'function') {
+      scope.console.debug('Boot recovery reset the recorded boot failure count.', context);
+    }
+    refreshOverlayStorageVisibility();
+  }
+
+  function attemptLocalStoragePurge() {
+    const confirmResult =
+      typeof scope?.confirm === 'function'
+        ? scope.confirm(
+            'Clearing local data removes saved settings for this device and may resolve corrupt state. Continue?',
+          )
+        : true;
+    if (!confirmResult) {
+      return;
+    }
+
+    const storage = resolveLocalStorage();
+    if (storage) {
+      try {
+        if (typeof storage.clear === 'function') {
+          storage.clear();
+        } else if (typeof storage.removeItem === 'function' && typeof storage.length === 'number') {
+          const keys = [];
+          for (let index = storage.length - 1; index >= 0; index -= 1) {
+            const key = storage.key?.(index);
+            if (typeof key === 'string' && key.length > 0) {
+              keys.push(key);
+            }
+          }
+          if (keys.length === 0 && typeof storage.key !== 'function') {
+            // fall back to removing known key when key() is unavailable
+            keys.push(BOOT_FAILURE_STORAGE_KEY);
+          }
+          keys.forEach((key) => {
+            try {
+              storage.removeItem(key);
+            } catch (error) {
+              if (scope?.console && typeof scope.console.debug === 'function') {
+                scope.console.debug('Boot recovery failed to remove localStorage key during purge.', error);
+              }
+            }
+          });
+        }
+      } catch (error) {
+        if (scope?.console && typeof scope.console.warn === 'function') {
+          scope.console.warn('Boot recovery failed to clear localStorage.', error);
+        }
+      }
+    }
+
+    overlayFailureActive = false;
+    resetBootFailureState({ reason: 'manual-purge' });
+
+    if (scope?.console && typeof scope.console.info === 'function') {
+      scope.console.info('Boot recovery purged localStorage and will reload the experience.');
+    }
+
+    triggerBootReload('local-storage-purge');
+  }
+
+  bootFailureCount = loadFailureCount();
+  refreshOverlayStorageVisibility();
 
   function refreshLeaderboardActionsVisibility() {
     if (!leaderboardActions) {
@@ -138,14 +343,43 @@
 
   function evaluateOverlayRecoveryVisibility() {
     const overlay = documentRef.getElementById('globalOverlay');
-    const overlayVisible = Boolean(overlay && overlay.hidden !== true && overlay.getAttribute('data-mode') === 'loading');
+    const overlayModeRaw = overlay?.getAttribute('data-mode');
+    const overlayMode = typeof overlayModeRaw === 'string' ? overlayModeRaw.trim().toLowerCase() : '';
+    const overlayVisible = Boolean(overlay && overlay.hidden !== true && overlayMode === 'loading');
     const uiStatusElement = documentRef.getElementById('bootstrapStatusUi');
     const uiStatusMessage = normaliseMessage(uiStatusElement?.textContent || '');
     const uiStatusItem = documentRef.querySelector('[data-phase="ui"]');
     const phaseStatus = uiStatusItem?.getAttribute('data-status') || '';
     const uiWaiting = /preparing\s+interface/.test(uiStatusMessage);
+
+    const overlayFailureLikely =
+      overlayVisible && (phaseStatus === 'error' || FAILURE_MESSAGE_PATTERN.test(uiStatusMessage));
+
+    if (overlayFailureLikely) {
+      if (!overlayFailureActive) {
+        overlayFailureActive = true;
+        recordBootFailure({ status: phaseStatus || 'unknown', message: uiStatusMessage || 'n/a' });
+      }
+    } else if (overlayFailureActive) {
+      overlayFailureActive = false;
+      refreshOverlayStorageVisibility();
+    }
+
     const shouldShow = overlayVisible && (uiWaiting || phaseStatus === 'error' || phaseStatus === 'warning');
     setOverlayRecoveryVisibility(shouldShow);
+
+    const overlayHidden = Boolean(overlay && overlay.hidden === true);
+    const overlayRecovered =
+      overlay &&
+      bootFailureCount > 0 &&
+      (!overlayVisible && (overlayHidden || (overlayMode && overlayMode !== 'loading')) ||
+        (overlayVisible && phaseStatus === 'ok' && !FAILURE_MESSAGE_PATTERN.test(uiStatusMessage)));
+
+    if (overlayRecovered) {
+      resetBootFailureState({ reason: 'overlay-recovered', mode: overlayMode || 'unknown' });
+    }
+
+    refreshOverlayStorageVisibility();
   }
 
   function evaluateBriefingRecoveryVisibility() {
@@ -180,6 +414,15 @@
         event.preventDefault();
       }
       triggerBootReload('overlay-recovery');
+    });
+  }
+
+  if (overlayStorageButton) {
+    overlayStorageButton.addEventListener('click', (event) => {
+      if (event?.preventDefault) {
+        event.preventDefault();
+      }
+      attemptLocalStoragePurge();
     });
   }
 
@@ -258,6 +501,8 @@
     setBriefingRecoveryVisibility,
     evaluateLeaderboardRecoveryVisibility,
     setLeaderboardRecoveryVisibility,
+    refreshOverlayStorageVisibility,
+    resetBootFailureState,
     triggerBootReload,
   };
 })(this);
