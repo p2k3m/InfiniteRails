@@ -14,6 +14,9 @@ function prepareExperienceForAdvance(experience) {
   vi.spyOn(experience, 'buildRails').mockImplementation(() => {});
   vi.spyOn(experience, 'spawnDimensionChests').mockImplementation(() => {});
   vi.spyOn(experience, 'refreshPortalState').mockImplementation(() => {});
+  vi.spyOn(experience, 'clearZombies').mockImplementation(() => {});
+  vi.spyOn(experience, 'clearGolems').mockImplementation(() => {});
+  vi.spyOn(experience, 'clearChests').mockImplementation(() => {});
   vi.spyOn(experience, 'revealDimensionIntro').mockImplementation(() => {});
   vi.spyOn(experience, 'rebindDimensionContext').mockImplementation(() => {});
   vi.spyOn(experience, 'updateHud').mockImplementation(() => {});
@@ -94,6 +97,9 @@ describe('simple experience dimension travel scoring', () => {
     expect(exitSpy).toHaveBeenCalledWith(
       expect.objectContaining({ previousDimension: expect.anything(), nextDimension: expect.anything() }),
     );
+    expect(experience.clearZombies).toHaveBeenCalled();
+    expect(experience.clearGolems).toHaveBeenCalled();
+    expect(experience.clearChests).toHaveBeenCalled();
     expect(applySpy).toHaveBeenCalledWith(expect.any(Number));
     expect(buildSpy).toHaveBeenCalled();
     expect(populateSpy).toHaveBeenCalledWith({ reason: 'dimension-transition' });
