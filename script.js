@@ -1,3 +1,38 @@
+function ensureTrailingSlash(value) {
+  if (typeof value !== 'string') {
+    return value;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return trimmed;
+  }
+  return trimmed.endsWith('/') ? trimmed : `${trimmed}/`;
+}
+
+const PRODUCTION_ASSET_ROOT = ensureTrailingSlash('https://d3gj6x3ityfh5o.cloudfront.net/');
+
+(function applyProductionAssetRoot(globalScope) {
+  if (!globalScope || typeof globalScope !== 'object') {
+    return;
+  }
+
+  try {
+    Object.defineProperty(globalScope, 'PRODUCTION_ASSET_ROOT', {
+      value: PRODUCTION_ASSET_ROOT,
+      writable: false,
+      enumerable: false,
+      configurable: false,
+    });
+  } catch (error) {
+    globalScope.PRODUCTION_ASSET_ROOT = PRODUCTION_ASSET_ROOT;
+  }
+
+  const appConfig = globalScope.APP_CONFIG || (globalScope.APP_CONFIG = {});
+  if (typeof appConfig.assetRoot !== 'string' || !appConfig.assetRoot.trim()) {
+    appConfig.assetRoot = PRODUCTION_ASSET_ROOT;
+  }
+})(typeof window !== 'undefined' ? window : typeof globalThis !== 'undefined' ? globalThis : undefined);
+
       message: 'Open Diagnostics → Assets to restore missing files, or reload manually if prompted.',
     message = 'An unexpected error occurred. Open Diagnostics for recovery steps before restarting.',
       userMessage: 'The game failed to initialise. Open Diagnostics → Renderer for recovery steps before restarting.',
