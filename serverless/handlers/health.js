@@ -85,6 +85,16 @@ function buildHealthPayload() {
   };
 }
 
+/**
+ * Lambda HTTP handler that returns a health payload consumed by uptime probes
+ * and the deployment pipeline. Accepts GET/HEAD/OPTIONS requests, rejects
+ * other methods, and always emits trace-aware JSON responses so downstream
+ * alerts surface the same metadata captured in the health dashboard.
+ *
+ * @param {import('aws-lambda').APIGatewayProxyEvent} [event]
+ * @param {import('aws-lambda').Context} [context]
+ * @returns {Promise<import('aws-lambda').APIGatewayProxyResult>}
+ */
 exports.handler = async (event = {}, context = {}) => {
   const trace = createTraceContext(event, context);
   const logger = createTraceLogger(trace);
