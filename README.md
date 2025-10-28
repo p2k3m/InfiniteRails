@@ -2,6 +2,9 @@
 
 Infinite Dimension is a browser-based voxel survival-puzzle experience inspired by the "Comprehensive Analysis and Enhancement Specifications" brief. The advanced renderer now boots by default and delivers a complete Minecraft-style prototype featuring:
 
+**Last successful deploy:** 2024-07-01 (build tag `61e4a3d4804d`, served from https://d3gj6x3ityfh5o.cloudfront.net/).
+**Last CloudFront verification:** 2024-07-01 (asset manifest curl checks against the distribution).
+
 - a Three.js render loop that carves out a 64×64 floating island with day/night lighting and shader-driven portals;
 - first-person controls with the Steve avatar, idle/walk animation mixers, mining and block placement, and virtual joystick support on mobile;
 - survival systems spanning health, bubbles, zombies, iron golems, crafting, scoring, and sequential dimension unlocks; and
