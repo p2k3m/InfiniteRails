@@ -366,7 +366,15 @@ export function createBootstrapSandbox(options = {}) {
 
   const windowStub = {
     document: documentStub,
-    location: { href: 'https://example.com/index.html', protocol: 'https:' },
+    location: {
+      href: 'https://example.com/index.html',
+      protocol: 'https:',
+      host: 'example.com',
+      hostname: 'example.com',
+      origin: 'https://example.com',
+      search: '',
+      pathname: '/index.html',
+    },
     navigator: { maxTouchPoints: 0, userAgent: 'test-agent' },
     matchMedia: vi.fn(() => ({
       matches: false,
@@ -412,6 +420,22 @@ export function createBootstrapSandbox(options = {}) {
     URL,
     URLSearchParams,
   };
+
+  const storageState = new Map();
+  const localStorageStub = {
+    getItem: vi.fn((key) => (storageState.has(String(key)) ? storageState.get(String(key)) : null)),
+    setItem: vi.fn((key, value) => {
+      storageState.set(String(key), String(value));
+    }),
+    removeItem: vi.fn((key) => {
+      storageState.delete(String(key));
+    }),
+    clear: vi.fn(() => {
+      storageState.clear();
+    }),
+  };
+  windowStub.localStorage = localStorageStub;
+  sandbox.localStorage = localStorageStub;
 
   windowStub.window = windowStub;
   windowStub.globalThis = windowStub;

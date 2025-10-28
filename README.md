@@ -56,6 +56,16 @@ Two automated suites ship with the repository:
 
 Playwright downloads its browser binaries on demand. If the end-to-end check fails with a message similar to “Executable doesn't exist … run `npx playwright install`”, execute that command once and rerun the test. When the host machine is missing system-level browser dependencies (common inside constrained CI sandboxes), the script now reports the missing packages and exits gracefully so the rest of the toolchain can continue. The download step is skipped automatically in CI because the workflow caches the Playwright bundle.
 
+### Asset bundle overrides
+
+The bootstrap now honours development-friendly asset roots before falling back to the production CDN. When you need to exercise the prototype offline or against a bespoke asset host, set any of the following before `script.js` executes:
+
+- `?assetRoot=<value>` query string – accepts absolute URLs, relative paths, or the keywords `local`, `offline`, and `self` to resolve to `./`.
+- `localStorage['infiniteRails.assetRootOverride']` – persisted automatically the first time a query override is detected so subsequent reloads stay offline.
+- `window.APP_CONFIG.assetRoot` – if you inject a value ahead of the bootstrap, it wins over the heuristics entirely.
+
+If no explicit override is found, the loader auto-detects loopback origins (for example `http://localhost:3000`) and serves assets from the same origin. Only when those checks fail does it fall back to `https://d3gj6x3ityfh5o.cloudfront.net/`, matching the deployed bundle.
+
 ## Enhancement roadmap
 
 The design brief titled **“Comprehensive Analysis and Enhancement Specifications for Infinite Rails: Portals of Dimension”**

@@ -11,6 +11,217 @@ function ensureTrailingSlash(value) {
 
 const PRODUCTION_ASSET_ROOT = ensureTrailingSlash('https://d3gj6x3ityfh5o.cloudfront.net/');
 
+const ASSET_ROOT_STORAGE_KEYS = Object.freeze([
+  'infiniteRails.assetRootOverride',
+  'InfiniteRails.assetRootOverride',
+  'InfiniteRails.assetRoot',
+]);
+
+const LOCAL_ASSET_ROOT_TOKENS = Object.freeze(new Set(['local', 'offline', 'self']));
+
+function getBootstrapLocation(scope) {
+  if (!scope || typeof scope !== 'object') {
+    return null;
+  }
+  const candidate =
+    scope.location && typeof scope.location === 'object'
+      ? scope.location
+      : scope.window && typeof scope.window.location === 'object'
+        ? scope.window.location
+        : null;
+  if (!candidate) {
+    return null;
+  }
+  return candidate;
+}
+
+function ensureString(value) {
+  if (typeof value === 'string') {
+    return value;
+  }
+  if (value == null) {
+    return '';
+  }
+  return String(value);
+}
+
+function normaliseAssetRootCandidate(rawValue, scope) {
+  const candidate = ensureString(rawValue).trim();
+  if (!candidate) {
+    return null;
+  }
+  if (candidate === '.' || candidate === './') {
+    return ensureTrailingSlash('./');
+  }
+  if (LOCAL_ASSET_ROOT_TOKENS.has(candidate.toLowerCase())) {
+    return ensureTrailingSlash('./');
+  }
+  const location = getBootstrapLocation(scope);
+  if (candidate.startsWith('//')) {
+    const protocol = ensureString(location?.protocol).trim();
+    const resolvedProtocol = protocol ? protocol : 'https:';
+    return ensureTrailingSlash(`${resolvedProtocol}${candidate}`);
+  }
+  if (candidate.startsWith('/')) {
+    const origin = ensureString(location?.origin).trim();
+    if (origin) {
+      return ensureTrailingSlash(`${origin}${candidate}`);
+    }
+  }
+  try {
+    if (/^[a-z]+:/i.test(candidate)) {
+      return ensureTrailingSlash(new URL(candidate).toString());
+    }
+  } catch (error) {
+    return null;
+  }
+  return ensureTrailingSlash(candidate);
+}
+
+function readAssetRootFromQuery(scope) {
+  const location = getBootstrapLocation(scope);
+  const search = ensureString(location?.search);
+  if (!search) {
+    return null;
+  }
+  let params;
+  try {
+    params = new URLSearchParams(search.startsWith('?') ? search : `?${search}`);
+  } catch (error) {
+    return null;
+  }
+  const explicitOverride =
+    params.get('assetRoot') ?? params.get('asset_root') ?? params.get('asset-root');
+  if (explicitOverride) {
+    return normaliseAssetRootCandidate(explicitOverride, scope);
+  }
+  if (params.has('useLocalAssets') || params.get('localAssets') === '1') {
+    return ensureTrailingSlash('./');
+  }
+  return null;
+}
+
+function getBootstrapStorage(scope) {
+  const storage =
+    scope.localStorage && typeof scope.localStorage === 'object'
+      ? scope.localStorage
+      : scope.window && typeof scope.window.localStorage === 'object'
+        ? scope.window.localStorage
+        : null;
+  if (!storage) {
+    return null;
+  }
+  if (typeof storage.getItem !== 'function') {
+    return null;
+  }
+  return storage;
+}
+
+function readAssetRootFromStorage(scope) {
+  const storage = getBootstrapStorage(scope);
+  if (!storage) {
+    return null;
+  }
+  for (const key of ASSET_ROOT_STORAGE_KEYS) {
+    let stored;
+    try {
+      stored = storage.getItem(key);
+    } catch (error) {
+      return null;
+    }
+    const normalised = normaliseAssetRootCandidate(stored, scope);
+    if (normalised) {
+      return normalised;
+    }
+  }
+  return null;
+}
+
+function persistAssetRootOverride(scope, assetRoot) {
+  const storage = getBootstrapStorage(scope);
+  if (!storage || typeof storage.setItem !== 'function') {
+    return;
+  }
+  for (const key of ASSET_ROOT_STORAGE_KEYS) {
+    try {
+      storage.setItem(key, assetRoot);
+    } catch (error) {
+      break;
+    }
+  }
+}
+
+function inferLocalAssetRoot(scope) {
+  const location = getBootstrapLocation(scope);
+  if (!location) {
+    return null;
+  }
+  const protocol = ensureString(location.protocol).toLowerCase();
+  const hostname = ensureString(location.hostname).toLowerCase();
+  if (protocol === 'file:') {
+    return ensureTrailingSlash('./');
+  }
+  const isLoopbackHost =
+    hostname === 'localhost' ||
+    hostname.endsWith('.localhost') ||
+    hostname === '127.0.0.1' ||
+    hostname === '::1';
+  if (!isLoopbackHost) {
+    return null;
+  }
+  const origin = ensureString(location.origin);
+  if (origin) {
+    return ensureTrailingSlash(`${origin}/`);
+  }
+  const host = ensureString(location.host);
+  if (host && protocol) {
+    return ensureTrailingSlash(`${protocol}//${host}/`);
+  }
+  return ensureTrailingSlash('./');
+}
+
+function resolveBootstrapAssetRoot(scope) {
+  const appConfig = scope.APP_CONFIG || (scope.APP_CONFIG = {});
+  const preconfigured = normaliseAssetRootCandidate(appConfig.assetRoot, scope);
+  if (preconfigured) {
+    appConfig.assetRoot = preconfigured;
+    if (typeof appConfig.assetBaseUrl !== 'string' || !appConfig.assetBaseUrl.trim()) {
+      appConfig.assetBaseUrl = preconfigured;
+    }
+    return preconfigured;
+  }
+  const queryOverride = readAssetRootFromQuery(scope);
+  if (queryOverride) {
+    appConfig.assetRoot = queryOverride;
+    if (typeof appConfig.assetBaseUrl !== 'string' || !appConfig.assetBaseUrl.trim()) {
+      appConfig.assetBaseUrl = queryOverride;
+    }
+    persistAssetRootOverride(scope, queryOverride);
+    return queryOverride;
+  }
+  const storedOverride = readAssetRootFromStorage(scope);
+  if (storedOverride) {
+    appConfig.assetRoot = storedOverride;
+    if (typeof appConfig.assetBaseUrl !== 'string' || !appConfig.assetBaseUrl.trim()) {
+      appConfig.assetBaseUrl = storedOverride;
+    }
+    return storedOverride;
+  }
+  const inferredLocal = inferLocalAssetRoot(scope);
+  if (inferredLocal) {
+    appConfig.assetRoot = inferredLocal;
+    if (typeof appConfig.assetBaseUrl !== 'string' || !appConfig.assetBaseUrl.trim()) {
+      appConfig.assetBaseUrl = inferredLocal;
+    }
+    return inferredLocal;
+  }
+  appConfig.assetRoot = PRODUCTION_ASSET_ROOT;
+  if (typeof appConfig.assetBaseUrl !== 'string' || !appConfig.assetBaseUrl.trim()) {
+    appConfig.assetBaseUrl = PRODUCTION_ASSET_ROOT;
+  }
+  return PRODUCTION_ASSET_ROOT;
+}
+
 (function setupErrorConsoleOverlay(globalScope) {
   const scope =
     typeof globalScope !== 'undefined'
@@ -1680,11 +1891,27 @@ const PRODUCTION_ASSET_ROOT = ensureTrailingSlash('https://d3gj6x3ityfh5o.cloudf
     globalScope.PRODUCTION_ASSET_ROOT = PRODUCTION_ASSET_ROOT;
   }
 
-  const appConfig = globalScope.APP_CONFIG || (globalScope.APP_CONFIG = {});
-  if (typeof appConfig.assetRoot !== 'string' || !appConfig.assetRoot.trim()) {
-    appConfig.assetRoot = PRODUCTION_ASSET_ROOT;
-  }
+  resolveBootstrapAssetRoot(globalScope);
 })(typeof window !== 'undefined' ? window : typeof globalThis !== 'undefined' ? globalThis : undefined);
+
+(function exposeBootstrapInternals(globalScope) {
+  if (!globalScope || typeof globalScope !== 'object') {
+    return;
+  }
+  try {
+    const registry = globalScope.__INFINITE_RAILS_BOOTSTRAP__ || (globalScope.__INFINITE_RAILS_BOOTSTRAP__ = {});
+    if (!Object.prototype.hasOwnProperty.call(registry, 'resolveBootstrapAssetRoot')) {
+      Object.defineProperty(registry, 'resolveBootstrapAssetRoot', {
+        value: resolveBootstrapAssetRoot,
+        writable: false,
+        enumerable: false,
+        configurable: false,
+      });
+    }
+  } catch (error) {
+    // ignore exposure failures; only used for tests and diagnostics
+  }
+})(typeof globalThis !== 'undefined' ? globalThis : typeof window !== 'undefined' ? window : undefined);
 
       message: 'Open Diagnostics → Assets to restore missing files, or reload manually if prompted.',
     message = 'An unexpected error occurred. Open Diagnostics for recovery steps before restarting.',
