@@ -2009,6 +2009,244 @@ function markBootPhaseError(phase, message) {
   registry[key] = appendCircuitBreakerGuidance(message || 'Unknown bootstrap error', key === 'unknown' ? 'default' : key);
 }
 
+(function setupMissionBriefingFallback(globalScope) {
+  const scope =
+    typeof globalScope !== 'undefined'
+      ? globalScope
+      : typeof window !== 'undefined'
+        ? window
+        : typeof globalThis !== 'undefined'
+          ? globalThis
+          : null;
+  if (!scope || scope.__MISSION_BRIEFING_FALLBACK_API__) {
+    return;
+  }
+
+  const documentRef = scope.document ?? scope.documentRef ?? null;
+  if (!documentRef) {
+    return;
+  }
+
+  const getElement = (id) => {
+    if (!id || typeof documentRef.getElementById !== 'function') {
+      return null;
+    }
+    return documentRef.getElementById(id);
+  };
+
+  const ensureClassList = (element) => {
+    if (!element) {
+      return null;
+    }
+    if (!element.classList) {
+      const classes = new Set();
+      element.classList = {
+        add: (...tokens) => {
+          tokens.forEach((token) => {
+            if (token) {
+              classes.add(String(token));
+            }
+          });
+          element.className = Array.from(classes).join(' ');
+        },
+        remove: (...tokens) => {
+          tokens.forEach((token) => {
+            classes.delete(String(token));
+          });
+          element.className = Array.from(classes).join(' ');
+        },
+        contains: (token) => classes.has(String(token)),
+      };
+    }
+    return element.classList;
+  };
+
+  const setRendererModeIndicator = (mode) => {
+    const resolved = typeof mode === 'string' && mode.trim().length ? mode.trim() : '';
+    const root = documentRef.documentElement ?? null;
+    const body = documentRef.body ?? null;
+    if (root?.setAttribute) {
+      root.setAttribute('data-renderer-mode', resolved);
+    }
+    if (body?.setAttribute) {
+      body.setAttribute('data-renderer-mode', resolved);
+    }
+    scope.__INFINITE_RAILS_RENDERER_MODE__ = resolved;
+    scope.InfiniteRails = scope.InfiniteRails || {};
+    scope.InfiniteRails.rendererMode = resolved;
+  };
+
+  const ensureFallbackNotice = (container) => {
+    if (!container) {
+      return null;
+    }
+    let notice = getElement('gameBriefingFallbackNotice');
+    if (notice) {
+      return notice;
+    }
+    if (typeof documentRef.createElement !== 'function') {
+      return null;
+    }
+    notice = documentRef.createElement('p');
+    notice.id = 'gameBriefingFallbackNotice';
+    notice.className = 'game-briefing__fallback-notice';
+    notice.textContent =
+      'Renderer systems are offline. Launch mission briefing mode or reload the page to retry.';
+    if (typeof container.insertBefore === 'function') {
+      container.insertBefore(notice, container.firstChild ?? null);
+    } else if (typeof container.appendChild === 'function') {
+      container.appendChild(notice);
+    }
+    return notice;
+  };
+
+  const revealBriefing = (briefing) => {
+    if (!briefing) {
+      return;
+    }
+    briefing.hidden = false;
+    ensureClassList(briefing)?.add?.('is-visible');
+    if (typeof briefing.removeAttribute === 'function') {
+      briefing.removeAttribute('aria-hidden');
+    }
+  };
+
+  const configureDismissButton = (options = {}) => {
+    const dismissButton = getElement('dismissBriefing');
+    if (!dismissButton) {
+      return;
+    }
+    if (dismissButton.disabled) {
+      dismissButton.disabled = false;
+    }
+    if (dismissButton.dataset) {
+      dismissButton.dataset.lowFidelityBound = 'true';
+    }
+    if (typeof dismissButton.addEventListener === 'function' && !dismissButton.__missionBriefingBound) {
+      const handler = (event) => {
+        if (event?.preventDefault) {
+          event.preventDefault();
+        }
+        const canvas = getElement('gameCanvas');
+        if (canvas) {
+          canvas.style.display = '';
+        }
+        ensureClassList(getElement('gameBriefing'))?.remove?.('is-visible');
+      };
+      dismissButton.addEventListener('click', handler);
+      dismissButton.__missionBriefingBound = true;
+    }
+  };
+
+  const disableStartButton = () => {
+    const startButton = getElement('startButton');
+    if (!startButton) {
+      return;
+    }
+    startButton.disabled = true;
+    if (startButton.dataset) {
+      startButton.dataset.fallbackMode = 'briefing';
+      delete startButton.dataset.preloading;
+    }
+    if (typeof startButton.setAttribute === 'function') {
+      startButton.setAttribute('aria-disabled', 'true');
+    }
+  };
+
+  const hideCanvas = () => {
+    const canvas = getElement('gameCanvas');
+    if (canvas && canvas.style) {
+      canvas.style.display = 'none';
+    }
+  };
+
+  const updateSupportActions = (options = {}) => {
+    const supportContainer = getElement('gameBriefingSupportActions');
+    if (!supportContainer) {
+      return;
+    }
+    const recoveryButton = getElement('gameBriefingRecoveryButton');
+    if (!recoveryButton) {
+      supportContainer.hidden = true;
+      return;
+    }
+    recoveryButton.hidden = false;
+    supportContainer.hidden = false;
+    if (typeof recoveryButton.addEventListener === 'function' && !recoveryButton.__missionBriefingBound) {
+      recoveryButton.addEventListener('click', (event) => {
+        if (event?.preventDefault) {
+          event.preventDefault();
+        }
+        if (scope.location?.reload) {
+          scope.location.reload();
+        }
+      });
+      recoveryButton.__missionBriefingBound = true;
+    }
+    if (recoveryButton.dataset) {
+      recoveryButton.dataset.fallbackReason = options.reason ?? 'renderer-failure';
+    }
+  };
+
+  const activateMissionBriefingFallback = (options = {}) => {
+    if (!documentRef) {
+      return false;
+    }
+    const briefing = getElement('gameBriefing');
+    const content = briefing?.querySelector?.('.game-briefing__content') ?? briefing;
+    ensureFallbackNotice(content);
+    revealBriefing(briefing);
+    configureDismissButton(options);
+    disableStartButton();
+    hideCanvas();
+    updateSupportActions(options);
+    setRendererModeIndicator('briefing');
+    scope.__MISSION_BRIEFING_FALLBACK_AVAILABLE__ = true;
+    scope.__MISSION_BRIEFING_FALLBACK_ACTIVE__ = true;
+    scope.__MISSION_BRIEFING_FALLBACK_REASON__ = options.reason ?? 'renderer-failure';
+    return true;
+  };
+
+  const offerMissionBriefingFallback = (options = {}) => {
+    const overlay = scope.bootstrapOverlay ?? null;
+    if (!overlay || typeof overlay.setRecoveryAction !== 'function') {
+      return activateMissionBriefingFallback({ ...options, source: 'implicit-offer' });
+    }
+    const recoveryConfig = {
+      action: 'open-mission-briefing',
+      label: 'Open Mission Briefing Mode',
+      description:
+        'Switch to the text-only mission briefing so the expedition can continue without the renderer.',
+      onSelect: () => {
+        activateMissionBriefingFallback({ ...options, source: 'recovery-action' });
+        if (typeof overlay.hide === 'function') {
+          overlay.hide({ force: true });
+        }
+      },
+    };
+    try {
+      overlay.setRecoveryAction(recoveryConfig);
+      scope.__MISSION_BRIEFING_FALLBACK_AVAILABLE__ = true;
+      return true;
+    } catch (error) {
+      scope.console?.warn?.('Failed to register mission briefing fallback.', error);
+      return activateMissionBriefingFallback({ ...options, source: 'recovery-action-error', error });
+    }
+  };
+
+  const hooks = scope.__INFINITE_RAILS_TEST_HOOKS__ ?? {};
+  hooks.activateMissionBriefingFallback = activateMissionBriefingFallback;
+  hooks.offerMissionBriefingFallback = offerMissionBriefingFallback;
+  scope.__INFINITE_RAILS_TEST_HOOKS__ = hooks;
+
+  scope.activateMissionBriefingFallback = activateMissionBriefingFallback;
+  scope.offerMissionBriefingFallback = offerMissionBriefingFallback;
+  scope.__MISSION_BRIEFING_FALLBACK_API__ = {
+    activateMissionBriefingFallback,
+    offerMissionBriefingFallback,
+  };
+})(typeof window !== 'undefined' ? window : undefined);
+
 (function setupBackendHealthMonitor(globalScope) {
   const globalRef =
     typeof globalScope !== 'undefined'
