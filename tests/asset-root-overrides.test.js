@@ -32,6 +32,22 @@ describe('asset root overrides', () => {
     expect(windowStub.APP_CONFIG.assetBaseUrl).toBe('http://localhost:3000/');
   });
 
+  it('treats private network hosts as local asset roots', () => {
+    const { sandbox, windowStub } = createBootstrapSandbox({});
+    windowStub.location.href = 'http://192.168.1.15:4173/index.html';
+    windowStub.location.protocol = 'http:';
+    windowStub.location.host = '192.168.1.15:4173';
+    windowStub.location.hostname = '192.168.1.15';
+    windowStub.location.origin = 'http://192.168.1.15:4173';
+    windowStub.location.pathname = '/index.html';
+    windowStub.location.search = '';
+
+    evaluateBootstrapScript(sandbox);
+
+    expect(windowStub.APP_CONFIG.assetRoot).toBe('http://192.168.1.15:4173/');
+    expect(windowStub.APP_CONFIG.assetBaseUrl).toBe('http://192.168.1.15:4173/');
+  });
+
   it('falls back to the production CDN when no overrides apply', () => {
     const { sandbox, windowStub } = createBootstrapSandbox({});
 
