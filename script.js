@@ -235,8 +235,18 @@ function inferLocalAssetRoot(scope) {
     hostname === 'localhost' ||
     hostname.endsWith('.localhost') ||
     hostname === '127.0.0.1' ||
+    hostname === '0.0.0.0' ||
     hostname === '::1';
-  if (!isLoopbackHost) {
+  const PRIVATE_IPV4_PATTERNS = [
+    /^10(?:\.\d{1,3}){3}$/,
+    /^192\.168(?:\.\d{1,3}){2}$/,
+    /^172\.(?:1[6-9]|2[0-9]|3[0-1])(?:\.\d{1,3}){2}$/,
+    /^169\.254(?:\.\d{1,3}){2}$/,
+  ];
+  const isPrivateNetworkHost = PRIVATE_IPV4_PATTERNS.some((pattern) => pattern.test(hostname));
+  const isMdnsHost = hostname.endsWith('.local');
+  const shouldTreatAsLocal = isLoopbackHost || isPrivateNetworkHost || isMdnsHost;
+  if (!shouldTreatAsLocal) {
     return null;
   }
   const origin = ensureString(location.origin);
