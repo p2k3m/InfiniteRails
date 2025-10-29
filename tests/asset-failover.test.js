@@ -25,6 +25,7 @@ describe('asset CDN failover', () => {
     const fetchResponses = [
       createResponse({ ok: false, status: 403, statusText: 'Forbidden' }),
       createResponse({ ok: true, status: 200, statusText: 'OK' }),
+      createResponse({ ok: true, status: 200, statusText: 'OK' }),
     ];
 
     const fetchMock = vi.fn((input) => {
@@ -46,9 +47,10 @@ describe('asset CDN failover', () => {
     const cdnAssetUrl = 'https://d3gj6x3ityfh5o.cloudfront.net/asset-manifest.json?assetVersion=1';
 
     const firstResponse = await wrappedFetch(cdnAssetUrl);
-    expect(firstResponse.ok).toBe(false);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(firstResponse.ok).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(requests[0]).toBe(cdnAssetUrl);
+    expect(requests[1]).toBe('https://example.com/asset-manifest.json?assetVersion=1');
 
     const failoverState = windowStub.__INFINITE_RAILS_TEST_HOOKS__?.getAssetFailoverState?.();
     expect(failoverState?.failoverActive).toBe(true);
@@ -57,7 +59,7 @@ describe('asset CDN failover', () => {
 
     const secondResponse = await wrappedFetch(cdnAssetUrl);
     expect(secondResponse.ok).toBe(true);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(requests[1]).toBe('https://example.com/asset-manifest.json?assetVersion=1');
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(requests[2]).toBe('https://example.com/asset-manifest.json?assetVersion=1');
   });
 });
