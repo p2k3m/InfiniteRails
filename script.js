@@ -2893,6 +2893,40 @@ function cloneFallbackShortcutState() {
     return false;
   }
 
+  function shouldRetryAssetRequestWithActiveFailover(detail) {
+    const state = getAssetFailoverState();
+    if (!state || !state.failoverActive) {
+      return false;
+    }
+    const requestUrl = ensureString(detail?.requestUrl).trim();
+    if (!requestUrl) {
+      return false;
+    }
+    const primaryLower = ensureString(state.primaryRootLower || state.primaryRoot).toLowerCase();
+    const fallbackLower = ensureString(state.activeRootLower || state.fallbackRoot).toLowerCase();
+    if (!primaryLower || !fallbackLower || primaryLower === fallbackLower) {
+      return false;
+    }
+    const lowerRequest = requestUrl.toLowerCase();
+    if (!lowerRequest.startsWith(primaryLower)) {
+      return false;
+    }
+    if (lowerRequest.startsWith(fallbackLower)) {
+      return false;
+    }
+    return true;
+  }
+
+  function shouldRetryAfterFailure(detail, failoverAttempted) {
+    if (failoverAttempted) {
+      return false;
+    }
+    if (!detail || detail.category !== 'assets') {
+      return false;
+    }
+    return shouldRetryAssetRequestWithActiveFailover(detail);
+  }
+
   function clearAssetRetry(url) {
     if (!assetRetryQueue || !url) {
       return;
@@ -3161,7 +3195,11 @@ function cloneFallbackShortcutState() {
     pruneFailures(category, Date.now());
   };
 
-  const wrappedFetch = (resource, init) => {
+  const performFetch = (resource, init, attemptOptions = {}) => {
+    const options = {
+      failoverAttempted: Boolean(attemptOptions?.failoverAttempted),
+    };
+
     let adjustedResource = resource;
     let adjustedInit = init;
     const rewritten = maybeRewriteAssetRequest(resource, init);
@@ -3185,15 +3223,19 @@ function cloneFallbackShortcutState() {
     try {
       fetchResult = nativeFetch.call(scope, adjustedResource, adjustedInit);
     } catch (error) {
-      recordFailure(category, { error, phase: 'invoke', resource: adjustedResource, init: adjustedInit });
-      maybeScheduleAssetRetry({
+      const detail = {
         category,
         requestUrl,
         resource: adjustedResource,
         init: adjustedInit,
         error,
         phase: 'invoke',
-      });
+      };
+      recordFailure(category, detail);
+      maybeScheduleAssetRetry(detail);
+      if (shouldRetryAfterFailure(detail, options.failoverAttempted)) {
+        return performFetch(resource, init, { failoverAttempted: true });
+      }
       throw error;
     }
 
@@ -3204,26 +3246,37 @@ function cloneFallbackShortcutState() {
     return Promise.resolve(fetchResult)
       .then((response) => {
         if (!response || typeof response.ok !== 'boolean') {
-          recordFailure(category, { response, phase: 'invalid-response', resource: adjustedResource, init: adjustedInit });
-          return response;
-        }
-        if (!response.ok) {
-          recordFailure(category, {
-            response,
-            status: response.status,
-            statusText: response.statusText,
-            phase: 'http',
-            resource: adjustedResource,
-            init: adjustedInit,
-          });
-          maybeScheduleAssetRetry({
+          const detail = {
             category,
             requestUrl,
             resource: adjustedResource,
             init: adjustedInit,
             response,
+            phase: 'invalid-response',
+          };
+          recordFailure(category, detail);
+          maybeScheduleAssetRetry(detail);
+          if (shouldRetryAfterFailure(detail, options.failoverAttempted)) {
+            return performFetch(resource, init, { failoverAttempted: true });
+          }
+          return response;
+        }
+        if (!response.ok) {
+          const detail = {
+            category,
+            requestUrl,
+            resource: adjustedResource,
+            init: adjustedInit,
+            response,
+            status: response.status,
+            statusText: response.statusText,
             phase: 'http',
-          });
+          };
+          recordFailure(category, detail);
+          maybeScheduleAssetRetry(detail);
+          if (shouldRetryAfterFailure(detail, options.failoverAttempted)) {
+            return performFetch(resource, init, { failoverAttempted: true });
+          }
         } else {
           recordSuccess(category);
           if (category === 'assets' && requestUrl) {
@@ -3233,18 +3286,24 @@ function cloneFallbackShortcutState() {
         return response;
       })
       .catch((error) => {
-        recordFailure(category, { error, phase: 'rejection', resource: adjustedResource, init: adjustedInit });
-        maybeScheduleAssetRetry({
+        const detail = {
           category,
           requestUrl,
           resource: adjustedResource,
           init: adjustedInit,
           error,
           phase: 'rejection',
-        });
+        };
+        recordFailure(category, detail);
+        maybeScheduleAssetRetry(detail);
+        if (shouldRetryAfterFailure(detail, options.failoverAttempted)) {
+          return performFetch(resource, init, { failoverAttempted: true });
+        }
         throw error;
       });
   };
+
+  const wrappedFetch = (resource, init) => performFetch(resource, init, { failoverAttempted: false });
 
   const resetCircuit = () => {
     state.failureLog.clear();
