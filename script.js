@@ -9,6 +9,178 @@ function ensureTrailingSlash(value) {
   return trimmed.endsWith('/') ? trimmed : `${trimmed}/`;
 }
 
+function cloneDeep(value) {
+  if (value == null || typeof value !== 'object') {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => cloneDeep(item));
+  }
+  const result = {};
+  for (const [key, entry] of Object.entries(value)) {
+    result[key] = cloneDeep(entry);
+  }
+  return result;
+}
+
+function getBootstrapUi(scope) {
+  if (!scope || typeof scope !== 'object') {
+    return null;
+  }
+  const existing = scope.__INFINITE_RAILS_BOOTSTRAP_UI__;
+  if (existing && existing.document === scope.document) {
+    return existing;
+  }
+  const documentRef = scope.document ?? null;
+  const ui = {
+    document: documentRef,
+    scoreboardStatus: documentRef?.getElementById?.('scoreboardStatus') ?? null,
+    refreshScoresButton: documentRef?.getElementById?.('refreshScores') ?? null,
+    leaderboardTable: documentRef?.getElementById?.('leaderboardTable') ?? null,
+    leaderboardEmptyMessage: documentRef?.getElementById?.('leaderboardEmptyMessage') ?? null,
+    scoreSyncWarning: documentRef?.getElementById?.('scoreSyncWarning') ?? null,
+    scoreSyncWarningMessage:
+      documentRef?.querySelector?.('#scoreSyncWarning .score-sync-warning__message') ?? null,
+    documentBody: documentRef?.body ?? null,
+  };
+  scope.__INFINITE_RAILS_BOOTSTRAP_UI__ = ui;
+  return ui;
+}
+
+function setScoreboardOffline(scope, message, options = {}) {
+  const ui = getBootstrapUi(scope);
+  const element = ui?.scoreboardStatus;
+  if (!element) {
+    return;
+  }
+  const resolvedMessage =
+    typeof message === 'string' && message.trim().length
+      ? message.trim()
+      : 'Offline session active — backend validation failed.';
+  element.textContent = resolvedMessage;
+  element.dataset = element.dataset || {};
+  element.dataset.offline = 'true';
+  if (typeof element.setAttribute === 'function') {
+    element.setAttribute('data-offline', 'true');
+  }
+  if (options.datasetKey && element.dataset) {
+    element.dataset[options.datasetKey] = 'true';
+  }
+}
+
+function clearScoreboardOffline(scope) {
+  const ui = getBootstrapUi(scope);
+  const element = ui?.scoreboardStatus;
+  if (!element) {
+    return;
+  }
+  if (element.dataset) {
+    delete element.dataset.offline;
+    delete element.dataset.errorRateLocked;
+  }
+  if (typeof element.removeAttribute === 'function') {
+    element.removeAttribute('data-offline');
+  }
+}
+
+function setLeaderboardLock(scope, locked, options = {}) {
+  const ui = getBootstrapUi(scope);
+  if (!ui) {
+    return;
+  }
+  const { refreshScoresButton, leaderboardTable, leaderboardEmptyMessage } = ui;
+  const reasonMessage = options.message ?? 'Offline session active — leaderboard locked.';
+  if (locked) {
+    if (refreshScoresButton) {
+      refreshScoresButton.disabled = true;
+      refreshScoresButton.dataset = refreshScoresButton.dataset || {};
+      refreshScoresButton.dataset.errorRateLocked = 'true';
+    }
+    if (leaderboardTable) {
+      leaderboardTable.hidden = true;
+      leaderboardTable.dataset = leaderboardTable.dataset || {};
+      leaderboardTable.dataset.errorRateLocked = 'true';
+    }
+    if (leaderboardEmptyMessage) {
+      leaderboardEmptyMessage.hidden = false;
+      leaderboardEmptyMessage.textContent = reasonMessage;
+    }
+  } else {
+    if (refreshScoresButton?.dataset) {
+      delete refreshScoresButton.dataset.errorRateLocked;
+    }
+    if (leaderboardTable?.dataset) {
+      delete leaderboardTable.dataset.errorRateLocked;
+      leaderboardTable.hidden = false;
+    }
+    if (leaderboardEmptyMessage) {
+      leaderboardEmptyMessage.hidden = true;
+    }
+    if (refreshScoresButton) {
+      refreshScoresButton.disabled = false;
+    }
+  }
+}
+
+function setScoreSyncWarning(scope, message, visible) {
+  const ui = getBootstrapUi(scope);
+  if (!ui?.scoreSyncWarning) {
+    return;
+  }
+  const { scoreSyncWarning, scoreSyncWarningMessage } = ui;
+  if (visible) {
+    scoreSyncWarning.hidden = false;
+    if (scoreSyncWarningMessage) {
+      scoreSyncWarningMessage.textContent = message;
+    }
+  } else {
+    scoreSyncWarning.hidden = true;
+    if (scoreSyncWarningMessage) {
+      scoreSyncWarningMessage.textContent = '';
+    }
+  }
+}
+
+function enforceAssetBaseConsistency(scope, resolvedRoot) {
+  if (!scope || typeof scope !== 'object') {
+    return;
+  }
+  const appConfig = scope.APP_CONFIG || (scope.APP_CONFIG = {});
+  const provided = typeof appConfig.assetBaseUrl === 'string' ? appConfig.assetBaseUrl.trim() : '';
+  if (!provided) {
+    if (resolvedRoot) {
+      appConfig.assetBaseUrl = ensureTrailingSlash(resolvedRoot);
+    }
+    return;
+  }
+  const normalisedProvided = ensureTrailingSlash(provided);
+  const allowed = new Set();
+  if (resolvedRoot) {
+    allowed.add(ensureTrailingSlash(resolvedRoot));
+  }
+  if (typeof scope.location?.origin === 'string' && scope.location.origin.trim().length) {
+    allowed.add(ensureTrailingSlash(scope.location.origin));
+  }
+  if (typeof PRODUCTION_ASSET_ROOT === 'string') {
+    allowed.add(ensureTrailingSlash(PRODUCTION_ASSET_ROOT));
+  }
+  if (typeof appConfig.assetRoot === 'string' && appConfig.assetRoot.trim().length) {
+    allowed.add(ensureTrailingSlash(appConfig.assetRoot));
+  }
+  if (!Array.from(allowed).some((candidate) => candidate === normalisedProvided)) {
+    const error = new Error(
+      'APP_CONFIG.assetBaseUrl mismatch detected between bundle metadata, asset-manifest.json, and the active deployment.',
+    );
+    error.name = 'AssetBaseUrlMismatchError';
+    error.detail = {
+      provided: normalisedProvided,
+      expected: Array.from(allowed),
+    };
+    throw error;
+  }
+  appConfig.assetBaseUrl = normalisedProvided;
+}
+
 const PRODUCTION_ASSET_ROOT = ensureTrailingSlash('https://d3gj6x3ityfh5o.cloudfront.net/');
 const DEFAULT_LOCAL_ASSET_ROOT = ensureTrailingSlash('./');
 
@@ -1227,6 +1399,521 @@ function resolveBootstrapAssetRoot(scope) {
   };
 })(typeof window !== 'undefined' ? window : undefined);
 
+(function setupStorageQuarantine(globalScope) {
+  const scope =
+    typeof globalScope !== 'undefined'
+      ? globalScope
+      : typeof window !== 'undefined'
+        ? window
+        : typeof globalThis !== 'undefined'
+          ? globalThis
+          : null;
+  if (!scope || scope.__INFINITE_RAILS_STORAGE_QUARANTINE__) {
+    return;
+  }
+
+  const handleStorageQuarantine = (event) => {
+    const detail = event?.detail ?? {};
+    const storageKey = typeof detail.storageKey === 'string' ? detail.storageKey : null;
+    if (storageKey) {
+      try {
+        const storage = scope.localStorage ?? scope.sessionStorage ?? null;
+        if (storage?.removeItem) {
+          storage.removeItem(storageKey);
+        }
+      } catch (error) {
+        scope.console?.warn?.('[InfiniteRails] Unable to quarantine storage key.', error);
+      }
+      scope.console?.warn?.(
+        `[InfiniteRails] Storage quarantine activated for "${storageKey}". Please reload the page to continue safely.`,
+        detail.error ?? null,
+      );
+    }
+  };
+
+  if (typeof scope.addEventListener === 'function') {
+    scope.addEventListener('infinite-rails:storage-quarantine-requested', handleStorageQuarantine);
+  }
+
+  const hooks = scope.__INFINITE_RAILS_TEST_HOOKS__ ?? {};
+  hooks.requestStorageQuarantine = (detail) => {
+    handleStorageQuarantine({ detail });
+  };
+  scope.__INFINITE_RAILS_TEST_HOOKS__ = hooks;
+  scope.__INFINITE_RAILS_STORAGE_QUARANTINE__ = {
+    handler: handleStorageQuarantine,
+  };
+})(typeof window !== 'undefined' ? window : typeof globalThis !== 'undefined' ? globalThis : undefined);
+
+(function setupErrorRateCircuitBreaker(globalScope) {
+  const scope =
+    typeof globalScope !== 'undefined'
+      ? globalScope
+      : typeof window !== 'undefined'
+        ? window
+        : typeof globalThis !== 'undefined'
+          ? globalThis
+          : null;
+  if (!scope) {
+    return;
+  }
+
+  const THRESHOLDS = {
+    api: { threshold: 5, windowMs: 60000 },
+  };
+
+  const circuitState = {
+    trippedCategories: new Set(),
+    failureWindows: new Map(),
+  };
+
+  function getIdentityState() {
+    const identity = scope.__INFINITE_RAILS_IDENTITY_STATE__;
+    if (identity && typeof identity === 'object') {
+      return identity;
+    }
+    return null;
+  }
+
+  function snapshotCircuitState() {
+    const counts = {};
+    circuitState.failureWindows.forEach((timestamps, category) => {
+      counts[category] = timestamps.length;
+    });
+    return {
+      trippedCategories: Array.from(circuitState.trippedCategories),
+      thresholds: JSON.parse(JSON.stringify(THRESHOLDS)),
+      counts,
+    };
+  }
+
+  function markCategoryTripped(category, detail) {
+    if (circuitState.trippedCategories.has(category)) {
+      return;
+    }
+    circuitState.trippedCategories.add(category);
+    const message = 'Offline session active — elevated API error rate detected. Leaderboard locked.';
+    setScoreboardOffline(scope, message, { datasetKey: 'errorRateLocked' });
+    setLeaderboardLock(scope, true, { message });
+    setScoreSyncWarning(scope, 'Score sync paused due to elevated API error rate.', true);
+    const ui = getBootstrapUi(scope);
+    if (ui?.documentBody?.dataset) {
+      ui.documentBody.dataset.errorRateCircuit = 'true';
+      ui.documentBody.dataset.errorRateCategory = category;
+    }
+    const identity = getIdentityState();
+    if (identity) {
+      identity.scoreboardOffline = true;
+      identity.liveFeaturesSuspended = true;
+      identity.liveFeaturesHoldDetail = {
+        kind: 'error-rate',
+        category,
+        detail,
+      };
+    }
+  }
+
+  function purgeExpired(category, now) {
+    const window = circuitState.failureWindows.get(category);
+    if (!window || window.length === 0) {
+      return [];
+    }
+    const { windowMs } = THRESHOLDS[category] ?? THRESHOLDS.api;
+    const filtered = window.filter((timestamp) => now - timestamp <= windowMs);
+    circuitState.failureWindows.set(category, filtered);
+    return filtered;
+  }
+
+  function recordFailure(category, timestamp) {
+    const { threshold } = THRESHOLDS[category] ?? THRESHOLDS.api;
+    if (!circuitState.failureWindows.has(category)) {
+      circuitState.failureWindows.set(category, []);
+    }
+    const window = circuitState.failureWindows.get(category);
+    window.push(timestamp);
+    const filtered = purgeExpired(category, timestamp);
+    if (filtered.length >= threshold) {
+      markCategoryTripped(category, { count: filtered.length, threshold });
+    }
+  }
+
+  function recordLogEntry(entry) {
+    if (!entry || typeof entry !== 'object') {
+      return;
+    }
+    const category = typeof entry.category === 'string' ? entry.category.toLowerCase() : 'unknown';
+    if (entry.level !== 'error') {
+      return;
+    }
+    if (!THRESHOLDS[category]) {
+      return;
+    }
+    recordFailure(category, entry.timestamp ?? Date.now());
+  }
+
+  const logStore = scope.InfiniteRails?.logs || {
+    entries: [],
+    record(entry) {
+      const enriched = {
+        category: entry?.category ?? 'general',
+        level: entry?.level ?? 'info',
+        message: entry?.message ?? '',
+        timestamp: entry?.timestamp ?? Date.now(),
+      };
+      this.entries.push(enriched);
+      recordLogEntry(enriched);
+    },
+  };
+
+  scope.InfiniteRails = scope.InfiniteRails || {};
+  scope.InfiniteRails.logs = logStore;
+
+  const hooks = scope.__INFINITE_RAILS_TEST_HOOKS__ ?? {};
+  hooks.getErrorRateCircuitState = () => snapshotCircuitState();
+  hooks.isErrorRateCircuitTripped = (category) =>
+    circuitState.trippedCategories.has((typeof category === 'string' ? category : '').toLowerCase());
+  scope.__INFINITE_RAILS_TEST_HOOKS__ = hooks;
+})(typeof window !== 'undefined' ? window : typeof globalThis !== 'undefined' ? globalThis : undefined);
+
+
+(function setupAudioSettings(globalScope) {
+  const scope =
+    typeof globalScope !== 'undefined'
+      ? globalScope
+      : typeof window !== 'undefined'
+        ? window
+        : typeof globalThis !== 'undefined'
+          ? globalThis
+          : null;
+  if (!scope) {
+    return;
+  }
+
+  const CHANNELS = ['master', 'music', 'effects', 'ui'];
+  const DEFAULTS = {
+    muted: false,
+    volumes: {
+      master: 0.8,
+      music: 0.6,
+      effects: 0.85,
+      ui: 0.7,
+    },
+  };
+  const STORAGE_KEY = 'infinite-rails:audio-settings';
+
+  const listeners = new Set();
+  const uiBindings = {
+    form: null,
+    sliders: new Map(),
+    labels: new Map(),
+    muteToggle: null,
+  };
+  const boundExperiences = new WeakSet();
+
+  function clampVolume(value) {
+    if (!Number.isFinite(value)) {
+      return 0;
+    }
+    const numeric = Number(value);
+    if (numeric < 0) {
+      return 0;
+    }
+    if (numeric > 1) {
+      return 1;
+    }
+    return numeric;
+  }
+
+  function snapshotState(source) {
+    return {
+      muted: source.muted,
+      volumes: { ...source.volumes },
+    };
+  }
+
+  function readStoredState() {
+    const storage = scope.localStorage ?? null;
+    if (!storage?.getItem) {
+      return null;
+    }
+    let raw;
+    try {
+      raw = storage.getItem(STORAGE_KEY);
+    } catch (error) {
+      scope.console?.warn?.('[InfiniteRails] Unable to read stored audio settings.', error);
+      return null;
+    }
+    if (!raw) {
+      return null;
+    }
+    try {
+      const parsed = JSON.parse(raw);
+      const muted = Boolean(parsed?.muted);
+      const volumes = { ...DEFAULTS.volumes };
+      if (parsed && typeof parsed === 'object') {
+        const storedVolumes = parsed.volumes || {};
+        for (const channel of CHANNELS) {
+          if (typeof storedVolumes[channel] === 'number') {
+            volumes[channel] = clampVolume(storedVolumes[channel]);
+          }
+        }
+      }
+      return { muted, volumes };
+    } catch (error) {
+      try {
+        storage.removeItem(STORAGE_KEY);
+      } catch (removeError) {
+        // ignore removal errors
+      }
+      scope.console?.warn?.(
+        '[InfiniteRails] Failed to parse audio settings from "infinite-rails:audio-settings".',
+        error,
+      );
+      return null;
+    }
+  }
+
+  let state = readStoredState() ?? snapshotState(DEFAULTS);
+
+  function persistState() {
+    const storage = scope.localStorage ?? null;
+    if (!storage?.setItem) {
+      return;
+    }
+    try {
+      storage.setItem(STORAGE_KEY, JSON.stringify(state));
+    } catch (error) {
+      scope.console?.warn?.('[InfiniteRails] Unable to persist audio settings.', error);
+    }
+  }
+
+  function emitChange(reason, options = {}) {
+    const snapshot = snapshotState(state);
+    listeners.forEach((listener) => {
+      try {
+        listener(snapshot);
+      } catch (error) {
+        scope.console?.error?.('[InfiniteRails] Audio settings listener failed.', error);
+      }
+    });
+    if (typeof scope.dispatchEvent === 'function' && typeof scope.CustomEvent === 'function') {
+      const event = new scope.CustomEvent('infinite-rails:audio-settings-changed', {
+        detail: {
+          snapshot,
+          reason,
+          persist: options.persist !== false,
+        },
+      });
+      scope.dispatchEvent(event);
+    }
+  }
+
+  function getChannelVolume(channel) {
+    const key = typeof channel === 'string' ? channel : '';
+    return state.volumes[key] ?? 1;
+  }
+
+  function updateLabels() {
+    if (!uiBindings.form) {
+      return;
+    }
+    const muted = state.muted;
+    for (const channel of CHANNELS) {
+      const label = uiBindings.labels.get(channel);
+      if (!label) {
+        continue;
+      }
+      if (muted) {
+        label.textContent = 'Muted';
+      } else {
+        const percent = Math.round((state.volumes[channel] ?? 0) * 100);
+        label.textContent = `${percent}%`;
+      }
+    }
+    if (uiBindings.muteToggle) {
+      uiBindings.muteToggle.checked = muted;
+    }
+  }
+
+  function updateSliders() {
+    for (const channel of CHANNELS) {
+      const slider = uiBindings.sliders.get(channel);
+      if (slider) {
+        const percent = Math.round((state.volumes[channel] ?? 0) * 100);
+        slider.value = String(percent);
+      }
+    }
+  }
+
+  function refreshUi() {
+    updateSliders();
+    updateLabels();
+  }
+
+  function setMuted(muted, options = {}) {
+    const resolved = Boolean(muted);
+    if (state.muted === resolved) {
+      return;
+    }
+    state = { ...state, muted: resolved };
+    if (options.persist !== false) {
+      persistState();
+    }
+    refreshUi();
+    emitChange('mute-change', options);
+  }
+
+  function setVolume(channel, value, options = {}) {
+    const key = typeof channel === 'string' ? channel : '';
+    if (!CHANNELS.includes(key)) {
+      return;
+    }
+    const volume = clampVolume(value);
+    if (state.volumes[key] === volume) {
+      return;
+    }
+    state = {
+      ...state,
+      volumes: { ...state.volumes, [key]: volume },
+    };
+    if (options.persist !== false) {
+      persistState();
+    }
+    refreshUi();
+    emitChange('volume-change', options);
+  }
+
+  function toggleMuted(options = {}) {
+    setMuted(!state.muted, options);
+  }
+
+  function onChange(listener) {
+    if (typeof listener !== 'function') {
+      return () => {};
+    }
+    listeners.add(listener);
+    return () => {
+      listeners.delete(listener);
+    };
+  }
+
+  function inferChannelFromSound(id, options = {}) {
+    if (typeof options.channel === 'string' && options.channel.trim().length) {
+      return options.channel.trim();
+    }
+    if (typeof id === 'string') {
+      const lower = id.toLowerCase();
+      if (lower.includes('ambient') || lower.includes('theme') || lower.includes('music')) {
+        return 'music';
+      }
+    }
+    return 'effects';
+  }
+
+  function applyAudioSettingsToExperience(experience) {
+    if (!experience || typeof experience !== 'object') {
+      return false;
+    }
+    if (boundExperiences.has(experience)) {
+      return true;
+    }
+    const audioController = experience.audio ?? null;
+    if (!audioController || typeof audioController.play !== 'function') {
+      return false;
+    }
+    const originalPlay = audioController.play.bind(audioController);
+    audioController.play = (soundId, options = {}) => {
+      const channel = inferChannelFromSound(soundId, options);
+      const masterVolume = state.muted ? 0 : getChannelVolume('master');
+      const channelVolume = state.muted ? 0 : getChannelVolume(channel);
+      const baseVolume = Number.isFinite(options.volume) ? Number(options.volume) : 1;
+      const finalVolume = state.muted ? 0 : baseVolume * masterVolume * channelVolume;
+      const mergedOptions = { ...options, channel, volume: finalVolume };
+      if (state.muted) {
+        mergedOptions.muted = true;
+      }
+      return originalPlay(soundId, mergedOptions);
+    };
+    experience.getAudioChannelVolume = (channel) => getChannelVolume(channel);
+    boundExperiences.add(experience);
+    return true;
+  }
+
+  function bindAudioSettingsControls({ settingsForm } = {}) {
+    const form = settingsForm || scope.document?.querySelector?.('[data-settings-form]') || null;
+    if (!form) {
+      return false;
+    }
+    uiBindings.form = form;
+    form.dataset = form.dataset || {};
+    form.dataset.audioSettingsBound = 'true';
+
+    for (const channel of CHANNELS) {
+      const slider = form.querySelector?.(`input[name="${channel}"]`) ?? null;
+      if (slider) {
+        uiBindings.sliders.set(channel, slider);
+        if (!slider.__audioBound) {
+          slider.addEventListener?.('input', (event) => {
+            const target = event?.target ?? slider;
+            const numeric = clampVolume(Number(target?.value ?? 0) / 100);
+            setVolume(channel, numeric, { source: 'ui' });
+          });
+          slider.__audioBound = true;
+        }
+      }
+      const label = form.querySelector?.(`[data-volume-label="${channel}"]`) ?? null;
+      if (label) {
+        uiBindings.labels.set(channel, label);
+      }
+    }
+
+    const muteToggle = form.querySelector?.('[data-audio-mute]') ?? null;
+    if (muteToggle) {
+      uiBindings.muteToggle = muteToggle;
+      if (!muteToggle.__audioBound) {
+        muteToggle.addEventListener?.('change', (event) => {
+          const checked = Boolean(event?.target?.checked);
+          setMuted(checked, { source: 'ui' });
+        });
+        muteToggle.__audioBound = true;
+      }
+    }
+
+    refreshUi();
+    return true;
+  }
+
+  function getState() {
+    return snapshotState(state);
+  }
+
+  const audioApi = {
+    getState,
+    setVolume,
+    setMuted,
+    toggleMuted,
+    onChange,
+  };
+
+  scope.InfiniteRails = scope.InfiniteRails || {};
+  scope.InfiniteRails.audio = audioApi;
+
+  const hooks = scope.__INFINITE_RAILS_TEST_HOOKS__ ?? {};
+  hooks.applyAudioSettingsToExperience = applyAudioSettingsToExperience;
+  hooks.bindAudioSettingsControls = bindAudioSettingsControls;
+  hooks.getAudioSettingsState = getState;
+  hooks.resetAudioSettings = () => {
+    state = snapshotState(DEFAULTS);
+    persistState();
+    refreshUi();
+    emitChange('reset');
+  };
+  scope.__INFINITE_RAILS_TEST_HOOKS__ = hooks;
+
+  bindAudioSettingsControls({});
+  emitChange('initialise', { persist: false });
+})(typeof window !== 'undefined' ? window : typeof globalThis !== 'undefined' ? globalThis : undefined);
+
 (function setupFetchCircuitBreaker(globalScope) {
   const scope =
     typeof globalScope !== 'undefined'
@@ -2257,6 +2944,7 @@ function resolveBootstrapAssetRoot(scope) {
   }
 
   const resolvedAssetRoot = resolveBootstrapAssetRoot(globalScope);
+  enforceAssetBaseConsistency(globalScope, resolvedAssetRoot);
   initialiseAssetFailover(globalScope, resolvedAssetRoot);
 })(typeof window !== 'undefined' ? window : typeof globalThis !== 'undefined' ? globalThis : undefined);
 
@@ -2627,56 +3315,77 @@ function markBootPhaseError(phase, message) {
   }
 
   const documentRef = globalRef.document ?? null;
-  const state = {
+  const appConfig = globalRef.APP_CONFIG || (globalRef.APP_CONFIG = {});
+  const identityState =
+    globalRef.__INFINITE_RAILS_IDENTITY_STATE__ ||
+    (globalRef.__INFINITE_RAILS_IDENTITY_STATE__ = {
+      apiBaseUrl: null,
+      scoreboardOffline: false,
+      liveFeaturesSuspended: false,
+      liveFeaturesHoldDetail: null,
+      backendValidation: { performed: false, ok: null, detail: null },
+      configuredEndpoints: {
+        scores: '/scores',
+        users: '/users',
+        events: '/events',
+      },
+      endpoints: {
+        scores: '/scores',
+        users: '/users',
+        events: '/events',
+      },
+    });
+
+  const backendState = {
     performed: false,
     success: null,
     detail: null,
     promise: null,
   };
 
-  let cachedScoreboardEl = null;
+  const heartbeatState =
+    globalRef.__INFINITE_RAILS_HEARTBEAT_STATE__ ||
+    (globalRef.__INFINITE_RAILS_HEARTBEAT_STATE__ = {
+      endpoint: null,
+      intervalMs: null,
+      timerId: null,
+      online: true,
+      sequence: 0,
+      lastPayload: null,
+    });
 
-  function getScoreboardStatusElement() {
-    if (cachedScoreboardEl && cachedScoreboardEl.isConnected !== false) {
-      return cachedScoreboardEl;
-    }
-    if (!documentRef || typeof documentRef.getElementById !== 'function') {
-      return null;
-    }
-    const element = documentRef.getElementById('scoreboardStatus');
-    if (!element) {
-      return null;
-    }
-    element.dataset = element.dataset || {};
-    cachedScoreboardEl = element;
-    return element;
+  const networkFailureCounts = new Map();
+  const NETWORK_FAILURE_THRESHOLD = 3;
+
+  function updateConfiguredEndpoints() {
+    const configured = identityState.configuredEndpoints || (identityState.configuredEndpoints = {});
+    configured.scores = configured.scores || '/scores';
+    configured.users = configured.users || '/users';
+    configured.events = configured.events || '/events';
+    const endpoints = identityState.endpoints || (identityState.endpoints = {});
+    endpoints.scores = configured.scores;
+    endpoints.users = configured.users;
+    endpoints.events = configured.events;
   }
 
-  function setOfflineScoreboardMessage(message) {
-    const element = getScoreboardStatusElement();
-    if (!element) {
-      return;
-    }
-    element.dataset = element.dataset || {};
-    element.dataset.offline = 'true';
-    if (typeof element.setAttribute === 'function') {
-      element.setAttribute('data-offline', 'true');
-    }
-    const resolved = typeof message === 'string' && message.trim().length ? message.trim() : 'Offline session active — backend validation failed.';
-    element.textContent = resolved;
+  updateConfiguredEndpoints();
+
+  function setIdentityOffline(detail) {
+    identityState.scoreboardOffline = true;
+    identityState.backendValidation = {
+      performed: true,
+      ok: false,
+      detail,
+    };
   }
 
-  function clearOfflineScoreboardState() {
-    const element = getScoreboardStatusElement();
-    if (!element) {
-      return;
-    }
-    if (element.dataset) {
-      delete element.dataset.offline;
-    }
-    if (typeof element.removeAttribute === 'function') {
-      element.removeAttribute('data-offline');
-    }
+  function setIdentityOnline() {
+    identityState.scoreboardOffline = false;
+    identityState.backendValidation = {
+      performed: true,
+      ok: true,
+      detail: { reason: 'ok', message: 'Backend validation succeeded.' },
+    };
   }
 
   function normaliseApiBaseUrl(value) {
@@ -2688,12 +3397,13 @@ function markBootPhaseError(phase, message) {
       return null;
     }
     try {
-      const url = new URL(trimmed, trimmed.startsWith('http') ? undefined : 'https://example.com');
+      const fallbackBase = typeof globalRef.location?.origin === 'string' ? globalRef.location.origin : 'https://example.com';
+      const url = new URL(trimmed, trimmed.startsWith('http') ? undefined : fallbackBase);
       if (url.protocol !== 'http:' && url.protocol !== 'https:') {
         return null;
       }
-      const normalised = `${url.origin}${url.pathname}`.replace(/\/+$/, '');
-      return normalised || null;
+      const normalised = `${url.origin}${url.pathname}`.replace(/\/+$/, '/');
+      return ensureTrailingSlash(normalised);
     } catch (error) {
       return null;
     }
@@ -2708,20 +3418,51 @@ function markBootPhaseError(phase, message) {
   }
 
   function recordFailure(reason, detail = {}) {
-    const detailReason = typeof reason === 'string' ? reason : 'unknown';
-    const detailMessage =
+    const message =
       typeof detail.message === 'string' && detail.message.trim().length
         ? detail.message.trim()
         : 'Offline session active — backend validation failed.';
-    state.performed = true;
-    state.success = false;
-    state.detail = { ...detail, reason: detailReason, message: detailMessage };
-    setOfflineScoreboardMessage(state.detail.message);
+    backendState.performed = true;
+    backendState.success = false;
+    backendState.detail = { ...detail, reason };
+    setIdentityOffline({ reason, message, detail });
+    setScoreboardOffline(globalRef, message);
     return false;
   }
 
+  function recordSuccess(apiBaseUrl) {
+    backendState.performed = true;
+    backendState.success = true;
+    backendState.detail = { reason: 'ok', message: 'Backend validation succeeded.' };
+    identityState.apiBaseUrl = apiBaseUrl;
+    setIdentityOnline();
+    clearScoreboardOffline(globalRef);
+    return true;
+  }
+
+  function validateConfiguredEndpoints() {
+    const configured = identityState.configuredEndpoints || {};
+    const endpoints = identityState.endpoints || {};
+    const failures = [];
+    if (!configured.scores || !endpoints.scores) {
+      failures.push('Scores endpoint not configured');
+    }
+    if (!configured.users || !endpoints.users) {
+      failures.push('Users endpoint not configured');
+    }
+    if (!configured.events || !endpoints.events) {
+      failures.push('Events endpoint not configured');
+    }
+    if (failures.length > 0) {
+      const message = buildOfflineMessage(failures);
+      recordFailure('endpoint-missing', { message, failures });
+      return false;
+    }
+    return true;
+  }
+
   async function pingEndpoint(fetchImpl, baseUrl, endpoint) {
-    const method = endpoint.method ?? 'GET';
+    const method = (endpoint.method ?? 'GET').toUpperCase();
     const url = `${baseUrl}${endpoint.path}`;
     try {
       const response = await fetchImpl(url, { method, credentials: 'include', cache: 'no-store' });
@@ -2730,8 +3471,11 @@ function markBootPhaseError(phase, message) {
       }
       if (!response.ok) {
         const status = Number.isFinite(response.status) ? response.status : '???';
-        const statusText = typeof response.statusText === 'string' && response.statusText.trim().length ? ` ${response.statusText.trim()}` : '';
-        const error = new Error(`${method.toUpperCase()} ${endpoint.path} returned ${status}${statusText}`);
+        const statusText =
+          typeof response.statusText === 'string' && response.statusText.trim().length
+            ? ` ${response.statusText.trim()}`
+            : '';
+        const error = new Error(`${method} ${endpoint.path} returned ${status}${statusText}`);
         error.name = 'EndpointStatusError';
         error.status = status;
         error.endpoint = endpoint.path;
@@ -2742,34 +3486,36 @@ function markBootPhaseError(phase, message) {
       if (error && error.name === 'EndpointStatusError') {
         return error.message;
       }
-      const message = `${method.toUpperCase()} ${endpoint.path} unreachable`;
-      return message;
+      return `${method} ${endpoint.path} unreachable`;
     }
   }
 
   async function performBackendValidation() {
     const fetchImpl = globalRef.fetch ?? null;
     if (typeof fetchImpl !== 'function') {
+      identityState.apiBaseUrl = null;
       return recordFailure('fetch-unavailable', {
         message: 'Offline session active — fetch API unavailable on this platform.',
-        detail: { reason: 'fetch-unavailable' },
       });
     }
 
-    const appConfig = globalRef.APP_CONFIG ?? {};
     const apiBaseUrl = normaliseApiBaseUrl(appConfig.apiBaseUrl);
     if (!apiBaseUrl) {
+      identityState.apiBaseUrl = null;
       return recordFailure('api-base-url-missing', {
         message: 'Offline session active — backend configuration missing.',
       });
     }
 
+    identityState.apiBaseUrl = apiBaseUrl;
+    updateConfiguredEndpoints();
+
     const endpoints = [
-      { path: '/scores', method: 'GET' },
-      { path: '/scores', method: 'POST' },
-      { path: '/users', method: 'GET' },
-      { path: '/users', method: 'POST' },
-      { path: '/events', method: 'POST' },
+      { path: identityState.endpoints.scores, method: 'GET' },
+      { path: identityState.endpoints.scores, method: 'POST' },
+      { path: identityState.endpoints.users, method: 'GET' },
+      { path: identityState.endpoints.users, method: 'POST' },
+      { path: identityState.endpoints.events, method: 'POST' },
     ];
 
     const failures = [];
@@ -2780,51 +3526,182 @@ function markBootPhaseError(phase, message) {
       }
     }
 
-    if (failures.length) {
+    if (failures.length > 0) {
       const message = buildOfflineMessage(failures);
-      return recordFailure('endpoint-failure', {
-        message,
-        failures,
-      });
+      return recordFailure('endpoint-failure', { message, failures });
     }
 
-    state.performed = true;
-    state.success = true;
-    state.detail = {
-      reason: 'ok',
-      message: 'Backend validation succeeded.',
-    };
-    clearOfflineScoreboardState();
-    return true;
+    if (!validateConfiguredEndpoints()) {
+      return false;
+    }
+
+    return recordSuccess(apiBaseUrl);
   }
 
   function ensureBackendLiveCheck() {
-    if (state.promise) {
-      return state.promise;
+    if (backendState.promise) {
+      return backendState.promise;
     }
     const task = async () => {
       const result = await performBackendValidation();
+      if (result) {
+        configureHeartbeat();
+      }
       return Boolean(result);
     };
-    state.promise = task().catch((error) => {
-      const message = 'Offline session active — backend validation failed.';
+    backendState.promise = task().catch((error) => {
       recordFailure('unexpected-error', {
-        message,
+        message: 'Offline session active — backend validation failed.',
         error,
       });
       return false;
     });
-    return state.promise;
+    return backendState.promise;
   }
 
   function getBackendLiveCheckState() {
-    return { ...state };
+    return {
+      performed: backendState.performed,
+      success: backendState.success,
+      detail: backendState.detail,
+      promise: backendState.promise,
+    };
+  }
+
+  function stopHeartbeat() {
+    if (heartbeatState.timerId && typeof globalRef.clearTimeout === 'function') {
+      globalRef.clearTimeout(heartbeatState.timerId);
+    }
+    heartbeatState.timerId = null;
+  }
+
+  function buildHeartbeatPayload() {
+    heartbeatState.sequence = (heartbeatState.sequence ?? 0) + 1;
+    const payload = {
+      mode: 'heartbeat',
+      intervalMs: heartbeatState.intervalMs,
+      sequence: heartbeatState.sequence,
+      status: {
+        scoreboard: { offline: Boolean(identityState.scoreboardOffline) },
+        gameClient: {
+          running: false,
+          available: typeof globalRef.InfiniteRails !== 'undefined',
+        },
+      },
+    };
+    heartbeatState.lastPayload = payload;
+    return payload;
+  }
+
+  function sendHeartbeat() {
+    if (!heartbeatState.endpoint || typeof globalRef.fetch !== 'function') {
+      return Promise.resolve(false);
+    }
+    const payload = buildHeartbeatPayload();
+    const init = {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    };
+    return Promise.resolve(globalRef.fetch(heartbeatState.endpoint, init)).then(() => payload);
+  }
+
+  function scheduleHeartbeat() {
+    if (!heartbeatState.endpoint || !Number.isFinite(heartbeatState.intervalMs)) {
+      return null;
+    }
+    stopHeartbeat();
+    if (typeof globalRef.setTimeout !== 'function') {
+      return null;
+    }
+    const timerId = globalRef.setTimeout(() => {
+      heartbeatState.timerId = null;
+      if (!heartbeatState.online) {
+        return;
+      }
+      sendHeartbeat()
+        .catch(() => false)
+        .finally(() => {
+          if (heartbeatState.online) {
+            heartbeatState.timerId = scheduleHeartbeat();
+          }
+        });
+    }, heartbeatState.intervalMs);
+    heartbeatState.timerId = timerId;
+    return timerId;
+  }
+
+  function configureHeartbeat() {
+    const endpoint = typeof appConfig.healthEndpoint === 'string' ? appConfig.healthEndpoint.trim() : '';
+    if (!endpoint) {
+      heartbeatState.endpoint = null;
+      stopHeartbeat();
+      return;
+    }
+    heartbeatState.endpoint = endpoint;
+    const intervalValue = Number(appConfig.healthHeartbeatIntervalMs);
+    heartbeatState.intervalMs = Number.isFinite(intervalValue) && intervalValue > 0 ? intervalValue : 60000;
+    heartbeatState.online = true;
+    if (!heartbeatState.timerId) {
+      scheduleHeartbeat();
+    }
+  }
+
+  function handleScoreSyncOffline(event) {
+    const detail = event?.detail ?? {};
+    heartbeatState.online = false;
+    stopHeartbeat();
+    setScoreboardOffline(globalRef, 'Offline session active — score synchronisation unavailable.', {
+      datasetKey: 'scoreSyncOffline',
+    });
+    setScoreSyncWarning(globalRef, 'Score sync offline — waiting for recovery.', true);
+    identityState.scoreboardOffline = true;
+    identityState.liveFeaturesHoldDetail = {
+      kind: 'score-sync-offline',
+      detail,
+    };
+  }
+
+  function handleScoreSyncRestored(event) {
+    heartbeatState.online = true;
+    setScoreSyncWarning(globalRef, '', false);
+    identityState.scoreboardOffline = Boolean(identityState.liveFeaturesSuspended);
+    if (heartbeatState.endpoint) {
+      scheduleHeartbeat();
+    }
   }
 
   const hooks = globalRef.__INFINITE_RAILS_TEST_HOOKS__ ?? {};
   hooks.ensureBackendLiveCheck = ensureBackendLiveCheck;
   hooks.getBackendLiveCheckState = getBackendLiveCheckState;
+  hooks.getIdentityState = () => cloneDeep(identityState);
+  hooks.getHeartbeatState = () => cloneDeep(heartbeatState);
+  hooks.triggerHeartbeat = () => {
+    if (!heartbeatState.endpoint || !heartbeatState.online) {
+      return false;
+    }
+    return sendHeartbeat();
+  };
+  hooks.recordNetworkFailure = (category, detail = {}) => {
+    const key = typeof category === 'string' && category.trim().length ? category.trim().toLowerCase() : 'unknown';
+    const current = networkFailureCounts.get(key) ?? 0;
+    const next = current + 1;
+    networkFailureCounts.set(key, next);
+    if (next >= NETWORK_FAILURE_THRESHOLD) {
+      const message = 'Offline/Recovery Mode — repeated API failures detected.';
+      setScoreboardOffline(globalRef, message, { datasetKey: 'networkFailure' });
+      setLeaderboardLock(globalRef, true, { message });
+      identityState.scoreboardOffline = true;
+      identityState.liveFeaturesSuspended = true;
+      identityState.liveFeaturesHoldDetail = { kind: 'network-failure', detail };
+    }
+  };
   globalRef.__INFINITE_RAILS_TEST_HOOKS__ = hooks;
+
+  if (typeof globalRef.addEventListener === 'function') {
+    globalRef.addEventListener('infinite-rails:score-sync-offline', handleScoreSyncOffline);
+    globalRef.addEventListener('infinite-rails:score-sync-restored', handleScoreSyncRestored);
+  }
 
   const autoStart = () => {
     try {
