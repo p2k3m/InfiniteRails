@@ -17,7 +17,9 @@ function createResponse({ ok, status, statusText = 'STATUS' }) {
 
 describe('asset CDN failover', () => {
   it('falls back to the local asset bundle when CDN responses return 403', async () => {
-    const { sandbox, windowStub } = createBootstrapSandbox({});
+    const { sandbox, windowStub } = createBootstrapSandbox({
+      appConfig: { assetRoot: 'https://d3gj6x3ityfh5o.cloudfront.net/' },
+    });
 
     const requests = [];
     const fetchResponses = [

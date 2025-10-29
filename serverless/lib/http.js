@@ -7,11 +7,23 @@ const { applyTraceHeaders, embedTraceInBody } = require('./trace');
  * @type {string}
  */
 const CONTENT_SECURITY_POLICY = [
-  "default-src 'none'",
-  "base-uri 'none'",
-  "form-action 'none'",
+  "default-src 'self'",
+  "connect-src 'self' https://d3gj6x3ityfh5o.cloudfront.net https://*.infiniterails.app https://*.amazonaws.com https://accounts.google.com https://www.googleapis.com https://*.googleapis.com",
+  "script-src 'self' https://d3gj6x3ityfh5o.cloudfront.net https://accounts.google.com",
+  "style-src 'self' 'unsafe-inline' https://accounts.google.com https://*.gstatic.com",
+  "img-src 'self' data: blob: https://d3gj6x3ityfh5o.cloudfront.net https://accounts.google.com https://*.gstatic.com",
+  "font-src 'self' data: https://accounts.google.com https://*.gstatic.com",
+  "media-src 'self' data: https://d3gj6x3ityfh5o.cloudfront.net",
+  "frame-src 'self' https://accounts.google.com",
+  "child-src 'self' https://accounts.google.com",
+  "manifest-src 'self'",
+  "worker-src 'self' blob:",
+  "base-uri 'self'",
+  "form-action 'self'",
   "frame-ancestors 'none'",
-  "connect-src 'self'",
+  "object-src 'none'",
+  'upgrade-insecure-requests',
+  'block-all-mixed-content',
 ].join('; ');
 
 /**

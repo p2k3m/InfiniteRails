@@ -433,6 +433,62 @@ function inferLocalAssetRoot(scope) {
   return ensureTrailingSlash('./');
 }
 
+function detectSameOriginAssetRoot(scope) {
+  const location = getBootstrapLocation(scope);
+  if (!location) {
+    return null;
+  }
+  const origin = ensureString(location.origin).trim();
+  if (!origin) {
+    return null;
+  }
+  const normalisedOrigin = ensureTrailingSlash(origin);
+  if (normalisedOrigin.toLowerCase() === PRODUCTION_ASSET_ROOT.toLowerCase()) {
+    return null;
+  }
+  const protocol = ensureString(location.protocol).toLowerCase();
+  if (!protocol.startsWith('http')) {
+    return null;
+  }
+  const documentRef = scope.document ?? null;
+  if (!documentRef) {
+    return null;
+  }
+  const scriptSources = [];
+  const currentScriptSrc = ensureString(documentRef.currentScript?.src);
+  if (currentScriptSrc) {
+    scriptSources.push(currentScriptSrc);
+  }
+  if (typeof documentRef.querySelectorAll === 'function') {
+    try {
+      const scripts = documentRef.querySelectorAll('script[src]') || [];
+      for (const script of scripts) {
+        const src = ensureString(script?.src);
+        if (src) {
+          scriptSources.push(src);
+        }
+      }
+    } catch (error) {
+      // ignore DOM query errors and fall back to any currentScript detection
+    }
+  }
+  if (scriptSources.length === 0) {
+    return null;
+  }
+  const baseUrl = ensureString(location.href) || normalisedOrigin;
+  for (const source of scriptSources) {
+    try {
+      const resolved = new URL(source, baseUrl);
+      if (resolved.origin === origin) {
+        return normalisedOrigin;
+      }
+    } catch (error) {
+      // ignore URL parsing issues and continue checking other candidates
+    }
+  }
+  return null;
+}
+
 function resolveLocalAssetFallback(scope) {
   const appConfig = scope.APP_CONFIG || (scope.APP_CONFIG = {});
   const configured = normaliseAssetRootCandidate(appConfig.localAssetRoot, scope);
@@ -570,6 +626,14 @@ function resolveBootstrapAssetRoot(scope) {
       appConfig.assetBaseUrl = storedOverride;
     }
     return storedOverride;
+  }
+  const sameOriginRoot = detectSameOriginAssetRoot(scope);
+  if (sameOriginRoot) {
+    appConfig.assetRoot = sameOriginRoot;
+    if (typeof appConfig.assetBaseUrl !== 'string' || !appConfig.assetBaseUrl.trim()) {
+      appConfig.assetBaseUrl = sameOriginRoot;
+    }
+    return sameOriginRoot;
   }
   const inferredLocal = inferLocalAssetRoot(scope);
   if (inferredLocal) {
