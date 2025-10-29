@@ -23,6 +23,154 @@ function cloneDeep(value) {
   return result;
 }
 
+(function setupInputModeDetection(globalScope) {
+  const scope =
+    typeof globalScope !== 'undefined'
+      ? globalScope
+      : typeof window !== 'undefined'
+        ? window
+        : typeof globalThis !== 'undefined'
+          ? globalThis
+          : null;
+  const documentRef = scope?.document ?? null;
+  const body = documentRef?.body ?? null;
+  if (!scope || !documentRef || !body) {
+    return;
+  }
+
+  const state = {
+    mode: null,
+    userOverride: null,
+    coarsePreferred: false,
+  };
+
+  const pointerQueries = ['(pointer: coarse)', '(any-pointer: coarse)'];
+  const hoverQueries = ['(hover: none)', '(any-hover: none)'];
+  const pointerMediaEntries = [];
+  const hoverMediaEntries = [];
+
+  const updateOverlayScheme = (mode) => {
+    const overlay = documentRef.getElementById?.('inputOverlay') ?? null;
+    if (!overlay) {
+      return;
+    }
+    overlay.dataset = overlay.dataset || {};
+    overlay.dataset.scheme = mode;
+  };
+
+  const applyMode = (mode, { userInitiated = false } = {}) => {
+    const nextMode = mode === 'touch' ? 'touch' : 'pointer';
+    if (userInitiated) {
+      state.userOverride = nextMode;
+    }
+    if (state.mode === nextMode) {
+      updateOverlayScheme(nextMode);
+      return;
+    }
+    state.mode = nextMode;
+    if (typeof body.setAttribute === 'function') {
+      body.setAttribute('data-input-mode', nextMode);
+    }
+    body.classList?.toggle?.('input-touch', nextMode === 'touch');
+    body.classList?.toggle?.('input-pointer', nextMode === 'pointer');
+    updateOverlayScheme(nextMode);
+  };
+
+  const computeCoarsePreference = () => {
+    if (Number(scope.navigator?.maxTouchPoints) > 0) {
+      return true;
+    }
+    if (pointerMediaEntries.length > 0) {
+      return pointerMediaEntries.some((entry) => Boolean(entry?.matches));
+    }
+    if (hoverMediaEntries.length > 0) {
+      return hoverMediaEntries.some((entry) => Boolean(entry?.matches));
+    }
+    return false;
+  };
+
+  const refreshMode = () => {
+    const preferred = state.userOverride ?? (state.coarsePreferred ? 'touch' : 'pointer');
+    applyMode(preferred);
+  };
+
+  const handleMediaChange = () => {
+    const newPreference = computeCoarsePreference();
+    state.coarsePreferred = newPreference;
+    if (state.userOverride === 'touch' && !newPreference) {
+      state.userOverride = null;
+    }
+    refreshMode();
+  };
+
+  if (typeof scope.matchMedia === 'function') {
+    const allQueries = [...pointerQueries, ...hoverQueries];
+    for (const query of allQueries) {
+      try {
+        const media = scope.matchMedia(query);
+        if (!media) {
+          continue;
+        }
+        if (pointerQueries.includes(query)) {
+          pointerMediaEntries.push(media);
+        } else if (hoverQueries.includes(query)) {
+          hoverMediaEntries.push(media);
+        }
+        if (typeof media.addEventListener === 'function') {
+          media.addEventListener('change', handleMediaChange);
+        } else if (typeof media.addListener === 'function') {
+          media.addListener(handleMediaChange);
+        }
+      } catch (error) {
+        // ignore matchMedia failures in synthetic environments
+      }
+    }
+  }
+
+  const handlePointerDown = (event) => {
+    const pointerTypeRaw = typeof event?.pointerType === 'string' ? event.pointerType : '';
+    const pointerType = pointerTypeRaw.toLowerCase();
+    if (pointerType === 'mouse') {
+      applyMode('pointer', { userInitiated: true });
+      return;
+    }
+    if (pointerType === 'touch') {
+      applyMode('touch', { userInitiated: true });
+      return;
+    }
+    if (pointerType === 'pen') {
+      const preferTouch = state.coarsePreferred || Number(scope.navigator?.maxTouchPoints) > 0;
+      applyMode(preferTouch ? 'touch' : 'pointer', { userInitiated: true });
+      return;
+    }
+    state.userOverride = null;
+    refreshMode();
+  };
+
+  if (typeof documentRef.addEventListener === 'function') {
+    try {
+      documentRef.addEventListener('pointerdown', handlePointerDown, { passive: true });
+    } catch (error) {
+      documentRef.addEventListener('pointerdown', handlePointerDown);
+    }
+  }
+
+  state.coarsePreferred = computeCoarsePreference();
+  refreshMode();
+
+  const hooks = scope.__INFINITE_RAILS_TEST_HOOKS__ ?? {};
+  hooks.getInputModeState = () => ({
+    mode: state.mode,
+    coarsePreferred: state.coarsePreferred,
+    userOverride: state.userOverride,
+  });
+  hooks.setInputModeOverride = (mode) => {
+    state.userOverride = typeof mode === 'string' ? mode : null;
+    refreshMode();
+  };
+  scope.__INFINITE_RAILS_TEST_HOOKS__ = hooks;
+})(typeof window !== 'undefined' ? window : undefined);
+
 function getBootstrapUi(scope) {
   if (!scope || typeof scope !== 'object') {
     return null;
@@ -140,6 +288,243 @@ function setScoreSyncWarning(scope, message, visible) {
     }
   }
 }
+
+(function setupInactivityMonitor(globalScope) {
+  const scope =
+    typeof globalScope !== 'undefined'
+      ? globalScope
+      : typeof window !== 'undefined'
+        ? window
+        : typeof globalThis !== 'undefined'
+          ? globalThis
+          : null;
+  const documentRef = scope?.document ?? null;
+  if (!scope || !documentRef) {
+    return;
+  }
+
+  scope.InfiniteRails = scope.InfiniteRails || {};
+  scope.InfiniteRails.renderers = scope.InfiniteRails.renderers || {};
+  if (typeof scope.InfiniteRails.renderers.reloadActive !== 'function') {
+    scope.InfiniteRails.renderers.reloadActive = () => Promise.resolve(undefined);
+  }
+
+  const state = {
+    idleThresholdMs: 120000,
+    refreshCountdownMs: 15000,
+    checkIntervalMs: 1000,
+    lastActivityAt: Date.now(),
+    promptVisible: false,
+    countdownExpiresAt: null,
+    countdownHandle: null,
+    checkHandle: null,
+  };
+
+  let overlayElements = null;
+
+  const getOverlayElements = () => {
+    if (overlayElements) {
+      return overlayElements;
+    }
+    const overlay = documentRef.getElementById?.('inactivityOverlay') ?? null;
+    const countdown = documentRef.getElementById?.('inactivityOverlayCountdown') ?? null;
+    const stayButton = documentRef.getElementById?.('inactivityStayButton') ?? null;
+    const refreshButton = documentRef.getElementById?.('inactivityRefreshButton') ?? null;
+    overlayElements = { overlay, countdown, stayButton, refreshButton };
+    return overlayElements;
+  };
+
+  const resetCheckTimer = () => {
+    if (state.checkHandle && typeof scope.clearTimeout === 'function') {
+      scope.clearTimeout(state.checkHandle);
+    }
+    state.checkHandle = null;
+  };
+
+  const resetCountdownTimer = () => {
+    if (state.countdownHandle && typeof scope.clearTimeout === 'function') {
+      scope.clearTimeout(state.countdownHandle);
+    }
+    state.countdownHandle = null;
+  };
+
+  const ensureOverlay = () => {
+    const elements = getOverlayElements();
+    const overlay = elements.overlay;
+    if (!overlay) {
+      return null;
+    }
+    overlay.hidden = true;
+    overlay.setAttribute?.('hidden', '');
+    overlay.setAttribute?.('data-mode', 'idle');
+    const stayButton = elements.stayButton;
+    if (stayButton && !stayButton.__inactivityBound) {
+      stayButton.addEventListener('click', (event) => {
+        if (event?.preventDefault) {
+          event.preventDefault();
+        }
+        hidePrompt({ resetActivity: true });
+        scheduleIdleCheck();
+      });
+      stayButton.__inactivityBound = true;
+    }
+    return elements;
+  };
+
+  const updateCountdownDisplay = (remainingMs) => {
+    const elements = getOverlayElements();
+    const countdown = elements?.countdown;
+    if (!countdown) {
+      return;
+    }
+    const seconds = Math.max(0, Math.ceil(Number(remainingMs) / 1000));
+    countdown.textContent = String(seconds);
+  };
+
+  const hidePrompt = ({ resetActivity = false } = {}) => {
+    const elements = ensureOverlay();
+    const overlay = elements?.overlay;
+    resetCountdownTimer();
+    state.promptVisible = false;
+    state.countdownExpiresAt = null;
+    if (overlay) {
+      overlay.hidden = true;
+      overlay.setAttribute?.('hidden', '');
+      overlay.setAttribute?.('data-mode', 'idle');
+    }
+    documentRef.body?.classList?.remove?.('hud-inactive');
+    if (resetActivity) {
+      state.lastActivityAt = Date.now();
+    }
+  };
+
+  const triggerRendererRefresh = () => {
+    const renderer = scope.InfiniteRails?.renderers ?? null;
+    if (renderer && typeof renderer.reloadActive === 'function') {
+      try {
+        renderer.reloadActive({ reason: 'inactivity-countdown' });
+      } catch (error) {
+        // ignore renderer errors during fallback reloads
+      }
+    }
+    hidePrompt({ resetActivity: true });
+  };
+
+  const tickCountdown = () => {
+    if (!state.promptVisible || typeof state.countdownExpiresAt !== 'number') {
+      return;
+    }
+    const remaining = state.countdownExpiresAt - Date.now();
+    if (remaining <= 0) {
+      triggerRendererRefresh();
+      return;
+    }
+    updateCountdownDisplay(remaining);
+    scheduleCountdownTick();
+  };
+
+  const scheduleCountdownTick = () => {
+    if (!state.promptVisible || typeof scope.setTimeout !== 'function') {
+      resetCountdownTimer();
+      return null;
+    }
+    resetCountdownTimer();
+    const remaining = typeof state.countdownExpiresAt === 'number' ? state.countdownExpiresAt - Date.now() : NaN;
+    updateCountdownDisplay(remaining);
+    if (!(remaining > 0)) {
+      tickCountdown();
+      return null;
+    }
+    const delay = Math.min(remaining, 1000);
+    state.countdownHandle = scope.setTimeout(() => {
+      state.countdownHandle = null;
+      tickCountdown();
+    }, delay);
+    return state.countdownHandle;
+  };
+
+  const showPrompt = () => {
+    const elements = ensureOverlay();
+    const overlay = elements?.overlay;
+    if (!overlay) {
+      return;
+    }
+    state.promptVisible = true;
+    overlay.hidden = false;
+    overlay.removeAttribute?.('hidden');
+    overlay.setAttribute?.('data-mode', 'prompt');
+    documentRef.body?.classList?.add?.('hud-inactive');
+    state.countdownExpiresAt = Date.now() + state.refreshCountdownMs;
+    scheduleCountdownTick();
+  };
+
+  const runIdleCheck = () => {
+    const now = Date.now();
+    const idleDuration = now - state.lastActivityAt;
+    if (idleDuration >= state.idleThresholdMs) {
+      if (!state.promptVisible) {
+        showPrompt();
+      } else if (typeof state.countdownExpiresAt !== 'number') {
+        state.countdownExpiresAt = now + state.refreshCountdownMs;
+        scheduleCountdownTick();
+      }
+    }
+  };
+
+  const scheduleIdleCheck = () => {
+    if (typeof scope.setTimeout !== 'function') {
+      return null;
+    }
+    resetCheckTimer();
+    const interval = Number.isFinite(state.checkIntervalMs) && state.checkIntervalMs > 0 ? state.checkIntervalMs : 1000;
+    state.checkIntervalMs = interval;
+    state.checkHandle = scope.setTimeout(() => {
+      state.checkHandle = null;
+      runIdleCheck();
+      scheduleIdleCheck();
+    }, interval);
+    return state.checkHandle;
+  };
+
+  const hooks = scope.__INFINITE_RAILS_TEST_HOOKS__ ?? {};
+  hooks.setupInactivityOverlay = () => Boolean(ensureOverlay()?.overlay);
+  hooks.configureInactivityMonitor = (options = {}) => {
+    if (options && typeof options === 'object') {
+      const idleValue = Number(options.idleThresholdMs);
+      if (Number.isFinite(idleValue) && idleValue > 0) {
+        state.idleThresholdMs = idleValue;
+      }
+      const refreshValue = Number(options.refreshCountdownMs);
+      if (Number.isFinite(refreshValue) && refreshValue > 0) {
+        state.refreshCountdownMs = refreshValue;
+      }
+      const intervalValue = Number(options.checkIntervalMs);
+      if (Number.isFinite(intervalValue) && intervalValue > 0) {
+        state.checkIntervalMs = intervalValue;
+      }
+    }
+    state.lastActivityAt = Date.now();
+    scheduleIdleCheck();
+  };
+  hooks.getInactivityMonitorState = () => cloneDeep(state);
+  hooks.setInactivityLastActivity = (timestamp) => {
+    const value = Number(timestamp);
+    state.lastActivityAt = Number.isFinite(value) ? value : Date.now();
+    if (state.promptVisible) {
+      hidePrompt();
+    }
+    scheduleIdleCheck();
+  };
+  hooks.setInactivityCountdownExpiresAt = (timestamp) => {
+    const value = Number(timestamp);
+    state.countdownExpiresAt = Number.isFinite(value) ? value : Date.now();
+    if (state.promptVisible) {
+      scheduleCountdownTick();
+    }
+  };
+  hooks.dismissInactivityPrompt = () => hidePrompt({ resetActivity: true });
+  scope.__INFINITE_RAILS_TEST_HOOKS__ = hooks;
+})(typeof window !== 'undefined' ? window : undefined);
 
 function enforceAssetBaseConsistency(scope, resolvedRoot) {
   if (!scope || typeof scope !== 'object') {
@@ -1548,6 +1933,60 @@ function dispatchDiagnosticsEvent(scope, payload) {
     // ignore errors triggered by synthetic environments
   }
 }
+
+(function setupAudioDiagnostics(globalScope) {
+  const scope =
+    typeof globalScope !== 'undefined'
+      ? globalScope
+      : typeof window !== 'undefined'
+        ? window
+        : typeof globalThis !== 'undefined'
+          ? globalThis
+          : null;
+  if (!scope || typeof scope.addEventListener !== 'function') {
+    return;
+  }
+
+  scope.addEventListener('infinite-rails:audio-boot-status', handleAudioBootStatus);
+
+  function handleAudioBootStatus(event) {
+    const detail = event?.detail ?? {};
+    if (detail.fallbackActive !== true) {
+      return;
+    }
+    const message =
+      typeof detail.message === 'string' && detail.message.trim().length
+        ? detail.message.trim()
+        : 'Audio fallback activated — audio assets unavailable.';
+    if (typeof scope.presentCriticalErrorOverlay === 'function') {
+      scope.presentCriticalErrorOverlay({
+        title: 'Audio assets unavailable',
+        message,
+        diagnosticScope: 'audio-boot',
+        diagnosticStatus: 'error',
+        detail,
+      });
+      return;
+    }
+    const overlayPayload = {
+      title: 'Audio assets unavailable',
+      message,
+      diagnosticScope: 'audio-boot',
+      diagnosticStatus: 'error',
+      detail,
+    };
+    const overlay = scope.bootstrapOverlay ?? null;
+    if (overlay?.showError) {
+      overlay.showError(overlayPayload);
+    } else if (typeof overlay?.present === 'function') {
+      overlay.present(overlayPayload);
+    }
+  }
+
+  const hooks = scope.__INFINITE_RAILS_TEST_HOOKS__ ?? {};
+  hooks.handleAudioBootStatus = handleAudioBootStatus;
+  scope.__INFINITE_RAILS_TEST_HOOKS__ = hooks;
+})(typeof window !== 'undefined' ? window : undefined);
 
 function logDiagnosticsEvent(scopeKey, message, options = {}) {
   const scope = typeof globalThis !== 'undefined' ? globalThis : undefined;
@@ -3827,11 +4266,31 @@ function markBootPhaseError(phase, message) {
   const networkFailureCounts = new Map();
   const NETWORK_FAILURE_THRESHOLD = 3;
 
+  function normaliseEndpointPath(value) {
+    if (typeof value !== 'string') {
+      return value == null ? null : value;
+    }
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return null;
+    }
+    return trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
+  }
+
   function updateConfiguredEndpoints() {
     const configured = identityState.configuredEndpoints || (identityState.configuredEndpoints = {});
-    configured.scores = configured.scores || '/scores';
-    configured.users = configured.users || '/users';
-    configured.events = configured.events || '/events';
+    if (!Object.prototype.hasOwnProperty.call(configured, 'scores')) {
+      configured.scores = '/scores';
+    }
+    if (!Object.prototype.hasOwnProperty.call(configured, 'users')) {
+      configured.users = '/users';
+    }
+    if (!Object.prototype.hasOwnProperty.call(configured, 'events')) {
+      configured.events = '/events';
+    }
+    configured.scores = normaliseEndpointPath(configured.scores);
+    configured.users = normaliseEndpointPath(configured.users);
+    configured.events = normaliseEndpointPath(configured.events);
     const endpoints = identityState.endpoints || (identityState.endpoints = {});
     endpoints.scores = configured.scores;
     endpoints.users = configured.users;
@@ -3931,9 +4390,21 @@ function markBootPhaseError(phase, message) {
     return true;
   }
 
+  function joinEndpointUrl(baseUrl, path) {
+    const base = typeof baseUrl === 'string' ? baseUrl.replace(/\/+$/, '') : '';
+    if (!path) {
+      return base;
+    }
+    const segment = typeof path === 'string' ? path.replace(/^\/+/, '') : '';
+    if (!segment) {
+      return base;
+    }
+    return `${base}/${segment}`;
+  }
+
   async function pingEndpoint(fetchImpl, baseUrl, endpoint) {
     const method = (endpoint.method ?? 'GET').toUpperCase();
-    const url = `${baseUrl}${endpoint.path}`;
+    const url = joinEndpointUrl(baseUrl, endpoint.path);
     try {
       const response = await fetchImpl(url, { method, credentials: 'include', cache: 'no-store' });
       if (!response || typeof response.ok !== 'boolean') {
@@ -3988,13 +4459,10 @@ function markBootPhaseError(phase, message) {
       { path: identityState.endpoints.events, method: 'POST' },
     ];
 
-    const failures = [];
-    for (const endpoint of endpoints) {
-      const failure = await pingEndpoint(fetchImpl, apiBaseUrl, endpoint);
-      if (failure) {
-        failures.push(failure);
-      }
-    }
+    const results = await Promise.all(
+      endpoints.map((endpoint) => pingEndpoint(fetchImpl, apiBaseUrl, endpoint)),
+    );
+    const failures = results.filter((failure) => Boolean(failure));
 
     if (failures.length > 0) {
       const message = buildOfflineMessage(failures);
@@ -4030,12 +4498,7 @@ function markBootPhaseError(phase, message) {
   }
 
   function getBackendLiveCheckState() {
-    return {
-      performed: backendState.performed,
-      success: backendState.success,
-      detail: backendState.detail,
-      promise: backendState.promise,
-    };
+    return backendState;
   }
 
   function stopHeartbeat() {
@@ -4115,6 +4578,10 @@ function markBootPhaseError(phase, message) {
     if (!heartbeatState.timerId) {
       scheduleHeartbeat();
     }
+    const initialHeartbeat = sendHeartbeat();
+    if (initialHeartbeat?.catch) {
+      initialHeartbeat.catch(() => false);
+    }
   }
 
   function handleScoreSyncOffline(event) {
@@ -4144,7 +4611,7 @@ function markBootPhaseError(phase, message) {
   const hooks = globalRef.__INFINITE_RAILS_TEST_HOOKS__ ?? {};
   hooks.ensureBackendLiveCheck = ensureBackendLiveCheck;
   hooks.getBackendLiveCheckState = getBackendLiveCheckState;
-  hooks.getIdentityState = () => cloneDeep(identityState);
+  hooks.getIdentityState = () => identityState;
   hooks.getHeartbeatState = () => cloneDeep(heartbeatState);
   hooks.triggerHeartbeat = () => {
     if (!heartbeatState.endpoint || !heartbeatState.online) {
@@ -4192,7 +4659,7 @@ function markBootPhaseError(phase, message) {
   const readyStateRaw = documentRef ? documentRef.readyState : null;
   const readyState = typeof readyStateRaw === 'string' ? readyStateRaw.toLowerCase() : '';
   if (!readyState || readyState === 'complete' || readyState === 'interactive') {
-    Promise.resolve().then(autoStart);
+    autoStart();
   } else {
     documentRef.addEventListener('DOMContentLoaded', autoStart, { once: true });
   }
