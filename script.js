@@ -1463,6 +1463,353 @@ function resolveBootstrapAssetRoot(scope) {
   };
 })(typeof window !== 'undefined' ? window : undefined);
 
+const DIAGNOSTICS_CRITICAL_LEVELS = new Set(['error', 'fatal']);
+const DIAGNOSTICS_OVERLAY_THROTTLE_MS = 2000;
+const DIAGNOSTICS_EVENT_HISTORY_LIMIT = 50;
+const diagnosticsLogBuffer = [];
+let diagnosticsLastOverlayKey = null;
+let diagnosticsLastOverlayAt = 0;
+
+function shouldSendDiagnosticsToServer(detail = {}, scope = typeof globalThis !== 'undefined' ? globalThis : undefined) {
+  const endpoint =
+    (detail && typeof detail.endpoint === 'string' && detail.endpoint.trim()) ||
+    scope?.diagnosticsEndpoint ||
+    scope?.APP_CONFIG?.diagnosticsEndpoint ||
+    null;
+  if (!endpoint) {
+    return false;
+  }
+  if (detail?.transient === true) {
+    return false;
+  }
+  return true;
+}
+
+function pushDiagnosticsHistory(entry) {
+  diagnosticsLogBuffer.push(entry);
+  if (diagnosticsLogBuffer.length > DIAGNOSTICS_EVENT_HISTORY_LIMIT) {
+    diagnosticsLogBuffer.splice(0, diagnosticsLogBuffer.length - DIAGNOSTICS_EVENT_HISTORY_LIMIT);
+  }
+}
+
+function getDiagnosticsConsole(scope) {
+  return scope?.console ?? (typeof console !== 'undefined' ? console : null);
+}
+
+function mirrorDiagnosticsToOverlay(payload, scope) {
+  if (!payload || !DIAGNOSTICS_CRITICAL_LEVELS.has(payload.level)) {
+    return;
+  }
+  const overlay = scope?.presentCriticalErrorOverlay ?? scope?.bootstrapOverlay ?? null;
+  const presenter =
+    typeof overlay?.present === 'function'
+      ? overlay.present.bind(overlay)
+      : typeof overlay?.showError === 'function'
+        ? (detail) => overlay.showError(detail)
+        : typeof scope?.presentCriticalErrorOverlay === 'function'
+          ? scope.presentCriticalErrorOverlay
+          : typeof presentCriticalErrorOverlay === 'function'
+            ? presentCriticalErrorOverlay
+            : null;
+  if (!presenter) {
+    return;
+  }
+
+  const overlayKey = `${payload.scope}:${payload.message}`;
+  const now = Date.now();
+  if (diagnosticsLastOverlayKey === overlayKey && now - diagnosticsLastOverlayAt < DIAGNOSTICS_OVERLAY_THROTTLE_MS) {
+    return;
+  }
+  diagnosticsLastOverlayKey = overlayKey;
+  diagnosticsLastOverlayAt = now;
+
+  presenter({
+    message: payload.message,
+    timestamp: payload.timestamp,
+    diagnosticScope: payload.scope,
+    diagnosticStatus: payload.level,
+    detail: payload.detail ?? {},
+  });
+}
+
+function dispatchDiagnosticsEvent(scope, payload) {
+  const target = scope ?? (typeof window !== 'undefined' ? window : undefined);
+  if (!target?.dispatchEvent || !target?.CustomEvent) {
+    return;
+  }
+  try {
+    const event = new target.CustomEvent('infinite-rails:diagnostic-event', {
+      detail: payload,
+      bubbles: false,
+      cancelable: false,
+    });
+    target.dispatchEvent(event);
+  } catch (error) {
+    // ignore errors triggered by synthetic environments
+  }
+}
+
+function logDiagnosticsEvent(scopeKey, message, options = {}) {
+  const scope = typeof globalThis !== 'undefined' ? globalThis : undefined;
+  const diagnosticScope = typeof scopeKey === 'string' && scopeKey.trim().length ? scopeKey.trim() : 'runtime';
+  const resolvedMessage = typeof message === 'string' && message.trim().length ? message.trim() : 'Unknown diagnostic event';
+  const level = typeof options.level === 'string' ? options.level.toLowerCase() : 'info';
+  const timestamp = Number.isFinite(options.timestamp) ? options.timestamp : Date.now();
+  const detail = options.detail ? { ...options.detail } : {};
+  const payload = { scope: diagnosticScope, message: resolvedMessage, level, detail, timestamp };
+
+  const consoleRef = getDiagnosticsConsole(scope);
+  if (consoleRef?.debug) {
+    consoleRef.debug('[diagnostic]', diagnosticScope, resolvedMessage, detail);
+  }
+
+  const bootstrapOverlay = scope?.bootstrapOverlay;
+  if (bootstrapOverlay?.logEvent) {
+    try {
+      bootstrapOverlay.logEvent(diagnosticScope, resolvedMessage, payload);
+    } catch (error) {
+      consoleRef?.warn?.('Failed to mirror diagnostic into bootstrap overlay', error);
+    }
+  }
+
+  if (typeof scope?.centralLogStore?.record === 'function') {
+    scope.centralLogStore.record(payload);
+  }
+
+  if (options.store !== false) {
+    pushDiagnosticsHistory(payload);
+  }
+
+  mirrorDiagnosticsToOverlay(payload, scope);
+  dispatchDiagnosticsEvent(scope, payload);
+
+  if (shouldSendDiagnosticsToServer(options, scope) && typeof scope?.fetch === 'function') {
+    const endpoint =
+      (options && typeof options.endpoint === 'string' && options.endpoint.trim()) ||
+      scope?.diagnosticsEndpoint ||
+      scope?.APP_CONFIG?.diagnosticsEndpoint;
+    if (endpoint) {
+      const body = JSON.stringify({
+        scope: diagnosticScope,
+        message: resolvedMessage,
+        level,
+        detail,
+        timestamp,
+        history: diagnosticsLogBuffer.slice(-10),
+      });
+      Promise.resolve(
+        scope.fetch(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body,
+        }),
+      ).catch((error) => {
+        consoleRef?.warn?.('Failed to post diagnostic event', error);
+      });
+    }
+  }
+
+  return payload;
+}
+
+function logThroughDiagnostics(fn, { scope, message, detail, rethrow = true } = {}) {
+  if (typeof fn !== 'function') {
+    return undefined;
+  }
+  try {
+    return fn();
+  } catch (error) {
+    const diagnosticMessage =
+      typeof message === 'string' && message.trim().length
+        ? message.trim()
+        : error?.message || 'Unhandled diagnostic error';
+    logDiagnosticsEvent(scope ?? 'runtime', diagnosticMessage, {
+      level: 'error',
+      detail: { ...(detail || {}), error },
+    });
+    if (rethrow) {
+      throw error;
+    }
+    return undefined;
+  }
+}
+
+function normaliseRequestInfo(input) {
+  if (!input) {
+    return { url: null, method: 'GET' };
+  }
+  if (typeof input === 'string') {
+    return { url: input, method: 'GET' };
+  }
+  if (typeof input === 'object') {
+    const { url, method } = input;
+    return {
+      url: typeof url === 'string' ? url : null,
+      method: typeof method === 'string' ? method.toUpperCase() : 'GET',
+    };
+  }
+  return { url: null, method: 'GET' };
+}
+
+if (typeof globalThis !== 'undefined') {
+  if (typeof globalThis.logDiagnosticsEvent !== 'function') {
+    globalThis.logDiagnosticsEvent = logDiagnosticsEvent;
+  }
+  if (typeof globalThis.logThroughDiagnostics !== 'function') {
+    globalThis.logThroughDiagnostics = logThroughDiagnostics;
+  }
+}
+
+const FALLBACK_SHORTCUT_STATE = {
+  active: false,
+  bindings: {},
+  unsubscribe: null,
+  handler: null,
+};
+
+function normaliseKeyBindingValue(value) {
+  if (Array.isArray(value)) {
+    return value.flatMap((entry) => normaliseKeyBindingValue(entry)).filter(Boolean);
+  }
+  if (typeof value !== 'string') {
+    return [];
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return [];
+  }
+  return [trimmed.toUpperCase()];
+}
+
+function buildFallbackShortcutBindings(controlMap = {}) {
+  const bindings = {};
+  const entries = typeof controlMap === 'object' && controlMap ? Object.entries(controlMap) : [];
+  for (const [action, value] of entries) {
+    const keys = normaliseKeyBindingValue(value);
+    for (const key of keys) {
+      if (!key) {
+        continue;
+      }
+      bindings[key] = action;
+    }
+  }
+  return bindings;
+}
+
+function queueBootstrapFallbackNotice(key, message) {
+  const scope = typeof globalThis !== 'undefined' ? globalThis : undefined;
+  if (!scope) {
+    return;
+  }
+  const registry = scope.__bootstrapNotices || (scope.__bootstrapNotices = []);
+  registry.push({ key, message });
+}
+
+function isEditableTarget(target) {
+  if (!target) {
+    return false;
+  }
+  if (target.isContentEditable) {
+    return true;
+  }
+  const tagName = typeof target.tagName === 'string' ? target.tagName.toUpperCase() : '';
+  return tagName === 'INPUT' || tagName === 'TEXTAREA' || tagName === 'SELECT';
+}
+
+function shouldIgnoreFallbackEvent(event) {
+  if (!event) {
+    return true;
+  }
+  if (event.repeat) {
+    return true;
+  }
+  if (event.altKey || event.ctrlKey || event.metaKey) {
+    return true;
+  }
+  return false;
+}
+
+function invokeFallbackAction(scope, action, context) {
+  if (!action) {
+    return;
+  }
+  const reason = 'user-shortcut';
+  if (action === 'activateBriefingFallback') {
+    const handled = scope?.activateMissionBriefingFallback?.({ reason, context }) ?? false;
+    if (!handled) {
+      queueBootstrapFallbackNotice(
+        'briefing-fallback-unavailable',
+        'Mission briefing fallback unavailable — unable to activate safe mode.',
+      );
+    }
+  } else if (action === 'startSimpleFallbackRenderer') {
+    const result = scope?.tryStartSimpleFallback?.({ reason }, context);
+    if (result === false) {
+      queueBootstrapFallbackNotice(
+        'simple-renderer-unavailable',
+        'Simple renderer fallback unavailable — unable to switch renderer.',
+      );
+    }
+  } else if (action === 'triggerTutorialRescue') {
+    const experience = scope?.__INFINITE_RAILS_ACTIVE_EXPERIENCE__;
+    if (experience?.showFirstRunTutorial) {
+      experience.showFirstRunTutorial({ force: true });
+    }
+    scope?.recordLiveDiagnostic?.('tutorial', 'Tutorial recovery requested via fallback shortcut.');
+  }
+}
+
+function ensureFallbackSubscription(scope) {
+  const controlsApi = scope?.InfiniteRailsControls;
+  if (!controlsApi || typeof controlsApi.subscribe !== 'function') {
+    FALLBACK_SHORTCUT_STATE.bindings = buildFallbackShortcutBindings(scope?.__INFINITE_RAILS_CONTROL_MAP__ || {});
+    FALLBACK_SHORTCUT_STATE.active = Object.keys(FALLBACK_SHORTCUT_STATE.bindings).length > 0;
+    return;
+  }
+  FALLBACK_SHORTCUT_STATE.unsubscribe?.();
+  FALLBACK_SHORTCUT_STATE.unsubscribe = controlsApi.subscribe((map) => {
+    FALLBACK_SHORTCUT_STATE.bindings = buildFallbackShortcutBindings(map);
+    FALLBACK_SHORTCUT_STATE.active = Object.keys(FALLBACK_SHORTCUT_STATE.bindings).length > 0;
+  });
+}
+
+function initialiseFallbackShortcutControls(scope = typeof globalThis !== 'undefined' ? globalThis : undefined, documentRef) {
+  if (!scope) {
+    return FALLBACK_SHORTCUT_STATE;
+  }
+  const targetDocument = documentRef ?? scope.document ?? null;
+  ensureFallbackSubscription(scope);
+
+  if (!FALLBACK_SHORTCUT_STATE.handler && typeof scope.addEventListener === 'function') {
+    FALLBACK_SHORTCUT_STATE.handler = (event) => {
+      if (event?.type !== 'keydown' || shouldIgnoreFallbackEvent(event)) {
+        return;
+      }
+      const code = event.code || '';
+      const action = FALLBACK_SHORTCUT_STATE.bindings[code];
+      if (!action) {
+        return;
+      }
+      if (isEditableTarget(event.target)) {
+        return;
+      }
+      event.preventDefault?.();
+      event.stopPropagation?.();
+      invokeFallbackAction(scope, action, { key: code, document: targetDocument });
+    };
+    scope.addEventListener('keydown', FALLBACK_SHORTCUT_STATE.handler, true);
+  }
+
+  return FALLBACK_SHORTCUT_STATE;
+}
+
+function cloneFallbackShortcutState() {
+  return {
+    active: FALLBACK_SHORTCUT_STATE.active,
+    bindings: { ...FALLBACK_SHORTCUT_STATE.bindings },
+  };
+}
+
 (function setupStorageQuarantine(globalScope) {
   const scope =
     typeof globalScope !== 'undefined'
@@ -3783,8 +4130,9 @@ function markBootPhaseError(phase, message) {
     return;
   }
 
-  const readyState = String(documentRef.readyState || '').toLowerCase();
-  if (readyState === 'complete' || readyState === 'interactive') {
+  const readyStateRaw = documentRef ? documentRef.readyState : null;
+  const readyState = typeof readyStateRaw === 'string' ? readyStateRaw.toLowerCase() : '';
+  if (!readyState || readyState === 'complete' || readyState === 'interactive') {
     Promise.resolve().then(autoStart);
   } else {
     documentRef.addEventListener('DOMContentLoaded', autoStart, { once: true });
