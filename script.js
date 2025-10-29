@@ -11,6 +11,76 @@ function ensureTrailingSlash(value) {
 
 const PRODUCTION_ASSET_ROOT = ensureTrailingSlash('https://d3gj6x3ityfh5o.cloudfront.net/');
 
+const HOTBAR_SLOT_COUNT = 10;
+
+const DEFAULT_KEY_BINDINGS = (() => {
+  const map = {
+    moveForward: ['KeyW', 'ArrowUp'],
+    moveBackward: ['KeyS', 'ArrowDown'],
+    moveLeft: ['KeyA', 'ArrowLeft'],
+    moveRight: ['KeyD', 'ArrowRight'],
+    jump: ['Space'],
+    interact: ['KeyF'],
+    resetPosition: ['KeyT'],
+    placeBlock: ['KeyQ'],
+    toggleCameraPerspective: ['KeyV'],
+    toggleCrafting: ['KeyE'],
+    toggleInventory: ['KeyI'],
+    activateBriefingFallback: ['F9'],
+    startSimpleFallbackRenderer: ['F10'],
+    triggerTutorialRescue: ['F7'],
+    openGuide: [],
+    toggleTutorial: ['F1', 'Slash'],
+    toggleDeveloperOverlay: ['Backquote', 'F8'],
+    openSettings: ['F2'],
+    openLeaderboard: ['F3'],
+    closeMenus: ['Escape'],
+    buildPortal: ['KeyR'],
+  };
+  for (let index = 1; index <= HOTBAR_SLOT_COUNT; index += 1) {
+    map[`hotbar${index}`] = [`Digit${index % 10}`, `Numpad${index % 10}`];
+  }
+  return map;
+})();
+
+function ensureEventLogListeners(register) {
+  if (typeof register !== 'function') {
+    return;
+  }
+  [
+    'world-generation-start',
+    'world-generation-complete',
+    'world-generation-failed',
+    'ai-attachment-failed',
+  ].forEach(register);
+}
+
+const EVENT_SOURCING_CAPTURE_TYPES = (() => {
+  const capture = new Set([
+    'world-generation-start',
+    'world-generation-complete',
+    'world-generation-failed',
+    'ai-attachment-failed',
+  ]);
+  return capture;
+})();
+
+function describeEventLogEntry(type, detail = {}) {
+  switch (type) {
+    case 'world-generation-start':
+      return 'World generation started — calibrating terrain seed.';
+    case 'world-generation-complete':
+      return 'World generation complete — terrain and actors online.';
+    case 'world-generation-failed':
+      return 'World generation failed — restoring safe defaults.';
+    case 'ai-attachment-failed':
+      return 'AI attachment failed — reverting to offline heuristics.';
+    default:
+      return detail?.message || 'Unknown gameplay event.';
+  }
+}
+
+
 const ASSET_ROOT_STORAGE_KEYS = Object.freeze([
   'infiniteRails.assetRootOverride',
   'InfiniteRails.assetRootOverride',
