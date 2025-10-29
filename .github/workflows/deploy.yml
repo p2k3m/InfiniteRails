@@ -147,6 +147,7 @@ jobs:
             --include "boot-recovery.js" \
             --include "portal-mechanics.js" \
             --include "scoreboard-utils.js" \
+            --include "scripts/**" \
             --include "assets/**" \
             --include "audio/**" \
             --include "textures/**" \

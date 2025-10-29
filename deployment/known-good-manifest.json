@@ -10,6 +10,7 @@
     "downlevel-polyfills.js?v=2151404cf1c4.61e4a3d4804d",
     "bootstrap-fallback.js?v=507486ca1198.61e4a3d4804d",
     "script.js?v=af6f93eba5f8.61e4a3d4804d",
+    "scripts/frame-guard.js?v=frame-guard.61e4a3d4804d",
     "test-driver.js?v=c11261fec8e5.61e4a3d4804d",
     "simple-experience.js?v=68521d86db78.61e4a3d4804d",
     "asset-resolver.js?v=388f0ca33542.61e4a3d4804d",

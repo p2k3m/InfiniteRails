@@ -11,6 +11,7 @@
     "bootstrap-fallback.js?v=87161f0d5f84.76f183b495ef",
     "boot-recovery.js?v=1a8d1c794902.76f183b495ef",
     "script.js?v=98d614f9704c.76f183b495ef",
+    "scripts/frame-guard.js?v=frame-guard.76f183b495ef",
     "test-driver.js?v=c11261fec8e5.76f183b495ef",
     "simple-experience.js?v=58b03c3f78df.76f183b495ef",
     "asset-resolver.js?v=388f0ca33542.76f183b495ef",
