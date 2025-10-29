@@ -90,9 +90,19 @@ function ensureManifestDigests() {
       hasLoggedUpdates = true;
     }
 
+    const scriptPath = path.join(repoRoot, 'script.js');
+    const scriptBefore = fs.existsSync(scriptPath) ? fs.readFileSync(scriptPath, 'utf8') : null;
     const updatedFiles = updateFileReferences(versionMap);
 
-    if (updates.length === 0 && updatedFiles.length === 0) {
+    let filteredUpdatedFiles = updatedFiles;
+    if (updatedFiles.includes('script.js') && scriptBefore !== null) {
+      const scriptAfter = fs.readFileSync(scriptPath, 'utf8');
+      if (scriptAfter === scriptBefore) {
+        filteredUpdatedFiles = updatedFiles.filter((file) => file !== 'script.js');
+      }
+    }
+
+    if (updates.length === 0 && filteredUpdatedFiles.length === 0) {
       if (!hasLoggedUpdates) {
         console.log('asset-manifest.json digests already match on-disk assets.');
       }
