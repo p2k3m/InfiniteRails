@@ -10,6 +10,7 @@ function ensureTrailingSlash(value) {
 }
 
 const PRODUCTION_ASSET_ROOT = ensureTrailingSlash('https://d3gj6x3ityfh5o.cloudfront.net/');
+const DEFAULT_LOCAL_ASSET_ROOT = ensureTrailingSlash('./');
 
 const HOTBAR_SLOT_COUNT = 10;
 
@@ -258,6 +259,117 @@ function inferLocalAssetRoot(scope) {
     return ensureTrailingSlash(`${protocol}//${host}/`);
   }
   return ensureTrailingSlash('./');
+}
+
+function resolveLocalAssetFallback(scope) {
+  const appConfig = scope.APP_CONFIG || (scope.APP_CONFIG = {});
+  const configured = normaliseAssetRootCandidate(appConfig.localAssetRoot, scope);
+  if (configured) {
+    return configured;
+  }
+  const location = getBootstrapLocation(scope);
+  const href = ensureString(location?.href);
+  if (href) {
+    try {
+      const baseUrl = new URL('.', href);
+      return ensureTrailingSlash(baseUrl.toString());
+    } catch (error) {
+      // ignore URL resolution failures and fall back to relative paths
+    }
+  }
+  return DEFAULT_LOCAL_ASSET_ROOT;
+}
+
+function getOrCreateAssetFailoverState(scope) {
+  if (!scope || typeof scope !== 'object') {
+    return null;
+  }
+  const existing = scope.__INFINITE_RAILS_ASSET_FAILOVER__;
+  if (existing && typeof existing === 'object') {
+    if (typeof existing.fallbackRoot !== 'string' || !existing.fallbackRoot.trim()) {
+      const resolvedFallback = resolveLocalAssetFallback(scope);
+      existing.fallbackRoot = resolvedFallback;
+      existing.fallbackRootLower = typeof resolvedFallback === 'string' ? resolvedFallback.toLowerCase() : null;
+    }
+    return existing;
+  }
+  const fallbackRoot = resolveLocalAssetFallback(scope);
+  const state = {
+    primaryRoot: null,
+    primaryRootLower: null,
+    fallbackRoot,
+    fallbackRootLower: typeof fallbackRoot === 'string' ? fallbackRoot.toLowerCase() : null,
+    activeRoot: null,
+    activeRootLower: null,
+    failoverActive: false,
+    triggeredAt: null,
+    reason: null,
+  };
+  scope.__INFINITE_RAILS_ASSET_FAILOVER__ = state;
+  return state;
+}
+
+function initialiseAssetFailover(scope, resolvedRoot) {
+  const state = getOrCreateAssetFailoverState(scope);
+  if (!state) {
+    return null;
+  }
+  const normalisedPrimary = normaliseAssetRootCandidate(resolvedRoot, scope);
+  state.primaryRoot = normalisedPrimary;
+  state.primaryRootLower = typeof normalisedPrimary === 'string' ? normalisedPrimary.toLowerCase() : null;
+  const fallbackRoot = normaliseAssetRootCandidate(state.fallbackRoot, scope) ?? resolveLocalAssetFallback(scope);
+  state.fallbackRoot = fallbackRoot;
+  state.fallbackRootLower = typeof fallbackRoot === 'string' ? fallbackRoot.toLowerCase() : null;
+  const initialActive = normalisedPrimary || fallbackRoot;
+  state.activeRoot = initialActive;
+  state.activeRootLower = typeof initialActive === 'string' ? initialActive.toLowerCase() : null;
+  if (state.failoverActive && initialActive === normalisedPrimary) {
+    state.failoverActive = false;
+    state.triggeredAt = null;
+    state.reason = null;
+  }
+  return state;
+}
+
+function activateAssetFailover(scope, reason = {}) {
+  if (!scope || typeof scope !== 'object') {
+    return false;
+  }
+  const state = getOrCreateAssetFailoverState(scope);
+  if (!state || state.failoverActive) {
+    return false;
+  }
+  const fallbackRoot = normaliseAssetRootCandidate(state.fallbackRoot, scope) ?? resolveLocalAssetFallback(scope);
+  if (!fallbackRoot || !fallbackRoot.trim()) {
+    return false;
+  }
+  const appConfig = scope.APP_CONFIG || (scope.APP_CONFIG = {});
+  state.failoverActive = true;
+  state.activeRoot = fallbackRoot;
+  state.activeRootLower = fallbackRoot.toLowerCase();
+  state.triggeredAt = Date.now();
+  state.reason = {
+    type: reason?.type ?? null,
+    status: typeof reason?.status === 'number' ? reason.status : null,
+    code: reason?.code ?? null,
+    message: reason?.message ?? null,
+    url: reason?.url ?? null,
+  };
+  appConfig.assetRoot = fallbackRoot;
+  if (
+    typeof appConfig.assetBaseUrl !== 'string' ||
+    !appConfig.assetBaseUrl.trim() ||
+    (state.primaryRoot && appConfig.assetBaseUrl === state.primaryRoot)
+  ) {
+    appConfig.assetBaseUrl = fallbackRoot;
+  }
+  if (scope.console && typeof scope.console.info === 'function') {
+    scope.console.info('[InfiniteRails] Asset CDN unavailable. Falling back to local bundle.', {
+      fallbackAssetRoot: fallbackRoot,
+      trigger: state.reason,
+    });
+  }
+  return true;
 }
 
 function resolveBootstrapAssetRoot(scope) {
@@ -1229,6 +1341,108 @@ function resolveBootstrapAssetRoot(scope) {
     return '';
   };
 
+  const getAssetFailoverState = () => scope.__INFINITE_RAILS_ASSET_FAILOVER__ || null;
+
+  const normaliseString = (value) => (typeof value === 'string' ? value : '');
+
+  const rewriteAssetUrlIfNecessary = (url) => {
+    const state = getAssetFailoverState();
+    if (!state || !state.failoverActive) {
+      return null;
+    }
+    const sourceUrl = ensureString(url).trim();
+    if (!sourceUrl) {
+      return null;
+    }
+    const primaryRoot = ensureString(state.primaryRoot).trim();
+    const fallbackRoot = ensureString(state.activeRoot || state.fallbackRoot).trim();
+    if (!primaryRoot || !fallbackRoot) {
+      return null;
+    }
+    const lowerSource = sourceUrl.toLowerCase();
+    const primaryLower = state.primaryRootLower || primaryRoot.toLowerCase();
+    if (!lowerSource.startsWith(primaryLower)) {
+      return null;
+    }
+    const fallbackLower = state.activeRootLower || fallbackRoot.toLowerCase();
+    if (lowerSource.startsWith(fallbackLower)) {
+      return null;
+    }
+    const suffix = sourceUrl.slice(primaryRoot.length);
+    const fallbackWithSlash = ensureTrailingSlash(fallbackRoot);
+    return `${fallbackWithSlash}${suffix}`;
+  };
+
+  const cloneRequestWithUrl = (request, url) => {
+    if (!RequestCtor || !request || typeof request !== 'object' || typeof url !== 'string') {
+      return null;
+    }
+    try {
+      return new RequestCtor(url, {
+        method: request.method,
+        headers: request.headers,
+        mode: request.mode,
+        credentials: request.credentials,
+        cache: request.cache,
+        redirect: request.redirect,
+        referrer: request.referrer,
+        referrerPolicy: request.referrerPolicy,
+        integrity: request.integrity,
+        keepalive: request.keepalive,
+      });
+    } catch (error) {
+      return null;
+    }
+  };
+
+  const maybeRewriteAssetRequest = (resource, init) => {
+    const rewritten = rewriteAssetUrlIfNecessary(toAbsoluteUrl(resource));
+    if (!rewritten) {
+      return { resource, init };
+    }
+    if (RequestCtor && resource instanceof RequestCtor) {
+      const clonedRequest = cloneRequestWithUrl(resource, rewritten);
+      if (clonedRequest) {
+        return { resource: clonedRequest, init };
+      }
+    }
+    if (resource && typeof resource.url === 'string') {
+      const nextInit = { ...(init || {}) };
+      if (!nextInit.method && normaliseString(resource.method)) {
+        nextInit.method = resource.method;
+      }
+      if (!nextInit.headers && resource.headers) {
+        nextInit.headers = resource.headers;
+      }
+      if (!nextInit.credentials && resource.credentials) {
+        nextInit.credentials = resource.credentials;
+      }
+      if (!nextInit.mode && resource.mode) {
+        nextInit.mode = resource.mode;
+      }
+      if (!nextInit.cache && resource.cache) {
+        nextInit.cache = resource.cache;
+      }
+      if (!nextInit.redirect && resource.redirect) {
+        nextInit.redirect = resource.redirect;
+      }
+      if (!nextInit.referrer && resource.referrer) {
+        nextInit.referrer = resource.referrer;
+      }
+      if (!nextInit.referrerPolicy && resource.referrerPolicy) {
+        nextInit.referrerPolicy = resource.referrerPolicy;
+      }
+      if (!nextInit.integrity && resource.integrity) {
+        nextInit.integrity = resource.integrity;
+      }
+      if (!nextInit.keepalive && resource.keepalive) {
+        nextInit.keepalive = resource.keepalive;
+      }
+      return { resource: rewritten, init: nextInit };
+    }
+    return { resource: rewritten, init };
+  };
+
   const getHeaderValue = (headers, name) => {
     if (!headers) {
       return null;
@@ -1443,29 +1657,28 @@ function resolveBootstrapAssetRoot(scope) {
       return null;
     }
     const safeInit = sanitiseRetryInit(init);
-    if (RequestCtor && resource instanceof RequestCtor) {
-      return () => {
+    return () => {
+      const { resource: adjustedResource, init: adjustedInit } = maybeRewriteAssetRequest(resource, safeInit);
+      if (RequestCtor && adjustedResource instanceof RequestCtor) {
         try {
-          return nativeFetch.call(scope, resource.clone());
+          return nativeFetch.call(scope, adjustedResource.clone());
         } catch (cloneError) {
           try {
-            return nativeFetch.call(scope, new RequestCtor(resource, safeInit));
+            return nativeFetch.call(scope, new RequestCtor(adjustedResource, adjustedInit));
           } catch (requestError) {
-            return nativeFetch.call(scope, resource, safeInit);
+            return nativeFetch.call(scope, adjustedResource, adjustedInit);
           }
         }
-      };
-    }
-    if (resource && typeof resource.clone === 'function') {
-      return () => {
+      }
+      if (adjustedResource && typeof adjustedResource.clone === 'function') {
         try {
-          return nativeFetch.call(scope, resource.clone());
+          return nativeFetch.call(scope, adjustedResource.clone());
         } catch (cloneError) {
-          return nativeFetch.call(scope, resource, safeInit);
+          return nativeFetch.call(scope, adjustedResource, adjustedInit);
         }
-      };
-    }
-    return () => nativeFetch.call(scope, resource, safeInit);
+      }
+      return nativeFetch.call(scope, adjustedResource, adjustedInit);
+    };
   }
 
   function shouldRetryAssetResponse(response, url) {
@@ -1532,6 +1745,56 @@ function resolveBootstrapAssetRoot(scope) {
     return false;
   }
 
+  function shouldActivateAssetFailoverForRequest(url) {
+    const state = getAssetFailoverState();
+    if (!state || state.failoverActive) {
+      return false;
+    }
+    const candidate = ensureString(url).trim();
+    if (!candidate) {
+      return false;
+    }
+    const primaryRoot = ensureString(state.primaryRoot).trim();
+    if (!primaryRoot) {
+      return false;
+    }
+    const primaryLower = state.primaryRootLower || primaryRoot.toLowerCase();
+    return candidate.toLowerCase().startsWith(primaryLower);
+  }
+
+  function maybeActivateAssetFailoverForFailure(detail) {
+    if (!detail || detail.category !== 'assets') {
+      return false;
+    }
+    const requestUrl = detail.requestUrl;
+    if (!shouldActivateAssetFailoverForRequest(requestUrl)) {
+      return false;
+    }
+    if (detail.response && typeof detail.response.status === 'number') {
+      const status = Number(detail.response.status);
+      if (status === 403 || status === 404) {
+        return activateAssetFailover(scope, {
+          type: 'http',
+          status,
+          url: requestUrl,
+          message: normaliseString(detail.response.statusText),
+        });
+      }
+    }
+    if (detail.error) {
+      const fingerprint = `${normaliseString(detail.error.code)} ${normaliseString(detail.error.message)} ${normaliseString(detail.error.name)}`.toLowerCase();
+      if (fingerprint.includes('403') || fingerprint.includes('forbidden') || fingerprint.includes('blocked')) {
+        return activateAssetFailover(scope, {
+          type: 'error',
+          code: detail.error.code ?? null,
+          message: detail.error.message ?? null,
+          url: requestUrl,
+        });
+      }
+    }
+    return false;
+  }
+
   function clearAssetRetry(url) {
     if (!assetRetryQueue || !url) {
       return;
@@ -1550,6 +1813,7 @@ function resolveBootstrapAssetRoot(scope) {
     if (!requestUrl) {
       return;
     }
+    maybeActivateAssetFailoverForFailure(detail);
     const requestFactory = createRetryRequestFactory(detail.resource, detail.init);
     if (!requestFactory) {
       return;
@@ -1800,28 +2064,35 @@ function resolveBootstrapAssetRoot(scope) {
   };
 
   const wrappedFetch = (resource, init) => {
-    const category = inferCategory(resource, init);
-    const bypass = shouldBypassCircuit(category, init);
+    let adjustedResource = resource;
+    let adjustedInit = init;
+    const rewritten = maybeRewriteAssetRequest(resource, init);
+    if (rewritten) {
+      adjustedResource = rewritten.resource;
+      adjustedInit = rewritten.init;
+    }
+    const category = inferCategory(adjustedResource, adjustedInit);
+    const bypass = shouldBypassCircuit(category, adjustedInit);
     if (!bypass && state.trippedCategories.has(category)) {
       const error = new Error(`Fetch circuit breaker tripped for ${category} requests.`);
       error.name = 'FetchCircuitTrippedError';
       error.circuitCategory = category;
-      error.fetchResource = resource;
-      error.fetchInit = init;
+      error.fetchResource = adjustedResource;
+      error.fetchInit = adjustedInit;
       return Promise.reject(error);
     }
 
     let fetchResult;
-    const requestUrl = toAbsoluteUrl(resource);
+    const requestUrl = toAbsoluteUrl(adjustedResource);
     try {
-      fetchResult = nativeFetch.call(scope, resource, init);
+      fetchResult = nativeFetch.call(scope, adjustedResource, adjustedInit);
     } catch (error) {
-      recordFailure(category, { error, phase: 'invoke', resource, init });
+      recordFailure(category, { error, phase: 'invoke', resource: adjustedResource, init: adjustedInit });
       maybeScheduleAssetRetry({
         category,
         requestUrl,
-        resource,
-        init,
+        resource: adjustedResource,
+        init: adjustedInit,
         error,
         phase: 'invoke',
       });
@@ -1835,7 +2106,7 @@ function resolveBootstrapAssetRoot(scope) {
     return Promise.resolve(fetchResult)
       .then((response) => {
         if (!response || typeof response.ok !== 'boolean') {
-          recordFailure(category, { response, phase: 'invalid-response', resource, init });
+          recordFailure(category, { response, phase: 'invalid-response', resource: adjustedResource, init: adjustedInit });
           return response;
         }
         if (!response.ok) {
@@ -1844,14 +2115,14 @@ function resolveBootstrapAssetRoot(scope) {
             status: response.status,
             statusText: response.statusText,
             phase: 'http',
-            resource,
-            init,
+            resource: adjustedResource,
+            init: adjustedInit,
           });
           maybeScheduleAssetRetry({
             category,
             requestUrl,
-            resource,
-            init,
+            resource: adjustedResource,
+            init: adjustedInit,
             response,
             phase: 'http',
           });
@@ -1864,12 +2135,12 @@ function resolveBootstrapAssetRoot(scope) {
         return response;
       })
       .catch((error) => {
-        recordFailure(category, { error, phase: 'rejection', resource, init });
+        recordFailure(category, { error, phase: 'rejection', resource: adjustedResource, init: adjustedInit });
         maybeScheduleAssetRetry({
           category,
           requestUrl,
-          resource,
-          init,
+          resource: adjustedResource,
+          init: adjustedInit,
           error,
           phase: 'rejection',
         });
@@ -1906,6 +2177,20 @@ function resolveBootstrapAssetRoot(scope) {
   hooks.tripFetchCircuit = (category) => {
     const resolved = normaliseCategory(category) ?? 'api';
     tripCircuit(resolved, { phase: 'manual' });
+  };
+  hooks.getAssetFailoverState = () => {
+    const state = getAssetFailoverState();
+    if (!state) {
+      return null;
+    }
+    return {
+      primaryRoot: state.primaryRoot,
+      fallbackRoot: state.fallbackRoot,
+      activeRoot: state.activeRoot,
+      failoverActive: state.failoverActive,
+      triggeredAt: state.triggeredAt,
+      reason: state.reason,
+    };
   };
   hooks.getAssetRetryQueueState = () => {
     if (!assetRetryQueue) {
@@ -1971,7 +2256,8 @@ function resolveBootstrapAssetRoot(scope) {
     globalScope.PRODUCTION_ASSET_ROOT = PRODUCTION_ASSET_ROOT;
   }
 
-  resolveBootstrapAssetRoot(globalScope);
+  const resolvedAssetRoot = resolveBootstrapAssetRoot(globalScope);
+  initialiseAssetFailover(globalScope, resolvedAssetRoot);
 })(typeof window !== 'undefined' ? window : typeof globalThis !== 'undefined' ? globalThis : undefined);
 
 (function exposeBootstrapInternals(globalScope) {
