@@ -475,7 +475,8 @@ export function evaluateBootRecoveryScript(sandbox) {
   vm.runInContext(source, sandbox);
 }
 
-export async function flushMicrotasks() {
-  await Promise.resolve();
-  await Promise.resolve();
+export async function flushMicrotasks(iterations = 5) {
+  for (let index = 0; index < iterations; index += 1) {
+    await Promise.resolve();
+  }
 }
