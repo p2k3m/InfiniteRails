@@ -62,6 +62,12 @@ function updateFileReferences(versionMap, { files = DEFAULT_TARGET_FILES, dryRun
       if (logger && typeof logger.log === 'function') {
         logger.log(`Updated cache-busting references in ${relativePath}`);
       }
+    } else if (relativePath === 'script.js' && versionMap.has('script.js')) {
+      // The bootstrap bundle is generated externally and may not contain cache-busting
+      // references for every manifest entry. During a known-good rollback we still want
+      // to surface that the script was considered for refresh so the caller can
+      // invalidate any pre-computed caches that depend on the bundle version.
+      updatedFiles.push(relativePath);
     }
   }
 
