@@ -1851,9 +1851,31 @@ function resolveBootstrapAssetRoot(scope) {
 const DIAGNOSTICS_CRITICAL_LEVELS = new Set(['error', 'fatal']);
 const DIAGNOSTICS_OVERLAY_THROTTLE_MS = 2000;
 const DIAGNOSTICS_EVENT_HISTORY_LIMIT = 50;
-const diagnosticsLogBuffer = [];
-let diagnosticsLastOverlayKey = null;
-let diagnosticsLastOverlayAt = 0;
+
+function getDiagnosticsStateContainer(scope = typeof globalScope !== 'undefined' ? globalScope : typeof globalThis !== 'undefined' ? globalThis : undefined) {
+  const target = scope ?? null;
+  const fallbackStore = getDiagnosticsStateContainer.__fallbackStore ||
+    (getDiagnosticsStateContainer.__fallbackStore = { logBuffer: [], lastOverlayKey: null, lastOverlayAt: 0 });
+  if (!target) {
+    return fallbackStore;
+  }
+  const existing = target.__INFINITE_RAILS_DIAGNOSTICS_STATE__;
+  if (existing && typeof existing === 'object') {
+    if (!Array.isArray(existing.logBuffer)) {
+      existing.logBuffer = [];
+    }
+    if (typeof existing.lastOverlayKey !== 'string') {
+      existing.lastOverlayKey = existing.lastOverlayKey == null ? null : String(existing.lastOverlayKey);
+    }
+    if (!Number.isFinite(existing.lastOverlayAt)) {
+      existing.lastOverlayAt = Number(existing.lastOverlayAt) || 0;
+    }
+    return existing;
+  }
+  const created = { logBuffer: [], lastOverlayKey: null, lastOverlayAt: 0 };
+  target.__INFINITE_RAILS_DIAGNOSTICS_STATE__ = created;
+  return created;
+}
 
 function shouldSendDiagnosticsToServer(detail = {}, scope = typeof globalThis !== 'undefined' ? globalThis : undefined) {
   const endpoint =
@@ -1870,10 +1892,50 @@ function shouldSendDiagnosticsToServer(detail = {}, scope = typeof globalThis !=
   return true;
 }
 
+function resolveDiagnosticsState(scope =
+  typeof globalScope !== 'undefined'
+    ? globalScope
+    : typeof globalThis !== 'undefined'
+      ? globalThis
+      : undefined) {
+  if (typeof getDiagnosticsStateContainer === 'function') {
+    return getDiagnosticsStateContainer(scope);
+  }
+  const target = scope ?? null;
+  const fallback =
+    resolveDiagnosticsState.__fallbackStore ||
+    (resolveDiagnosticsState.__fallbackStore = { logBuffer: [], lastOverlayKey: null, lastOverlayAt: 0 });
+  if (!target) {
+    return fallback;
+  }
+  const existing = target.__INFINITE_RAILS_DIAGNOSTICS_STATE__;
+  if (existing && typeof existing === 'object') {
+    if (!Array.isArray(existing.logBuffer)) {
+      existing.logBuffer = [];
+    }
+    if (typeof existing.lastOverlayKey !== 'string') {
+      existing.lastOverlayKey = existing.lastOverlayKey == null ? null : String(existing.lastOverlayKey);
+    }
+    if (!Number.isFinite(existing.lastOverlayAt)) {
+      existing.lastOverlayAt = Number(existing.lastOverlayAt) || 0;
+    }
+    return existing;
+  }
+  const created = { logBuffer: [], lastOverlayKey: null, lastOverlayAt: 0 };
+  target.__INFINITE_RAILS_DIAGNOSTICS_STATE__ = created;
+  return created;
+}
+
 function pushDiagnosticsHistory(entry) {
-  diagnosticsLogBuffer.push(entry);
-  if (diagnosticsLogBuffer.length > DIAGNOSTICS_EVENT_HISTORY_LIMIT) {
-    diagnosticsLogBuffer.splice(0, diagnosticsLogBuffer.length - DIAGNOSTICS_EVENT_HISTORY_LIMIT);
+  const state = resolveDiagnosticsState();
+  const history = state.logBuffer;
+  history.push(entry);
+  const limit =
+    typeof DIAGNOSTICS_EVENT_HISTORY_LIMIT === 'number'
+      ? DIAGNOSTICS_EVENT_HISTORY_LIMIT
+      : 50;
+  if (history.length > limit) {
+    history.splice(0, history.length - limit);
   }
 }
 
@@ -1882,7 +1944,11 @@ function getDiagnosticsConsole(scope) {
 }
 
 function mirrorDiagnosticsToOverlay(payload, scope) {
-  if (!payload || !DIAGNOSTICS_CRITICAL_LEVELS.has(payload.level)) {
+  const criticalLevels =
+    typeof DIAGNOSTICS_CRITICAL_LEVELS !== 'undefined'
+      ? DIAGNOSTICS_CRITICAL_LEVELS
+      : new Set(['error', 'fatal']);
+  if (!payload || !criticalLevels.has(payload.level)) {
     return;
   }
   const overlay = scope?.presentCriticalErrorOverlay ?? scope?.bootstrapOverlay ?? null;
@@ -1902,11 +1968,16 @@ function mirrorDiagnosticsToOverlay(payload, scope) {
 
   const overlayKey = `${payload.scope}:${payload.message}`;
   const now = Date.now();
-  if (diagnosticsLastOverlayKey === overlayKey && now - diagnosticsLastOverlayAt < DIAGNOSTICS_OVERLAY_THROTTLE_MS) {
+  const state = resolveDiagnosticsState(scope);
+  const throttle =
+    typeof DIAGNOSTICS_OVERLAY_THROTTLE_MS === 'number'
+      ? DIAGNOSTICS_OVERLAY_THROTTLE_MS
+      : 2000;
+  if (state.lastOverlayKey === overlayKey && now - state.lastOverlayAt < throttle) {
     return;
   }
-  diagnosticsLastOverlayKey = overlayKey;
-  diagnosticsLastOverlayAt = now;
+  state.lastOverlayKey = overlayKey;
+  state.lastOverlayAt = now;
 
   presenter({
     message: payload.message,
@@ -2028,13 +2099,14 @@ function logDiagnosticsEvent(scopeKey, message, options = {}) {
       scope?.diagnosticsEndpoint ||
       scope?.APP_CONFIG?.diagnosticsEndpoint;
     if (endpoint) {
+      const history = resolveDiagnosticsState(scope).logBuffer.slice(-10);
       const body = JSON.stringify({
         scope: diagnosticScope,
         message: resolvedMessage,
         level,
         detail,
         timestamp,
-        history: diagnosticsLogBuffer.slice(-10),
+        history,
       });
       Promise.resolve(
         scope.fetch(endpoint, {
@@ -2073,6 +2145,103 @@ function logThroughDiagnostics(fn, { scope, message, detail, rethrow = true } = 
   }
 }
 
+(function exposeDiagnosticsNamespace(globalScope) {
+  const scope =
+    typeof globalScope !== 'undefined'
+      ? globalScope
+      : typeof globalThis !== 'undefined'
+        ? globalThis
+        : null;
+  if (!scope) {
+    return;
+  }
+  const namespace = scope.InfiniteRails || (scope.InfiniteRails = {});
+  const diagnosticsApi = namespace.diagnostics || (namespace.diagnostics = {});
+  if (typeof diagnosticsApi.record !== 'function') {
+    diagnosticsApi.record = (category, message, detail = {}, options = {}) => {
+      const eventOptions = { detail: typeof detail === 'object' && detail ? detail : {} };
+      if (options && typeof options === 'object') {
+        Object.assign(eventOptions, options);
+      }
+      return logDiagnosticsEvent(category, message, eventOptions);
+    };
+  }
+
+  const ensureClone = (value) => {
+    if (value == null) {
+      return value;
+    }
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+      return value;
+    }
+    try {
+      return JSON.parse(JSON.stringify(value));
+    } catch (error) {
+      return value;
+    }
+  };
+
+  const logsApi = namespace.logs || (namespace.logs = { entries: [] });
+  if (!Array.isArray(logsApi.entries)) {
+    logsApi.entries = [];
+  }
+  if (typeof logsApi.record !== 'function') {
+    logsApi.record = (entry) => {
+      const snapshot = {
+        category: entry?.category ?? 'runtime',
+        level: entry?.level ?? 'info',
+        message: entry?.message ?? '',
+        timestamp: entry?.timestamp ?? Date.now(),
+      };
+      logsApi.entries.push(snapshot);
+      if (logsApi.entries.length > 200) {
+        logsApi.entries.splice(0, logsApi.entries.length - 200);
+      }
+      return snapshot;
+    };
+  }
+  if (typeof logsApi.getEntries !== 'function') {
+    logsApi.getEntries = () => logsApi.entries.slice();
+  }
+
+  const replayBufferApi = namespace.replayBuffer || (namespace.replayBuffer = {});
+  const replayStore = Array.isArray(replayBufferApi.__store) ? replayBufferApi.__store : [];
+  replayBufferApi.__store = replayStore;
+  const replayLimit = () => {
+    const raw = namespace.replayBufferLimit;
+    return Number.isFinite(raw) && raw > 0 ? Math.min(1000, Math.floor(raw)) : 100;
+  };
+  if (typeof replayBufferApi.record !== 'function') {
+    replayBufferApi.record = (action, detail = {}, metadata = {}) => {
+      const entry = {
+        action: typeof action === 'string' && action ? action : 'unknown-event',
+        detail: ensureClone(detail),
+        metadata: ensureClone(metadata),
+        timestamp: Date.now(),
+      };
+      replayStore.push(entry);
+      const limit = replayLimit();
+      if (replayStore.length > limit) {
+        replayStore.splice(0, replayStore.length - limit);
+      }
+      return entry;
+    };
+  }
+  if (typeof replayBufferApi.snapshot !== 'function') {
+    replayBufferApi.snapshot = () => replayStore.map((entry) => ({
+      action: entry.action,
+      detail: ensureClone(entry.detail),
+      metadata: ensureClone(entry.metadata),
+      timestamp: entry.timestamp,
+    }));
+  }
+  if (typeof replayBufferApi.clear !== 'function') {
+    replayBufferApi.clear = () => {
+      replayStore.splice(0, replayStore.length);
+    };
+  }
+})(typeof globalThis !== 'undefined' ? globalThis : undefined);
+
 function normaliseRequestInfo(input) {
   if (!input) {
     return { url: null, method: 'GET' };
@@ -2099,13 +2268,6 @@ if (typeof globalThis !== 'undefined') {
   }
 }
 
-const FALLBACK_SHORTCUT_STATE = {
-  active: false,
-  bindings: {},
-  unsubscribe: null,
-  handler: null,
-};
-
 function normaliseKeyBindingValue(value) {
   if (Array.isArray(value)) {
     return value.flatMap((entry) => normaliseKeyBindingValue(entry)).filter(Boolean);
@@ -2120,6 +2282,26 @@ function normaliseKeyBindingValue(value) {
   return [trimmed.toUpperCase()];
 }
 
+const FALLBACK_SHORTCUT_STATE = (() => {
+  const scope =
+    typeof globalScope !== 'undefined'
+      ? globalScope
+      : typeof globalThis !== 'undefined'
+        ? globalThis
+        : undefined;
+  if (scope) {
+    const existing = scope.__INFINITE_RAILS_FALLBACK_SHORTCUT_STATE__;
+    if (existing && typeof existing === 'object') {
+      existing.bindings = existing.bindings && typeof existing.bindings === 'object' ? existing.bindings : {};
+      return existing;
+    }
+    const created = { active: false, bindings: {}, unsubscribe: null, handler: null };
+    scope.__INFINITE_RAILS_FALLBACK_SHORTCUT_STATE__ = created;
+    return created;
+  }
+  return { active: false, bindings: {}, unsubscribe: null, handler: null };
+})();
+
 function buildFallbackShortcutBindings(controlMap = {}) {
   const bindings = {};
   const entries = typeof controlMap === 'object' && controlMap ? Object.entries(controlMap) : [];
@@ -2133,15 +2315,6 @@ function buildFallbackShortcutBindings(controlMap = {}) {
     }
   }
   return bindings;
-}
-
-function queueBootstrapFallbackNotice(key, message) {
-  const scope = typeof globalThis !== 'undefined' ? globalThis : undefined;
-  if (!scope) {
-    return;
-  }
-  const registry = scope.__bootstrapNotices || (scope.__bootstrapNotices = []);
-  registry.push({ key, message });
 }
 
 function isEditableTarget(target) {
@@ -2182,7 +2355,8 @@ function invokeFallbackAction(scope, action, context) {
       );
     }
   } else if (action === 'startSimpleFallbackRenderer') {
-    const result = scope?.tryStartSimpleFallback?.({ reason }, context);
+    const actionContext = { ...(context || {}), reason };
+    const result = scope?.tryStartSimpleFallback?.({ reason }, actionContext);
     if (result === false) {
       queueBootstrapFallbackNotice(
         'simple-renderer-unavailable',
@@ -2247,6 +2421,15 @@ function cloneFallbackShortcutState() {
     active: FALLBACK_SHORTCUT_STATE.active,
     bindings: { ...FALLBACK_SHORTCUT_STATE.bindings },
   };
+}
+
+function queueBootstrapFallbackNotice(key, message) {
+  const scope = typeof globalThis !== 'undefined' ? globalThis : undefined;
+  if (!scope) {
+    return;
+  }
+  const registry = scope.__bootstrapNotices || (scope.__bootstrapNotices = []);
+  registry.push({ key, message });
 }
 
 (function setupStorageQuarantine(globalScope) {
@@ -2762,6 +2945,406 @@ function cloneFallbackShortcutState() {
 
   bindAudioSettingsControls({});
   emitChange('initialise', { persist: false });
+})(typeof window !== 'undefined' ? window : typeof globalThis !== 'undefined' ? globalThis : undefined);
+
+(function setupEventSourcing(globalScope) {
+  const scope =
+    typeof globalScope !== 'undefined'
+      ? globalScope
+      : typeof window !== 'undefined'
+        ? window
+        : typeof globalThis !== 'undefined'
+          ? globalThis
+          : null;
+  if (!scope) {
+    return;
+  }
+
+  const setTimeoutImpl =
+    typeof scope.setTimeout === 'function'
+      ? scope.setTimeout.bind(scope)
+      : typeof setTimeout === 'function'
+        ? setTimeout
+        : null;
+  const clearTimeoutImpl =
+    typeof scope.clearTimeout === 'function'
+      ? scope.clearTimeout.bind(scope)
+      : typeof clearTimeout === 'function'
+        ? clearTimeout
+        : null;
+
+  const FLUSH_DELAY_MS = 200;
+  const MAX_QUEUE_SIZE = 120;
+
+  const state =
+    scope.__INFINITE_RAILS_EVENT_SOURCING_STATE__ ||
+    (scope.__INFINITE_RAILS_EVENT_SOURCING_STATE__ = {
+      queue: [],
+      flushTimer: null,
+      sessionId: null,
+      traceSessionId: null,
+      identityListeners: new Set(),
+    });
+
+  function generateId(prefix = 'event') {
+    const random = Math.random().toString(36).slice(2, 10);
+    const timestamp = Date.now().toString(36);
+    return `${prefix}-${random}${timestamp}`;
+  }
+
+  function safeClone(value, seen = new WeakSet()) {
+    if (value == null) {
+      return value;
+    }
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+      return value;
+    }
+    if (value instanceof Date) {
+      return value.toISOString();
+    }
+    if (value instanceof Error) {
+      return {
+        name: value.name,
+        message: value.message,
+        stack: typeof value.stack === 'string' ? value.stack : undefined,
+      };
+    }
+    if (typeof value === 'function') {
+      return `[Function ${value.name || 'anonymous'}]`;
+    }
+    if (seen.has(value)) {
+      return '[Circular]';
+    }
+    if (Array.isArray(value)) {
+      seen.add(value);
+      const clone = value.slice(0, 100).map((entry) => safeClone(entry, seen));
+      seen.delete(value);
+      return clone;
+    }
+    if (typeof value === 'object') {
+      seen.add(value);
+      const output = {};
+      Object.keys(value)
+        .slice(0, 50)
+        .forEach((key) => {
+          output[key] = safeClone(value[key], seen);
+        });
+      seen.delete(value);
+      return output;
+    }
+    try {
+      return JSON.parse(JSON.stringify(value));
+    } catch (error) {
+      return String(value);
+    }
+  }
+
+  function updateTrace(detail) {
+    const summary = detail && typeof detail === 'object' ? detail.summary : null;
+    const trace = summary && typeof summary === 'object' ? summary.trace : null;
+    const candidates = [
+      trace && typeof trace.sessionId === 'string' ? trace.sessionId.trim() : null,
+      trace && typeof trace.traceId === 'string' ? trace.traceId.trim() : null,
+      typeof detail?.traceSessionId === 'string' ? detail.traceSessionId.trim() : null,
+    ].filter(Boolean);
+    if (candidates.length > 0) {
+      state.traceSessionId = candidates[0];
+    } else if (!state.traceSessionId) {
+      state.traceSessionId = generateId('trace');
+    }
+  }
+
+  function ensureSessionId(detail) {
+    if (!state.sessionId) {
+      const summary = detail && typeof detail === 'object' ? detail.summary : null;
+      const candidates = [
+        typeof detail?.sessionId === 'string' ? detail.sessionId.trim() : null,
+        typeof summary?.sessionId === 'string' ? summary.sessionId.trim() : null,
+        typeof summary?.id === 'string' ? summary.id.trim() : null,
+        typeof detail?.runId === 'string' ? detail.runId.trim() : null,
+      ].filter(Boolean);
+      state.sessionId = candidates.length > 0 ? candidates[0] : generateId('session');
+    }
+    return state.sessionId;
+  }
+
+  function normaliseBaseUrl(value) {
+    if (typeof value !== 'string') {
+      return null;
+    }
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return null;
+    }
+    return trimmed.replace(/\/+$/, '');
+  }
+
+  function resolveEventsEndpoint() {
+    const identity = scope.__INFINITE_RAILS_IDENTITY_STATE__ || {};
+    const baseCandidate =
+      identity.apiBaseUrl ||
+      (scope.APP_CONFIG && scope.APP_CONFIG.apiBaseUrl) ||
+      scope.apiBaseUrl ||
+      null;
+    const baseUrl = normaliseBaseUrl(baseCandidate);
+    if (!baseUrl) {
+      return null;
+    }
+    const endpointCandidate = identity.endpoints?.events;
+    if (typeof endpointCandidate === 'string' && endpointCandidate.trim()) {
+      const endpoint = endpointCandidate.trim();
+      if (/^https?:/i.test(endpoint)) {
+        return endpoint;
+      }
+      return `${baseUrl}/${endpoint.replace(/^\/+/, '')}`;
+    }
+    return `${baseUrl}/events`;
+  }
+
+  function captureReproductionArtifacts() {
+    const logsApi = scope.InfiniteRails?.logs ?? null;
+    let sessionLogs = [];
+    if (logsApi) {
+      try {
+        if (typeof logsApi.getEntries === 'function') {
+          sessionLogs = safeClone(logsApi.getEntries());
+        } else if (Array.isArray(logsApi.entries)) {
+          sessionLogs = safeClone(logsApi.entries.slice(-50));
+        }
+      } catch (error) {
+        sessionLogs = [];
+      }
+    }
+
+    const diagnosticsHistory = safeClone(getDiagnosticsStateContainer(scope).logBuffer.slice(-20));
+
+    const replayApi = scope.InfiniteRails?.replayBuffer ?? null;
+    let replaySnapshot = [];
+    if (replayApi && typeof replayApi.snapshot === 'function') {
+      try {
+        replaySnapshot = safeClone(replayApi.snapshot());
+      } catch (error) {
+        replaySnapshot = [];
+      }
+    }
+
+    const artifactSnapshot = {
+      userActionReplay: Array.isArray(replaySnapshot) ? replaySnapshot : [],
+      centralLog: Array.isArray(sessionLogs) ? sessionLogs : [],
+      liveDiagnostics: Array.isArray(diagnosticsHistory) ? diagnosticsHistory : [],
+    };
+    let snapshotChunks = { length: 0 };
+    try {
+      const json = JSON.stringify(artifactSnapshot);
+      const chunkSize = 2048;
+      if (json.length === 0) {
+        snapshotChunks = { c0: '', length: 1 };
+      } else {
+        snapshotChunks = { length: 0 };
+        for (let offset = 0; offset < json.length; offset += chunkSize) {
+          const index = Math.floor(offset / chunkSize);
+          snapshotChunks[`c${index}`] = json.slice(offset, offset + chunkSize);
+          snapshotChunks.length = index + 1;
+        }
+      }
+    } catch (error) {
+      snapshotChunks = { length: 0 };
+    }
+
+    const traceSessionId = state.traceSessionId || generateId('trace');
+    state.traceSessionId = traceSessionId;
+
+    return {
+      traceSessionId,
+      sessionLogs,
+      diagnosticsHistory,
+      userActionReplay: artifactSnapshot.userActionReplay,
+      snapshotChunks,
+    };
+  }
+
+  function flushQueue() {
+    if (!state.queue.length) {
+      return;
+    }
+    const endpoint = resolveEventsEndpoint();
+    if (!endpoint || typeof scope.fetch !== 'function') {
+      return;
+    }
+    const events = state.queue.splice(0, state.queue.length).map((entry) => {
+      const payload = {
+        type: entry.type,
+        detail: safeClone(entry.detail),
+        timestamp: entry.timestamp,
+        sessionId: entry.sessionId,
+      };
+      if (typeof entry.context !== 'undefined') {
+        payload.context = safeClone(entry.context);
+      }
+      if (typeof entry.summary !== 'undefined') {
+        payload.summary = safeClone(entry.summary);
+      }
+      return payload;
+    });
+    if (!events.length) {
+      return;
+    }
+    const init = {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ events }),
+    };
+    Promise.resolve(scope.fetch(endpoint, init)).catch((error) => {
+      scope.console?.warn?.('[InfiniteRails] Failed to post gameplay events.', error);
+    });
+  }
+
+  function scheduleFlush() {
+    if (!setTimeoutImpl || state.flushTimer) {
+      return;
+    }
+    state.flushTimer = setTimeoutImpl(() => {
+      state.flushTimer = null;
+      flushQueue();
+      if (state.queue.length) {
+        scheduleFlush();
+      }
+    }, FLUSH_DELAY_MS);
+  }
+
+  function enqueueEvent(type, detail = {}, options = {}) {
+    const eventType = typeof type === 'string' && type.trim().length ? type.trim() : 'unknown';
+    const timestampSource =
+      Number.isFinite(options.timestamp) ? Number(options.timestamp) : Number(detail?.timestamp);
+    const timestamp = Number.isFinite(timestampSource) ? timestampSource : Date.now();
+    updateTrace(detail);
+    const sessionId = ensureSessionId(detail);
+    const entry = {
+      type: eventType,
+      detail: safeClone(detail),
+      timestamp,
+      sessionId,
+      context: options.context ? safeClone(options.context) : undefined,
+    };
+    if (detail && typeof detail === 'object') {
+      if (detail.summary && typeof detail.summary === 'object') {
+        entry.summary = safeClone(detail.summary);
+      }
+      if (detail.context && entry.context === undefined && typeof detail.context === 'object') {
+        entry.context = safeClone(detail.context);
+      }
+    }
+    state.queue.push(entry);
+    if (state.queue.length > MAX_QUEUE_SIZE) {
+      state.queue.splice(0, state.queue.length - MAX_QUEUE_SIZE);
+    }
+    scheduleFlush();
+    return entry;
+  }
+
+  function handleStarted(event) {
+    const detail = event?.detail ?? {};
+    enqueueEvent('started', detail, { timestamp: detail.timestamp });
+  }
+
+  function handleStartError(event) {
+    const detail = event?.detail ?? {};
+    const enriched = { ...detail, artifacts: captureReproductionArtifacts() };
+    enqueueEvent('start-error', enriched, { timestamp: detail.timestamp });
+  }
+
+  function handleAudioSettingsChanged(event) {
+    enqueueEvent('audio-settings-changed', event?.detail ?? {});
+  }
+
+  function handleControlMapChanged(event) {
+    enqueueEvent('control-map-changed', event?.detail ?? {});
+  }
+
+  function handleKeybindingsChanged(event) {
+    enqueueEvent('keybindings-changed', event?.detail ?? {});
+  }
+
+  function ensureIdentityApi() {
+    scope.InfiniteRails = scope.InfiniteRails || {};
+    const identityState = scope.__INFINITE_RAILS_IDENTITY_STATE__ || (scope.__INFINITE_RAILS_IDENTITY_STATE__ = {});
+    if (!identityState.identity || typeof identityState.identity !== 'object') {
+      identityState.identity = { name: 'Guest Explorer', googleId: null };
+    } else {
+      identityState.identity = { ...identityState.identity };
+      if (typeof identityState.identity.googleId !== 'string') {
+        identityState.identity.googleId = identityState.identity.googleId ?? null;
+      }
+    }
+    if (!state.identityListeners) {
+      state.identityListeners = new Set();
+    }
+
+    const identityApi = scope.InfiniteRails.identity || {};
+    identityApi.getIdentity = () => ({ ...(identityState.identity ?? {}) });
+    identityApi.setIdentity = (update = {}) => {
+      const next = {
+        ...(identityState.identity ?? { name: 'Guest Explorer', googleId: null }),
+        ...(typeof update === 'object' && update ? update : {}),
+      };
+      if (typeof next.googleId !== 'string' || !next.googleId.trim()) {
+        next.googleId = null;
+      } else {
+        next.googleId = next.googleId.trim();
+      }
+      if (typeof next.name !== 'string' || !next.name.trim()) {
+        next.name = identityState.identity?.name ?? 'Guest Explorer';
+      } else {
+        next.name = next.name.trim();
+      }
+      identityState.identity = next;
+      enqueueEvent('identity-change', { identity: safeClone(next) });
+      state.identityListeners.forEach((listener) => {
+        try {
+          listener({ ...next });
+        } catch (error) {
+          scope.console?.warn?.('[InfiniteRails] Identity listener failed.', error);
+        }
+      });
+      return next;
+    };
+    identityApi.subscribe = (listener) => {
+      if (typeof listener !== 'function') {
+        return () => {};
+      }
+      state.identityListeners.add(listener);
+      return () => {
+        state.identityListeners.delete(listener);
+      };
+    };
+    scope.InfiniteRails.identity = identityApi;
+    return identityApi;
+  }
+
+  function registerEventListeners() {
+    if (typeof scope.addEventListener !== 'function') {
+      return;
+    }
+    scope.addEventListener('infinite-rails:started', handleStarted);
+    scope.addEventListener('infinite-rails:start-error', handleStartError);
+    scope.addEventListener('infinite-rails:audio-settings-changed', handleAudioSettingsChanged);
+    scope.addEventListener('infinite-rails:control-map-changed', handleControlMapChanged);
+    scope.addEventListener('infinite-rails:keybindings-changed', handleKeybindingsChanged);
+  }
+
+  ensureIdentityApi();
+  registerEventListeners();
+
+  const hooks = scope.__INFINITE_RAILS_TEST_HOOKS__ ?? {};
+  hooks.getEventQueueSnapshot = () => state.queue.map((entry) => ({ ...entry, detail: safeClone(entry.detail) }));
+  hooks.flushEventQueue = () => {
+    if (state.flushTimer && clearTimeoutImpl) {
+      clearTimeoutImpl(state.flushTimer);
+      state.flushTimer = null;
+    }
+    flushQueue();
+  };
+  scope.__INFINITE_RAILS_TEST_HOOKS__ = hooks;
 })(typeof window !== 'undefined' ? window : typeof globalThis !== 'undefined' ? globalThis : undefined);
 
 (function setupFetchCircuitBreaker(globalScope) {
