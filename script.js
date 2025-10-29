@@ -23,6 +23,9 @@ function cloneDeep(value) {
   return result;
 }
 
+const DEFAULT_SCOREBOARD_MESSAGE =
+  'Google Sign-In unavailable — configure APP_CONFIG.googleClientId to enable SSO.';
+
 (function setupInputModeDetection(globalScope) {
   const scope =
     typeof globalScope !== 'undefined'
@@ -2478,6 +2481,32 @@ function queueBootstrapFallbackNotice(key, message) {
   };
 })(typeof window !== 'undefined' ? window : typeof globalThis !== 'undefined' ? globalThis : undefined);
 
+(function initialiseIdentityState(globalScope) {
+  const scope =
+    typeof globalScope !== 'undefined'
+      ? globalScope
+      : typeof window !== 'undefined'
+        ? window
+        : typeof globalThis !== 'undefined'
+          ? globalThis
+          : null;
+  if (!scope) {
+    return;
+  }
+  if (!scope.__INFINITE_RAILS_IDENTITY_STATE__) {
+    scope.__INFINITE_RAILS_IDENTITY_STATE__ = {
+      apiBaseUrl: null,
+      scoreboardOffline: false,
+      liveFeaturesSuspended: false,
+      liveFeaturesHoldDetail: null,
+      backendValidation: { performed: false, ok: null, detail: null },
+      configuredEndpoints: { scores: '/scores', users: '/users', events: '/events' },
+      endpoints: { scores: '/scores', users: '/users', events: '/events' },
+      identity: { name: 'Guest Explorer', googleId: null, location: null, locationLabel: null },
+    };
+  }
+})(typeof window !== 'undefined' ? window : typeof globalThis !== 'undefined' ? globalThis : undefined);
+
 (function setupErrorRateCircuitBreaker(globalScope) {
   const scope =
     typeof globalScope !== 'undefined'
@@ -2534,8 +2563,22 @@ function queueBootstrapFallbackNotice(key, message) {
       ui.documentBody.dataset.errorRateCircuit = 'true';
       ui.documentBody.dataset.errorRateCategory = category;
     }
-    const identity = getIdentityState();
-    if (identity) {
+    let identity = getIdentityState();
+    if (!identity) {
+      identity =
+        scope.__INFINITE_RAILS_IDENTITY_STATE__ ||
+        (scope.__INFINITE_RAILS_IDENTITY_STATE__ = {
+          apiBaseUrl: null,
+          scoreboardOffline: false,
+          liveFeaturesSuspended: false,
+          liveFeaturesHoldDetail: null,
+          backendValidation: { performed: false, ok: null, detail: null },
+          configuredEndpoints: { scores: '/scores', users: '/users', events: '/events' },
+          endpoints: { scores: '/scores', users: '/users', events: '/events' },
+          identity: { name: 'Guest Explorer', googleId: null, location: null, locationLabel: null },
+        });
+    }
+    if (identity && typeof identity === 'object') {
       identity.scoreboardOffline = true;
       identity.liveFeaturesSuspended = true;
       identity.liveFeaturesHoldDetail = {
@@ -2584,19 +2627,50 @@ function queueBootstrapFallbackNotice(key, message) {
     recordFailure(category, entry.timestamp ?? Date.now());
   }
 
-  const logStore = scope.InfiniteRails?.logs || {
-    entries: [],
-    record(entry) {
-      const enriched = {
-        category: entry?.category ?? 'general',
-        level: entry?.level ?? 'info',
-        message: entry?.message ?? '',
-        timestamp: entry?.timestamp ?? Date.now(),
+  let logStore = scope.InfiniteRails?.logs ?? null;
+  if (logStore && typeof logStore.record === 'function') {
+    const originalRecord = logStore.record.bind(logStore);
+    if (!logStore.__INFINITE_RAILS_ERROR_RATE_PATCHED__) {
+      logStore.record = function record(entry) {
+        const result = originalRecord(entry);
+        const snapshot =
+          result && typeof result === 'object'
+            ? result
+            : {
+                category: entry?.category ?? 'general',
+                level: entry?.level ?? 'info',
+                message: entry?.message ?? '',
+                timestamp: entry?.timestamp ?? Date.now(),
+              };
+        recordLogEntry(snapshot);
+        return result;
       };
-      this.entries.push(enriched);
-      recordLogEntry(enriched);
-    },
-  };
+      Object.defineProperty(logStore, '__INFINITE_RAILS_ERROR_RATE_PATCHED__', {
+        value: true,
+        configurable: false,
+        enumerable: false,
+        writable: false,
+      });
+    }
+  } else {
+    logStore = {
+      entries: [],
+      record(entry) {
+        const enriched = {
+          category: entry?.category ?? 'general',
+          level: entry?.level ?? 'info',
+          message: entry?.message ?? '',
+          timestamp: entry?.timestamp ?? Date.now(),
+        };
+        this.entries.push(enriched);
+        if (this.entries.length > 200) {
+          this.entries.splice(0, this.entries.length - 200);
+        }
+        recordLogEntry(enriched);
+        return enriched;
+      },
+    };
+  }
 
   scope.InfiniteRails = scope.InfiniteRails || {};
   scope.InfiniteRails.logs = logStore;
@@ -3345,6 +3419,668 @@ function queueBootstrapFallbackNotice(key, message) {
     flushQueue();
   };
   scope.__INFINITE_RAILS_TEST_HOOKS__ = hooks;
+})(typeof window !== 'undefined' ? window : typeof globalThis !== 'undefined' ? globalThis : undefined);
+
+(function setupIdentitySnapshots(globalScope) {
+  const scope =
+    typeof globalScope !== 'undefined'
+      ? globalScope
+      : typeof window !== 'undefined'
+        ? window
+        : typeof globalThis !== 'undefined'
+          ? globalThis
+          : null;
+  if (!scope) {
+    return;
+  }
+
+  const IDENTITY_STORAGE_KEY = 'infinite-rails-simple-identity';
+  const SESSION_STORAGE_KEY = 'infinite-rails-simple-session';
+
+  const storage = scope.localStorage ?? null;
+
+  const identityState =
+    scope.__INFINITE_RAILS_IDENTITY_STATE__ ||
+    (scope.__INFINITE_RAILS_IDENTITY_STATE__ = {
+      apiBaseUrl: null,
+      scoreboardOffline: false,
+      liveFeaturesSuspended: false,
+      liveFeaturesHoldDetail: null,
+      backendValidation: { performed: false, ok: null, detail: null },
+      configuredEndpoints: { scores: '/scores', users: '/users', events: '/events' },
+      endpoints: { scores: '/scores', users: '/users', events: '/events' },
+      identity: { name: 'Guest Explorer', googleId: null, location: null, locationLabel: null },
+    });
+
+  if (!identityState.identity || typeof identityState.identity !== 'object') {
+    identityState.identity = { name: 'Guest Explorer', googleId: null, location: null, locationLabel: null };
+  } else {
+    const nextIdentity = { ...identityState.identity };
+    if (typeof nextIdentity.name !== 'string' || !nextIdentity.name.trim()) {
+      nextIdentity.name = 'Guest Explorer';
+    }
+    if (typeof nextIdentity.googleId !== 'string' || !nextIdentity.googleId.trim()) {
+      nextIdentity.googleId = null;
+    }
+    if (typeof nextIdentity.location !== 'string') {
+      nextIdentity.location = null;
+    }
+    if (typeof nextIdentity.locationLabel !== 'string') {
+      nextIdentity.locationLabel = null;
+    }
+    identityState.identity = nextIdentity;
+  }
+
+  const sessionState =
+    scope.__INFINITE_RAILS_IDENTITY_SESSION_STATE__ ||
+    (scope.__INFINITE_RAILS_IDENTITY_SESSION_STATE__ = {
+      refreshToken: null,
+      googleId: null,
+      expiresAt: null,
+      issuedAt: null,
+      lastRefreshedAt: null,
+      status: 'idle',
+    });
+
+  let autoRefreshHandle = null;
+  const pendingRefreshes = [];
+
+  const getScoreboardElement = () => getBootstrapUi(scope)?.scoreboardStatus ?? null;
+
+  const ensureDefaultScoreboardMessage = () => {
+    const element = getScoreboardElement();
+    if (!element) {
+      return;
+    }
+    if (element.dataset && element.dataset.offline === 'true') {
+      return;
+    }
+    element.textContent = DEFAULT_SCOREBOARD_MESSAGE;
+  };
+
+  function cloneSessionState() {
+    return {
+      refreshToken: sessionState.refreshToken ?? null,
+      googleId: sessionState.googleId ?? null,
+      expiresAt: sessionState.expiresAt ?? null,
+      issuedAt: sessionState.issuedAt ?? null,
+      lastRefreshedAt: sessionState.lastRefreshedAt ?? null,
+      status: sessionState.status ?? 'idle',
+    };
+  }
+
+  function requestStorageQuarantine(detail) {
+    const payload = {
+      storageKey: detail?.storageKey ?? null,
+      context: detail?.context ?? null,
+      error: detail?.error ?? null,
+    };
+    if (payload.storageKey) {
+      if (typeof scope.dispatchEvent === 'function' && typeof scope.CustomEvent === 'function') {
+        try {
+          const event = new scope.CustomEvent('infinite-rails:storage-quarantine-requested', { detail: payload });
+          scope.dispatchEvent(event);
+          return;
+        } catch (error) {
+          // fall through to test hooks
+        }
+      }
+      const hooks = scope.__INFINITE_RAILS_TEST_HOOKS__;
+      if (hooks?.requestStorageQuarantine) {
+        hooks.requestStorageQuarantine(payload);
+      }
+    }
+  }
+
+  function handleStorageFailure(storageKey, context, error) {
+    if (storage?.removeItem) {
+      try {
+        storage.removeItem(storageKey);
+      } catch (removeError) {
+        scope.console?.warn?.('[InfiniteRails] Unable to clear quarantined storage key.', removeError);
+      }
+    }
+    scope.console?.warn?.(
+      `[InfiniteRails] Failed to access ${context} from "${storageKey}".`,
+      error ?? null,
+    );
+    requestStorageQuarantine({ storageKey, context, error });
+  }
+
+  function readStoredJson(storageKey, context) {
+    if (!storage?.getItem) {
+      return null;
+    }
+    let rawValue;
+    try {
+      rawValue = storage.getItem(storageKey);
+    } catch (error) {
+      handleStorageFailure(storageKey, context, error);
+      return null;
+    }
+    if (!rawValue) {
+      return null;
+    }
+    try {
+      return JSON.parse(rawValue);
+    } catch (error) {
+      handleStorageFailure(storageKey, context, error);
+      return null;
+    }
+  }
+
+  function persistIdentitySnapshot() {
+    if (!storage?.setItem) {
+      return;
+    }
+    try {
+      const snapshot = {
+        displayName: identityState.identity?.name ?? 'Guest Explorer',
+        googleId: identityState.identity?.googleId ?? null,
+        location: identityState.identity?.location ?? null,
+        locationLabel: identityState.identity?.locationLabel ?? null,
+      };
+      storage.setItem(IDENTITY_STORAGE_KEY, JSON.stringify(snapshot));
+    } catch (error) {
+      scope.console?.warn?.('[InfiniteRails] Unable to persist identity snapshot.', error);
+    }
+  }
+
+  function persistSessionSnapshot() {
+    if (!storage?.setItem) {
+      return;
+    }
+    try {
+      const snapshot = {
+        refreshToken: sessionState.refreshToken ?? null,
+        googleId: sessionState.googleId ?? null,
+        expiresAt: sessionState.expiresAt ?? null,
+        issuedAt: sessionState.issuedAt ?? null,
+        lastRefreshedAt: sessionState.lastRefreshedAt ?? null,
+      };
+      storage.setItem(SESSION_STORAGE_KEY, JSON.stringify(snapshot));
+    } catch (error) {
+      scope.console?.warn?.('[InfiniteRails] Unable to persist identity session.', error);
+    }
+  }
+
+  function applyIdentitySnapshot(snapshot) {
+    if (!snapshot || typeof snapshot !== 'object') {
+      return;
+    }
+    const displayNameRaw = typeof snapshot.displayName === 'string' ? snapshot.displayName : snapshot.name;
+    const displayName = typeof displayNameRaw === 'string' && displayNameRaw.trim()
+      ? displayNameRaw.trim()
+      : identityState.identity?.name ?? 'Guest Explorer';
+    const googleIdRaw = typeof snapshot.googleId === 'string' ? snapshot.googleId : null;
+    const googleId = googleIdRaw && googleIdRaw.trim() ? googleIdRaw.trim() : null;
+    identityState.identity = {
+      name: displayName,
+      googleId,
+      location: snapshot.location ?? null,
+      locationLabel: snapshot.locationLabel ?? null,
+    };
+  }
+
+  const storedIdentity = readStoredJson(IDENTITY_STORAGE_KEY, 'identity snapshot');
+  if (storedIdentity) {
+    applyIdentitySnapshot(storedIdentity);
+  }
+
+  function resetSessionState() {
+    sessionState.refreshToken = null;
+    sessionState.googleId = null;
+    sessionState.expiresAt = null;
+    sessionState.issuedAt = null;
+    sessionState.lastRefreshedAt = null;
+    sessionState.status = 'idle';
+  }
+
+  function applySessionSnapshot(snapshot) {
+    if (!snapshot || typeof snapshot !== 'object') {
+      return false;
+    }
+    const refreshToken = typeof snapshot.refreshToken === 'string' && snapshot.refreshToken.trim()
+      ? snapshot.refreshToken.trim()
+      : null;
+    const googleId = typeof snapshot.googleId === 'string' && snapshot.googleId.trim()
+      ? snapshot.googleId.trim()
+      : null;
+    const expiresAtValue = Number(snapshot.expiresAt);
+    const issuedAtValue = Number(snapshot.issuedAt);
+    if (!refreshToken || !googleId || !Number.isFinite(expiresAtValue)) {
+      return false;
+    }
+    sessionState.refreshToken = refreshToken;
+    sessionState.googleId = googleId;
+    sessionState.expiresAt = expiresAtValue;
+    sessionState.issuedAt = Number.isFinite(issuedAtValue) ? issuedAtValue : null;
+    sessionState.lastRefreshedAt = Number.isFinite(Number(snapshot.lastRefreshedAt))
+      ? Number(snapshot.lastRefreshedAt)
+      : null;
+    sessionState.status = 'active';
+    return true;
+  }
+
+  function clearAutoRefresh() {
+    if (autoRefreshHandle != null && typeof scope.clearTimeout === 'function') {
+      scope.clearTimeout(autoRefreshHandle);
+    }
+    autoRefreshHandle = null;
+  }
+
+  function scheduleAutoRefresh() {
+    clearAutoRefresh();
+    if (typeof scope.setTimeout !== 'function') {
+      return;
+    }
+    const expiresAt = Number(sessionState.expiresAt);
+    if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+      return;
+    }
+    const refreshLeadMs = 30 * 1000;
+    const delay = Math.max(5_000, expiresAt - Date.now() - refreshLeadMs);
+    autoRefreshHandle = scope.setTimeout(() => {
+      autoRefreshHandle = null;
+      refreshSession({ reason: 'auto-refresh' }).catch(() => {});
+    }, delay);
+  }
+
+  function resolvePendingRefresh(success, value, error) {
+    if (!pendingRefreshes.length) {
+      return;
+    }
+    const [{ resolve, reject }] = pendingRefreshes.splice(0, 1);
+    if (success) {
+      resolve(value);
+    } else {
+      reject(error ?? new Error('Session refresh failed.'));
+    }
+  }
+
+  function expireSession(reason = 'expired') {
+    clearAutoRefresh();
+    if (storage?.removeItem) {
+      try {
+        storage.removeItem(SESSION_STORAGE_KEY);
+      } catch (error) {
+        scope.console?.warn?.('[InfiniteRails] Unable to remove expired identity session.', error);
+      }
+    }
+    const message = reason === 'expired'
+      ? 'Session expired — please sign in again.'
+      : 'Session unavailable — please sign in again.';
+    identityState.identity = {
+      name: identityState.identity?.name ?? 'Guest Explorer',
+      googleId: null,
+      location: null,
+      locationLabel: null,
+    };
+    identityState.scoreboardOffline = true;
+    setScoreboardOffline(scope, message, { datasetKey: 'sessionExpired' });
+    setScoreSyncWarning(scope, 'Sign-in required to resume live features.', true);
+    sessionState.status = 'expired';
+    resetSessionState();
+    persistIdentitySnapshot();
+  }
+
+  const storedSession = readStoredJson(SESSION_STORAGE_KEY, 'identity session');
+  if (storedSession && applySessionSnapshot(storedSession)) {
+    if (Number(sessionState.expiresAt) <= Date.now()) {
+      expireSession('expired');
+    } else {
+      scheduleAutoRefresh();
+    }
+  } else if (storedSession) {
+    handleStorageFailure(SESSION_STORAGE_KEY, 'identity session', new Error('Invalid session snapshot.'));
+    resetSessionState();
+  }
+
+  ensureDefaultScoreboardMessage();
+
+  function base64UrlDecode(segment) {
+    if (typeof segment !== 'string') {
+      return null;
+    }
+    let normalized = segment.replace(/-/g, '+').replace(/_/g, '/');
+    const pad = normalized.length % 4;
+    if (pad) {
+      normalized += '='.repeat(4 - pad);
+    }
+    try {
+      const decoder = typeof scope.atob === 'function' ? scope.atob.bind(scope) : null;
+      if (!decoder) {
+        return null;
+      }
+      return decoder(normalized);
+    } catch (error) {
+      scope.console?.warn?.('[InfiniteRails] Failed to decode identity credential payload.', error);
+      return null;
+    }
+  }
+
+  function decodeJwtPayload(credential) {
+    if (typeof credential !== 'string') {
+      return null;
+    }
+    const parts = credential.split('.');
+    if (parts.length < 2) {
+      return null;
+    }
+    const payloadSegment = base64UrlDecode(parts[1]);
+    if (!payloadSegment) {
+      return null;
+    }
+    try {
+      return JSON.parse(payloadSegment);
+    } catch (error) {
+      scope.console?.warn?.('[InfiniteRails] Invalid identity credential payload.', error);
+      return null;
+    }
+  }
+
+  function restoreScoreboardDefaults() {
+    if (identityState.liveFeaturesSuspended) {
+      return;
+    }
+    clearScoreboardOffline(scope);
+    setScoreSyncWarning(scope, '', false);
+    identityState.scoreboardOffline = false;
+    ensureDefaultScoreboardMessage();
+  }
+
+  function updateIdentityFromPayload(payload) {
+    const name = typeof payload?.name === 'string' && payload.name.trim()
+      ? payload.name.trim()
+      : identityState.identity?.name ?? 'Guest Explorer';
+    const googleId = typeof payload?.sub === 'string' && payload.sub.trim() ? payload.sub.trim() : null;
+    const locationLabel = typeof payload?.hd === 'string' && payload.hd.trim() ? payload.hd.trim() : null;
+    identityState.identity = {
+      name,
+      googleId,
+      location: null,
+      locationLabel,
+      email: typeof payload?.email === 'string' ? payload.email : undefined,
+      avatarUrl: typeof payload?.picture === 'string' ? payload.picture : undefined,
+    };
+    persistIdentitySnapshot();
+  }
+
+  function activateSessionFromPayload(payload) {
+    const now = Date.now();
+    const expiresAt = Number(payload?.exp) ? Number(payload.exp) * 1000 : now + 60 * 60 * 1000;
+    const issuedAt = Number(payload?.iat) ? Number(payload.iat) * 1000 : now;
+    sessionState.refreshToken = `refresh-${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
+    sessionState.googleId = identityState.identity?.googleId ?? null;
+    sessionState.expiresAt = expiresAt;
+    sessionState.issuedAt = issuedAt;
+    sessionState.lastRefreshedAt = now;
+    sessionState.status = 'active';
+    persistSessionSnapshot();
+    scheduleAutoRefresh();
+    restoreScoreboardDefaults();
+  }
+
+  const googleAccounts = scope.google?.accounts?.id ?? null;
+  const googleClientIdRaw = typeof scope.APP_CONFIG?.googleClientId === 'string' ? scope.APP_CONFIG.googleClientId : null;
+  const googleClientId = googleClientIdRaw && googleClientIdRaw.trim() ? googleClientIdRaw.trim() : null;
+
+  function handleGoogleCredential(response) {
+    const payload = decodeJwtPayload(response?.credential);
+    if (!payload?.sub) {
+      return;
+    }
+    updateIdentityFromPayload(payload);
+    activateSessionFromPayload(payload);
+    resolvePendingRefresh(true, cloneSessionState());
+  }
+
+  if (googleAccounts && googleClientId) {
+    try {
+      googleAccounts.initialize?.({ client_id: googleClientId, callback: handleGoogleCredential });
+    } catch (error) {
+      scope.console?.warn?.('[InfiniteRails] Failed to initialise Google Identity Services.', error);
+    }
+  }
+
+  function refreshSession(options = {}) {
+    if (!googleAccounts || typeof googleAccounts.prompt !== 'function') {
+      return Promise.reject(new Error('Google Identity Services unavailable.'));
+    }
+    return new Promise((resolve, reject) => {
+      pendingRefreshes.push({ resolve, reject });
+      try {
+        googleAccounts.prompt((notification) => {
+          if (!notification) {
+            return;
+          }
+          const dismissed =
+            (typeof notification.isDismissedMoment === 'function' && notification.isDismissedMoment()) ||
+            (typeof notification.isNotDisplayed === 'function' && notification.isNotDisplayed()) ||
+            (typeof notification.isSkippedMoment === 'function' && notification.isSkippedMoment());
+          if (dismissed) {
+            resolvePendingRefresh(false, null, new Error('Sign-in was dismissed.'));
+          }
+        }, options);
+      } catch (error) {
+        resolvePendingRefresh(false, null, error);
+      }
+    });
+  }
+
+  scope.InfiniteRailsIdentity = scope.InfiniteRailsIdentity || {};
+  scope.InfiniteRailsIdentity.getSession = () => cloneSessionState();
+  scope.InfiniteRailsIdentity.refreshSession = (options = {}) => refreshSession(options);
+
+  const hooks = scope.__INFINITE_RAILS_TEST_HOOKS__ ?? {};
+  hooks.getIdentitySessionState = () => cloneSessionState();
+  hooks.handleGoogleCredential = handleGoogleCredential;
+  hooks.expireIdentitySession = expireSession;
+  scope.__INFINITE_RAILS_TEST_HOOKS__ = hooks;
+})(typeof window !== 'undefined' ? window : typeof globalThis !== 'undefined' ? globalThis : undefined);
+
+(function setupRemoteFeatureFlags(globalScope) {
+  const scope =
+    typeof globalScope !== 'undefined'
+      ? globalScope
+      : typeof window !== 'undefined'
+        ? window
+        : typeof globalThis !== 'undefined'
+          ? globalThis
+          : null;
+  if (!scope) {
+    return;
+  }
+
+  scope.InfiniteRails = scope.InfiniteRails || {};
+  const appConfig = scope.APP_CONFIG || (scope.APP_CONFIG = {});
+
+  const identityState =
+    scope.__INFINITE_RAILS_IDENTITY_STATE__ ||
+    (scope.__INFINITE_RAILS_IDENTITY_STATE__ = {
+      apiBaseUrl: null,
+      scoreboardOffline: false,
+      liveFeaturesSuspended: false,
+      liveFeaturesHoldDetail: null,
+      backendValidation: { performed: false, ok: null, detail: null },
+      configuredEndpoints: { scores: '/scores', users: '/users', events: '/events' },
+      endpoints: { scores: '/scores', users: '/users', events: '/events' },
+      identity: { name: 'Guest Explorer', googleId: null, location: null, locationLabel: null },
+    });
+
+  const featureState =
+    scope.__INFINITE_RAILS_FEATURE_FLAG_STATE__ ||
+    (scope.__INFINITE_RAILS_FEATURE_FLAG_STATE__ = {
+      ready: false,
+      flags: {},
+      metadata: { health: { degraded: false } },
+      lastFetchedAt: null,
+    });
+
+  let fetchPromise = null;
+
+  function snapshotFeatureState() {
+    return {
+      flags: { ...featureState.flags },
+      metadata: cloneDeep(featureState.metadata),
+    };
+  }
+
+  function setSafeModeAppConfig(enabled) {
+    if (enabled) {
+      appConfig.forceSimpleMode = true;
+      appConfig.enableAdvancedExperience = false;
+      appConfig.preferAdvanced = false;
+    } else {
+      delete appConfig.forceSimpleMode;
+      delete appConfig.enableAdvancedExperience;
+      delete appConfig.preferAdvanced;
+    }
+  }
+
+  function applySafeMode(message, detail = {}) {
+    const resolvedMessage =
+      typeof message === 'string' && message.trim().length
+        ? message.trim()
+        : 'Leaderboard offline for maintenance.';
+    identityState.liveFeaturesSuspended = true;
+    identityState.scoreboardOffline = true;
+    identityState.liveFeaturesHoldDetail = { kind: detail.kind ?? 'remote-config', detail };
+    setScoreboardOffline(scope, resolvedMessage, { datasetKey: 'remoteConfig' });
+    setScoreSyncWarning(scope, resolvedMessage, true);
+  }
+
+  function clearSafeMode() {
+    const holdDetail = identityState.liveFeaturesHoldDetail;
+    if (holdDetail && holdDetail.kind && holdDetail.kind !== 'remote-config' && holdDetail.kind !== 'remote-health') {
+      identityState.scoreboardOffline = true;
+      identityState.liveFeaturesSuspended = true;
+      return;
+    }
+    identityState.liveFeaturesSuspended = false;
+    identityState.scoreboardOffline = false;
+    identityState.liveFeaturesHoldDetail = null;
+    setScoreSyncWarning(scope, '', false);
+    clearScoreboardOffline(scope);
+    const element = getBootstrapUi(scope)?.scoreboardStatus ?? null;
+    if (element) {
+      element.textContent = DEFAULT_SCOREBOARD_MESSAGE;
+    }
+  }
+
+  function deriveHealthMetadata(options) {
+    const { status, degraded, message } = options;
+    const metadata = { degraded: Boolean(degraded) };
+    if (status) {
+      metadata.status = status;
+    }
+    if (message && degraded) {
+      metadata.message = message;
+    }
+    return metadata;
+  }
+
+  function normaliseHealthStatus(rawStatus) {
+    if (typeof rawStatus !== 'string') {
+      return null;
+    }
+    const trimmed = rawStatus.trim();
+    if (!trimmed) {
+      return null;
+    }
+    return trimmed.toLowerCase().replace(/_/g, '-');
+  }
+
+  function applyRemoteConfig(payload) {
+    const config = (payload && typeof payload === 'object' ? payload.config : null) || {};
+    const features = typeof config.features === 'object' && config.features ? config.features : {};
+    const messages = typeof config.messages === 'object' && config.messages ? config.messages : {};
+    const health = typeof config.health === 'object' && config.health ? config.health : null;
+
+    featureState.flags = {};
+    Object.keys(features).forEach((key) => {
+      featureState.flags[key] = Boolean(features[key]);
+    });
+
+    const scoreboardMessage = typeof messages.scoreboard === 'string' ? messages.scoreboard.trim() : '';
+    const healthStatus = normaliseHealthStatus(health?.status);
+    const healthMessage = typeof health?.message === 'string' && health.message.trim() ? health.message.trim() : '';
+
+    const degradedByHealth = Boolean(healthStatus && /outage|degrad/.test(healthStatus));
+    const safeModeByFlags = Boolean(featureState.flags.forceSimpleRenderer || featureState.flags.disableScoreSync);
+    const safeMode = degradedByHealth || safeModeByFlags || Boolean(scoreboardMessage);
+
+    if (safeMode) {
+      featureState.flags.forceSimpleRenderer = true;
+      featureState.flags.disableScoreSync = true;
+    }
+
+    setSafeModeAppConfig(safeMode);
+
+    if (safeMode) {
+      const message = healthMessage || scoreboardMessage;
+      const detail = {
+        kind: degradedByHealth ? 'remote-health' : 'remote-config',
+        status: healthStatus || undefined,
+        message: message || undefined,
+      };
+      applySafeMode(message, detail);
+      featureState.metadata.health = deriveHealthMetadata({
+        degraded: true,
+        status: healthStatus || undefined,
+        message: message || undefined,
+      });
+    } else {
+      clearSafeMode();
+      featureState.metadata.health = deriveHealthMetadata({ degraded: false, status: healthStatus || undefined });
+    }
+
+    featureState.ready = true;
+    featureState.lastFetchedAt = Date.now();
+  }
+
+  function fetchRemoteConfig(options = {}) {
+    if (fetchPromise) {
+      return fetchPromise.then(() => snapshotFeatureState());
+    }
+    const endpoint =
+      typeof appConfig.featureFlagsEndpoint === 'string' && appConfig.featureFlagsEndpoint.trim()
+        ? appConfig.featureFlagsEndpoint.trim()
+        : '/feature-flags.json';
+    fetchPromise = Promise.resolve()
+      .then(() => {
+        if (typeof scope.fetch !== 'function') {
+          applyRemoteConfig({});
+          return;
+        }
+        return scope
+          .fetch(endpoint, { cache: 'no-store', signal: options.signal })
+          .then((response) => (typeof response?.json === 'function' ? response.json() : Promise.resolve({})))
+          .then((data) => {
+            applyRemoteConfig(data || {});
+          })
+          .catch((error) => {
+            scope.console?.warn?.('[InfiniteRails] Failed to load remote feature flags.', error);
+            featureState.ready = true;
+          });
+      })
+      .finally(() => {
+        fetchPromise = null;
+      });
+    return fetchPromise.then(() => snapshotFeatureState());
+  }
+
+  const featuresApi = scope.InfiniteRails.features || (scope.InfiniteRails.features = {});
+  featuresApi.ready = () => Boolean(featureState.ready);
+  featuresApi.get = (name) => featureState.flags[name] ?? false;
+  featuresApi.refresh = (options = {}) => fetchRemoteConfig(options);
+  featuresApi.metadata = () => cloneDeep(featureState.metadata);
+
+  const hooks = scope.__INFINITE_RAILS_TEST_HOOKS__ ?? {};
+  hooks.getFeatureFlagState = () => snapshotFeatureState();
+  scope.__INFINITE_RAILS_TEST_HOOKS__ = hooks;
+
+  fetchRemoteConfig({ initial: true });
 })(typeof window !== 'undefined' ? window : typeof globalThis !== 'undefined' ? globalThis : undefined);
 
 (function setupFetchCircuitBreaker(globalScope) {
@@ -4938,6 +5674,11 @@ function markBootPhaseError(phase, message) {
     backendState.success = false;
     backendState.detail = { ...detail, reason };
     setIdentityOffline({ reason, message, detail });
+    const scoreboard = getBootstrapUi(globalRef)?.scoreboardStatus ?? null;
+    if (scoreboard?.dataset?.sessionExpired === 'true') {
+      scoreboard.dataset.offline = 'true';
+      return false;
+    }
     setScoreboardOffline(globalRef, message);
     return false;
   }
