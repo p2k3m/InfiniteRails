@@ -28,6 +28,143 @@ const DEFAULT_SCOREBOARD_MESSAGE =
 
 const ASSET_VERSION = 1;
 
+(function setupBootstrapTracing(globalScope) {
+  const scope =
+    typeof globalScope !== 'undefined'
+      ? globalScope
+      : typeof window !== 'undefined'
+        ? window
+        : typeof globalThis !== 'undefined'
+          ? globalThis
+          : null;
+  if (!scope) {
+    return;
+  }
+
+  const state =
+    scope.__INFINITE_RAILS_TRACE_STATE__ ||
+    (scope.__INFINITE_RAILS_TRACE_STATE__ = {
+      traceId: null,
+      sessionId: null,
+      consoleInstrumented: false,
+      fetchInstrumented: false,
+      xhrInstrumented: false,
+    });
+
+  const generateId = (prefix) => {
+    const random = Math.random().toString(36).slice(2, 10);
+    const timestamp = Date.now().toString(36);
+    return `${prefix}-${random}${timestamp}`;
+  };
+
+  if (typeof state.traceId !== 'string' || state.traceId.length === 0) {
+    state.traceId = generateId('trace');
+  }
+  if (typeof state.sessionId !== 'string' || state.sessionId.length === 0) {
+    state.sessionId = generateId('session');
+  }
+
+  const buildMetadata = () => ({
+    traceId: state.traceId,
+    sessionId: state.sessionId,
+    trace: { traceId: state.traceId, sessionId: state.sessionId },
+  });
+
+  const consoleRef = scope.console ?? (typeof console !== 'undefined' ? console : null);
+  if (consoleRef && !state.consoleInstrumented) {
+    const methods = ['log', 'info', 'warn', 'error', 'debug', 'trace', 'assert'];
+    methods.forEach((method) => {
+      const fn = consoleRef[method];
+      if (typeof fn !== 'function') {
+        return;
+      }
+      if (fn && typeof fn === 'function') {
+        const mockDescriptor = fn.mock || fn.getMockImplementation?.() || fn.__isMockFunction;
+        if (mockDescriptor) {
+          return;
+        }
+      }
+      const original = fn.bind(consoleRef);
+      consoleRef[method] = (...args) => {
+        try {
+          return original(...args, buildMetadata());
+        } catch (error) {
+          try {
+            return original(...args);
+          } catch (fallbackError) {
+            return fallbackError;
+          }
+        }
+      };
+    });
+    state.consoleInstrumented = true;
+  }
+
+  const applyTraceHeaders = (headers) => {
+    const traceHeaders = {
+      'x-trace-id': state.traceId,
+      'x-trace-session': state.sessionId,
+    };
+    const HeadersCtor = scope.Headers || (typeof Headers !== 'undefined' ? Headers : null);
+    if (HeadersCtor && headers instanceof HeadersCtor) {
+      headers.set('x-trace-id', state.traceId);
+      headers.set('x-trace-session', state.sessionId);
+      return headers;
+    }
+    if (HeadersCtor) {
+      try {
+        const hydrated = new HeadersCtor(headers ?? undefined);
+        hydrated.set('x-trace-id', state.traceId);
+        hydrated.set('x-trace-session', state.sessionId);
+        return hydrated;
+      } catch (error) {
+        // fall through to plain object handling
+      }
+    }
+    if (Array.isArray(headers)) {
+      const map = Object.fromEntries(headers);
+      return { ...map, ...traceHeaders };
+    }
+    return { ...(headers || {}), ...traceHeaders };
+  };
+
+  if (typeof scope.fetch === 'function' && !state.fetchInstrumented) {
+    const originalFetch = scope.fetch.bind(scope);
+    scope.fetch = (resource, init = {}) => {
+      const nextInit = { ...init };
+      nextInit.headers = applyTraceHeaders(init.headers);
+      return originalFetch(resource, nextInit);
+    };
+    state.fetchInstrumented = true;
+  }
+
+  if (typeof scope.XMLHttpRequest === 'function' && !state.xhrInstrumented) {
+    const OriginalXHR = scope.XMLHttpRequest;
+    const InstrumentedXHR = function (...args) {
+      const instance = Reflect.construct(OriginalXHR, args);
+      if (typeof instance.send === 'function') {
+        const originalSend = instance.send;
+        instance.send = function (...sendArgs) {
+          try {
+            if (typeof instance.setRequestHeader === 'function') {
+              instance.setRequestHeader('X-Trace-Id', state.traceId);
+              instance.setRequestHeader('X-Trace-Session', state.sessionId);
+            }
+          } catch (error) {
+            // ignore header application failures
+          }
+          return originalSend.apply(this, sendArgs);
+        };
+      }
+      return instance;
+    };
+    InstrumentedXHR.prototype = OriginalXHR.prototype;
+    Object.setPrototypeOf(InstrumentedXHR, OriginalXHR);
+    scope.XMLHttpRequest = InstrumentedXHR;
+    state.xhrInstrumented = true;
+  }
+})(typeof window !== 'undefined' ? window : typeof globalThis !== 'undefined' ? globalThis : undefined);
+
 function applyAssetVersionTag(url) {
   if (typeof url !== 'string' || !url) {
     return url;
@@ -1112,67 +1249,6 @@ var rendererModeAppConfig =
           ? (globalScope.APP_CONFIG = globalScope.APP_CONFIG || {})
           : {});
 
-const SIMPLE_RENDERER_NOTICE_MESSAGES = {
-  'webgl-unavailable-simple-mode':
-    'WebGL2 support is unavailable on this device, so the mission briefing view is shown instead of the full 3D renderer.',
-  'mobile-simple-mode':
-    'Advanced renderer is unavailable on mobile devices — loading the simplified sandbox instead.',
-  'query-simple-mode': 'Sandbox renderer requested via mode=simple.',
-  'forced-simple-mode': 'Sandbox renderer forced by configuration.',
-};
-
-function queueBootstrapNotice(scope, key, message) {
-  if (!scope) {
-    return;
-  }
-  const notices = scope.__bootstrapNotices || (scope.__bootstrapNotices = []);
-  const existing = notices.find((entry) => entry?.key === key);
-  const resolvedMessage = typeof message === 'string' && message.trim().length ? message.trim() : SIMPLE_RENDERER_NOTICE_MESSAGES[key];
-  const entry = { key, message: resolvedMessage ?? '' };
-  if (existing) {
-    existing.message = entry.message;
-    return;
-  }
-  notices.push(entry);
-}
-
-function setRendererModeIndicator(mode) {
-  const helpers = ensureRendererHelpers();
-  const doc = helpers.getDocument();
-  const scope = helpers.getScope();
-  if (!doc) {
-    return;
-  }
-  const targetMode = mode === 'simple' ? 'simple' : 'advanced';
-  const root = doc.documentElement ?? null;
-  const body = doc.body ?? null;
-  if (root?.setAttribute) {
-    root.setAttribute('data-renderer-mode', targetMode);
-  }
-  if (body?.setAttribute) {
-    body.setAttribute('data-renderer-mode', targetMode);
-  }
-  if (body) {
-    body.dataset = body.dataset || {};
-    body.dataset.rendererMode = targetMode;
-  }
-  if (scope) {
-    scope.__INFINITE_RAILS_RENDERER_MODE__ = targetMode;
-    scope.InfiniteRails = scope.InfiniteRails || {};
-    scope.InfiniteRails.rendererMode = targetMode;
-  }
-}
-
-function updateRendererState(reason, mode = 'simple') {
-  const scope = ensureRendererHelpers().getScope();
-  if (!scope) {
-    return;
-  }
-  const state = scope.__INFINITE_RAILS_STATE__ || (scope.__INFINITE_RAILS_STATE__ = {});
-  state.rendererMode = mode;
-  state.reason = reason ?? state.reason ?? null;
-}
-
 function hasCoarsePointer(scope = ensureRendererHelpers().getScope()) {
   if (!scope) {
     return false;
@@ -1219,11 +1295,24 @@ function ensureRendererHelpers() {
       return resolveScope();
     },
     getDocument() {
+      return this.getRendererDocument();
+    },
+    getRendererDocument() {
       if (typeof rendererModeDocument !== 'undefined' && rendererModeDocument) {
         return rendererModeDocument;
       }
       const scope = resolveScope();
       return scope?.document ?? null;
+    },
+    getRendererRoot() {
+      if (typeof rendererModeRoot !== 'undefined' && rendererModeRoot) {
+        return rendererModeRoot;
+      }
+      const doc = this.getRendererDocument();
+      if (doc?.getElementById) {
+        return doc.getElementById('rendererRoot') ?? null;
+      }
+      return null;
     },
     getAppConfig() {
       const scope = resolveScope();
@@ -1260,7 +1349,8 @@ function markMobileEnvironment(appConfig, value = true) {
 }
 
 function ensureStandaloneWebglOverlay(detail = {}) {
-  const doc = ensureRendererHelpers().getDocument();
+  const helpers = getSimpleModeHelperStore();
+  const doc = helpers.getRendererDocument() ?? helpers.getDocument();
   if (!doc?.createElement || !doc.body) {
     return null;
   }
@@ -1300,6 +1390,166 @@ function ensureStandaloneWebglOverlay(detail = {}) {
   return overlay;
 }
 
+function createTestWebglContext(scope) {
+  const helpers = getSimpleModeHelperStore();
+  const doc = helpers.getRendererDocument() ?? helpers.getDocument() ?? scope?.document ?? null;
+  if (!doc?.createElement) {
+    return null;
+  }
+  try {
+    const canvas = doc.createElement('canvas');
+    if (!canvas || typeof canvas.getContext !== 'function') {
+      return null;
+    }
+    return canvas.getContext('webgl2') || canvas.getContext('experimental-webgl2');
+  } catch (error) {
+    return null;
+  }
+}
+
+function runWebglPreflightCheck() {
+  const helpers = getSimpleModeHelperStore();
+  const scope = helpers.getScope();
+  const appConfig = helpers.getAppConfig();
+  if (!scope) {
+    return false;
+  }
+  if (appConfig.__webglFallbackApplied) {
+    return true;
+  }
+  if (appConfig.forceSimpleMode) {
+    return true;
+  }
+  const hasWebgl2Context = Boolean(scope.WebGL2RenderingContext) && Boolean(createTestWebglContext(scope));
+  if (hasWebgl2Context) {
+    appConfig.webglSupport = true;
+    return false;
+  }
+  applySimpleModeFallback('webgl2-unavailable', {
+    noticeKey: 'webgl-unavailable-simple-mode',
+    noticeMessage: resolveSimpleRendererNoticeMessage('webgl-unavailable-simple-mode'),
+  });
+  return true;
+}
+
+function shouldStartSimpleMode() {
+  const helpers = getSimpleModeHelperStore();
+  const scope = helpers.getScope();
+  const appConfig = helpers.getAppConfig();
+  if (!scope) {
+    return false;
+  }
+  const search = typeof scope.location?.search === 'string' ? scope.location.search : '';
+  const params = new URLSearchParams(search);
+  if ((params.get('mode') || '').toLowerCase() === 'simple') {
+    applySimpleModeFallback('query-mode', {
+      noticeKey: 'query-simple-mode',
+      noticeMessage: resolveSimpleRendererNoticeMessage('query-simple-mode'),
+    });
+    return true;
+  }
+  if (appConfig.forceSimpleMode) {
+    applySimpleModeFallback('config-forced', {
+      noticeKey: 'forced-simple-mode',
+      noticeMessage: resolveSimpleRendererNoticeMessage('forced-simple-mode'),
+    });
+    return true;
+  }
+  if (appConfig.forceAdvanced) {
+    return false;
+  }
+  const mobile = hasCoarsePointer(scope) || isMobileUserAgent(scope);
+  if (mobile) {
+    markMobileEnvironment(appConfig, true);
+    if (appConfig.supportsAdvancedMobile === true) {
+      return false;
+    }
+    applySimpleModeFallback('mobile-simple-mode', {
+      noticeKey: 'mobile-simple-mode',
+      noticeMessage: resolveSimpleRendererNoticeMessage('mobile-simple-mode'),
+    });
+    return true;
+  }
+  markMobileEnvironment(appConfig, false);
+  if (runWebglPreflightCheck()) {
+    return true;
+  }
+  return false;
+}
+
+function ensureSimpleModeQueryParam(url, { mode = 'simple' } = {}) {
+  if (typeof url !== 'string' || !url) {
+    return url;
+  }
+  try {
+    const resolvedMode = mode === 'advanced' ? 'advanced' : 'simple';
+    const scope = getSimpleModeHelperStore().getScope();
+    const base = scope?.location?.origin ?? 'https://example.com';
+    const parsed = new URL(url, base);
+    parsed.searchParams.set('mode', resolvedMode);
+    return parsed.toString();
+  } catch (error) {
+    const hasQuery = url.includes('?');
+    const [prefix, suffix] = url.split('#', 2);
+    const hash = typeof suffix === 'string' ? `#${suffix}` : '';
+    const separator = hasQuery ? '&' : '?';
+    return `${hasQuery ? prefix : url}${separator}mode=${mode}${hash}`;
+  }
+}
+
+function getSimpleModeHelperStore() {
+  if (typeof ensureRendererHelpers === 'function') {
+    try {
+      const helpers = ensureRendererHelpers();
+      const helperScope = helpers && typeof helpers.getScope === 'function' ? helpers.getScope() : undefined;
+      const expectedScope =
+        typeof globalScope !== 'undefined' && globalScope ? globalScope : typeof window !== 'undefined' ? window : undefined;
+      if (!expectedScope || helperScope === expectedScope) {
+        return helpers;
+      }
+    } catch (error) {
+      // fall through to fallback helpers
+    }
+  }
+  const scope =
+    (typeof globalScope !== 'undefined' && globalScope) ||
+    (typeof window !== 'undefined' ? window : undefined) ||
+    (typeof globalThis !== 'undefined' ? globalThis : undefined) ||
+    null;
+  const documentRef = scope?.document ?? scope?.documentRef ?? null;
+  const appConfig =
+    scope && typeof scope === 'object'
+      ? (scope.APP_CONFIG = scope.APP_CONFIG || {})
+      : {};
+  const rendererDocument =
+    scope?.rendererModeDocument ??
+    documentRef ??
+    (typeof document !== 'undefined' ? document : null);
+  const rendererRoot =
+    scope?.rendererModeRoot ??
+    (rendererDocument?.getElementById ? rendererDocument.getElementById('rendererRoot') : null);
+  return {
+    getScope: () => scope,
+    getDocument: () => documentRef,
+    getRendererDocument: () => rendererDocument,
+    getRendererRoot: () => rendererRoot,
+    getAppConfig: () => appConfig,
+  };
+}
+
+const simpleFallbackRuntime = {
+  attempted: false,
+  lastReason: null,
+  lastError: null,
+  baselineConfig: null,
+  baselineCaptured: false,
+  watchdog: { handle: null, mode: null, timeoutMs: null, startedAt: null, onTimeout: null },
+};
+
+let simpleFallbackAttempted = false;
+let simpleFallbackLastReason = null;
+let simpleFallbackLastError = null;
+
 function ensureSimpleModeConfig(appConfig, reason) {
   if (!appConfig) {
     return;
@@ -1325,8 +1575,12 @@ function ensureSimpleModeConfig(appConfig, reason) {
 }
 
 function applySimpleModeFallback(reason, options = {}) {
-  const scope = ensureRendererHelpers().getScope();
-  const appConfig = ensureRendererHelpers().getAppConfig();
+  const helpers = getSimpleModeHelperStore();
+  const scope = helpers.getScope();
+  const appConfig = helpers.getAppConfig();
+  if (!scope || !appConfig) {
+    return;
+  }
   ensureSimpleModeConfig(appConfig, reason);
   setRendererModeIndicator('simple');
   updateRendererState(reason, 'simple');
@@ -1378,153 +1632,318 @@ function applySimpleModeFallback(reason, options = {}) {
   }
 }
 
-function createTestWebglContext(scope) {
-  const doc = ensureRendererHelpers().getDocument() ?? scope?.document ?? null;
-  if (!doc?.createElement) {
-    return null;
-  }
-  try {
-    const canvas = doc.createElement('canvas');
-    if (!canvas || typeof canvas.getContext !== 'function') {
-      return null;
-    }
-    return canvas.getContext('webgl2') || canvas.getContext('experimental-webgl2');
-  } catch (error) {
-    return null;
-  }
-}
+const DEFAULT_SIMPLE_RENDERER_NOTICE_MESSAGES = {
+  'webgl-unavailable-simple-mode':
+    'WebGL2 support is unavailable on this device, so the mission briefing view is shown instead of the full 3D renderer.',
+  'mobile-simple-mode':
+    'Advanced renderer is unavailable on mobile devices — loading the simplified sandbox instead.',
+  'query-simple-mode': 'Sandbox renderer requested via mode=simple.',
+  'forced-simple-mode': 'Sandbox renderer forced by configuration.',
+};
 
-function runWebglPreflightCheck() {
-  const scope = ensureRendererHelpers().getScope();
-  const appConfig = ensureRendererHelpers().getAppConfig();
-  if (!scope) {
-    return false;
+function resolveSimpleRendererNoticeMessage(key) {
+  if (!key) {
+    return '';
   }
-  if (appConfig.__webglFallbackApplied) {
-    return true;
-  }
-  if (appConfig.forceSimpleMode) {
-    return true;
-  }
-  const hasWebgl2Context = Boolean(scope.WebGL2RenderingContext) && Boolean(createTestWebglContext(scope));
-  if (hasWebgl2Context) {
-    appConfig.webglSupport = true;
-    return false;
-  }
-  applySimpleModeFallback('webgl2-unavailable', {
-    noticeKey: 'webgl-unavailable-simple-mode',
-    noticeMessage: SIMPLE_RENDERER_NOTICE_MESSAGES['webgl-unavailable-simple-mode'],
-  });
-  return true;
-}
-
-function shouldStartSimpleMode() {
   const helpers = getSimpleModeHelperStore();
   const scope = helpers.getScope();
-  const appConfig = helpers.getAppConfig();
+  const candidates = [
+    typeof SIMPLE_RENDERER_NOTICE_MESSAGES !== 'undefined' ? SIMPLE_RENDERER_NOTICE_MESSAGES : null,
+    scope?.SIMPLE_RENDERER_NOTICE_MESSAGES ?? null,
+    DEFAULT_SIMPLE_RENDERER_NOTICE_MESSAGES,
+  ];
+  for (const map of candidates) {
+    if (map && typeof map === 'object' && map[key]) {
+      return map[key];
+    }
+  }
+  return '';
+}
+
+function queueBootstrapNotice(scope, key, message) {
+  const targetScope = scope || getSimpleModeHelperStore().getScope();
+  if (!targetScope) {
+    return;
+  }
+  const notices = targetScope.__bootstrapNotices || (targetScope.__bootstrapNotices = []);
+  const existing = notices.find((entry) => entry?.key === key);
+  const resolvedMessage =
+    typeof message === 'string' && message.trim().length ? message.trim() : resolveSimpleRendererNoticeMessage(key);
+  const entry = { key, message: resolvedMessage ?? '' };
+  if (existing) {
+    existing.message = entry.message;
+    return;
+  }
+  notices.push(entry);
+}
+
+function setRendererModeIndicator(mode) {
+  const helpers = getSimpleModeHelperStore();
+  const doc = helpers.getRendererDocument() ?? helpers.getDocument();
+  const scope = helpers.getScope();
+  if (!doc) {
+    return;
+  }
+  const targetMode = mode === 'simple' ? 'simple' : 'advanced';
+  const root = doc.documentElement ?? null;
+  const body = doc.body ?? null;
+  if (root?.setAttribute) {
+    root.setAttribute('data-renderer-mode', targetMode);
+  }
+  if (body?.setAttribute) {
+    body.setAttribute('data-renderer-mode', targetMode);
+  }
+  if (body) {
+    body.dataset = body.dataset || {};
+    body.dataset.rendererMode = targetMode;
+  }
+  if (scope) {
+    scope.__INFINITE_RAILS_RENDERER_MODE__ = targetMode;
+    scope.InfiniteRails = scope.InfiniteRails || {};
+    scope.InfiniteRails.rendererMode = targetMode;
+  }
+}
+
+function updateRendererState(reason, mode = 'simple') {
+  const scope = getSimpleModeHelperStore().getScope();
   if (!scope) {
-    return false;
+    return;
   }
-  const search = typeof scope.location?.search === 'string' ? scope.location.search : '';
-  const params = new URLSearchParams(search);
-  if ((params.get('mode') || '').toLowerCase() === 'simple') {
-    applySimpleModeFallback('query-mode', {
-      noticeKey: 'query-simple-mode',
-      noticeMessage: SIMPLE_RENDERER_NOTICE_MESSAGES['query-simple-mode'],
+  const state = scope.__INFINITE_RAILS_STATE__ || (scope.__INFINITE_RAILS_STATE__ = {});
+  state.rendererMode = mode;
+  state.reason = reason ?? state.reason ?? null;
+}
+
+function setupSimpleExperienceIntegrations(globalScope) {
+  const helpers = getSimpleModeHelperStore();
+  const rawScope =
+    (typeof globalScope !== 'undefined' && globalScope) ||
+    helpers.getScope() ||
+    (typeof window !== 'undefined' ? window : typeof globalThis !== 'undefined' ? globalThis : null);
+  if (!rawScope) {
+    return { ensureSimpleExperience: () => null };
+  }
+
+  const scope =
+    rawScope && typeof rawScope.window === 'object' && rawScope.window ? rawScope.window : rawScope;
+
+  const documentRef = helpers.getRendererDocument() ?? scope.document ?? null;
+  const appConfig = helpers.getAppConfig();
+  const runtime =
+    scope.__INFINITE_RAILS_SIMPLE_RUNTIME__ ||
+    (scope.__INFINITE_RAILS_SIMPLE_RUNTIME__ = {
+      pendingPreload: null,
     });
-    return true;
-  }
-  if (appConfig.forceSimpleMode) {
-    applySimpleModeFallback('config-forced', {
-      noticeKey: 'forced-simple-mode',
-      noticeMessage: SIMPLE_RENDERER_NOTICE_MESSAGES['forced-simple-mode'],
-    });
-    return true;
-  }
-  if (appConfig.forceAdvanced) {
-    return false;
-  }
-  if (runWebglPreflightCheck()) {
-    return true;
-  }
-  const mobile = hasCoarsePointer(scope) || isMobileUserAgent(scope);
-  if (mobile) {
-    markMobileEnvironment(appConfig, true);
-    if (appConfig.supportsAdvancedMobile === true) {
+
+  const resolveStartButton = () => {
+    if (!documentRef || typeof documentRef.getElementById !== 'function') {
+      return null;
+    }
+    return documentRef.getElementById('startButton');
+  };
+
+  const setStartButtonPreloading = (active) => {
+    const startButton = resolveStartButton();
+    if (!startButton) {
+      return;
+    }
+    startButton.disabled = Boolean(active);
+    if (startButton.dataset) {
+      if (active) {
+        startButton.dataset.preloading = 'true';
+      } else {
+        delete startButton.dataset.preloading;
+        delete startButton.dataset.fallbackMode;
+      }
+    }
+    if (typeof startButton.setAttribute === 'function') {
+      startButton.setAttribute('aria-disabled', active ? 'true' : 'false');
+    }
+  };
+
+  const loadEmbeddedModels = (experience) => {
+    if (!experience) {
+      return;
+    }
+    let entries = [];
+    if (typeof experience.collectCriticalModelEntries === 'function') {
+      try {
+        const result = experience.collectCriticalModelEntries();
+        if (Array.isArray(result)) {
+          entries = result;
+        }
+      } catch (error) {
+        scope.console && typeof scope.console.warn === 'function'
+          ? scope.console.warn('collectCriticalModelEntries failed.', error)
+          : null;
+      }
+    }
+    entries
+      .filter((entry) => entry && typeof entry.key === 'string' && entry.key)
+      .forEach((entry) => {
+        try {
+          if (experience.loadEmbeddedModelFromBundle) {
+            experience.loadEmbeddedModelFromBundle(entry.key, { force: true, reason: 'embedded-bundle' });
+          }
+        } catch (error) {
+          scope.console && typeof scope.console.warn === 'function'
+            ? scope.console.warn('Embedded model load failed.', error)
+            : null;
+        }
+      });
+  };
+
+  const shouldUseEmbeddedFallback = (experience, error) => {
+    if (!experience || typeof experience.shouldUseEmbeddedModelFallback !== 'function') {
       return false;
     }
-    applySimpleModeFallback('mobile-simple-mode', {
-      noticeKey: 'mobile-simple-mode',
-      noticeMessage: SIMPLE_RENDERER_NOTICE_MESSAGES['mobile-simple-mode'],
-    });
-    return true;
-  }
-  markMobileEnvironment(appConfig, false);
-  return false;
-}
-
-function ensureSimpleModeQueryParam(url, { mode = 'simple' } = {}) {
-  if (typeof url !== 'string' || !url) {
-    return url;
-  }
-  try {
-    const resolvedMode = mode === 'advanced' ? 'advanced' : 'simple';
-    const scope = getSimpleModeHelperStore().getScope();
-    const base = scope?.location?.origin ?? 'https://example.com';
-    const parsed = new URL(url, base);
-    parsed.searchParams.set('mode', resolvedMode);
-    return parsed.toString();
-  } catch (error) {
-    const hasQuery = url.includes('?');
-    const [prefix, suffix] = url.split('#', 2);
-    const hash = typeof suffix === 'string' ? `#${suffix}` : '';
-    const separator = hasQuery ? '&' : '?';
-    return `${hasQuery ? prefix : url}${separator}mode=${mode}${hash}`;
-  }
-}
-
-function getSimpleModeHelperStore() {
-  if (typeof ensureRendererHelpers === 'function') {
     try {
-      return ensureRendererHelpers();
-    } catch (error) {
-      // fall through to fallback helpers
+      return experience.shouldUseEmbeddedModelFallback(error) === true;
+    } catch (fallbackError) {
+      scope.console && typeof scope.console.warn === 'function'
+        ? scope.console.warn('Embedded fallback probe failed.', fallbackError)
+        : null;
+      return false;
+    }
+  };
+
+  const ensureSimpleExperience = (mode = 'simple', options = {}) => {
+    const resolvedMode = mode === 'advanced' ? 'advanced' : 'simple';
+    const factory = scope.SimpleExperience && scope.SimpleExperience.create;
+    if (typeof factory !== 'function') {
+      scope.console && typeof scope.console.warn === 'function'
+        ? scope.console.warn('SimpleExperience.create unavailable — cannot ensure simple experience.')
+        : null;
+      return null;
+    }
+
+    const canvas =
+      options.canvas ??
+      (documentRef && typeof documentRef.getElementById === 'function'
+        ? documentRef.getElementById('gameCanvas')
+        : null) ??
+      (documentRef && typeof documentRef.querySelector === 'function'
+        ? documentRef.querySelector('canvas')
+        : null);
+    const experienceOptions = {
+      canvas,
+      ui: options.ui ?? scope.__INFINITE_RAILS_UI__ ?? {},
+      appConfig,
+    };
+    const experience = factory(experienceOptions);
+    scope.__INFINITE_RAILS_ACTIVE_EXPERIENCE__ = experience;
+
+    setRendererModeIndicator(resolvedMode);
+    updateRendererState(options.reason ?? `${resolvedMode}-preload`, resolvedMode);
+
+    if (experience && typeof experience.enableStrictAssetValidation === 'function') {
+      try {
+        experience.enableStrictAssetValidation(true);
+      } catch (error) {
+        scope.console && typeof scope.console.debug === 'function'
+          ? scope.console.debug('enableStrictAssetValidation failed.', error)
+          : null;
+      }
+    }
+
+    const overlay = scope.bootstrapOverlay ?? null;
+
+    const runPreloadSequence = async () => {
+      const executePreload = async () => {
+        if (!experience || typeof experience.preloadRequiredAssets !== 'function') {
+          return true;
+        }
+        return experience.preloadRequiredAssets();
+      };
+
+      try {
+        await Promise.resolve(executePreload());
+        return { ok: true, reason: options.reason ?? `${resolvedMode}-preload` };
+      } catch (error) {
+        if (shouldUseEmbeddedFallback(experience, error)) {
+          scope.console && typeof scope.console.warn === 'function'
+            ? scope.console.warn(
+                'Critical asset preload failed while running from file://; activating embedded asset bundle.',
+                error,
+              )
+            : null;
+          if (overlay && typeof overlay.setDiagnostic === 'function') {
+            overlay.setDiagnostic('renderer', {
+              status: 'warning',
+              message: 'Embedded asset bundle active — continuing with cached assets.',
+            });
+          }
+          if (overlay && typeof overlay.showLoading === 'function') {
+            overlay.showLoading({
+              title: 'Loading embedded assets',
+              message: 'Switching to embedded models while remote assets recover.',
+            });
+          }
+          loadEmbeddedModels(experience);
+          await Promise.resolve(executePreload());
+          return { ok: true, reason: 'embedded-bundle' };
+        }
+        throw error;
+      }
+    };
+
+    if (runtime.pendingPreload) {
+      runtime.pendingPreload.catch(() => undefined);
+    }
+
+    setStartButtonPreloading(true);
+    const preloadTask = runPreloadSequence()
+      .then((result) => {
+        setStartButtonPreloading(false);
+        updateRendererState(result.reason, resolvedMode);
+        return result;
+      })
+      .catch((error) => {
+        setStartButtonPreloading(false);
+        scope.console && typeof scope.console.error === 'function'
+          ? scope.console.error('Simple experience preload failed.', error)
+          : null;
+        if (overlay && typeof overlay.setDiagnostic === 'function') {
+          overlay.setDiagnostic('renderer', {
+            status: 'error',
+            message: 'Renderer assets unavailable — retry or reload to continue.',
+            detail: { reason: 'preload-failed' },
+          });
+        }
+        throw error;
+      })
+      .finally(() => {
+        runtime.pendingPreload = null;
+      });
+
+    runtime.pendingPreload = preloadTask;
+
+    return experience;
+  };
+
+  const hooks = scope.__INFINITE_RAILS_TEST_HOOKS__ || (scope.__INFINITE_RAILS_TEST_HOOKS__ = {});
+  hooks.ensureSimpleExperience = ensureSimpleExperience;
+  hooks.getSimpleExperienceState = () => ({
+    preloading: Boolean(runtime.pendingPreload),
+  });
+  scope.__INFINITE_RAILS_TEST_HOOKS__ = hooks;
+  rawScope.__INFINITE_RAILS_TEST_HOOKS__ = hooks;
+
+  return { ensureSimpleExperience };
+}
+
+(function initialiseSimpleExperienceIntegration(globalScope) {
+  try {
+    setupSimpleExperienceIntegrations(globalScope);
+  } catch (error) {
+    const scope =
+      (typeof globalScope !== 'undefined' && globalScope) ||
+      (typeof window !== 'undefined' ? window : typeof globalThis !== 'undefined' ? globalThis : null);
+    if (scope && scope.console && typeof scope.console.warn === 'function') {
+      scope.console.warn('Failed to initialise simple experience integrations.', error);
     }
   }
-  const scope =
-    (typeof globalScope !== 'undefined' && globalScope) ||
-    (typeof window !== 'undefined' ? window : undefined) ||
-    (typeof globalThis !== 'undefined' ? globalThis : undefined) ||
-    null;
-  const documentRef = scope?.document ?? scope?.documentRef ?? null;
-  const appConfig =
-    scope && typeof scope === 'object'
-      ? (scope.APP_CONFIG = scope.APP_CONFIG || {})
-      : {};
-  const rendererDocument =
-    scope?.rendererModeDocument ??
-    documentRef ??
-    (typeof document !== 'undefined' ? document : null);
-  const rendererRoot =
-    scope?.rendererModeRoot ??
-    (rendererDocument?.getElementById ? rendererDocument.getElementById('rendererRoot') : null);
-  return {
-    getScope: () => scope,
-    getDocument: () => documentRef,
-    getRendererDocument: () => rendererDocument,
-    getRendererRoot: () => rendererRoot,
-    getAppConfig: () => appConfig,
-  };
-}
-
-const simpleFallbackRuntime = {
-  attempted: false,
-  lastReason: null,
-  lastError: null,
-  baselineConfig: null,
-  baselineCaptured: false,
-  watchdog: { handle: null, mode: null, timeoutMs: null, startedAt: null, onTimeout: null },
-};
+})(typeof window !== 'undefined' ? window : typeof globalThis !== 'undefined' ? globalThis : undefined);
 
 function getSimpleModeToggleState(scope = getSimpleModeHelperStore().getScope()) {
   if (!scope) {
@@ -1536,14 +1955,16 @@ function getSimpleModeToggleState(scope = getSimpleModeHelperStore().getScope())
     baselineConfig: null,
     baselineCaptured: false,
   });
+  const helpers = getSimpleModeHelperStore();
+  const rendererDoc = helpers.getRendererDocument();
   if (!state.control || !state.control.isConnected) {
-    const toggle = rendererModeDocument?.getElementById?.('forceSimpleModeToggle') ?? null;
+    const toggle = rendererDoc?.getElementById?.('forceSimpleModeToggle') ?? null;
     if (toggle) {
       state.control = toggle;
     }
   }
   if (!state.status || !state.status.isConnected) {
-    const status = rendererModeDocument?.getElementById?.('forceSimpleModeStatus') ?? null;
+    const status = rendererDoc?.getElementById?.('forceSimpleModeStatus') ?? null;
     if (status) {
       state.status = status;
     }
@@ -1595,6 +2016,9 @@ function restoreSimpleModeConfig(appConfig) {
   simpleFallbackRuntime.attempted = false;
   simpleFallbackRuntime.lastReason = null;
   simpleFallbackRuntime.lastError = null;
+  simpleFallbackAttempted = false;
+  simpleFallbackLastReason = null;
+  simpleFallbackLastError = null;
   const toggleState = getSimpleModeToggleState();
   if (toggleState.status) {
     toggleState.status.hidden = true;
@@ -1636,8 +2060,9 @@ function updateSimpleModeToggle({ active, reason, source }) {
 }
 
 function applyRendererReadyState(mode, options = {}) {
+  const helpers = getSimpleModeHelperStore();
   setRendererModeIndicator(mode);
-  const doc = rendererModeDocument;
+  const doc = helpers.getRendererDocument();
   if (!doc) {
     return;
   }
@@ -1646,38 +2071,38 @@ function applyRendererReadyState(mode, options = {}) {
     return;
   }
   body.dataset = body.dataset || {};
-  body.dataset.rendererReady = options.ready ? 'true' : 'false';
+  body.dataset.rendererReady = options?.ready ? 'true' : 'false';
 }
 
 const DEFAULT_RENDERER_START_TIMEOUT_MS = 20000;
 const DEFAULT_RENDERER_RECOVERY_TIMEOUT_MS = 60000;
-
 function ensureSimpleModeUrl(scope = getSimpleModeHelperStore().getScope()) {
   if (!scope) {
-    return;
+    return 'noop';
   }
   const location = scope.location ?? null;
   if (!location) {
-    return;
+    return 'noop';
   }
   const current = typeof location.href === 'string' ? location.href : '';
   const next = ensureSimpleModeQueryParam(current, { mode: 'simple' });
   if (next === current) {
-    return;
+    return 'noop';
   }
   if (scope.history && typeof scope.history.replaceState === 'function') {
     try {
       scope.history.replaceState(scope.history.state, '', next);
-      return;
+      return 'history';
     } catch (error) {
       // fall through to location.replace
     }
   }
   if (typeof location.replace === 'function') {
     location.replace(next);
-  } else {
-    location.href = next;
+    return 'navigation';
   }
+  location.href = next;
+  return 'navigation';
 }
 
 function ensureSimpleRendererModule(scope, context) {
@@ -1781,7 +2206,7 @@ function offerMissionBriefingFallback(options = {}) {
 
 function showMissionBriefingFallback(scope, options = {}) {
   const message =
-    'Renderer systems are offline. Mission briefing mode is available with a text-only experience so the expedition can continue.';
+    'Renderer systems are offline — mission briefing mode is available with a text-only experience so the expedition can continue.';
   const diagnosticMessage =
     'Mission briefing mode activated — renderer unavailable. Follow the text briefing to continue the expedition.';
   const overlay = scope?.bootstrapOverlay ?? null;
@@ -1823,46 +2248,186 @@ function tryStartSimpleFallback(error, options = {}) {
   state.attempted = true;
   state.lastReason = options.reason ?? 'renderer-failure';
   state.lastError = error ?? null;
+  simpleFallbackAttempted = true;
+  simpleFallbackLastReason = state.lastReason;
+  simpleFallbackLastError = state.lastError;
 
-  const appConfig = rendererModeAppConfig;
+  const appConfig = helpers.getAppConfig();
   rememberSimpleModeBaseline(appConfig);
-  applySimpleModeFallback('simple-fallback', {
+  const fallbackOptions = {
     noticeKey: 'forced-simple-mode',
-    noticeMessage: SIMPLE_RENDERER_NOTICE_MESSAGES['forced-simple-mode'],
+    noticeMessage: resolveSimpleRendererNoticeMessage('forced-simple-mode'),
     showLoadingMessage: 'Switching to sandbox mode while we recover the renderer.',
-    diagnosticMessage: 'Sandbox renderer active — renderer fallback engaged.',
+    diagnosticMessage: 'sandbox renderer active — renderer fallback engaged.',
     diagnosticStatus: 'warning',
-  });
+  };
+  if (state.lastReason === 'renderer-timeout') {
+    fallbackOptions.showLoadingMessage = 'Renderer start timed out — enabling simplified safe mode.';
+    fallbackOptions.diagnosticMessage = 'Renderer start timed out — simplified safe mode active.';
+  }
+  applySimpleModeFallback('simple-fallback', fallbackOptions);
   ensureSimpleModeConfig(appConfig, 'simple-fallback');
   updateSimpleModeToggle({ active: true, reason: state.lastReason, source: options.source ?? 'fallback' });
-  ensureSimpleModeUrl(scope);
-  applyRendererReadyState('simple', { ready: false });
+  const urlChange = ensureSimpleModeUrl(scope);
+  const rendererDoc = helpers.getRendererDocument();
+  const rendererBody = rendererDoc?.body ?? null;
+  if (rendererBody) {
+    rendererBody.dataset = rendererBody.dataset || {};
+    rendererBody.dataset.rendererReady = 'false';
+  }
 
   const ensureContext = {
     mode: 'simple',
     reason: options.reason ?? 'renderer-failure',
     source: options.source ?? 'fallback',
   };
-  let ensureResult = ensureSimpleRendererModule(scope, ensureContext);
+  const bootstrapSimple = () => {
+    if (urlChange === 'navigation') {
+      return;
+    }
+    try {
+      scope.bootstrap({ mode: 'simple', reason: state.lastReason });
+    } catch (bootstrapError) {
+      scope.console?.error?.('Failed to bootstrap simple renderer.', bootstrapError);
+    }
+  };
+
+  const ensureResult = ensureSimpleRendererModule(scope, ensureContext);
   if (ensureResult && typeof ensureResult.then === 'function') {
-    ensureResult = ensureResult.catch((moduleError) => {
-      scope.console?.warn?.('Simple renderer module ensure failed.', moduleError);
-    });
+    ensureResult.then(
+      () => {
+        bootstrapSimple();
+      },
+      (moduleError) => {
+        scope.console?.warn?.('Simple renderer module ensure failed.', moduleError);
+        bootstrapSimple();
+      },
+    );
+  } else {
+    bootstrapSimple();
   }
-  Promise.resolve(ensureResult)
-    .catch(() => {})
-    .finally(() => {
-      try {
-        scope.bootstrap({ mode: 'simple', reason: state.lastReason });
-      } catch (bootstrapError) {
-        scope.console?.error?.('Failed to bootstrap simple renderer.', bootstrapError);
-      }
-    });
 
   return true;
 }
 
-function scheduleRendererStartWatchdog({ mode = 'simple', timeoutMs = DEFAULT_RENDERER_START_TIMEOUT_MS, onTimeout } = {}) {
+const ERROR_BOUNDARY_DEFAULTS = {
+  title: 'Renderer unavailable',
+  message: 'Renderer encountered a critical error and must recover.',
+  diagnosticScope: 'renderer',
+  diagnosticStatus: 'error',
+};
+
+const errorBoundaryState = { handled: false, lastContext: null };
+
+function normaliseBoundaryDetail(detail = {}) {
+  const output = { ...detail };
+  if (!output.stage && output.boundary) {
+    output.stage = output.boundary;
+  }
+  return output;
+}
+
+function handleErrorBoundary(error, options = {}) {
+  errorBoundaryState.handled = false;
+  const detail = normaliseBoundaryDetail({ ...options.detail, boundary: options.boundary });
+  const boundary = typeof options.boundary === 'string' ? options.boundary : 'runtime';
+  const reason = typeof detail.reason === 'string' && detail.reason.trim() ? detail.reason.trim() : 'renderer-failure';
+  const stageLabel = typeof detail.stage === 'string' && detail.stage.trim() ? detail.stage.trim() : boundary;
+  const stage = stageLabel === 'init' ? boundary : stageLabel;
+
+  const overlayPayload = {
+    title: options.title ?? ERROR_BOUNDARY_DEFAULTS.title,
+    message: options.message ?? ERROR_BOUNDARY_DEFAULTS.message,
+    diagnosticScope: detail.scope ?? ERROR_BOUNDARY_DEFAULTS.diagnosticScope,
+    diagnosticStatus: detail.status ?? ERROR_BOUNDARY_DEFAULTS.diagnosticStatus,
+    detail: {
+      boundary,
+      stage,
+      reason,
+      trace: detail.trace ?? null,
+      asset: formatAssetLogLabel(boundary, detail),
+    },
+  };
+
+  try {
+    presentCriticalErrorOverlay?.(overlayPayload);
+  } catch (overlayError) {
+    globalScope?.console?.warn?.('Failed to present error overlay.', overlayError);
+  }
+
+  const mode = typeof resolveRendererModeForFallback === 'function'
+    ? resolveRendererModeForFallback({ error, boundary, detail }) || 'advanced'
+    : 'advanced';
+
+  const context = {
+    reason,
+    boundary,
+    stage,
+    mode,
+    source: 'error-boundary',
+    detail,
+  };
+  errorBoundaryState.lastContext = context;
+
+  if (mode === 'simple') {
+    errorBoundaryState.handled = true;
+    return true;
+  }
+
+  let simpleResult = false;
+  try {
+    simpleResult = tryStartSimpleFallback?.(error, context) === true;
+  } catch (fallbackError) {
+    globalScope?.console?.warn?.('Simple fallback activation failed.', fallbackError);
+    simpleResult = false;
+  }
+
+  if (simpleResult) {
+    errorBoundaryState.handled = true;
+    return true;
+  }
+
+  const missionOptions = {
+    reason: `${reason}-mission-briefing`,
+    context,
+    detail,
+    error,
+    diagnosticMessage: 'Mission briefing text mode available — renderer recovery required.',
+    notice:
+      'Renderer recovery failed. Switch to mission briefing text mode for a text-based experience while we stabilise the renderer.',
+  };
+
+  try {
+    const offered = offerMissionBriefingFallback?.(missionOptions);
+    errorBoundaryState.handled = Boolean(offered);
+    return errorBoundaryState.handled;
+  } catch (missionError) {
+    globalScope?.console?.warn?.('Mission briefing fallback failed to activate.', missionError);
+    errorBoundaryState.handled = false;
+    return false;
+  }
+}
+
+function wasErrorHandledByBoundary() {
+  return Boolean(errorBoundaryState.handled);
+}
+
+const formatAssetLogLabel = (boundary, detail = {}) => {
+  const boundaryLabel = typeof boundary === 'string' && boundary.trim() ? boundary.trim() : 'runtime';
+  const stage = typeof detail.stage === 'string' && detail.stage.trim() ? detail.stage.trim() : boundaryLabel;
+  const reason = typeof detail.reason === 'string' && detail.reason.trim() ? detail.reason.trim() : 'unknown';
+  return `${boundaryLabel}:${stage}:${reason}`;
+};
+// function formatAssetLogLabel sentinel
+
+function scheduleRendererStartWatchdog(input = {}) {
+  const config =
+    typeof input === 'string'
+      ? { mode: input }
+      : input && typeof input === 'object'
+        ? input
+        : {};
+  const { mode = 'simple', timeoutMs = DEFAULT_RENDERER_START_TIMEOUT_MS, onTimeout } = config;
   const scope = getSimpleModeHelperStore().getScope();
   if (!scope || typeof scope.setTimeout !== 'function') {
     return null;
@@ -1870,6 +2435,54 @@ function scheduleRendererStartWatchdog({ mode = 'simple', timeoutMs = DEFAULT_RE
   cancelRendererStartWatchdog();
   const timeout = Number(timeoutMs);
   const duration = Number.isFinite(timeout) && timeout > 0 ? timeout : DEFAULT_RENDERER_START_TIMEOUT_MS;
+  const resolvedOnTimeout =
+    typeof onTimeout === 'function'
+      ? onTimeout
+      : ({ mode: triggeredMode }) => {
+          const fallbackMode = triggeredMode || mode || 'advanced';
+          const detail = {
+            reason: 'renderer-timeout',
+            mode: fallbackMode,
+            timeoutMs: duration,
+          };
+          scope.console?.warn?.('Renderer start watchdog enabling safe mode.', { detail });
+          scope.console?.warn?.('Switching to simplified renderer after start timeout.', detail);
+          const logDiagnostics =
+            typeof scope.logDiagnosticsEvent === 'function'
+              ? scope.logDiagnosticsEvent
+              : typeof globalThis !== 'undefined' && typeof globalThis.logDiagnosticsEvent === 'function'
+                ? globalThis.logDiagnosticsEvent
+                : null;
+          if (typeof logDiagnostics === 'function') {
+            try {
+              logDiagnostics('startup', `Advanced renderer start timed out after ${detail.timeoutMs}ms.`, {
+                detail,
+              });
+              logDiagnostics('startup', 'Switching to simplified safe mode after renderer timeout.', { detail });
+            } catch (error) {
+              scope.console?.warn?.('Renderer watchdog diagnostics logging failed.', error);
+            }
+          }
+          const fallbackError = new Error('Renderer start watchdog timeout');
+          fallbackError.name = 'RendererStartTimeoutError';
+          cancelRendererStartWatchdog();
+          const fallbackStarted = tryStartSimpleFallback(fallbackError, {
+            reason: 'renderer-timeout',
+            mode: fallbackMode,
+            source: 'watchdog-timeout',
+            detail,
+            allowRetry: true,
+          });
+          if (!fallbackStarted) {
+            offerMissionBriefingFallback({
+              reason: 'renderer-timeout-mission-briefing',
+              source: 'watchdog-timeout',
+              context: detail,
+              notice: 'Renderer start timed out. Mission briefing mode is available as a fallback.',
+              diagnosticMessage: 'Renderer start timed out — activating mission briefing mode.',
+            });
+          }
+        };
   const handle = scope.setTimeout(() => {
     simpleFallbackRuntime.watchdog.handle = null;
     if (typeof simpleFallbackRuntime.watchdog.onTimeout === 'function') {
@@ -1885,7 +2498,7 @@ function scheduleRendererStartWatchdog({ mode = 'simple', timeoutMs = DEFAULT_RE
     mode,
     timeoutMs: duration,
     startedAt: Date.now(),
-    onTimeout,
+    onTimeout: resolvedOnTimeout,
   };
   return handle;
 }
@@ -3938,6 +4551,196 @@ function resolveDiagnosticsState(scope =
   const created = { logBuffer: [], lastOverlayKey: null, lastOverlayAt: 0 };
   target.__INFINITE_RAILS_DIAGNOSTICS_STATE__ = created;
   return created;
+}
+
+function includesTextureLanguage(value) {
+  if (typeof value !== 'string') {
+    return false;
+  }
+  const normalised = value.toLowerCase();
+  return normalised.includes('texture') || normalised.includes('textures');
+}
+
+function resolveAssetReloadActionLabel(detail = {}) {
+  const candidates = [detail.key, detail.logMessage, detail.source, detail.description];
+  if (candidates.some((entry) => includesTextureLanguage(String(entry ?? '')))) {
+    return 'Refresh textures';
+  }
+  return 'Reload assets';
+}
+
+function attemptAssetReloadFromDiagnostics(event = {}) {
+  const scope =
+    (typeof globalScope !== 'undefined' && globalScope) ||
+    (typeof window !== 'undefined' ? window : typeof globalThis !== 'undefined' ? globalThis : undefined);
+  if (!scope) {
+    return Promise.resolve(false);
+  }
+
+  const detail = event?.detail ?? {};
+  const control = event?.control ?? null;
+  const logMessage = typeof event?.logMessage === 'string' ? event.logMessage.trim() : '';
+  const source = typeof event?.source === 'string' && event.source.trim() ? event.source.trim() : 'diagnostics-overlay';
+  if (control && typeof control === 'object') {
+    control.disabled = true;
+  }
+
+  const keys = Array.isArray(detail.keys)
+    ? detail.keys.filter((value) => typeof value === 'string' && value)
+    : (() => {
+        const rawKey = typeof detail.key === 'string' ? detail.key : '';
+        if (!rawKey) {
+          return [];
+        }
+        const segments = rawKey.split(':');
+        const last = segments[segments.length - 1];
+        return last ? [last] : [rawKey];
+      })();
+
+  const payload = {
+    source,
+    keys,
+    baseUrl: typeof detail.baseUrl === 'string' ? detail.baseUrl : null,
+    alternateBaseUrls: Array.isArray(detail.alternateBaseUrls)
+      ? detail.alternateBaseUrls.filter((entry) => typeof entry === 'string' && entry)
+      : [],
+  };
+
+  const label = resolveAssetReloadActionLabel({ ...detail, source, logMessage });
+  const hudAlertCandidate =
+    (typeof event?.showHudAlert === 'function' && event.showHudAlert) ||
+    (typeof showHudAlert === 'function' ? showHudAlert : null) ||
+    (typeof scope.showHudAlert === 'function' ? scope.showHudAlert : null);
+  const hudAlert = typeof hudAlertCandidate === 'function' ? hudAlertCandidate : null;
+  if (hudAlert) {
+    try {
+      hudAlert({ title: label === 'Refresh textures' ? 'Refreshing textures' : label, detail: payload });
+    } catch (error) {
+      scope.console?.debug?.('HUD alert failed.', error);
+    }
+  }
+
+  if (typeof logDiagnosticsEvent === 'function') {
+    logDiagnosticsEvent('texture-reload', logMessage || 'Diagnostics-triggered asset reload requested.', {
+      level: 'info',
+      detail: { label, ...payload },
+    });
+  }
+
+  if (typeof scope.dispatchEvent === 'function') {
+    try {
+      const EventCtor = scope.CustomEvent || (typeof CustomEvent !== 'undefined' ? CustomEvent : null);
+      const dispatchPayload = new (EventCtor || Object)(
+        EventCtor ? 'infinite-rails:asset-reload-request' : undefined,
+        EventCtor ? { detail: payload } : undefined,
+      );
+      if (!EventCtor) {
+        dispatchPayload.type = 'infinite-rails:asset-reload-request';
+        dispatchPayload.detail = payload;
+      }
+      scope.dispatchEvent(dispatchPayload);
+    } catch (error) {
+      scope.console?.warn?.('Failed to dispatch asset reload diagnostics event.', error);
+    }
+  }
+
+  const refreshTextures = scope.InfiniteRails?.refreshTextures;
+  const refreshPromise = typeof refreshTextures === 'function'
+    ? Promise.resolve(refreshTextures({ ...payload, logMessage }))
+    : Promise.reject(new Error('refreshTextures unavailable'));
+
+  return refreshPromise
+    .then((result) => {
+      if (hudAlert) {
+        try {
+          hudAlert({ title: 'Textures refreshed', detail: { ...payload, result } });
+        } catch (error) {
+          scope.console?.debug?.('HUD alert completion failed.', error);
+        }
+      }
+      return result;
+    })
+    .catch((error) => {
+      scope.console?.warn?.('Diagnostics texture refresh failed.', error);
+      if (hudAlert) {
+        try {
+          hudAlert({
+            title: 'Texture refresh failed',
+            message: error?.message ?? 'Unable to refresh textures from diagnostics overlay.',
+            detail: { ...payload, error },
+          });
+        } catch (alertError) {
+          scope.console?.debug?.('HUD failure notice failed.', alertError);
+        }
+      }
+      if (typeof scope.location?.reload === 'function') {
+        scope.location.reload();
+      }
+      return false;
+    })
+    .finally(() => {
+      if (control && typeof control === 'object') {
+        control.disabled = false;
+      }
+    });
+}
+
+function presentCriticalErrorOverlay(options = {}) {
+  const helpers = ensureRendererHelpers();
+  const scope = helpers.getScope();
+  const doc = helpers.getDocument();
+  const payload = {
+    title: options.title ?? 'Critical error encountered',
+    message: options.message ?? 'Renderer encountered a critical error and needs attention.',
+    diagnosticScope: options.diagnosticScope ?? 'runtime',
+    diagnosticStatus: options.diagnosticStatus ?? 'error',
+    detail: options.detail ?? {},
+    timestamp: options.timestamp ?? Date.now(),
+  };
+
+  const overlay = scope?.bootstrapOverlay ?? null;
+  if (overlay?.present) {
+    overlay.present(payload);
+    return payload;
+  }
+  if (overlay?.showError) {
+    overlay.showError(payload);
+    return payload;
+  }
+
+  if (!doc || typeof doc.createElement !== 'function') {
+    scope?.console?.error?.('Critical error overlay unavailable.', payload);
+    return payload;
+  }
+
+  let container = doc.getElementById?.('criticalErrorOverlay') ?? null;
+  if (!container) {
+    container = doc.createElement('section');
+    container.id = 'criticalErrorOverlay';
+    container.className = 'critical-error-overlay';
+    const titleNode = doc.createElement('h2');
+    titleNode.id = 'criticalErrorOverlayTitle';
+    container.appendChild(titleNode);
+    const messageNode = doc.createElement('p');
+    messageNode.id = 'criticalErrorOverlayMessage';
+    container.appendChild(messageNode);
+    doc.body?.appendChild?.(container);
+  }
+
+  const titleNode = container.querySelector?.('#criticalErrorOverlayTitle') ?? container.firstChild ?? null;
+  const messageNode = container.querySelector?.('#criticalErrorOverlayMessage') ?? titleNode?.nextSibling ?? null;
+  if (titleNode) {
+    titleNode.textContent = payload.title;
+  }
+  if (messageNode) {
+    messageNode.textContent = payload.message;
+  }
+  container.hidden = false;
+  container.dataset = container.dataset || {};
+  container.dataset.diagnosticScope = payload.diagnosticScope;
+  container.dataset.diagnosticStatus = payload.diagnosticStatus;
+
+  return payload;
 }
 
 function pushDiagnosticsHistory(entry) {
