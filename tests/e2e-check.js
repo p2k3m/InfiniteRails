@@ -816,11 +816,19 @@ async function waitForLeaderboard(page) {
 }
 
 async function validateScoreHud(page, { requireDimensionCount = false } = {}) {
-  const scoreHud = await page.evaluate(() => ({
-    total: Number.parseInt(document.querySelector('#scoreTotal')?.textContent ?? '0', 10),
-    recipes: Number.parseInt(document.querySelector('#scoreRecipes')?.textContent ?? '0', 10),
-    dimensions: Number.parseInt(document.querySelector('#scoreDimensions')?.textContent ?? '0', 10),
-  }));
+  const scoreHud = await page.evaluate(() => {
+    const extractNumber = (selector) => {
+      const text = document.querySelector(selector)?.textContent ?? '';
+      const match = text.match(/-?\d[\d,]*/);
+      if (!match) return NaN;
+      return Number.parseInt(match[0].replace(/,/g, ''), 10);
+    };
+    return {
+      total: extractNumber('#scoreTotal'),
+      recipes: extractNumber('#scoreRecipes'),
+      dimensions: extractNumber('#scoreDimensions'),
+    };
+  });
   if (!Number.isFinite(scoreHud.total) || scoreHud.total < 0) {
     throw new Error('Score HUD did not initialise with a finite total.');
   }
