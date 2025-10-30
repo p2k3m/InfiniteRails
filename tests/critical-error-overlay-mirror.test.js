@@ -17,8 +17,10 @@ if (blockStart === -1 || blockEnd === -1 || blockEnd <= blockStart) {
 const diagnosticsSource = scriptSource.slice(blockStart, blockEnd);
 
 function instantiateDiagnosticsHarness() {
+  const presentOverlay = vi.fn();
   const bootstrapOverlay = {
     logEvent: vi.fn(),
+    present: presentOverlay,
   };
   const scope = {
     console: { debug: vi.fn(), warn: vi.fn() },
@@ -26,8 +28,9 @@ function instantiateDiagnosticsHarness() {
     bootstrapOverlay,
     diagnosticsEndpoint: null,
   };
-  const presentOverlay = vi.fn();
   const centralLogStore = { record: vi.fn() };
+
+  scope.presentCriticalErrorOverlay = presentOverlay;
 
   const factory = new Function(
     'scope',
@@ -38,7 +41,7 @@ function instantiateDiagnosticsHarness() {
       'const bootstrapOverlay = scope.bootstrapOverlay;' +
       'const diagnosticsEndpoint = scope.diagnosticsEndpoint ?? null;' +
       'const centralLogStore = centralLogStoreArg;' +
-      'const presentCriticalErrorOverlay = presentOverlay;' +
+      'const ensureRendererHelpers = () => ({ getScope: () => scope, getDocument: () => scope.document });' +
       diagnosticsSource +
       '\nreturn { logDiagnosticsEvent, logThroughDiagnostics };',
   );

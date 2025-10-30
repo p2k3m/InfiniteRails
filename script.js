@@ -1684,7 +1684,10 @@ function setRendererModeIndicator(mode) {
   if (!doc) {
     return;
   }
-  const targetMode = mode === 'simple' ? 'simple' : 'advanced';
+  const targetMode =
+    mode === 'simple' || mode === 'briefing'
+      ? mode
+      : 'advanced';
   const root = doc.documentElement ?? null;
   const body = doc.body ?? null;
   if (root?.setAttribute) {
