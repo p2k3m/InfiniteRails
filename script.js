@@ -26,6 +26,553 @@ function cloneDeep(value) {
 const DEFAULT_SCOREBOARD_MESSAGE =
   'Google Sign-In unavailable — configure APP_CONFIG.googleClientId to enable SSO.';
 
+const ASSET_VERSION = 1;
+
+function applyAssetVersionTag(url) {
+  if (typeof url !== 'string' || !url) {
+    return url;
+  }
+  if (url.includes('assetVersion=')) {
+    return url;
+  }
+  const [prefix, hashSuffix = ''] = url.split('#', 2);
+  const hash = hashSuffix ? `#${hashSuffix}` : '';
+  const separator = prefix.includes('?') ? '&' : '?';
+  const versionValue = Number.isFinite(ASSET_VERSION) && ASSET_VERSION > 0 ? ASSET_VERSION : 1;
+  return `${prefix}${separator}assetVersion=${versionValue}${hash}`;
+}
+
+function monitorSignedAssetUrl(rawBaseUrl, resolvedUrl, relativePath) {
+  const scope =
+    typeof globalScope !== 'undefined'
+      ? globalScope
+      : typeof window !== 'undefined'
+        ? window
+        : typeof globalThis !== 'undefined'
+          ? globalThis
+          : undefined;
+  if (!scope) {
+    return;
+  }
+  const references = [];
+  if (typeof rawBaseUrl === 'string' && rawBaseUrl) {
+    references.push(rawBaseUrl);
+  }
+  if (typeof resolvedUrl === 'string' && resolvedUrl) {
+    references.push(resolvedUrl);
+  }
+  if (references.length === 0) {
+    return;
+  }
+
+  if (!monitorSignedAssetUrl.__seen || !(monitorSignedAssetUrl.__seen instanceof Set)) {
+    monitorSignedAssetUrl.__seen = new Set();
+  }
+  const seen = monitorSignedAssetUrl.__seen;
+
+  let bestExpiry = null;
+  for (const reference of references) {
+    let parsed;
+    try {
+      parsed = new URL(reference, scope?.location?.href ?? undefined);
+    } catch (error) {
+      continue;
+    }
+    const key = `${parsed.origin}${parsed.pathname}?${parsed.searchParams.get('Expires') ?? parsed.search}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    const rawExpires = parsed.searchParams.get('Expires');
+    if (rawExpires) {
+      let expiresValue = Number(rawExpires);
+      if (Number.isFinite(expiresValue) && expiresValue > 0) {
+        if (expiresValue < 10_000_000_000) {
+          expiresValue *= 1000;
+        }
+        bestExpiry = Math.max(bestExpiry ?? 0, expiresValue);
+      }
+    }
+    seen.add(key);
+  }
+
+  if (!Number.isFinite(bestExpiry)) {
+    return;
+  }
+
+  const now = Date.now();
+  const remaining = bestExpiry - now;
+  const severity = remaining <= 0 ? 'expired' : remaining <= 24 * 60 * 60 * 1000 ? 'warning' : 'info';
+  const remainingMs = Math.max(0, remaining);
+
+  const detail = {
+    severity,
+    millisecondsUntilExpiry: remainingMs,
+    assetBaseUrl: typeof rawBaseUrl === 'string' ? rawBaseUrl : null,
+    candidateUrl: typeof resolvedUrl === 'string' ? resolvedUrl : null,
+    relativePath: typeof relativePath === 'string' ? relativePath : null,
+  };
+
+  if (severity === 'warning' || severity === 'expired') {
+    try {
+      scope.console?.error?.(
+        'Signed asset URL expires soon; rotate credentials or refresh APP_CONFIG.assetBaseUrl to avoid CDN outages.',
+        detail,
+      );
+    } catch (error) {
+      // ignore console failures in synthetic environments
+    }
+
+    const documentRef = scope.document ?? (typeof document !== 'undefined' ? document : null);
+    if (documentRef && typeof documentRef.dispatchEvent === 'function') {
+      try {
+        const event = { type: 'infinite-rails:signed-url-expiry', detail };
+        documentRef.dispatchEvent(event);
+      } catch (error) {
+        // ignore dispatch failures
+      }
+    }
+  }
+}
+
+function createAssetUrlCandidates(relativePath, options = {}) {
+  if (typeof relativePath !== 'string' || !relativePath) {
+    return [];
+  }
+  const outerScope = typeof globalScope !== 'undefined' ? globalScope : undefined;
+  const scope =
+    (options && typeof options.globalScope === 'object' && options.globalScope) ||
+    (outerScope && typeof outerScope === 'object' ? outerScope : null) ||
+    (typeof window !== 'undefined' ? window : typeof globalThis !== 'undefined' ? globalThis : undefined);
+  const outerDocument = typeof documentRef !== 'undefined' ? documentRef : undefined;
+  const docRef =
+    options.documentRef !== undefined
+      ? options.documentRef
+      : outerDocument !== undefined
+        ? outerDocument
+        : scope?.document ?? (typeof document !== 'undefined' ? document : null);
+  const candidates = [];
+  const seen = new Set();
+
+  const assetVersion =
+    typeof ASSET_VERSION === 'number' && Number.isFinite(ASSET_VERSION) && ASSET_VERSION > 0 ? ASSET_VERSION : 1;
+  const applyVersion =
+    typeof applyAssetVersionTag === 'function'
+      ? (value) => applyAssetVersionTag(value)
+      : (value) => {
+          if (typeof value !== 'string' || !value) {
+            return value;
+          }
+          if (value.includes('assetVersion=')) {
+            return value;
+          }
+          const [prefix, hashSuffix = ''] = value.split('#', 2);
+          const hash = hashSuffix ? `#${hashSuffix}` : '';
+          const separator = prefix.includes('?') ? '&' : '?';
+          return `${prefix}${separator}assetVersion=${assetVersion}${hash}`;
+        };
+
+  const monitorFn = typeof monitorSignedAssetUrl === 'function' ? monitorSignedAssetUrl : null;
+
+  const pushCandidate = (value, monitorBase) => {
+    if (typeof value !== 'string' || !value) {
+      return;
+    }
+    const versioned = applyVersion(value);
+    if (seen.has(versioned)) {
+      return;
+    }
+    seen.add(versioned);
+    candidates.push(versioned);
+    if (monitorFn && typeof monitorBase === 'string') {
+      try {
+        monitorFn(monitorBase, value, relativePath);
+      } catch (error) {
+        scope?.console?.warn?.('Signed asset monitor failed.', error);
+      }
+    }
+  };
+
+  const preloadedSelector = options.preloadedSelector;
+  if (preloadedSelector && docRef?.querySelector) {
+    try {
+      const element = docRef.querySelector(preloadedSelector);
+      const src = typeof element?.src === 'string' ? element.src : null;
+      if (src) {
+        pushCandidate(src, src);
+        if (candidates.length > 0) {
+          return candidates;
+        }
+      }
+    } catch (error) {
+      scope?.console?.warn?.('Failed to resolve preloaded asset candidate.', error);
+    }
+  }
+
+  const rawBase = scope?.APP_CONFIG?.assetBaseUrl;
+  if (typeof rawBase === 'string' && rawBase.trim()) {
+    try {
+      const parsedBase = new URL(rawBase.trim(), scope?.location?.href ?? undefined);
+      if (!parsedBase.pathname.endsWith('/')) {
+        parsedBase.pathname = `${parsedBase.pathname}/`;
+      }
+      const resolved = new URL(relativePath, parsedBase.href).href;
+      pushCandidate(resolved, rawBase.trim());
+      if (candidates.length > 0) {
+        return candidates;
+      }
+    } catch (error) {
+      scope?.console?.warn?.('Failed to resolve asset URL using configured assetBaseUrl.', error);
+    }
+  }
+
+  const documentScript = (() => {
+    if (!docRef) {
+      return null;
+    }
+    if (docRef.currentScript && typeof docRef.currentScript.src === 'string') {
+      return docRef.currentScript;
+    }
+    if (typeof docRef.getElementsByTagName === 'function') {
+      const scripts = Array.from(docRef.getElementsByTagName('script'));
+      return scripts.find((element) => typeof element?.src === 'string' && element.src);
+    }
+    return null;
+  })();
+
+  if (documentScript?.src) {
+    try {
+      const scriptUrl = new URL(documentScript.src, scope?.location?.href ?? undefined);
+      const scriptDir = scriptUrl.href.replace(/[^/]*$/, '');
+      const fromDir = new URL(relativePath, scriptDir).href;
+      pushCandidate(fromDir, documentScript.src);
+      const fromOrigin = new URL(relativePath, `${scriptUrl.origin}/`).href;
+      pushCandidate(fromOrigin, documentScript.src);
+    } catch (error) {
+      scope?.console?.warn?.('Failed to derive asset URL from bootstrap script.', error);
+    }
+  }
+
+  if (docRef?.baseURI) {
+    try {
+      const fromBase = new URL(relativePath, docRef.baseURI).href;
+      pushCandidate(fromBase, docRef.baseURI);
+    } catch (error) {
+      scope?.console?.warn?.('Failed to derive asset URL from document base URI.', error);
+    }
+  }
+
+  if (scope?.location?.origin) {
+    try {
+      const fromOrigin = new URL(relativePath, `${scope.location.origin}/`).href;
+      const baseReference = typeof scope.location.href === 'string' ? scope.location.href : scope.location.origin;
+      pushCandidate(fromOrigin, baseReference);
+    } catch (error) {
+      // ignore origin fallback failures
+    }
+  }
+
+  if (/^https?:\/\//i.test(relativePath) || relativePath.startsWith('//')) {
+    pushCandidate(relativePath);
+  }
+
+  if (candidates.length === 0) {
+    pushCandidate(relativePath);
+  }
+
+  return candidates;
+}
+
+function loadScript(url, attributes = {}) {
+  const documentRef = typeof document !== 'undefined' ? document : null;
+  const scope =
+    typeof globalScope !== 'undefined'
+      ? globalScope
+      : typeof window !== 'undefined'
+        ? window
+        : typeof globalThis !== 'undefined'
+          ? globalThis
+          : undefined;
+  if (!documentRef || typeof documentRef.createElement !== 'function') {
+    return Promise.reject(new Error('Document context unavailable; cannot load script.'));
+  }
+
+  const resolveUrl = (value) => {
+    if (typeof value !== 'string' || !value) {
+      return value;
+    }
+    try {
+      return new URL(value, documentRef.baseURI || scope?.location?.href || undefined).toString();
+    } catch (error) {
+      return value;
+    }
+  };
+
+  const targetUrl = resolveUrl(url);
+
+  const findExistingScript = () => {
+    if (typeof documentRef.querySelectorAll !== 'function') {
+      return null;
+    }
+    const scripts = Array.from(documentRef.querySelectorAll('script'));
+    return scripts.find((element) => {
+      const attributeSrc = element.getAttribute ? element.getAttribute('src') : null;
+      if (attributeSrc && resolveUrl(attributeSrc) === targetUrl) {
+        return true;
+      }
+      if (typeof element.src === 'string' && resolveUrl(element.src) === targetUrl) {
+        return true;
+      }
+      return false;
+    });
+  };
+
+  const createScriptElement = () => {
+    const script = documentRef.createElement('script');
+    script.async = true;
+    script.src = targetUrl;
+    if (attributes && typeof attributes === 'object') {
+      Object.entries(attributes).forEach(([key, value]) => {
+        if (value == null) {
+          return;
+        }
+        try {
+          script.setAttribute(key, String(value));
+        } catch (error) {
+          // ignore attribute failures
+        }
+      });
+    }
+    return script;
+  };
+
+  return new Promise((resolve, reject) => {
+    const existingScript = findExistingScript();
+    const attachListeners = (script) => {
+      const handleLoad = () => {
+        try {
+          script.setAttribute?.('data-load-script-loaded', 'true');
+          script.removeAttribute?.('data-load-script-error');
+        } catch (error) {
+          // ignore attribute errors
+        }
+        resolve(script);
+      };
+      const handleError = (event) => {
+        try {
+          script.setAttribute?.('data-load-script-error', 'true');
+          script.removeAttribute?.('data-load-script-loaded');
+        } catch (error) {
+          // ignore attribute errors
+        }
+        const errorMessage = `Unable to load script from ${targetUrl}.`;
+        reject(event?.error instanceof Error ? event.error : new Error(errorMessage));
+      };
+      if (typeof script.addEventListener === 'function') {
+        script.addEventListener('load', handleLoad, { once: true });
+        script.addEventListener('error', handleError, { once: true });
+      } else {
+        script.onload = handleLoad;
+        script.onerror = handleError;
+      }
+    };
+
+    if (existingScript && existingScript.getAttribute?.('data-load-script-error') !== 'true') {
+      attachListeners(existingScript);
+      if (existingScript.readyState === 'complete' || existingScript.getAttribute?.('data-load-script-loaded') === 'true') {
+        resolve(existingScript);
+      }
+      return;
+    }
+
+    if (existingScript?.remove) {
+      try {
+        existingScript.remove();
+      } catch (error) {
+        // ignore removal errors
+      }
+    }
+
+    const scriptElement = createScriptElement();
+    attachListeners(scriptElement);
+    const parent =
+      documentRef.head ||
+      documentRef.body ||
+      (documentRef.documentElement && typeof documentRef.documentElement.appendChild === 'function'
+        ? documentRef.documentElement
+        : null);
+    if (parent && typeof parent.appendChild === 'function') {
+      parent.appendChild(scriptElement);
+    } else if (typeof documentRef.appendChild === 'function') {
+      documentRef.appendChild(scriptElement);
+    }
+  });
+}
+
+const THREE_SCRIPT_URL = applyAssetVersionTag(
+  'vendor/three.min.js?v=030c75d4e909.ab27faa9d2d6',
+);
+const GLTF_LOADER_SCRIPT_URL = applyAssetVersionTag(
+  'vendor/GLTFLoader.js?v=0e92b0589a2a.ab27faa9d2d6',
+);
+
+let threeLoaderPromise = null;
+
+function ensureThree() {
+  const scope =
+    typeof globalScope !== 'undefined'
+      ? globalScope
+      : typeof window !== 'undefined'
+        ? window
+        : typeof globalThis !== 'undefined'
+          ? globalThis
+          : undefined;
+  if (!scope) {
+    return Promise.reject(new Error('Three.js bootstrap requires a global scope.'));
+  }
+
+  const reportFailure = (code, message, context = {}) => {
+    const error = new Error(message);
+    error.code = code;
+    if (typeof reportThreeLoadFailure === 'function') {
+      try {
+        reportThreeLoadFailure(error, { reason: code, ...context });
+      } catch (reportError) {
+        scope.console?.warn?.('reportThreeLoadFailure callback failed.', reportError);
+      }
+    }
+    return error;
+  };
+
+  const resolveExistingThree = () => {
+    const globalThree = scope.THREE_GLOBAL ?? null;
+    if (globalThree && scope.THREE && scope.THREE !== globalThree) {
+      scope.THREE = globalThree;
+      throw reportFailure(
+        'duplicate-three-global',
+        'Multiple Three.js contexts detected; refusing to bootstrap duplicate instance.',
+        { detail: 'duplicate-three-global' },
+      );
+    }
+    if (globalThree) {
+      scope.THREE = globalThree;
+      return globalThree;
+    }
+    if (scope.THREE) {
+      throw reportFailure(
+        'legacy-three-global',
+        'Legacy Three.js global detected; refusing unsupported context.',
+        { detail: 'legacy-three-global' },
+      );
+    }
+    return null;
+  };
+
+  try {
+    const existing = resolveExistingThree();
+    if (existing) {
+      return Promise.resolve(existing);
+    }
+  } catch (error) {
+    return Promise.reject(error);
+  }
+
+  if (!threeLoaderPromise) {
+    threeLoaderPromise = loadScript(THREE_SCRIPT_URL, { 'data-three-bootstrap': 'true' })
+      .then(() => {
+        const globalThree = scope.THREE_GLOBAL ?? scope.THREE ?? null;
+        if (!globalThree) {
+          throw reportFailure('missing-three-global', 'Unable to locate global THREE after script load.');
+        }
+        scope.THREE_GLOBAL = globalThree;
+        scope.THREE = globalThree;
+        return globalThree;
+      })
+      .catch((error) => {
+        const message = `Unable to load Three.js from ${THREE_SCRIPT_URL}.`;
+        const failure = reportFailure('load-failed', message, {
+          url: THREE_SCRIPT_URL,
+          error: error?.message ?? String(error ?? 'unknown-error'),
+        });
+        throw failure;
+      });
+  }
+
+  return threeLoaderPromise.catch((error) => {
+    threeLoaderPromise = null;
+    throw error;
+  });
+}
+
+let gltfLoaderPromise = null;
+
+function ensureGLTFLoader() {
+  return ensureThree()
+    .then((THREE) => {
+      if (THREE && typeof THREE.GLTFLoader === 'function') {
+        return THREE.GLTFLoader;
+      }
+      if (!gltfLoaderPromise) {
+        gltfLoaderPromise = loadScript(GLTF_LOADER_SCRIPT_URL, { 'data-three-gltf': 'true' })
+          .then(() => {
+            const scope =
+              typeof globalScope !== 'undefined'
+                ? globalScope
+                : typeof window !== 'undefined'
+                  ? window
+                  : typeof globalThis !== 'undefined'
+                    ? globalThis
+                    : undefined;
+            const loader = scope?.THREE_GLOBAL?.GLTFLoader ?? scope?.THREE?.GLTFLoader ?? null;
+            if (!loader) {
+              const error = new Error('GLTFLoader failed to register a loader constructor.');
+              error.code = 'missing-gltf-loader';
+              throw error;
+            }
+            return loader;
+          })
+          .catch((error) => {
+            gltfLoaderPromise = null;
+            throw error;
+          });
+      }
+      return gltfLoaderPromise;
+    })
+    .catch((error) => {
+      gltfLoaderPromise = null;
+      throw error;
+    });
+}
+
+(function bootstrapAdvancedRenderer(globalScope) {
+  const scope =
+    typeof globalScope !== 'undefined'
+      ? globalScope
+      : typeof window !== 'undefined'
+        ? window
+        : typeof globalThis !== 'undefined'
+          ? globalThis
+          : null;
+  if (!scope || scope.__INFINITE_RAILS_TEST_SKIP_BOOTSTRAP__) {
+    return;
+  }
+  if (typeof ensureThree !== 'function') {
+    return;
+  }
+  ensureThree()
+    .then(() => {
+      if (typeof scope.bootstrap === 'function') {
+        try {
+          scope.bootstrap({ mode: 'advanced' });
+        } catch (error) {
+          scope.console?.error?.('Failed to bootstrap advanced renderer.', error);
+        }
+      }
+    })
+    .catch((error) => {
+      scope.console?.warn?.('Advanced renderer bootstrap aborted — Three.js unavailable.', error);
+    });
+})(typeof window !== 'undefined' ? window : undefined);
+
 (function setupInputModeDetection(globalScope) {
   const scope =
     typeof globalScope !== 'undefined'
@@ -171,6 +718,255 @@ const DEFAULT_SCOREBOARD_MESSAGE =
     state.userOverride = typeof mode === 'string' ? mode : null;
     refreshMode();
   };
+  scope.__INFINITE_RAILS_TEST_HOOKS__ = hooks;
+})(typeof window !== 'undefined' ? window : undefined);
+
+(function setupSurvivalWatchdog(globalScope) {
+  const scope =
+    typeof globalScope !== 'undefined'
+      ? globalScope
+      : typeof window !== 'undefined'
+        ? window
+        : typeof globalThis !== 'undefined'
+          ? globalThis
+          : null;
+  if (!scope) {
+    return;
+  }
+
+  const DEFAULT_VITALS = { maxHealth: 20, maxHunger: 20, maxBreath: 10 };
+  const WATCHED_STAGES = new Set(['simulation', 'game-logic', 'window.error']);
+
+  const ensureLocalState = () => {
+    const container =
+      scope.__INFINITE_RAILS_LOCAL_STATE__ ||
+      (scope.__INFINITE_RAILS_LOCAL_STATE__ = {
+        player: {
+          maxHealth: DEFAULT_VITALS.maxHealth,
+          health: DEFAULT_VITALS.maxHealth,
+          maxHunger: DEFAULT_VITALS.maxHunger,
+          hunger: DEFAULT_VITALS.maxHunger,
+          hungerPercent: 100,
+          maxBreath: DEFAULT_VITALS.maxBreath,
+          breath: DEFAULT_VITALS.maxBreath,
+          breathPercent: 100,
+        },
+      });
+    if (!container.player || typeof container.player !== 'object') {
+      container.player = { ...DEFAULT_VITALS, health: DEFAULT_VITALS.maxHealth, hunger: DEFAULT_VITALS.maxHunger, hungerPercent: 100, breath: DEFAULT_VITALS.maxBreath, breathPercent: 100 };
+    }
+    return container;
+  };
+
+  ensureLocalState();
+
+  const survivalState =
+    scope.__INFINITE_RAILS_SURVIVAL_WATCHDOG__ ||
+    (scope.__INFINITE_RAILS_SURVIVAL_WATCHDOG__ = {
+      experience: null,
+      lastTrigger: null,
+    });
+
+  const normaliseDetail = (detail = {}) => {
+    const stageRaw = typeof detail.stage === 'string' ? detail.stage.trim() : '';
+    const reasonRaw = typeof detail.reason === 'string' ? detail.reason.trim() : '';
+    const messageRaw = typeof detail.message === 'string' ? detail.message.trim() : '';
+    const stageKey = stageRaw
+      ? stageRaw
+          .trim()
+          .replace(/\s+/g, '-')
+          .replace(/_+/g, '-')
+          .toLowerCase()
+      : 'simulation';
+    return {
+      stageLabel: stageRaw || 'simulation',
+      stageKey,
+      reasonLabel: reasonRaw || 'unknown',
+      reasonKey: reasonRaw.toLowerCase() || 'unknown',
+      message: messageRaw,
+    };
+  };
+
+  const resolveMaxValue = (value, fallback) => {
+    const numeric = Number(value);
+    if (Number.isFinite(numeric) && numeric > 0) {
+      return numeric;
+    }
+    return fallback;
+  };
+
+  const applyExperienceVitals = (experience, vitals) => {
+    if (!experience || typeof experience !== 'object') {
+      return false;
+    }
+    let applied = false;
+    try {
+      if ('maxHealth' in experience) {
+        experience.maxHealth = vitals.maxHealth;
+      }
+      if ('health' in experience || typeof experience.health === 'number') {
+        experience.health = vitals.maxHealth;
+      }
+      if ('maxHunger' in experience) {
+        experience.maxHunger = vitals.maxHunger;
+      }
+      if ('hunger' in experience || typeof experience.hunger === 'number') {
+        experience.hunger = vitals.maxHunger;
+      }
+      if ('hungerPercent' in experience || typeof experience.hungerPercent === 'number') {
+        experience.hungerPercent = 100;
+      }
+      if ('playerBreathCapacity' in experience) {
+        experience.playerBreathCapacity = vitals.maxBreath;
+      }
+      if ('playerBreath' in experience || typeof experience.playerBreath === 'number') {
+        experience.playerBreath = vitals.maxBreath;
+      }
+      if ('playerBreathPercent' in experience || typeof experience.playerBreathPercent === 'number') {
+        experience.playerBreathPercent = 100;
+      }
+      applied = true;
+    } catch (error) {
+      scope.console?.warn?.('Failed to apply survival watchdog vitals to experience.', error);
+    }
+    return applied;
+  };
+
+  const updateLocalState = (vitals) => {
+    const container = ensureLocalState();
+    container.player = {
+      maxHealth: vitals.maxHealth,
+      health: vitals.maxHealth,
+      maxHunger: vitals.maxHunger,
+      hunger: vitals.maxHunger,
+      hungerPercent: 100,
+      maxBreath: vitals.maxBreath,
+      breath: vitals.maxBreath,
+      breathPercent: 100,
+    };
+    if (!scope.__INFINITE_RAILS_STATE__ || typeof scope.__INFINITE_RAILS_STATE__ !== 'object') {
+      scope.__INFINITE_RAILS_STATE__ = {
+        player: { ...container.player },
+        updatedAt: Date.now(),
+      };
+    }
+    return container.player;
+  };
+
+  const triggerSurvivalWatchdog = (rawDetail = {}, options = {}) => {
+    const detail = normaliseDetail(rawDetail);
+    if (!WATCHED_STAGES.has(detail.stageKey)) {
+      return false;
+    }
+
+    const experience = survivalState.experience;
+    const localState = ensureLocalState();
+
+    const maxHealth = resolveMaxValue(experience?.maxHealth ?? localState.player?.maxHealth, DEFAULT_VITALS.maxHealth);
+    const maxHunger = resolveMaxValue(experience?.maxHunger ?? localState.player?.maxHunger, DEFAULT_VITALS.maxHunger);
+    const maxBreath = resolveMaxValue(
+      experience?.playerBreathCapacity ?? localState.player?.maxBreath,
+      DEFAULT_VITALS.maxBreath,
+    );
+
+    const vitals = { maxHealth, maxHunger, maxBreath };
+    const experienceUpdated = applyExperienceVitals(experience, vitals);
+    const playerState = updateLocalState(vitals);
+
+    const eventPayload = {
+      stage: detail.stageLabel,
+      reason: detail.reasonLabel,
+      message: detail.message || null,
+      experienceUpdated,
+    };
+
+    try {
+      experience?.updateHud?.({ reason: 'survival-watchdog', stage: detail.stageLabel });
+    } catch (error) {
+      scope.console?.warn?.('Survival watchdog HUD update failed.', error);
+    }
+
+    try {
+      experience?.publishStateSnapshot?.('survival-watchdog');
+    } catch (error) {
+      scope.console?.warn?.('Survival watchdog snapshot publish failed.', error);
+    }
+
+    try {
+      experience?.emitGameEvent?.('survival-watchdog-reset', eventPayload);
+    } catch (error) {
+      scope.console?.warn?.('Survival watchdog event emission failed.', error);
+    }
+
+    try {
+      scope.console?.warn?.('Survival watchdog reset player vitals after crash.', {
+        stage: detail.stageLabel,
+        reason: detail.reasonLabel,
+        message: detail.message || null,
+      });
+    } catch (error) {
+      // ignore logging failures
+    }
+
+    survivalState.lastTrigger = { ...eventPayload, playerState, timestamp: Date.now(), sync: options?.sync === true };
+    return true;
+  };
+
+  const unwrapExperienceHooks = () => {
+    const experience = survivalState.experience;
+    if (!experience || typeof experience !== 'object') {
+      return;
+    }
+    const original = experience.presentRendererFailure?.__survivalWatchdogOriginal;
+    if (original) {
+      experience.presentRendererFailure = original;
+    }
+  };
+
+  const setActiveExperienceInstance = (experience) => {
+    unwrapExperienceHooks();
+    survivalState.experience = experience || null;
+    if (!experience || typeof experience !== 'object') {
+      return;
+    }
+    const handler = experience.presentRendererFailure;
+    if (typeof handler === 'function' && !handler.__survivalWatchdogOriginal) {
+      const wrapped = function wrappedPresentRendererFailure(reason, detail) {
+        let result;
+        try {
+          result = handler.apply(this, arguments);
+        } finally {
+          const stageDetail = typeof detail === 'object' && detail ? detail : {};
+          triggerSurvivalWatchdog(stageDetail, { sync: true });
+        }
+        return result;
+      };
+      wrapped.__survivalWatchdogOriginal = handler;
+      experience.presentRendererFailure = wrapped;
+    }
+  };
+
+  const resetSurvivalWatchdogState = () => {
+    unwrapExperienceHooks();
+    survivalState.experience = null;
+    survivalState.lastTrigger = null;
+    const container = ensureLocalState();
+    container.player = {
+      maxHealth: DEFAULT_VITALS.maxHealth,
+      health: DEFAULT_VITALS.maxHealth,
+      maxHunger: DEFAULT_VITALS.maxHunger,
+      hunger: DEFAULT_VITALS.maxHunger,
+      hungerPercent: 100,
+      maxBreath: DEFAULT_VITALS.maxBreath,
+      breath: DEFAULT_VITALS.maxBreath,
+      breathPercent: 100,
+    };
+  };
+
+  const hooks = scope.__INFINITE_RAILS_TEST_HOOKS__ ?? {};
+  hooks.setActiveExperienceInstance = setActiveExperienceInstance;
+  hooks.triggerSurvivalWatchdog = triggerSurvivalWatchdog;
+  hooks.resetSurvivalWatchdogState = resetSurvivalWatchdogState;
   scope.__INFINITE_RAILS_TEST_HOOKS__ = hooks;
 })(typeof window !== 'undefined' ? window : undefined);
 
@@ -4708,6 +5504,9 @@ function queueBootstrapFallbackNotice(key, message) {
       return;
     }
     if (element.dataset && element.dataset.offline === 'true') {
+      if (element.dataset.sessionExpired === 'true') {
+        element.textContent = 'Session expired — please sign in again.';
+      }
       return;
     }
     element.textContent = DEFAULT_SCOREBOARD_MESSAGE;
@@ -4934,8 +5733,15 @@ function queueBootstrapFallbackNotice(key, message) {
     identityState.scoreboardOffline = true;
     setScoreboardOffline(scope, message, { datasetKey: 'sessionExpired' });
     setScoreSyncWarning(scope, 'Sign-in required to resume live features.', true);
+    identityState.liveFeaturesSuspended = true;
+    identityState.liveFeaturesHoldDetail = {
+      kind: 'identity-session',
+      reason,
+      message,
+    };
     sessionState.status = 'expired';
     resetSessionState();
+    sessionState.status = 'expired';
     persistIdentitySnapshot();
   }
 
@@ -4952,6 +5758,10 @@ function queueBootstrapFallbackNotice(key, message) {
   }
 
   ensureDefaultScoreboardMessage();
+
+  if (sessionState.status === 'expired') {
+    setScoreboardOffline(scope, 'Session expired — please sign in again.', { datasetKey: 'sessionExpired' });
+  }
 
   function base64UrlDecode(segment) {
     if (typeof segment !== 'string') {
@@ -5031,12 +5841,22 @@ function queueBootstrapFallbackNotice(key, message) {
     sessionState.issuedAt = issuedAt;
     sessionState.lastRefreshedAt = now;
     sessionState.status = 'active';
+    if (identityState.liveFeaturesHoldDetail?.kind === 'identity-session') {
+      identityState.liveFeaturesHoldDetail = null;
+      identityState.liveFeaturesSuspended = false;
+    }
     persistSessionSnapshot();
     scheduleAutoRefresh();
     restoreScoreboardDefaults();
   }
 
-  const googleAccounts = scope.google?.accounts?.id ?? null;
+  const GOOGLE_ACCOUNTS_ID_PATH = 'google.accounts.id';
+  const googleAccounts =
+    scope.google?.accounts?.id ??
+    (typeof scope[GOOGLE_ACCOUNTS_ID_PATH] === 'object' ||
+    typeof scope[GOOGLE_ACCOUNTS_ID_PATH] === 'function'
+      ? scope[GOOGLE_ACCOUNTS_ID_PATH]
+      : null);
   const googleClientIdRaw = typeof scope.APP_CONFIG?.googleClientId === 'string' ? scope.APP_CONFIG.googleClientId : null;
   const googleClientId = googleClientIdRaw && googleClientIdRaw.trim() ? googleClientIdRaw.trim() : null;
 
@@ -5258,10 +6078,20 @@ function queueBootstrapFallbackNotice(key, message) {
     if (fetchPromise) {
       return fetchPromise.then(() => snapshotFeatureState());
     }
-    const endpointRaw =
-      typeof appConfig.featureFlagsEndpoint === 'string' && appConfig.featureFlagsEndpoint.trim()
-        ? appConfig.featureFlagsEndpoint.trim()
-        : '';
+    const endpointRaw = (() => {
+      const primary =
+        typeof appConfig.featureFlagsEndpoint === 'string' && appConfig.featureFlagsEndpoint.trim()
+          ? appConfig.featureFlagsEndpoint.trim()
+          : '';
+      if (primary) {
+        return primary;
+      }
+      const legacy =
+        typeof appConfig.featureConfigUrl === 'string' && appConfig.featureConfigUrl.trim()
+          ? appConfig.featureConfigUrl.trim()
+          : '';
+      return legacy;
+    })();
     if (!endpointRaw && options.initial) {
       applyRemoteConfig({});
       return Promise.resolve(snapshotFeatureState());
@@ -6924,6 +7754,26 @@ function markBootPhaseError(phase, message) {
     backendState.detail = { reason: 'ok', message: 'Backend validation succeeded.' };
     identityState.apiBaseUrl = apiBaseUrl;
     setIdentityOnline();
+    const scoreboardEndpoint =
+      typeof apiBaseUrl === 'string'
+        ? `${apiBaseUrl.replace(/\/$/, '')}/scores`
+        : identityState.endpoints?.scores ?? '/scores';
+    const usersEndpoint =
+      typeof apiBaseUrl === 'string'
+        ? `${apiBaseUrl.replace(/\/$/, '')}/users`
+        : identityState.endpoints?.users ?? '/users';
+    const eventsEndpoint =
+      typeof apiBaseUrl === 'string'
+        ? `${apiBaseUrl.replace(/\/$/, '')}/events`
+        : identityState.endpoints?.events ?? '/events';
+    const backendDetail = identityState.backendValidation?.detail;
+    if (backendDetail && typeof backendDetail === 'object') {
+      backendDetail.endpoints = {
+        scores: scoreboardEndpoint,
+        users: usersEndpoint,
+        events: eventsEndpoint,
+      };
+    }
     clearScoreboardOffline(globalRef);
     return true;
   }
@@ -7172,6 +8022,7 @@ function markBootPhaseError(phase, message) {
   hooks.getBackendLiveCheckState = getBackendLiveCheckState;
   hooks.getIdentityState = () => identityState;
   hooks.getHeartbeatState = () => cloneDeep(heartbeatState);
+  hooks.getScoreboardStatusText = () => getBootstrapUi(globalRef)?.scoreboardStatus?.textContent ?? null;
   hooks.triggerHeartbeat = () => {
     if (!heartbeatState.endpoint || !heartbeatState.online) {
       return false;
