@@ -53,6 +53,29 @@ const config = {
 };
 
 config.githubHost = new URL(config.githubServerUrl).host;
+config.originalTargetBranch = config.targetBranch;
+
+function getAuthenticatedRemoteUrl() {
+  const remoteBase = config.githubServerUrl.endsWith('/') ? config.githubServerUrl : `${config.githubServerUrl}/`;
+  const remote = new URL(`${config.repo}.git`, remoteBase);
+  if (config.githubToken) {
+    remote.username = config.githubToken;
+  }
+  return remote.toString();
+}
+
+async function remoteBranchExists(branch) {
+  if (!branch) {
+    return false;
+  }
+  try {
+    const { stdout } = await runCommand('git', ['ls-remote', '--heads', getAuthenticatedRemoteUrl(), branch], { capture: true });
+    return Boolean(stdout.trim());
+  } catch (error) {
+    console.warn(`Unable to verify remote branch ${branch}: ${error.message}`);
+    return false;
+  }
+}
 
 async function githubRequest(endpoint, { method = 'GET', body, headers = {}, raw = false } = {}) {
   const url = endpoint.startsWith('http') ? endpoint : `${config.githubApiBase.replace(/\/$/, '')}${endpoint}`;
@@ -283,17 +306,31 @@ function runCommand(command, args, options = {}) {
 
 async function applyPatchAndPush(diffText, run, attempt) {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'auto-fix-'));
-  const remoteBase = config.githubServerUrl.endsWith('/')
-    ? config.githubServerUrl
-    : `${config.githubServerUrl}/`;
-  const remote = new URL(`${config.repo}.git`, remoteBase);
-  remote.username = config.githubToken;
-  const authRemote = remote.toString();
+  const authRemote = getAuthenticatedRemoteUrl();
 
   await runCommand('git', ['clone', authRemote, tempDir]);
   await runCommand('git', ['config', 'user.name', config.gitUserName], { cwd: tempDir });
   await runCommand('git', ['config', 'user.email', config.gitUserEmail], { cwd: tempDir });
-  await runCommand('git', ['checkout', config.targetBranch], { cwd: tempDir });
+
+  let targetBranch = config.targetBranch;
+  let branchAvailable = await remoteBranchExists(targetBranch);
+  if (!branchAvailable && config.originalTargetBranch && config.originalTargetBranch !== targetBranch) {
+    console.warn(
+      `Target branch ${targetBranch} not found. Falling back to original target branch ${config.originalTargetBranch}.`
+    );
+    targetBranch = config.originalTargetBranch;
+    branchAvailable = await remoteBranchExists(targetBranch);
+  }
+
+  if (!branchAvailable) {
+    throw new Error(`Target branch ${targetBranch} not found in remote repository.`);
+  }
+
+  if (targetBranch !== config.targetBranch) {
+    config.targetBranch = targetBranch;
+  }
+
+  await runCommand('git', ['checkout', targetBranch], { cwd: tempDir });
 
   const branchName = `${config.branchPrefix}${run.id}-${Date.now()}-attempt-${attempt}`;
   await runCommand('git', ['checkout', '-b', branchName], { cwd: tempDir });
@@ -446,8 +483,15 @@ async function main() {
   if (run.event === 'pull_request') {
     const prBaseBranch = run.pull_requests?.[0]?.base_branch;
     if (prBaseBranch && prBaseBranch !== config.targetBranch) {
-      console.log(`Adjusting target branch from ${config.targetBranch} to PR base ${prBaseBranch}.`);
-      config.targetBranch = prBaseBranch;
+      const branchAvailable = await remoteBranchExists(prBaseBranch);
+      if (branchAvailable) {
+        console.log(`Adjusting target branch from ${config.targetBranch} to PR base ${prBaseBranch}.`);
+        config.targetBranch = prBaseBranch;
+      } else {
+        console.warn(
+          `PR base branch ${prBaseBranch} not found in remote repository. Keeping target branch ${config.targetBranch}.`
+        );
+      }
     }
   }
 
