@@ -166,8 +166,63 @@ function createExperienceForTest(options = {}) {
   });
 
   vi.spyOn(experience, 'buildTerrain').mockImplementation(function () {
-    this.columns.clear();
+    if (!(this.columns instanceof Map)) {
+      this.columns = new Map();
+    } else {
+      this.columns.clear();
+    }
     this.columns.set(spawnColumn, [spawnTop]);
+
+    if (!(this.terrainChunkGroups instanceof Array)) {
+      this.terrainChunkGroups = [];
+    } else {
+      this.terrainChunkGroups.length = 0;
+    }
+    if (!(this.terrainChunkMap instanceof Map)) {
+      this.terrainChunkMap = new Map();
+    } else {
+      this.terrainChunkMap.clear();
+    }
+
+    if (this.terrainGroup instanceof THREE.Group) {
+      for (const child of this.terrainGroup.children.slice()) {
+        this.terrainGroup.remove(child);
+      }
+    }
+
+    const [gridXRaw, gridZRaw] = spawnColumn.split('|');
+    const gridX = Number.parseInt(gridXRaw ?? '', 10) || 0;
+    const gridZ = Number.parseInt(gridZRaw ?? '', 10) || 0;
+    const chunkKey =
+      typeof this.getTerrainChunkKey === 'function'
+        ? this.getTerrainChunkKey(gridX, gridZ)
+        : '0|0';
+    const chunkInfo =
+      typeof this.parseTerrainChunkKey === 'function'
+        ? this.parseTerrainChunkKey(chunkKey)
+        : { chunkX: 0, chunkZ: 0 };
+
+    const chunk = new THREE.Group();
+    chunk.name = `TestTerrainChunk-${chunkInfo.chunkX}-${chunkInfo.chunkZ}`;
+    chunk.visible = true;
+    chunk.userData = {
+      chunkKey,
+      chunkX: chunkInfo.chunkX,
+      chunkZ: chunkInfo.chunkZ,
+      minY: spawnTop.position.y - 0.5,
+      maxY: spawnTop.position.y + 0.5,
+      boundingSphere: new THREE.Sphere(
+        new THREE.Vector3(spawnTop.position.x, spawnTop.position.y, spawnTop.position.z),
+        1,
+      ),
+    };
+    chunk.add(spawnTop);
+
+    this.terrainChunkGroups.push(chunk);
+    this.terrainChunkMap.set(chunkKey, chunk);
+    if (this.terrainGroup instanceof THREE.Group) {
+      this.terrainGroup.add(chunk);
+    }
   });
   vi.spyOn(experience, 'buildRails').mockImplementation(() => {});
   vi.spyOn(experience, 'refreshPortalState').mockImplementation(() => {});
