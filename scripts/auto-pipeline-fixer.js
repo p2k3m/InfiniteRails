@@ -4,6 +4,14 @@ const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
 
+class SkipRunError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'SkipRunError';
+    this.skip = true;
+  }
+}
+
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function ensureEnv() {
@@ -323,7 +331,7 @@ async function applyPatchAndPush(diffText, run, attempt) {
   }
 
   if (!branchAvailable) {
-    throw new Error(`Target branch ${targetBranch} not found in remote repository.`);
+    throw new SkipRunError(`Target branch ${targetBranch} not found in remote repository.`);
   }
 
   if (targetBranch !== config.targetBranch) {
@@ -506,7 +514,22 @@ async function main() {
     const diffText = extractDiff(llmResponse);
     console.log('Received diff from LLM. Applying patch...');
 
-    const { branchName, headSha } = await applyPatchAndPush(diffText, run, attempt);
+    let branchName;
+    let headSha;
+    try {
+      ({ branchName, headSha } = await applyPatchAndPush(diffText, run, attempt));
+    } catch (error) {
+      if (error instanceof SkipRunError || error?.skip) {
+        console.warn(`Skipping workflow run #${run.id}: ${error.message}`);
+        run = await getLatestFailedRun(processedRuns);
+        attempt += 1;
+        if (!run) {
+          console.log('No additional failed runs detected. Exiting.');
+        }
+        continue;
+      }
+      throw error;
+    }
     console.log(`Pushed branch ${branchName} with head SHA ${headSha}`);
 
     const pr = await createPullRequest(run, branchName, attempt, failureContext);
