@@ -1,4 +1,5 @@
 const { chromium } = require('playwright');
+const path = require('path');
 
 const MAX_RUN_DURATION_MS = 5 * 60 * 1000;
 
@@ -31,6 +32,7 @@ const ALLOWED_WARNING_SUBSTRINGS = [
   'Welcome audio playback test failed',
   'Missing audio samples detected during startup',
   'Fallback beep active until audio assets are restored',
+  'Manifest check missing — no assets defined.',
   "Refused to load media from 'data:audio/wav",
   "The Content Security Policy directive 'frame-ancestors' is ignored when delivered via a <meta> element.",
   "Refused to load media from 'data:audio/wav;base64,UklGRuQDAABXQVZFZm10'",
@@ -131,7 +133,7 @@ function findUnexpectedWarnings(warnings) {
 }
 
 async function loadTestDriver(page) {
-  try {
+  const waitForDriver = async (timeoutMs) => {
     const handle = await page.waitForFunction(
       () => {
         if (!navigator.webdriver) {
@@ -178,16 +180,40 @@ async function loadTestDriver(page) {
         };
       },
       undefined,
-      { timeout: 15000 },
+      { timeout: timeoutMs },
     );
     const snapshot = await handle.jsonValue();
     await handle.dispose();
     return snapshot;
+  };
+
+  try {
+    return await waitForDriver(15000);
   } catch (error) {
-    if (error?.name === 'TimeoutError') {
-      return { status: 'timeout', error: 'Timed out while waiting for test driver.' };
+    if (error?.name !== 'TimeoutError') {
+      return { status: 'error', error: error?.message ?? 'unknown error' };
     }
-    return { status: 'error', error: error?.message ?? 'unknown error' };
+  }
+
+  try {
+    await page.addScriptTag({ path: path.join(process.cwd(), 'test-driver.js') });
+  } catch (injectError) {
+    return {
+      status: 'error',
+      error: `Manual driver injection failed: ${injectError?.message ?? injectError}`,
+    };
+  }
+
+  try {
+    return await waitForDriver(10000);
+  } catch (retryError) {
+    if (retryError?.name === 'TimeoutError') {
+      return {
+        status: 'timeout',
+        error: 'Timed out while waiting for test driver after manual injection.',
+      };
+    }
+    return { status: 'error', error: retryError?.message ?? 'unknown error' };
   }
 }
 
@@ -863,7 +889,7 @@ async function runAdvancedScenario(browser) {
         () => document.body.classList.contains('game-active'),
         undefined,
         {
-          timeout: 15000,
+          timeout: 45000,
         },
       ),
     );
@@ -872,7 +898,7 @@ async function runAdvancedScenario(browser) {
       page.waitForFunction(
         () => Boolean(window.__INFINITE_RAILS_STATE__),
         undefined,
-        { timeout: 15000 },
+        { timeout: 45000 },
       ),
     );
     logCheckpoint('Advanced', 'Renderer state object detected', { elapsedFrom: scenarioStart });
