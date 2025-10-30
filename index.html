@@ -1945,6 +1945,33 @@
     <script src="assets/offline-assets.js?v=9be2b637059b.92ea3e84d7dd" defer></script>
     <script src="boot-recovery.js" defer></script>
     <script src="scripts/frame-guard.js?v=74ac3cf18479.92ea3e84d7dd" defer></script>
+    <script>
+      (function () {
+        var navigatorRef = typeof navigator !== 'undefined' ? navigator : null;
+        var isAutomation = false;
+        try {
+          isAutomation = Boolean(navigatorRef && navigatorRef.webdriver);
+        } catch (error) {
+          isAutomation = false;
+        }
+        if (!isAutomation) {
+          return;
+        }
+        try {
+          var script = document.createElement('script');
+          script.src = 'test-driver.js';
+          script.async = false;
+          script.defer = false;
+          script.dataset = script.dataset || {};
+          script.dataset.injected = 'automation';
+          document.head.appendChild(script);
+        } catch (injectionError) {
+          if (typeof console !== 'undefined' && console && typeof console.warn === 'function') {
+            console.warn('[Automation] Failed to inject test driver.', injectionError);
+          }
+        }
+      })();
+    </script>
     <script src="script.js?v=9ec566bfc77a.92ea3e84d7dd" defer></script>
     <div class="caption-layer" id="captionOverlay" role="status" aria-live="assertive" aria-atomic="true" hidden>
       <p class="caption-layer__text" id="captionOverlayText"></p>
