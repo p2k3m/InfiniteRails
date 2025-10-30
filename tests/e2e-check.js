@@ -195,12 +195,56 @@ async function loadTestDriver(page) {
     }
   }
 
+  const driverPath = path.join(process.cwd(), 'test-driver.js');
+  const cspSafeUrl = 'https://d3gj6x3ityfh5o.cloudfront.net/__e2e__/test-driver.js';
+  let fulfillError = null;
+  let fulfilled = false;
+
+  const routeHandler = async (route) => {
+    try {
+      await route.fulfill({
+        path: driverPath,
+        contentType: 'application/javascript',
+      });
+      fulfilled = true;
+    } catch (error) {
+      fulfillError = error;
+      try {
+        await route.fallback();
+      } catch (fallbackError) {
+        // no-op: the original fulfil error is the actionable one.
+      }
+    }
+  };
+
+  await page.route(cspSafeUrl, routeHandler);
+
   try {
-    await page.addScriptTag({ path: path.join(process.cwd(), 'test-driver.js') });
+    await page.addScriptTag({ url: cspSafeUrl });
   } catch (injectError) {
     return {
       status: 'error',
       error: `Manual driver injection failed: ${injectError?.message ?? injectError}`,
+    };
+  } finally {
+    try {
+      await page.unroute(cspSafeUrl, routeHandler);
+    } catch (unrouteError) {
+      console.warn('[E2E][StartButton] Failed to remove test driver route:', unrouteError);
+    }
+  }
+
+  if (fulfillError) {
+    return {
+      status: 'error',
+      error: `Manual driver routing failed: ${fulfillError?.message ?? fulfillError}`,
+    };
+  }
+
+  if (!fulfilled) {
+    return {
+      status: 'error',
+      error: 'Manual driver injection aborted before fulfilment.',
     };
   }
 
