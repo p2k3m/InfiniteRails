@@ -292,6 +292,1221 @@ function setScoreSyncWarning(scope, message, visible) {
   }
 }
 
+var rendererModeScope =
+  (typeof rendererModeScope !== 'undefined' && rendererModeScope)
+    ? rendererModeScope
+    : typeof window !== 'undefined'
+      ? window
+      : typeof globalScope !== 'undefined'
+        ? globalScope
+        : typeof globalThis !== 'undefined'
+          ? globalThis
+          : undefined;
+var rendererModeDocument =
+  (typeof rendererModeDocument !== 'undefined' && rendererModeDocument)
+    ? rendererModeDocument
+    : rendererModeScope?.document ?? (typeof globalScope !== 'undefined' ? globalScope.document ?? null : null);
+var rendererModeAppConfig =
+  (typeof rendererModeAppConfig !== 'undefined' && rendererModeAppConfig)
+    ? rendererModeAppConfig
+    : rendererModeScope?.APP_CONFIG ||
+      (rendererModeScope
+        ? (rendererModeScope.APP_CONFIG = rendererModeScope.APP_CONFIG || {})
+        : typeof globalScope !== 'undefined'
+          ? (globalScope.APP_CONFIG = globalScope.APP_CONFIG || {})
+          : {});
+
+const SIMPLE_RENDERER_NOTICE_MESSAGES = {
+  'webgl-unavailable-simple-mode':
+    'WebGL2 support is unavailable on this device, so the mission briefing view is shown instead of the full 3D renderer.',
+  'mobile-simple-mode':
+    'Advanced renderer is unavailable on mobile devices — loading the simplified sandbox instead.',
+  'query-simple-mode': 'Sandbox renderer requested via mode=simple.',
+  'forced-simple-mode': 'Sandbox renderer forced by configuration.',
+};
+
+function queueBootstrapNotice(scope, key, message) {
+  if (!scope) {
+    return;
+  }
+  const notices = scope.__bootstrapNotices || (scope.__bootstrapNotices = []);
+  const existing = notices.find((entry) => entry?.key === key);
+  const resolvedMessage = typeof message === 'string' && message.trim().length ? message.trim() : SIMPLE_RENDERER_NOTICE_MESSAGES[key];
+  const entry = { key, message: resolvedMessage ?? '' };
+  if (existing) {
+    existing.message = entry.message;
+    return;
+  }
+  notices.push(entry);
+}
+
+function setRendererModeIndicator(mode) {
+  const helpers = ensureRendererHelpers();
+  const doc = helpers.getDocument();
+  const scope = helpers.getScope();
+  if (!doc) {
+    return;
+  }
+  const targetMode = mode === 'simple' ? 'simple' : 'advanced';
+  const root = doc.documentElement ?? null;
+  const body = doc.body ?? null;
+  if (root?.setAttribute) {
+    root.setAttribute('data-renderer-mode', targetMode);
+  }
+  if (body?.setAttribute) {
+    body.setAttribute('data-renderer-mode', targetMode);
+  }
+  if (body) {
+    body.dataset = body.dataset || {};
+    body.dataset.rendererMode = targetMode;
+  }
+  if (scope) {
+    scope.__INFINITE_RAILS_RENDERER_MODE__ = targetMode;
+    scope.InfiniteRails = scope.InfiniteRails || {};
+    scope.InfiniteRails.rendererMode = targetMode;
+  }
+}
+
+function updateRendererState(reason, mode = 'simple') {
+  const scope = ensureRendererHelpers().getScope();
+  if (!scope) {
+    return;
+  }
+  const state = scope.__INFINITE_RAILS_STATE__ || (scope.__INFINITE_RAILS_STATE__ = {});
+  state.rendererMode = mode;
+  state.reason = reason ?? state.reason ?? null;
+}
+
+function hasCoarsePointer(scope = ensureRendererHelpers().getScope()) {
+  if (!scope) {
+    return false;
+  }
+  if (Number(scope.navigator?.maxTouchPoints) > 1) {
+    return true;
+  }
+  if (typeof scope.matchMedia === 'function') {
+    try {
+      const pointerQuery = scope.matchMedia('(pointer: coarse)');
+      if (pointerQuery?.matches) {
+        return true;
+      }
+    } catch (error) {
+      // ignore synthetic environment failures
+    }
+  }
+  return false;
+}
+
+function ensureRendererHelpers() {
+  const globalRef = typeof globalThis !== 'undefined' ? globalThis : typeof window !== 'undefined' ? window : undefined;
+  const existing = globalRef?.__IR_RENDERER_HELPERS__;
+  if (existing) {
+    return existing;
+  }
+  const resolveScope = () => {
+    if (typeof rendererModeScope !== 'undefined' && rendererModeScope) {
+      return rendererModeScope;
+    }
+    if (typeof globalScope !== 'undefined' && globalScope) {
+      return globalScope;
+    }
+    if (typeof window !== 'undefined') {
+      return window;
+    }
+    if (typeof globalThis !== 'undefined') {
+      return globalThis;
+    }
+    return undefined;
+  };
+  const helpers = {
+    getScope() {
+      return resolveScope();
+    },
+    getDocument() {
+      if (typeof rendererModeDocument !== 'undefined' && rendererModeDocument) {
+        return rendererModeDocument;
+      }
+      const scope = resolveScope();
+      return scope?.document ?? null;
+    },
+    getAppConfig() {
+      const scope = resolveScope();
+      if (scope) {
+        scope.APP_CONFIG = scope.APP_CONFIG || {};
+        return scope.APP_CONFIG;
+      }
+      if (typeof rendererModeAppConfig !== 'undefined' && rendererModeAppConfig) {
+        return rendererModeAppConfig;
+      }
+      return {};
+    },
+  };
+  if (globalRef) {
+    globalRef.__IR_RENDERER_HELPERS__ = helpers;
+  }
+  return helpers;
+}
+
+function isMobileUserAgent(scope = ensureRendererHelpers().getScope()) {
+  const userAgent = typeof scope?.navigator?.userAgent === 'string' ? scope.navigator.userAgent : '';
+  const lower = userAgent.toLowerCase();
+  if (!lower) {
+    return false;
+  }
+  return /iphone|ipad|android|mobile/.test(lower);
+}
+
+function markMobileEnvironment(appConfig, value = true) {
+  if (!appConfig) {
+    return;
+  }
+  appConfig.isMobileEnvironment = value;
+}
+
+function ensureStandaloneWebglOverlay(detail = {}) {
+  const doc = ensureRendererHelpers().getDocument();
+  if (!doc?.createElement || !doc.body) {
+    return null;
+  }
+  let overlay = doc.getElementById?.('webglBlockedOverlay') ?? null;
+  if (overlay) {
+    overlay.hidden = false;
+    doc.body.setAttribute?.('data-webgl-fallback-mode', detail.fallbackMode ?? 'simple');
+    overlay.__webglFallback = { detail, troubleshootingSteps: overlay.__webglFallback?.troubleshootingSteps };
+    return overlay;
+  }
+  overlay = doc.createElement('div');
+  overlay.id = 'webglBlockedOverlay';
+  overlay.className = 'webgl-fallback';
+  overlay.hidden = false;
+  const heading = doc.createElement('h2');
+  heading.textContent = 'WebGL2 support unavailable';
+  const description = doc.createElement('p');
+  description.textContent =
+    'WebGL2 support is unavailable, so Infinite Rails is launching the simplified renderer.';
+  const list = doc.createElement('ol');
+  const steps = [
+    "Open your browser settings (for example, chrome://settings/system) and enable 'Use hardware acceleration when available.' If the toggle stays disabled, follow the browser help steps at https://support.google.com/chrome/answer/95759.",
+    'Disable extensions that block WebGL or force software rendering.',
+    'Update your graphics drivers, then restart your browser.',
+  ];
+  steps.forEach((text) => {
+    const item = doc.createElement('li');
+    item.textContent = text;
+    list.appendChild(item);
+  });
+  overlay.appendChild(heading);
+  overlay.appendChild(description);
+  overlay.appendChild(list);
+  overlay.__webglFallback = { detail, troubleshootingSteps: steps.slice() };
+  doc.body.appendChild(overlay);
+  doc.body.setAttribute?.('data-webgl-fallback-mode', detail.fallbackMode ?? 'simple');
+  return overlay;
+}
+
+function ensureSimpleModeConfig(appConfig, reason) {
+  if (!appConfig) {
+    return;
+  }
+  if (!appConfig.__simpleModeBaselineCaptured) {
+    appConfig.__simpleModeBaselineCaptured = true;
+    appConfig.__simpleModeBaseline = {
+      enableAdvancedExperience: appConfig.enableAdvancedExperience !== false,
+      preferAdvanced: appConfig.preferAdvanced !== false,
+      forceAdvanced: appConfig.forceAdvanced === true,
+      defaultMode: appConfig.defaultMode ?? null,
+    };
+  }
+  appConfig.forceSimpleMode = true;
+  appConfig.enableAdvancedExperience = false;
+  appConfig.preferAdvanced = false;
+  appConfig.forceAdvanced = false;
+  appConfig.defaultMode = 'simple';
+  if (reason === 'webgl2-unavailable') {
+    appConfig.webglSupport = false;
+    appConfig.__webglFallbackApplied = true;
+  }
+}
+
+function applySimpleModeFallback(reason, options = {}) {
+  const scope = ensureRendererHelpers().getScope();
+  const appConfig = ensureRendererHelpers().getAppConfig();
+  ensureSimpleModeConfig(appConfig, reason);
+  setRendererModeIndicator('simple');
+  updateRendererState(reason, 'simple');
+  if (options.noticeKey) {
+    queueBootstrapNotice(scope, options.noticeKey, options.noticeMessage);
+  }
+  scope.__SIMPLE_RENDERER_FORCED__ = true;
+  const overlay = scope.bootstrapOverlay ?? null;
+  if (reason === 'webgl2-unavailable') {
+    const payload = {
+      title: 'WebGL2 support unavailable',
+      message:
+        'WebGL2 support is unavailable, so Infinite Rails is launching the simplified renderer.',
+      detail: { reason },
+    };
+    if (overlay && typeof overlay.showError === 'function') {
+      overlay.showError(payload);
+    } else {
+      ensureStandaloneWebglOverlay({ reason, fallbackMode: 'simple' });
+    }
+    if (overlay?.setDiagnostic) {
+      overlay.setDiagnostic('renderer', {
+        status: 'warning',
+        message: 'WebGL2 support unavailable — launching simplified renderer.',
+      });
+    }
+    if (overlay?.setRecoveryAction) {
+      overlay.setRecoveryAction({
+        action: 'retry-webgl',
+        label: 'Retry WebGL Renderer',
+        onSelect: () => {
+          if (typeof scope?.reloadActiveRenderer === 'function') {
+            scope.reloadActiveRenderer({ reason: 'retry-webgl' }).catch(() => {});
+          }
+        },
+      });
+    }
+  } else if (overlay?.showLoading && options.showLoadingMessage) {
+    overlay.showLoading({
+      title: 'Switching to sandbox mode',
+      message: options.showLoadingMessage,
+    });
+  }
+  if (options.diagnosticMessage && overlay?.setDiagnostic) {
+    overlay.setDiagnostic('renderer', {
+      status: options.diagnosticStatus ?? 'info',
+      message: options.diagnosticMessage,
+    });
+  }
+}
+
+function createTestWebglContext(scope) {
+  const doc = ensureRendererHelpers().getDocument() ?? scope?.document ?? null;
+  if (!doc?.createElement) {
+    return null;
+  }
+  try {
+    const canvas = doc.createElement('canvas');
+    if (!canvas || typeof canvas.getContext !== 'function') {
+      return null;
+    }
+    return canvas.getContext('webgl2') || canvas.getContext('experimental-webgl2');
+  } catch (error) {
+    return null;
+  }
+}
+
+function runWebglPreflightCheck() {
+  const scope = ensureRendererHelpers().getScope();
+  const appConfig = ensureRendererHelpers().getAppConfig();
+  if (!scope) {
+    return false;
+  }
+  if (appConfig.__webglFallbackApplied) {
+    return true;
+  }
+  if (appConfig.forceSimpleMode) {
+    return true;
+  }
+  const hasWebgl2Context = Boolean(scope.WebGL2RenderingContext) && Boolean(createTestWebglContext(scope));
+  if (hasWebgl2Context) {
+    appConfig.webglSupport = true;
+    return false;
+  }
+  applySimpleModeFallback('webgl2-unavailable', {
+    noticeKey: 'webgl-unavailable-simple-mode',
+    noticeMessage: SIMPLE_RENDERER_NOTICE_MESSAGES['webgl-unavailable-simple-mode'],
+  });
+  return true;
+}
+
+function shouldStartSimpleMode() {
+  const helpers = getSimpleModeHelperStore();
+  const scope = helpers.getScope();
+  const appConfig = helpers.getAppConfig();
+  if (!scope) {
+    return false;
+  }
+  const search = typeof scope.location?.search === 'string' ? scope.location.search : '';
+  const params = new URLSearchParams(search);
+  if ((params.get('mode') || '').toLowerCase() === 'simple') {
+    applySimpleModeFallback('query-mode', {
+      noticeKey: 'query-simple-mode',
+      noticeMessage: SIMPLE_RENDERER_NOTICE_MESSAGES['query-simple-mode'],
+    });
+    return true;
+  }
+  if (appConfig.forceSimpleMode) {
+    applySimpleModeFallback('config-forced', {
+      noticeKey: 'forced-simple-mode',
+      noticeMessage: SIMPLE_RENDERER_NOTICE_MESSAGES['forced-simple-mode'],
+    });
+    return true;
+  }
+  if (appConfig.forceAdvanced) {
+    return false;
+  }
+  if (runWebglPreflightCheck()) {
+    return true;
+  }
+  const mobile = hasCoarsePointer(scope) || isMobileUserAgent(scope);
+  if (mobile) {
+    markMobileEnvironment(appConfig, true);
+    if (appConfig.supportsAdvancedMobile === true) {
+      return false;
+    }
+    applySimpleModeFallback('mobile-simple-mode', {
+      noticeKey: 'mobile-simple-mode',
+      noticeMessage: SIMPLE_RENDERER_NOTICE_MESSAGES['mobile-simple-mode'],
+    });
+    return true;
+  }
+  markMobileEnvironment(appConfig, false);
+  return false;
+}
+
+function ensureSimpleModeQueryParam(url, { mode = 'simple' } = {}) {
+  if (typeof url !== 'string' || !url) {
+    return url;
+  }
+  try {
+    const resolvedMode = mode === 'advanced' ? 'advanced' : 'simple';
+    const scope = getSimpleModeHelperStore().getScope();
+    const base = scope?.location?.origin ?? 'https://example.com';
+    const parsed = new URL(url, base);
+    parsed.searchParams.set('mode', resolvedMode);
+    return parsed.toString();
+  } catch (error) {
+    const hasQuery = url.includes('?');
+    const [prefix, suffix] = url.split('#', 2);
+    const hash = typeof suffix === 'string' ? `#${suffix}` : '';
+    const separator = hasQuery ? '&' : '?';
+    return `${hasQuery ? prefix : url}${separator}mode=${mode}${hash}`;
+  }
+}
+
+function getSimpleModeHelperStore() {
+  if (typeof ensureRendererHelpers === 'function') {
+    try {
+      return ensureRendererHelpers();
+    } catch (error) {
+      // fall through to fallback helpers
+    }
+  }
+  const scope =
+    (typeof globalScope !== 'undefined' && globalScope) ||
+    (typeof window !== 'undefined' ? window : undefined) ||
+    (typeof globalThis !== 'undefined' ? globalThis : undefined) ||
+    null;
+  const documentRef = scope?.document ?? scope?.documentRef ?? null;
+  const appConfig =
+    scope && typeof scope === 'object'
+      ? (scope.APP_CONFIG = scope.APP_CONFIG || {})
+      : {};
+  const rendererDocument =
+    scope?.rendererModeDocument ??
+    documentRef ??
+    (typeof document !== 'undefined' ? document : null);
+  const rendererRoot =
+    scope?.rendererModeRoot ??
+    (rendererDocument?.getElementById ? rendererDocument.getElementById('rendererRoot') : null);
+  return {
+    getScope: () => scope,
+    getDocument: () => documentRef,
+    getRendererDocument: () => rendererDocument,
+    getRendererRoot: () => rendererRoot,
+    getAppConfig: () => appConfig,
+  };
+}
+
+const simpleFallbackRuntime = {
+  attempted: false,
+  lastReason: null,
+  lastError: null,
+  baselineConfig: null,
+  baselineCaptured: false,
+  watchdog: { handle: null, mode: null, timeoutMs: null, startedAt: null, onTimeout: null },
+};
+
+function getSimpleModeToggleState(scope = getSimpleModeHelperStore().getScope()) {
+  if (!scope) {
+    return { control: null, status: null };
+  }
+  const state = scope.simpleModeToggleState || (scope.simpleModeToggleState = {
+    control: null,
+    status: null,
+    baselineConfig: null,
+    baselineCaptured: false,
+  });
+  if (!state.control || !state.control.isConnected) {
+    const toggle = rendererModeDocument?.getElementById?.('forceSimpleModeToggle') ?? null;
+    if (toggle) {
+      state.control = toggle;
+    }
+  }
+  if (!state.status || !state.status.isConnected) {
+    const status = rendererModeDocument?.getElementById?.('forceSimpleModeStatus') ?? null;
+    if (status) {
+      state.status = status;
+    }
+  }
+  return state;
+}
+
+function rememberSimpleModeBaseline(appConfig) {
+  if (!appConfig) {
+    return;
+  }
+  if (!simpleFallbackRuntime.baselineCaptured) {
+    simpleFallbackRuntime.baselineConfig = {
+      enableAdvancedExperience: appConfig.enableAdvancedExperience !== false,
+      preferAdvanced: appConfig.preferAdvanced !== false,
+      forceAdvanced: appConfig.forceAdvanced === true,
+      defaultMode: appConfig.defaultMode ?? null,
+      forceSimpleMode: appConfig.forceSimpleMode === true,
+    };
+    simpleFallbackRuntime.baselineCaptured = true;
+  }
+  const toggleState = getSimpleModeToggleState();
+  if (!toggleState.baselineCaptured) {
+    toggleState.baselineConfig = {
+      active: Boolean(appConfig.forceSimpleMode),
+      textContent: toggleState.status?.textContent ?? '',
+    };
+    toggleState.baselineCaptured = true;
+  }
+}
+
+function restoreSimpleModeConfig(appConfig) {
+  const baseline = simpleFallbackRuntime.baselineConfig;
+  if (baseline && appConfig) {
+    appConfig.enableAdvancedExperience = baseline.enableAdvancedExperience;
+    appConfig.preferAdvanced = baseline.preferAdvanced;
+    appConfig.forceAdvanced = baseline.forceAdvanced;
+    if (baseline.defaultMode == null) {
+      delete appConfig.defaultMode;
+    } else {
+      appConfig.defaultMode = baseline.defaultMode;
+    }
+    if (baseline.forceSimpleMode) {
+      appConfig.forceSimpleMode = true;
+    } else {
+      delete appConfig.forceSimpleMode;
+    }
+  }
+  simpleFallbackRuntime.attempted = false;
+  simpleFallbackRuntime.lastReason = null;
+  simpleFallbackRuntime.lastError = null;
+  const toggleState = getSimpleModeToggleState();
+  if (toggleState.status) {
+    toggleState.status.hidden = true;
+    toggleState.status.textContent = '';
+  }
+  if (toggleState.control) {
+    toggleState.control.checked = Boolean(appConfig?.forceSimpleMode);
+    if (toggleState.control.dataset) {
+      delete toggleState.control.dataset.simpleModeForced;
+    }
+  }
+}
+
+function updateSimpleModeToggle({ active, reason, source }) {
+  const toggleState = getSimpleModeToggleState();
+  const control = toggleState.control;
+  const status = toggleState.status;
+  if (control) {
+    control.checked = Boolean(active);
+    control.dataset = control.dataset || {};
+    if (active) {
+      control.dataset.simpleModeForced = 'true';
+    } else {
+      delete control.dataset.simpleModeForced;
+    }
+  }
+  if (!status) {
+    return;
+  }
+  if (!active) {
+    status.hidden = true;
+    status.textContent = '';
+    return;
+  }
+  const reasonLabel = typeof reason === 'string' && reason.trim().length ? reason.trim() : 'renderer fallback';
+  const sourceLabel = typeof source === 'string' && source.trim().length ? source.trim() : 'system';
+  status.hidden = false;
+  status.textContent = `Sandbox mode active (${reasonLabel}; source: ${sourceLabel}).`;
+}
+
+function applyRendererReadyState(mode, options = {}) {
+  setRendererModeIndicator(mode);
+  const doc = rendererModeDocument;
+  if (!doc) {
+    return;
+  }
+  const body = doc.body ?? null;
+  if (!body) {
+    return;
+  }
+  body.dataset = body.dataset || {};
+  body.dataset.rendererReady = options.ready ? 'true' : 'false';
+}
+
+const DEFAULT_RENDERER_START_TIMEOUT_MS = 20000;
+const DEFAULT_RENDERER_RECOVERY_TIMEOUT_MS = 60000;
+
+function ensureSimpleModeUrl(scope = getSimpleModeHelperStore().getScope()) {
+  if (!scope) {
+    return;
+  }
+  const location = scope.location ?? null;
+  if (!location) {
+    return;
+  }
+  const current = typeof location.href === 'string' ? location.href : '';
+  const next = ensureSimpleModeQueryParam(current, { mode: 'simple' });
+  if (next === current) {
+    return;
+  }
+  if (scope.history && typeof scope.history.replaceState === 'function') {
+    try {
+      scope.history.replaceState(scope.history.state, '', next);
+      return;
+    } catch (error) {
+      // fall through to location.replace
+    }
+  }
+  if (typeof location.replace === 'function') {
+    location.replace(next);
+  } else {
+    location.href = next;
+  }
+}
+
+function ensureSimpleRendererModule(scope, context) {
+  if (typeof scope?.ensureRendererModule === 'function') {
+    try {
+      return scope.ensureRendererModule('simple', context);
+    } catch (error) {
+      return Promise.reject(error);
+    }
+  }
+  return null;
+}
+
+function activateMissionBriefingFallback(options = {}) {
+  const helpers = getSimpleModeHelperStore();
+  const scope = helpers.getScope();
+  const doc = helpers.getDocument();
+  setRendererModeIndicator('briefing');
+  const briefing = doc?.getElementById?.('gameBriefing') ?? null;
+  const content = briefing?.querySelector?.('.game-briefing__content') ?? briefing ?? null;
+  if (briefing) {
+    briefing.hidden = false;
+    briefing.classList?.add?.('is-visible');
+  }
+  if (content) {
+    let notice = doc?.getElementById?.('gameBriefingFallbackNotice') ?? null;
+    if (!notice && doc?.createElement) {
+      notice = doc.createElement('p');
+      notice.id = 'gameBriefingFallbackNotice';
+      notice.className = 'game-briefing__notice';
+      content.appendChild(notice);
+    }
+    if (notice) {
+      notice.textContent =
+        options.notice ?? 'Renderer systems are offline. Mission briefing mode is available with a text-only experience so the expedition can continue.';
+    }
+  }
+  const startButton = doc?.getElementById?.('startButton') ?? null;
+  if (startButton) {
+    startButton.disabled = true;
+    startButton.dataset = startButton.dataset || {};
+    startButton.dataset.fallbackMode = 'briefing';
+  }
+  const canvas = doc?.getElementById?.('gameCanvas') ?? null;
+  if (canvas && canvas.style) {
+    canvas.style.display = 'none';
+  }
+  const dismissButton = doc?.getElementById?.('dismissBriefing') ?? null;
+  if (dismissButton) {
+    try {
+      dismissButton.addEventListener?.('click', () => {});
+    } catch (error) {
+      // ignore synthetic environment limitations
+    }
+    dismissButton.dataset = dismissButton.dataset || {};
+    dismissButton.dataset.lowFidelityBound = 'true';
+  }
+  const overlay = scope?.bootstrapOverlay ?? null;
+  overlay?.showLoading?.({
+    title: 'Mission briefing mode',
+    message:
+      options.message ?? 'Renderer unavailable. Switching to mission briefing mode so the expedition can continue.',
+  });
+  overlay?.setDiagnostic?.('renderer', {
+    status: 'error',
+    message:
+      options.diagnosticMessage ?? 'Mission briefing mode active — renderer unavailable. Follow the text briefing to continue.',
+  });
+  scope.__MISSION_BRIEFING_FALLBACK_AVAILABLE__ = true;
+  scope.__MISSION_BRIEFING_FALLBACK_ACTIVE__ = true;
+  scope.__MISSION_BRIEFING_FALLBACK_REASON__ = options.reason ?? 'renderer-failure';
+  return true;
+}
+
+function offerMissionBriefingFallback(options = {}) {
+  const scope = getSimpleModeHelperStore().getScope();
+  const overlay = scope?.bootstrapOverlay ?? null;
+  if (!overlay || typeof overlay.setRecoveryAction !== 'function') {
+    return activateMissionBriefingFallback({ ...options, source: options.source ?? 'implicit-offer' });
+  }
+  const recoveryConfig = {
+    action: 'open-mission-briefing',
+    label: 'Open Mission Briefing Mode',
+    description:
+      options.description ??
+      'Switch to the text-only mission briefing so the expedition can continue without the renderer.',
+    onSelect: () => {
+      activateMissionBriefingFallback({ ...options, source: 'recovery-action' });
+      overlay.hide?.({ force: true });
+    },
+  };
+  try {
+    overlay.setRecoveryAction(recoveryConfig);
+    scope.__MISSION_BRIEFING_FALLBACK_AVAILABLE__ = true;
+    return true;
+  } catch (error) {
+    scope.console?.warn?.('Failed to register mission briefing fallback.', error);
+    return activateMissionBriefingFallback({ ...options, source: 'recovery-action-error', error });
+  }
+}
+
+function showMissionBriefingFallback(scope, options = {}) {
+  const message =
+    'Renderer systems are offline. Mission briefing mode is available with a text-only experience so the expedition can continue.';
+  const diagnosticMessage =
+    'Mission briefing mode activated — renderer unavailable. Follow the text briefing to continue the expedition.';
+  const overlay = scope?.bootstrapOverlay ?? null;
+  overlay?.showError?.({
+    title: 'Renderer unavailable',
+    message,
+    detail: { reason: options.reason ?? 'simple-unavailable' },
+  });
+  overlay?.setDiagnostic?.('renderer', { status: 'error', message: diagnosticMessage });
+  overlay?.setRecoveryAction?.({
+    action: 'open-mission-briefing',
+    label: 'Open Mission Briefing Mode',
+    onSelect: () => {
+      activateMissionBriefingFallback({ ...options, source: 'recovery-action' });
+    },
+  });
+  return activateMissionBriefingFallback({ ...options, notice: message, diagnosticMessage });
+}
+
+function tryStartSimpleFallback(error, options = {}) {
+  const helpers = getSimpleModeHelperStore();
+  const scope = helpers.getScope();
+  if (!scope) {
+    return false;
+  }
+  const simpleFactory = scope.SimpleExperience?.create ?? null;
+  if (typeof simpleFactory !== 'function') {
+    showMissionBriefingFallback(scope, options);
+    return false;
+  }
+  if (!scope.bootstrap || typeof scope.bootstrap !== 'function') {
+    showMissionBriefingFallback(scope, options);
+    return false;
+  }
+  const state = simpleFallbackRuntime;
+  if (state.attempted && !options.allowRetry) {
+    return false;
+  }
+  state.attempted = true;
+  state.lastReason = options.reason ?? 'renderer-failure';
+  state.lastError = error ?? null;
+
+  const appConfig = rendererModeAppConfig;
+  rememberSimpleModeBaseline(appConfig);
+  applySimpleModeFallback('simple-fallback', {
+    noticeKey: 'forced-simple-mode',
+    noticeMessage: SIMPLE_RENDERER_NOTICE_MESSAGES['forced-simple-mode'],
+    showLoadingMessage: 'Switching to sandbox mode while we recover the renderer.',
+    diagnosticMessage: 'Sandbox renderer active — renderer fallback engaged.',
+    diagnosticStatus: 'warning',
+  });
+  ensureSimpleModeConfig(appConfig, 'simple-fallback');
+  updateSimpleModeToggle({ active: true, reason: state.lastReason, source: options.source ?? 'fallback' });
+  ensureSimpleModeUrl(scope);
+  applyRendererReadyState('simple', { ready: false });
+
+  const ensureContext = {
+    mode: 'simple',
+    reason: options.reason ?? 'renderer-failure',
+    source: options.source ?? 'fallback',
+  };
+  let ensureResult = ensureSimpleRendererModule(scope, ensureContext);
+  if (ensureResult && typeof ensureResult.then === 'function') {
+    ensureResult = ensureResult.catch((moduleError) => {
+      scope.console?.warn?.('Simple renderer module ensure failed.', moduleError);
+    });
+  }
+  Promise.resolve(ensureResult)
+    .catch(() => {})
+    .finally(() => {
+      try {
+        scope.bootstrap({ mode: 'simple', reason: state.lastReason });
+      } catch (bootstrapError) {
+        scope.console?.error?.('Failed to bootstrap simple renderer.', bootstrapError);
+      }
+    });
+
+  return true;
+}
+
+function scheduleRendererStartWatchdog({ mode = 'simple', timeoutMs = DEFAULT_RENDERER_START_TIMEOUT_MS, onTimeout } = {}) {
+  const scope = getSimpleModeHelperStore().getScope();
+  if (!scope || typeof scope.setTimeout !== 'function') {
+    return null;
+  }
+  cancelRendererStartWatchdog();
+  const timeout = Number(timeoutMs);
+  const duration = Number.isFinite(timeout) && timeout > 0 ? timeout : DEFAULT_RENDERER_START_TIMEOUT_MS;
+  const handle = scope.setTimeout(() => {
+    simpleFallbackRuntime.watchdog.handle = null;
+    if (typeof simpleFallbackRuntime.watchdog.onTimeout === 'function') {
+      try {
+        simpleFallbackRuntime.watchdog.onTimeout({ mode });
+      } catch (error) {
+        scope.console?.warn?.('Renderer watchdog callback failed.', error);
+      }
+    }
+  }, duration);
+  simpleFallbackRuntime.watchdog = {
+    handle,
+    mode,
+    timeoutMs: duration,
+    startedAt: Date.now(),
+    onTimeout,
+  };
+  return handle;
+}
+
+function cancelRendererStartWatchdog() {
+  const scope = getSimpleModeHelperStore().getScope();
+  const handle = simpleFallbackRuntime.watchdog.handle;
+  if (handle && typeof scope?.clearTimeout === 'function') {
+    scope.clearTimeout(handle);
+  }
+  simpleFallbackRuntime.watchdog.handle = null;
+  simpleFallbackRuntime.watchdog.mode = null;
+  simpleFallbackRuntime.watchdog.timeoutMs = null;
+  simpleFallbackRuntime.watchdog.startedAt = null;
+  simpleFallbackRuntime.watchdog.onTimeout = null;
+}
+
+function getRendererStartWatchdogState() {
+  const state = simpleFallbackRuntime.watchdog;
+  return {
+    handle: state.handle,
+    mode: state.mode,
+    timeoutMs: state.timeoutMs,
+    startedAt: state.startedAt,
+  };
+}
+
+function createScoreboardUtilsFallback() {
+  return {
+    setOfflineMessage(scope, message) {
+      setScoreboardOffline(scope ?? ensureRendererHelpers().getScope(), message ?? 'Offline session active.');
+    },
+  };
+}
+
+const fallbackScopeForEvents = getSimpleModeHelperStore().getScope();
+if (fallbackScopeForEvents && typeof fallbackScopeForEvents.addEventListener === 'function') {
+  const safeStart = (event, type) => {
+    const detail = event?.detail ?? {};
+    const reason = detail.reason ?? `${type}-failure`;
+    const mode = detail.mode ?? 'advanced';
+    const fallbackError = detail.error instanceof Error ? detail.error : new Error(reason);
+    tryStartSimpleFallback(fallbackError, {
+      reason,
+      mode,
+      source: `event:${type}`,
+    });
+  };
+  fallbackScopeForEvents.addEventListener('infinite-rails:start-error', (event) => safeStart(event, 'start-error'));
+  fallbackScopeForEvents.addEventListener('infinite-rails:initialisation-error', (event) => safeStart(event, 'initialisation-error'));
+}
+
+const simpleFallbackHooks = (() => {
+  const scope = ensureRendererHelpers().getScope();
+  if (!scope) {
+    return null;
+  }
+  return scope.__INFINITE_RAILS_TEST_HOOKS__ || (scope.__INFINITE_RAILS_TEST_HOOKS__ = {});
+})();
+if (simpleFallbackHooks) {
+  simpleFallbackHooks.getSimpleFallbackState = () => ({
+    attempted: simpleFallbackRuntime.attempted,
+    lastReason: simpleFallbackRuntime.lastReason,
+    watchdog: getRendererStartWatchdogState(),
+  });
+  simpleFallbackHooks.triggerSimpleFallback = (reason = 'manual-test') =>
+    tryStartSimpleFallback(new Error(reason), { reason, source: 'test-hook', allowRetry: true });
+}
+
+
+const manifestDiagnosticsScope = rendererModeScope ?? (typeof window !== 'undefined' ? window : typeof globalThis !== 'undefined' ? globalThis : undefined);
+
+const MANIFEST_MISSING_LABEL = 'Manifest check missing assets';
+const MANIFEST_RELOAD_MESSAGE = 'Manifest integrity mismatch detected. Reloading to restore asset bundle.';
+
+function getManifestDiagnosticsUi(scope) {
+  const doc = scope?.document ?? null;
+  if (!doc) {
+    return null;
+  }
+  const list = doc.getElementById?.('bootDiagnosticsAssetsList') ?? null;
+  const status = doc.getElementById?.('bootDiagnosticsAssetsStatus') ?? null;
+  return { list, status };
+}
+
+function renderManifestDiagnostics(scope, missing = []) {
+  const ui = getManifestDiagnosticsUi(scope);
+  if (!ui) {
+    return;
+  }
+  const { list, status } = ui;
+  if (status) {
+    status.textContent = missing.length === 0 ? 'All manifest assets reachable.' : `${MANIFEST_MISSING_LABEL} (${missing.length})`;
+  }
+  if (!list) {
+    return;
+  }
+  while (list.firstChild) {
+    list.removeChild(list.firstChild);
+  }
+  if (missing.length === 0) {
+    const item = scope?.document?.createElement?.('li');
+    if (item) {
+      item.textContent = `${MANIFEST_MISSING_LABEL}: none`;
+      list.appendChild(item);
+    }
+    return;
+  }
+  missing.forEach((asset) => {
+    const item = scope?.document?.createElement?.('li');
+    if (item) {
+      item.textContent = `${asset.path || asset.url || 'unknown asset'} — ${asset.reason ?? 'unreachable'}`;
+      list.appendChild(item);
+    }
+  });
+}
+
+async function fetchWithTimeout(resource, options = {}) {
+  const scope = manifestDiagnosticsScope;
+  const controller = typeof scope?.AbortController === 'function' ? new scope.AbortController() : null;
+  const timeout = Number(options.timeout ?? 5000);
+  const init = { ...options };
+  if (controller) {
+    init.signal = controller.signal;
+  }
+  let timeoutHandle = null;
+  if (controller && Number.isFinite(timeout) && timeout > 0 && typeof scope?.setTimeout === 'function') {
+    timeoutHandle = scope.setTimeout(() => {
+      try {
+        controller.abort();
+      } catch (error) {
+        // ignore abort errors
+      }
+    }, timeout);
+  }
+  try {
+    return await (scope?.fetch ?? fetch)(resource, init);
+  } finally {
+    if (timeoutHandle && typeof scope?.clearTimeout === 'function') {
+      scope.clearTimeout(timeoutHandle);
+    }
+  }
+}
+
+async function probeManifestAsset(scope, asset) {
+  const url = typeof asset?.url === 'string' && asset.url ? asset.url : null;
+  if (!url) {
+    return { ok: false, reason: 'missing-url' };
+  }
+  try {
+    const response = await fetchWithTimeout(asset.url, {
+      method: 'HEAD',
+      cache: 'no-cache',
+      credentials: 'include',
+    });
+    if (!response || typeof response.ok !== 'boolean') {
+      return { ok: false, reason: 'invalid-response' };
+    }
+    if (!response.ok) {
+      return { ok: false, reason: `status-${response.status}` };
+    }
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, reason: error?.name ?? 'network-error' };
+  }
+}
+
+async function startManifestIntegrityVerification({ source = 'manual', scope = manifestDiagnosticsScope } = {}) {
+  if (!scope) {
+    return { ok: false, reason: 'no-scope' };
+  }
+  const manifest = scope.__INFINITE_RAILS_ASSET_MANIFEST__ ?? scope.ASSET_MANIFEST ?? null;
+  const records = Array.isArray(manifest?.assets) ? manifest.assets : [];
+  if (records.length === 0) {
+    renderManifestDiagnostics(scope, []);
+    scope.console?.warn?.('Manifest check missing — no assets defined.');
+    return { ok: false, reason: 'manifest-empty' };
+  }
+  const results = await Promise.all(
+    records.map(async (asset) => {
+      const outcome = await probeManifestAsset(scope, asset);
+      return { asset, outcome };
+    }),
+  );
+  const missing = results
+    .filter((entry) => !entry.outcome.ok)
+    .map((entry) => ({ path: entry.asset.path ?? entry.asset.url, reason: entry.outcome.reason }));
+  renderManifestDiagnostics(scope, missing);
+
+  if (manifest?.integrity && manifest?.computedIntegrity && manifest.integrity !== manifest.computedIntegrity) {
+    scope.console?.error?.(MANIFEST_RELOAD_MESSAGE, { expected: manifest.integrity, computed: manifest.computedIntegrity });
+    if (typeof scope?.location?.reload === 'function') {
+      scope.location.reload();
+    }
+    return { ok: false, reason: 'integrity-mismatch', reloaded: true };
+  }
+
+  if (missing.length > 0) {
+    scope.console?.warn?.('Manifest diagnostics detected missing assets.', { source, missing });
+    return { ok: false, reason: 'missing-assets', missing };
+  }
+
+  scope.console?.info?.('Manifest asset availability verified.', { source });
+  return { ok: true, reason: 'ok' };
+}
+
+(async () => {
+  const scope = manifestDiagnosticsScope;
+  if (!scope || scope.__INFINITE_RAILS_MANIFEST_VERIFIED__) {
+    return;
+  }
+  scope.__INFINITE_RAILS_MANIFEST_VERIFIED__ = true;
+  try {
+    await startManifestIntegrityVerification({ source: 'bootstrap', scope });
+  } catch (error) {
+    scope.console?.error?.('Manifest verification failed during bootstrap.', error);
+  }
+})();
+
+
+(function setupPerformanceMetricsSampler(globalScope) {
+  const scope =
+    typeof globalScope !== 'undefined'
+      ? globalScope
+      : typeof window !== 'undefined'
+        ? window
+        : typeof globalThis !== 'undefined'
+          ? globalThis
+          : null;
+  if (!scope) {
+    return;
+  }
+
+  const appConfig = scope.APP_CONFIG || (scope.APP_CONFIG = {});
+  if ((appConfig.environment || '').toLowerCase() !== 'development') {
+    return;
+  }
+  if (typeof appConfig.diagnosticsEndpoint !== 'string' || !appConfig.diagnosticsEndpoint.trim()) {
+    return;
+  }
+
+  const performanceRef = scope.performance ?? { now: () => Date.now() };
+  const consoleRef = scope.console ?? console;
+  const navigatorRef = scope.navigator ?? {};
+
+  const state = {
+    active: false,
+    bootStartedAt: performanceRef.now(),
+    intervalHandle: null,
+    fpsSamples: [],
+    inputLatency: [],
+    worldSamples: [],
+    lastWorldSnapshot: null,
+    attachedExperience: null,
+    sampleCount: 0,
+  };
+
+  function computeAverage(values) {
+    if (!Array.isArray(values) || values.length === 0) {
+      return 0;
+    }
+    const sum = values.reduce((total, value) => total + Number(value || 0), 0);
+    return sum / values.length;
+  }
+
+  function snapshotWorldMetrics(experience) {
+    const columns = experience?.columns instanceof Map ? experience.columns.size : 0;
+    let voxels = 0;
+    if (experience?.columns instanceof Map) {
+      for (const [, column] of experience.columns.entries()) {
+        if (Array.isArray(column)) {
+          voxels += column.length;
+        }
+      }
+    }
+    return { columns, voxels, timestamp: performanceRef.now() };
+  }
+
+  function recordWorldMetrics(experience) {
+    const current = snapshotWorldMetrics(experience);
+    if (state.lastWorldSnapshot) {
+      const elapsed = Math.max(1, current.timestamp - state.lastWorldSnapshot.timestamp);
+      const columnsDelta = Math.max(0, current.columns - state.lastWorldSnapshot.columns);
+      const voxelsDelta = Math.max(0, current.voxels - state.lastWorldSnapshot.voxels);
+      const columnsPerSecond = (columnsDelta * 1000) / elapsed;
+      const voxelsPerSecond = (voxelsDelta * 1000) / elapsed;
+      state.worldSamples.push({ columnsPerSecond, voxelsPerSecond });
+    }
+    state.lastWorldSnapshot = current;
+  }
+
+  function recordFps(metrics) {
+    if (metrics && typeof metrics.fps === 'number') {
+      state.fpsSamples.push(metrics.fps);
+    }
+  }
+
+  function recordInputLatency(latencyMs) {
+    if (Number.isFinite(latencyMs) && latencyMs >= 0) {
+      state.inputLatency.push(latencyMs);
+    }
+  }
+
+  function buildSummary() {
+    const fpsAverage = computeAverage(state.fpsSamples);
+    const inputAverage = computeAverage(state.inputLatency);
+    const worldAverage = state.worldSamples.length
+      ? state.worldSamples[state.worldSamples.length - 1]
+      : { columnsPerSecond: 0, voxelsPerSecond: 0 };
+    return `Performance metrics — boot=${Math.round(performanceRef.now() - state.bootStartedAt)}ms; fps=${fpsAverage.toFixed(
+      1,
+    )}; world=${Math.max(worldAverage.columnsPerSecond, worldAverage.voxelsPerSecond).toFixed(1)}; input=${inputAverage.toFixed(
+      1,
+    )}ms`;
+  }
+
+  function flushMetrics() {
+    if (!state.attachedExperience || state.fpsSamples.length === 0) {
+      return;
+    }
+    const summary = buildSummary();
+    consoleRef.info?.(summary);
+    const world = state.worldSamples.length
+      ? state.worldSamples[state.worldSamples.length - 1]
+      : { columnsPerSecond: 0, voxelsPerSecond: 0 };
+    const payload = {
+      scope: 'performance',
+      detail: {
+        analytics: 'performance',
+        summary,
+        metrics: {
+          fps: {
+            sampleCount: state.fpsSamples.length,
+            average: computeAverage(state.fpsSamples),
+          },
+          worldGeneration: {
+            columnsPerSecond: world.columnsPerSecond,
+            voxelsPerSecond: world.voxelsPerSecond,
+          },
+          inputLatency: {
+            sampleCount: state.inputLatency.length,
+            averageMs: computeAverage(state.inputLatency),
+          },
+        },
+      },
+    };
+    try {
+      const endpoint = appConfig.diagnosticsEndpoint;
+      if (typeof navigatorRef.sendBeacon === 'function') {
+        navigatorRef.sendBeacon(endpoint, JSON.stringify(payload));
+      } else if (typeof scope.fetch === 'function') {
+        scope.fetch(endpoint, { method: 'POST', body: JSON.stringify(payload), keepalive: true });
+      }
+    } catch (error) {
+      consoleRef.warn?.('Failed to submit performance diagnostics.', error);
+    }
+  }
+
+  function sampleMetrics() {
+    const experience = scope.__INFINITE_RAILS_ACTIVE_EXPERIENCE__ ?? null;
+    if (!experience) {
+      return;
+    }
+    state.attachedExperience = experience;
+    if (!experience.__performanceSamplerAttached) {
+      experience.__performanceSamplerAttached = true;
+    }
+    let metrics = null;
+    try {
+      metrics = typeof experience.getDeveloperMetrics === 'function' ? experience.getDeveloperMetrics() : null;
+    } catch (error) {
+      consoleRef.warn?.('getDeveloperMetrics failed.', error);
+    }
+    if (metrics) {
+      recordFps(metrics);
+    }
+    recordWorldMetrics(experience);
+    state.sampleCount += 1;
+    if (state.sampleCount >= 3) {
+      flushMetrics();
+    }
+  }
+
+  function ensureSamplingInterval() {
+    if (state.intervalHandle || typeof scope.setInterval !== 'function') {
+      return;
+    }
+    state.intervalHandle = scope.setInterval(sampleMetrics, 1000);
+  }
+
+  function handlePointerDown(event) {
+    if (state.active) {
+      const latency = performanceRef.now() - Number(event?.timeStamp ?? 0);
+      recordInputLatency(latency);
+      return;
+    }
+    state.active = true;
+    ensureSamplingInterval();
+    const latency = performanceRef.now() - Number(event?.timeStamp ?? 0);
+    recordInputLatency(latency);
+    sampleMetrics();
+  }
+
+  if (typeof scope.addEventListener === 'function') {
+    scope.addEventListener('pointerdown', handlePointerDown, { passive: true });
+  }
+
+  const hooks = scope.__INFINITE_RAILS_TEST_HOOKS__ || (scope.__INFINITE_RAILS_TEST_HOOKS__ = {});
+  hooks.getPerformanceSamplerState = () => ({
+    active: state.active,
+    sampleCount: state.sampleCount,
+    fpsSamples: state.fpsSamples.slice(),
+    inputLatency: state.inputLatency.slice(),
+  });
+})(typeof window !== 'undefined' ? window : undefined);
+
+
 (function setupInactivityMonitor(globalScope) {
   const scope =
     typeof globalScope !== 'undefined'
@@ -4043,10 +5258,15 @@ function queueBootstrapFallbackNotice(key, message) {
     if (fetchPromise) {
       return fetchPromise.then(() => snapshotFeatureState());
     }
-    const endpoint =
+    const endpointRaw =
       typeof appConfig.featureFlagsEndpoint === 'string' && appConfig.featureFlagsEndpoint.trim()
         ? appConfig.featureFlagsEndpoint.trim()
-        : '/feature-flags.json';
+        : '';
+    if (!endpointRaw && options.initial) {
+      applyRemoteConfig({});
+      return Promise.resolve(snapshotFeatureState());
+    }
+    const endpoint = endpointRaw || '/feature-flags.json';
     fetchPromise = Promise.resolve()
       .then(() => {
         if (typeof scope.fetch !== 'function') {
@@ -4628,7 +5848,7 @@ function queueBootstrapFallbackNotice(key, message) {
     }
     if (detail.response && typeof detail.response.status === 'number') {
       const status = Number(detail.response.status);
-      if (status === 403 || status === 404) {
+      if (status === 403) {
         return activateAssetFailover(scope, {
           type: 'http',
           status,
@@ -4703,7 +5923,6 @@ function queueBootstrapFallbackNotice(key, message) {
     if (!requestUrl) {
       return;
     }
-    maybeActivateAssetFailoverForFailure(detail);
     const requestFactory = createRetryRequestFactory(detail.resource, detail.init);
     if (!requestFactory) {
       return;
@@ -4990,8 +6209,12 @@ function queueBootstrapFallbackNotice(key, message) {
         phase: 'invoke',
       };
       recordFailure(category, detail);
-      maybeScheduleAssetRetry(detail);
-      if (shouldRetryAfterFailure(detail, options.failoverAttempted)) {
+      maybeActivateAssetFailoverForFailure(detail);
+      const retryDueToFailover = shouldRetryAfterFailure(detail, options.failoverAttempted);
+      if (!retryDueToFailover) {
+        maybeScheduleAssetRetry(detail);
+      }
+      if (retryDueToFailover) {
         return performFetch(resource, init, { failoverAttempted: true });
       }
       throw error;
@@ -5013,8 +6236,12 @@ function queueBootstrapFallbackNotice(key, message) {
             phase: 'invalid-response',
           };
           recordFailure(category, detail);
-          maybeScheduleAssetRetry(detail);
-          if (shouldRetryAfterFailure(detail, options.failoverAttempted)) {
+          maybeActivateAssetFailoverForFailure(detail);
+          const retryDueToFailover = shouldRetryAfterFailure(detail, options.failoverAttempted);
+          if (!retryDueToFailover) {
+            maybeScheduleAssetRetry(detail);
+          }
+          if (retryDueToFailover) {
             return performFetch(resource, init, { failoverAttempted: true });
           }
           return response;
@@ -5031,8 +6258,12 @@ function queueBootstrapFallbackNotice(key, message) {
             phase: 'http',
           };
           recordFailure(category, detail);
-          maybeScheduleAssetRetry(detail);
-          if (shouldRetryAfterFailure(detail, options.failoverAttempted)) {
+          maybeActivateAssetFailoverForFailure(detail);
+          const retryDueToFailover = shouldRetryAfterFailure(detail, options.failoverAttempted);
+          if (!retryDueToFailover) {
+            maybeScheduleAssetRetry(detail);
+          }
+          if (retryDueToFailover) {
             return performFetch(resource, init, { failoverAttempted: true });
           }
         } else {
@@ -5053,8 +6284,12 @@ function queueBootstrapFallbackNotice(key, message) {
           phase: 'rejection',
         };
         recordFailure(category, detail);
-        maybeScheduleAssetRetry(detail);
-        if (shouldRetryAfterFailure(detail, options.failoverAttempted)) {
+        maybeActivateAssetFailoverForFailure(detail);
+        const retryDueToFailover = shouldRetryAfterFailure(detail, options.failoverAttempted);
+        if (!retryDueToFailover) {
+          maybeScheduleAssetRetry(detail);
+        }
+        if (retryDueToFailover) {
           return performFetch(resource, init, { failoverAttempted: true });
         }
         throw error;
