@@ -1,4 +1,5 @@
 const { chromium } = require('playwright');
+const fs = require('fs');
 const path = require('path');
 
 const MAX_RUN_DURATION_MS = 5 * 60 * 1000;
@@ -59,6 +60,52 @@ const FAIL_FAST_PATTERNS = [
   { category: 'asset', regex: /\basset\b[^\n]*critical[^\n]*(?:fail|failure|error|missing|denied|blocked)/i },
   { category: 'asset', regex: /Missing audio samples/i },
 ];
+
+async function installAssetManifestFallback(page) {
+  const manifestAbsolutePath = path.join(process.cwd(), 'asset-manifest.json');
+  let manifestBody;
+  try {
+    manifestBody = fs.readFileSync(manifestAbsolutePath, 'utf8');
+  } catch (error) {
+    console.warn('[E2E][ManifestFallback] Unable to read asset-manifest.json for inline fulfilment.', error);
+    return async () => {};
+  }
+
+  const pattern = /asset-manifest\.json(?:\?|$)/;
+  const handler = async (route) => {
+    const request = route.request();
+    const url = request.url();
+    if (!url.startsWith('file://')) {
+      await route.fallback();
+      return;
+    }
+
+    try {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: manifestBody,
+      });
+    } catch (error) {
+      console.warn('[E2E][ManifestFallback] Failed to fulfil asset manifest request.', error);
+      try {
+        await route.abort();
+      } catch (abortError) {
+        console.warn('[E2E][ManifestFallback] Failed to abort asset manifest request after fulfilment error.', abortError);
+      }
+    }
+  };
+
+  await page.route(pattern, handler);
+
+  return async () => {
+    try {
+      await page.unroute(pattern, handler);
+    } catch (error) {
+      console.warn('[E2E][ManifestFallback] Failed to remove asset manifest route handler.', error);
+    }
+  };
+}
 
 function createConsoleCapture(page, scope) {
   const warnings = [];
@@ -917,6 +964,7 @@ async function runAdvancedScenario(browser) {
   page.on('pageerror', (err) => {
     throw err;
   });
+  const teardownManifestFallback = await installAssetManifestFallback(page);
 
   try {
     logCheckpoint('Advanced', 'Navigating to advanced renderer', { elapsedFrom: scenarioStart });
@@ -1019,6 +1067,7 @@ async function runAdvancedScenario(browser) {
     }
     throw new Error(`[E2E][Advanced] ${error}`);
   } finally {
+    await teardownManifestFallback();
     await page.close();
   }
 }
@@ -1032,6 +1081,7 @@ async function runSimpleScenario(browser) {
   page.on('pageerror', (err) => {
     throw err;
   });
+  const teardownManifestFallback = await installAssetManifestFallback(page);
 
   try {
     logCheckpoint('Sandbox', 'Navigating to simple renderer', { elapsedFrom: scenarioStart });
@@ -1178,6 +1228,7 @@ async function runSimpleScenario(browser) {
     capture.assertHealthy();
     logCheckpoint('Sandbox', 'Scenario complete', { elapsedFrom: scenarioStart });
   } finally {
+    await teardownManifestFallback();
     await page.close();
   }
 }
