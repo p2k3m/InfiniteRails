@@ -546,10 +546,10 @@ function loadScript(url, attributes = {}) {
 }
 
 const THREE_SCRIPT_URL = applyAssetVersionTag(
-  'vendor/three.min.js?v=030c75d4e909.6082ae2161e3',
+  'vendor/three.min.js?v=030c75d4e909.9233a9f5cad5-dirty',
 );
 const GLTF_LOADER_SCRIPT_URL = applyAssetVersionTag(
-  'vendor/GLTFLoader.js?v=0e92b0589a2a.6082ae2161e3',
+  'vendor/GLTFLoader.js?v=0e92b0589a2a.9233a9f5cad5-dirty',
 );
 
 let threeLoaderPromise = null;
@@ -3196,7 +3196,7 @@ function enforceAssetBaseConsistency(scope, resolvedRoot) {
   appConfig.assetBaseUrl = normalisedProvided;
 }
 
-const PRODUCTION_ASSET_ROOT = ensureTrailingSlash('https://d3gj6x3ityfh5o.cloudfront.net/');
+const PRODUCTION_ASSET_ROOT = ensureTrailingSlash('/');
 const DEFAULT_LOCAL_ASSET_ROOT = ensureTrailingSlash('./');
 
 const HOTBAR_SLOT_COUNT = 10;

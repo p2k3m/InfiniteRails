@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "assetBaseUrl": "https://d3gj6x3ityfh5o.cloudfront.net/",
+  "assetBaseUrl": "/",
   "buildTag": "61e4a3d4804d",
   "recordedAt": "2024-07-01T00:00:00.000Z",
   "assets": [
@@ -11,6 +11,7 @@
     "bootstrap-fallback.js?v=507486ca1198.61e4a3d4804d",
     "script.js?v=af6f93eba5f8.61e4a3d4804d",
     "scripts/frame-guard.js?v=frame-guard.61e4a3d4804d",
+    "automation-bootstrap.js?v=a0394428a635.9233a9f5cad5-dirty",
     "test-driver.js?v=c11261fec8e5.61e4a3d4804d",
     "simple-experience.js?v=68521d86db78.61e4a3d4804d",
     "asset-resolver.js?v=388f0ca33542.61e4a3d4804d",

@@ -86,13 +86,18 @@ function loadManifestDocument() {
     throw new Error('asset-manifest.json must define an "assetBaseUrl" string.');
   }
 
+  const rawBaseUrl = manifest.assetBaseUrl.trim();
   let assetBaseUrl;
-  try {
-    assetBaseUrl = ensureTrailingSlash(new URL(manifest.assetBaseUrl.trim()).toString());
-  } catch (error) {
-    throw new Error(
-      `asset-manifest.json "assetBaseUrl" must be an absolute URL. Found: ${manifest.assetBaseUrl}`,
-    );
+  if (rawBaseUrl.startsWith('/') || rawBaseUrl.startsWith('./')) {
+    assetBaseUrl = ensureTrailingSlash(rawBaseUrl);
+  } else {
+    try {
+      assetBaseUrl = ensureTrailingSlash(new URL(rawBaseUrl).toString());
+    } catch (error) {
+      throw new Error(
+        `asset-manifest.json "assetBaseUrl" must be an absolute URL or a root-relative path. Found: ${manifest.assetBaseUrl}`,
+      );
+    }
   }
 
   return { ...manifest, assetBaseUrl };
@@ -113,10 +118,16 @@ function extractBootstrapProductionAssetRoot() {
   }
 
   const raw = match[1].trim();
+  if (raw.startsWith('/') || raw.startsWith('./')) {
+    return ensureTrailingSlash(raw);
+  }
+
   try {
     return ensureTrailingSlash(new URL(raw).toString());
   } catch (error) {
-    throw new Error(`script.js PRODUCTION_ASSET_ROOT must be an absolute URL. Found: ${raw}`);
+    throw new Error(
+      `script.js PRODUCTION_ASSET_ROOT must be an absolute URL or a root-relative path. Found: ${raw}`,
+    );
   }
 }
 

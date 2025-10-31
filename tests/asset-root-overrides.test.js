@@ -48,12 +48,12 @@ describe('asset root overrides', () => {
     expect(windowStub.APP_CONFIG.assetBaseUrl).toBe('http://192.168.1.15:4173/');
   });
 
-  it('falls back to the production CDN when no overrides apply', () => {
+  it('falls back to the bundled asset root when no overrides apply', () => {
     const { sandbox, windowStub } = createBootstrapSandbox({});
 
     evaluateBootstrapScript(sandbox);
 
-    expect(windowStub.APP_CONFIG.assetRoot).toBe('https://d3gj6x3ityfh5o.cloudfront.net/');
-    expect(windowStub.APP_CONFIG.assetBaseUrl).toBe('https://d3gj6x3ityfh5o.cloudfront.net/');
+    expect(windowStub.APP_CONFIG.assetRoot).toBe('/');
+    expect(windowStub.APP_CONFIG.assetBaseUrl).toBe('/');
   });
 });
