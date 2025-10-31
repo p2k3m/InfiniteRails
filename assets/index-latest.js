@@ -31,7 +31,7 @@
     }
   }
   if (!configuredSrc && config && typeof config.assetRoot === 'string' && config.assetRoot.trim()) {
-    configuredSrc = config.assetRoot.replace(/\/*$/, '/') + 'script.js?v=04489cbd9ab4.1e816fb1c1e5-dirty';
+    configuredSrc = config.assetRoot.replace(/\/*$/, '/') + 'script.js?v=649b1ad1145e.7a4f11715e5f';
   }
   var targetSrc = configuredSrc || defaultSrc;
   if (!targetSrc) {
@@ -82,4 +82,4 @@
   } else if (insertionPoint && typeof insertionPoint.appendChild === 'function') {
     insertionPoint.appendChild(scriptElement);
   }
-})(typeof globalThis !== 'undefined' ? globalThis : undefined, '../script.js?v=04489cbd9ab4.1e816fb1c1e5-dirty');
+})(typeof globalThis !== 'undefined' ? globalThis : undefined, '../script.js?v=649b1ad1145e.7a4f11715e5f');
