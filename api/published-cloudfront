@@ -3,11 +3,11 @@
   "generatedAt": "2024-07-01T00:00:00.000Z",
   "assetRoot": "/",
   "aliases": {
-    "index-latest.css": "/assets/index-latest.css?v=cad70101c3e6.0a08493c0fbd",
-    "index-latest.js": "/assets/index-latest.js?v=0ee77156aa62.93d1bda32af1"
+    "index-latest.css": "/assets/index-latest.css?v=cad70101c3e6.fc7f0e65505a",
+    "index-latest.js": "/assets/index-latest.js?v=3554a7b2d7bc.fc7f0e65505a"
   },
   "legacy": {
-    "index-1e47f298.css": "/assets/index-1e47f298.css?v=69293a2d8145.a38de030bd30",
-    "index-0da0d266.js": "/assets/index-0da0d266.js?v=1288877c9e9d.a38de030bd30"
+    "index-1e47f298.css": "/assets/index-1e47f298.css?v=c8c49e2451ff.fc7f0e65505a",
+    "index-0da0d266.js": "/assets/index-0da0d266.js?v=a68a8df2341b.fc7f0e65505a"
   }
 }
