@@ -291,6 +291,17 @@ function collectGltfAssets() {
     .map((file) => path.relative(repoRoot, file).split(path.sep).join('/'));
 }
 
+function findHashedEntrypoints(assets, extension) {
+  return assets.filter((asset) => {
+    if (!asset.startsWith('assets/index-') || !asset.endsWith(extension)) {
+      return false;
+    }
+
+    const latestAsset = `assets/index-latest${extension}`;
+    return asset !== latestAsset;
+  });
+}
+
 function loadManifestAssets() {
   return manifestDocument.assets
     .map((asset) => normalisePath(asset))
@@ -309,11 +320,14 @@ function getManifestVersionFor(assetPath) {
 
 const manifestAssets = loadManifestAssets();
 const manifestAssetSet = new Set(manifestAssets);
+const hashedLegacyCssEntrypoints = findHashedEntrypoints(manifestAssets, '.css');
+const hashedLegacyJsEntrypoints = findHashedEntrypoints(manifestAssets, '.js');
+const hashedLegacyEntrypoints = [...hashedLegacyCssEntrypoints, ...hashedLegacyJsEntrypoints];
+const hashedLegacyEntrypointFilenames = hashedLegacyEntrypoints.map((asset) => path.basename(asset));
 const legacyCdnAliasAssets = [
   'assets/index-latest.css',
-  'assets/index-1e47f298.css',
   'assets/index-latest.js',
-  'assets/index-0da0d266.js',
+  ...hashedLegacyEntrypoints,
   'api/published-cloudfront',
 ];
 
@@ -368,20 +382,28 @@ describe('deployment workflow asset coverage', () => {
     expect(payload.status).toBe('ok');
     expect(payload.assetRoot).toBe('/');
 
-    const aliasCss = payload.aliases?.['index-latest.css'];
-    const aliasJs = payload.aliases?.['index-latest.js'];
-    const legacyCss = payload.legacy?.['index-1e47f298.css'];
-    const legacyJs = payload.legacy?.['index-0da0d266.js'];
+    const aliasEntries = payload.aliases || {};
+    const legacyEntries = payload.legacy || {};
 
     const expectedAliasCss = `/assets/index-latest.css?v=${getManifestVersionFor('assets/index-latest.css')}`;
     const expectedAliasJs = `/assets/index-latest.js?v=${getManifestVersionFor('assets/index-latest.js')}`;
-    const expectedLegacyCss = `/assets/index-1e47f298.css?v=${getManifestVersionFor('assets/index-1e47f298.css')}`;
-    const expectedLegacyJs = `/assets/index-0da0d266.js?v=${getManifestVersionFor('assets/index-0da0d266.js')}`;
 
-    expect(aliasCss).toBe(expectedAliasCss);
-    expect(aliasJs).toBe(expectedAliasJs);
-    expect(legacyCss).toBe(expectedLegacyCss);
-    expect(legacyJs).toBe(expectedLegacyJs);
+    expect(aliasEntries['index-latest.css']).toBe(expectedAliasCss);
+    expect(aliasEntries['index-latest.js']).toBe(expectedAliasJs);
+
+    const expectedLegacyEntries = Object.fromEntries(
+      hashedLegacyEntrypointFilenames.map((filename) => {
+        const assetPath = `assets/${filename}`;
+        return [filename, `/assets/${filename}?v=${getManifestVersionFor(assetPath)}`];
+      }),
+    );
+
+    expect(Object.keys(expectedLegacyEntries).length).toBeGreaterThan(0);
+    expect(Object.keys(legacyEntries).sort()).toEqual(Object.keys(expectedLegacyEntries).sort());
+
+    for (const [filename, expectedPath] of Object.entries(expectedLegacyEntries)) {
+      expect(legacyEntries[filename]).toBe(expectedPath);
+    }
   });
 
   it('includes every GLTF model referenced by the experience', () => {
