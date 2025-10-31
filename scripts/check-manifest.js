@@ -7,6 +7,14 @@ const THREE = require('three');
 
 const repoRoot = path.resolve(__dirname, '..');
 
+function setGlobalNavigator(value) {
+  Object.defineProperty(globalThis, 'navigator', {
+    value,
+    configurable: true,
+    writable: true,
+  });
+}
+
 function createCanvasStub(overrides = {}) {
   const loseContextStub = { loseContext: () => {} };
   const webglContext = {
@@ -109,7 +117,7 @@ function ensureTestEnvironment() {
 
   globalThis.window = windowStub;
   globalThis.document = documentStub;
-  globalThis.navigator = { geolocation: { getCurrentPosition: () => {} }, maxTouchPoints: 0 };
+  setGlobalNavigator({ geolocation: { getCurrentPosition: () => {} }, maxTouchPoints: 0 });
   globalThis.performance = { now: () => Date.now() };
   globalThis.requestAnimationFrame = windowStub.requestAnimationFrame;
   globalThis.cancelAnimationFrame = windowStub.cancelAnimationFrame;

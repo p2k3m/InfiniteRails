@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
 
 const PLAYER_EYE_HEIGHT = 1.8;
@@ -16,6 +16,23 @@ if (typeof globalThis.WebGL2RenderingContext !== 'function') {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, '..');
+const originalNavigatorDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+
+function setGlobalNavigator(value) {
+  Object.defineProperty(globalThis, 'navigator', {
+    value,
+    configurable: true,
+    writable: true,
+  });
+}
+
+function restoreGlobalNavigator() {
+  if (originalNavigatorDescriptor) {
+    Object.defineProperty(globalThis, 'navigator', originalNavigatorDescriptor);
+  } else {
+    delete globalThis.navigator;
+  }
+}
 const PORTAL_SHADER_FALLBACK_ANNOUNCEMENT =
   'Portal shader offline — plain flashing color active while shaders recover.';
 
@@ -102,7 +119,7 @@ function ensureSimpleExperienceLoaded() {
 
   globalThis.window = windowStub;
   globalThis.document = documentStub;
-  globalThis.navigator = { geolocation: { getCurrentPosition: () => {} } };
+  setGlobalNavigator({ geolocation: { getCurrentPosition: () => {} } });
   globalThis.performance = { now: () => Date.now() };
   globalThis.requestAnimationFrame = windowStub.requestAnimationFrame;
   globalThis.cancelAnimationFrame = windowStub.cancelAnimationFrame;
@@ -358,6 +375,10 @@ beforeAll(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+});
+
+afterAll(() => {
+  restoreGlobalNavigator();
 });
 
 describe('dimension loot tables', () => {
