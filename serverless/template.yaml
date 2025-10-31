@@ -67,9 +67,7 @@ Resources:
             Action:
               - s3:GetObject
             Resource:
-              - !Sub "${AssetsBucket.Arn}/assets/*"
-              - !Sub "${AssetsBucket.Arn}/textures/*"
-              - !Sub "${AssetsBucket.Arn}/audio/*"
+              - !Sub "${AssetsBucket.Arn}/*"
 
   AssetsResponseHeadersPolicy:
     Type: AWS::CloudFront::ResponseHeadersPolicy
