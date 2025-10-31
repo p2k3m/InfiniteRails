@@ -14,6 +14,7 @@ const DEFAULT_TARGET_FILES = [
   'simple-experience.js',
   'asset-resolver.js',
   'tests/renderer-three-init.test.js',
+  'api/published-cloudfront',
 ];
 
 function escapeRegExp(value) {

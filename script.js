@@ -546,10 +546,10 @@ function loadScript(url, attributes = {}) {
 }
 
 const THREE_SCRIPT_URL = applyAssetVersionTag(
-  'vendor/three.min.js?v=030c75d4e909.fc7f0e65505a',
+  'vendor/three.min.js?v=030c75d4e909.8f12d087f673',
 );
 const GLTF_LOADER_SCRIPT_URL = applyAssetVersionTag(
-  'vendor/GLTFLoader.js?v=0e92b0589a2a.fc7f0e65505a',
+  'vendor/GLTFLoader.js?v=0e92b0589a2a.8f12d087f673',
 );
 
 let threeLoaderPromise = null;
