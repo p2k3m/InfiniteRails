@@ -1,6 +1,6 @@
 # CloudFront 403 Troubleshooting Runbook
 
-When every request to `d3gj6x3ityfh5o.cloudfront.net/*.js` (or other static asset paths) returns **HTTP 403**, CloudFront is unable to fetch the files from the origin bucket. This runbook documents the validation steps and fixes for the typical root causes: restrictive S3 bucket policies, object ACLs, and an incorrectly configured Origin Access Identity (OAI) or Origin Access Control (OAC).
+When every request to `d3gj6x3ityfh5o.cloudfront.net/*.js` (or other static asset paths) returns **HTTP 403**, CloudFront is unable to fetch the files from the origin bucket. The bootstrapper now logs `CloudFront returned HTTP 403 for asset-manifest.json — ensure the distribution can read from the origin bucket.` to direct on-call engineers to this document. This runbook documents the validation steps and fixes for the typical root causes: restrictive S3 bucket policies, object ACLs, and an incorrectly configured Origin Access Identity (OAI) or Origin Access Control (OAC).
 
 ## 1. Confirm the symptom
 

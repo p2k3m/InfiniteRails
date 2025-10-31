@@ -203,10 +203,18 @@
         }
       }
     } else if (consoleRef && typeof consoleRef.warn === 'function') {
-      consoleRef.warn('Manifest bootstrap request for asset-manifest.json failed.', {
+      const failureDetails = {
         status: request.status,
         statusText: request.statusText,
-      });
+      };
+      consoleRef.warn('Manifest bootstrap request for asset-manifest.json failed.', failureDetails);
+
+      if (request.status === 403 && typeof consoleRef.error === 'function') {
+        consoleRef.error(
+          'CloudFront returned HTTP 403 for asset-manifest.json — ensure the distribution can read from the origin bucket. See docs/cdn-permissions-runbook.md for recovery steps.',
+          failureDetails,
+        );
+      }
     }
   } catch (error) {
     if (consoleRef && typeof consoleRef.error === 'function') {
