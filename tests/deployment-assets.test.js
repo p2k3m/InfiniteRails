@@ -10,6 +10,7 @@ const workflowPath = path.join(repoRoot, '.github', 'workflows', 'deploy.yml');
 const manifestPath = path.join(repoRoot, 'asset-manifest.json');
 const templatePath = path.join(repoRoot, 'serverless', 'template.yaml');
 const scriptPath = path.join(repoRoot, 'script.js');
+const aliasManifestPath = path.join(repoRoot, 'api', 'published-cloudfront');
 
 const indexHtml = fs.readFileSync(indexHtmlPath, 'utf8');
 const workflowContents = fs.readFileSync(workflowPath, 'utf8');
@@ -296,8 +297,25 @@ function loadManifestAssets() {
     .filter((asset) => typeof asset === 'string' && asset.length > 0);
 }
 
+function getManifestVersionFor(assetPath) {
+  const entry = manifestDocument.assets.find((candidate) => normalisePath(candidate) === assetPath);
+  if (!entry) {
+    throw new Error(`Manifest is missing an entry for ${assetPath}`);
+  }
+  const [, query = ''] = entry.split('?', 2);
+  const params = new URLSearchParams(query);
+  return params.get('v') || '';
+}
+
 const manifestAssets = loadManifestAssets();
 const manifestAssetSet = new Set(manifestAssets);
+const legacyCdnAliasAssets = [
+  'assets/index-latest.css',
+  'assets/index-1e47f298.css',
+  'assets/index-latest.js',
+  'assets/index-0da0d266.js',
+  'api/published-cloudfront',
+];
 
 describe('deployment workflow asset coverage', () => {
   it('aligns manifest assetBaseUrl with the bootstrap production asset root', () => {
@@ -340,6 +358,30 @@ describe('deployment workflow asset coverage', () => {
     const missing = requiredAssets.filter((asset) => !manifestAssetSet.has(asset));
 
     expect(missing).toEqual([]);
+  });
+
+  it('publishes legacy CDN alias metadata for hashed entrypoints', () => {
+    expect(fs.existsSync(aliasManifestPath)).toBe(true);
+
+    const payload = JSON.parse(fs.readFileSync(aliasManifestPath, 'utf8'));
+    expect(payload).toBeTruthy();
+    expect(payload.status).toBe('ok');
+    expect(payload.assetRoot).toBe('/');
+
+    const aliasCss = payload.aliases?.['index-latest.css'];
+    const aliasJs = payload.aliases?.['index-latest.js'];
+    const legacyCss = payload.legacy?.['index-1e47f298.css'];
+    const legacyJs = payload.legacy?.['index-0da0d266.js'];
+
+    const expectedAliasCss = `/assets/index-latest.css?v=${getManifestVersionFor('assets/index-latest.css')}`;
+    const expectedAliasJs = `/assets/index-latest.js?v=${getManifestVersionFor('assets/index-latest.js')}`;
+    const expectedLegacyCss = `/assets/index-1e47f298.css?v=${getManifestVersionFor('assets/index-1e47f298.css')}`;
+    const expectedLegacyJs = `/assets/index-0da0d266.js?v=${getManifestVersionFor('assets/index-0da0d266.js')}`;
+
+    expect(aliasCss).toBe(expectedAliasCss);
+    expect(aliasJs).toBe(expectedAliasJs);
+    expect(legacyCss).toBe(expectedLegacyCss);
+    expect(legacyJs).toBe(expectedLegacyJs);
   });
 
   it('includes every GLTF model referenced by the experience', () => {
@@ -572,7 +614,10 @@ describe('deployment workflow asset coverage', () => {
   });
 
   it('does not include unreachable manifest assets', () => {
-    const { unreachable } = listUnreachableManifestAssets(manifestAssets, { baseDir: repoRoot });
+    const { unreachable } = listUnreachableManifestAssets(manifestAssets, {
+      baseDir: repoRoot,
+      alwaysReachable: legacyCdnAliasAssets,
+    });
 
     expect(unreachable).toEqual([]);
   });
