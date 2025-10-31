@@ -139,6 +139,7 @@ jobs:
             --include "combat-utils.js" \
             --include "crafting.js" \
             --include "test-driver.js" \
+            --include "automation-bootstrap.js" \
             --include "script.js" \
             --include "simple-experience.js" \
             --include "controls.config.js" \

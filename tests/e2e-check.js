@@ -196,7 +196,7 @@ async function loadTestDriver(page) {
   }
 
   const driverPath = path.join(process.cwd(), 'test-driver.js');
-  const cspSafeUrl = 'https://d3gj6x3ityfh5o.cloudfront.net/__e2e__/test-driver.js';
+  const cspSafeUrl = /\/test-driver\.js(?:\?.*)?$/;
   let fulfillError = null;
   let fulfilled = false;
 

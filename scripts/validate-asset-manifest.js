@@ -59,11 +59,17 @@ function extractBootstrapProductionAssetRoot() {
   }
 
   const raw = match[1].trim();
+  if (raw.startsWith('/') || raw.startsWith('./')) {
+    return ensureTrailingSlash(raw);
+  }
+
   let parsed;
   try {
     parsed = new URL(raw);
   } catch (error) {
-    throw new Error(`script.js PRODUCTION_ASSET_ROOT must be an absolute URL. Found: ${raw}`);
+    throw new Error(
+      `script.js PRODUCTION_ASSET_ROOT must be an absolute URL or a root-relative path. Found: ${raw}`,
+    );
   }
 
   return ensureTrailingSlash(parsed.toString());
@@ -285,13 +291,18 @@ function loadManifest() {
     throw new Error('asset-manifest.json must define an "assetBaseUrl" string.');
   }
 
+  const rawBaseUrl = raw.assetBaseUrl.trim();
   let manifestBaseUrl;
-  try {
-    manifestBaseUrl = ensureTrailingSlash(new URL(raw.assetBaseUrl.trim()).toString());
-  } catch (error) {
-    throw new Error(
-      `asset-manifest.json "assetBaseUrl" must be an absolute URL. Found: ${raw.assetBaseUrl}`,
-    );
+  if (rawBaseUrl.startsWith('/') || rawBaseUrl.startsWith('./')) {
+    manifestBaseUrl = ensureTrailingSlash(rawBaseUrl);
+  } else {
+    try {
+      manifestBaseUrl = ensureTrailingSlash(new URL(rawBaseUrl).toString());
+    } catch (error) {
+      throw new Error(
+        `asset-manifest.json "assetBaseUrl" must be an absolute URL or a root-relative path. Found: ${raw.assetBaseUrl}`,
+      );
+    }
   }
 
   if (bootstrapAssetRoot && manifestBaseUrl !== bootstrapAssetRoot) {

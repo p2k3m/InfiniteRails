@@ -8,12 +8,12 @@ const { applyTraceHeaders, embedTraceInBody } = require('./trace');
  */
 const CONTENT_SECURITY_POLICY = [
   "default-src 'self'",
-  "connect-src 'self' https://d3gj6x3ityfh5o.cloudfront.net https://*.infiniterails.app https://*.amazonaws.com https://accounts.google.com https://www.googleapis.com https://*.googleapis.com",
-  "script-src 'self' https://d3gj6x3ityfh5o.cloudfront.net https://accounts.google.com",
+  "connect-src 'self' https://*.infiniterails.app https://*.amazonaws.com https://accounts.google.com https://www.googleapis.com https://*.googleapis.com",
+  "script-src 'self' https://accounts.google.com",
   "style-src 'self' 'unsafe-inline' https://accounts.google.com https://*.gstatic.com",
-  "img-src 'self' data: blob: https://d3gj6x3ityfh5o.cloudfront.net https://accounts.google.com https://*.gstatic.com",
+  "img-src 'self' data: blob: https://accounts.google.com https://*.gstatic.com",
   "font-src 'self' data: https://accounts.google.com https://*.gstatic.com",
-  "media-src 'self' data: https://d3gj6x3ityfh5o.cloudfront.net",
+  "media-src 'self' data:",
   "frame-src 'self' https://accounts.google.com",
   "child-src 'self' https://accounts.google.com",
   "manifest-src 'self'",
