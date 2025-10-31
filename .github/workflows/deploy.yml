@@ -133,6 +133,7 @@ jobs:
             --exclude "*" \
             --include "index.html" \
             --include "styles.css" \
+            --include "manifest-bootstrap.js" \
             --include "asset-resolver.js" \
             --include "audio-aliases.js" \
             --include "audio-captions.js" \
