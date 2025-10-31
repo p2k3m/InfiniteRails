@@ -115,6 +115,14 @@ if (typeof globalThis.WebGL2RenderingContext !== 'function') {
 
 const repoRoot = path.resolve(__dirname, '..', '..');
 
+function setGlobalNavigator(value) {
+  Object.defineProperty(globalThis, 'navigator', {
+    value,
+    configurable: true,
+    writable: true,
+  });
+}
+
 let pluginRegistryLoaded = false;
 let simpleExperienceLoaded = false;
 let documentStub = null;
@@ -271,7 +279,7 @@ function ensureTestEnvironment() {
 
   globalThis.window = windowStub;
   globalThis.document = documentStub;
-  globalThis.navigator = { geolocation: { getCurrentPosition: () => {} }, maxTouchPoints: 0 };
+  setGlobalNavigator({ geolocation: { getCurrentPosition: () => {} }, maxTouchPoints: 0 });
   globalThis.performance = { now: () => Date.now() };
   globalThis.requestAnimationFrame = windowStub.requestAnimationFrame;
   globalThis.cancelAnimationFrame = windowStub.cancelAnimationFrame;

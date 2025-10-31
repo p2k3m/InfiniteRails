@@ -15,6 +15,22 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, '..');
 
+function setGlobalNavigator(value) {
+  Object.defineProperty(globalThis, 'navigator', {
+    value,
+    configurable: true,
+    writable: true,
+  });
+}
+
+function restoreGlobalNavigator(descriptor) {
+  if (descriptor) {
+    Object.defineProperty(globalThis, 'navigator', descriptor);
+  } else {
+    delete globalThis.navigator;
+  }
+}
+
 function extractDefaultBindings({ source, hotbarConstantName, hotbarCount }) {
   const marker = 'const DEFAULT_KEY_BINDINGS = (() => {';
   const start = source.indexOf(marker);
@@ -108,7 +124,7 @@ function createCanvasStub() {
 let simpleExperienceLoaded = false;
 let originalWindow;
 let originalDocument;
-let originalNavigator;
+let originalNavigatorDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
 let originalPerformance;
 let originalRequestAnimationFrame;
 let originalCancelAnimationFrame;
@@ -156,7 +172,7 @@ function ensureSimpleExperienceLoaded() {
 
   originalWindow = globalThis.window;
   originalDocument = globalThis.document;
-  originalNavigator = globalThis.navigator;
+  originalNavigatorDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
   originalPerformance = globalThis.performance;
   originalRequestAnimationFrame = globalThis.requestAnimationFrame;
   originalCancelAnimationFrame = globalThis.cancelAnimationFrame;
@@ -167,7 +183,7 @@ function ensureSimpleExperienceLoaded() {
   globalThis.THREE = THREE;
   globalThis.window = windowStub;
   globalThis.document = documentStub;
-  globalThis.navigator = { geolocation: { getCurrentPosition: () => {} } };
+  setGlobalNavigator({ geolocation: { getCurrentPosition: () => {} } });
   globalThis.performance = { now: () => Date.now() };
   globalThis.requestAnimationFrame = windowStub.requestAnimationFrame;
   globalThis.cancelAnimationFrame = windowStub.cancelAnimationFrame;
@@ -180,7 +196,7 @@ function ensureSimpleExperienceLoaded() {
 function restoreGlobals() {
   globalThis.window = originalWindow;
   globalThis.document = originalDocument;
-  globalThis.navigator = originalNavigator;
+  restoreGlobalNavigator(originalNavigatorDescriptor);
   globalThis.performance = originalPerformance;
   globalThis.requestAnimationFrame = originalRequestAnimationFrame;
   globalThis.cancelAnimationFrame = originalCancelAnimationFrame;
