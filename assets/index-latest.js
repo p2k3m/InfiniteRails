@@ -31,7 +31,7 @@
     }
   }
   if (!configuredSrc && config && typeof config.assetRoot === 'string' && config.assetRoot.trim()) {
-    configuredSrc = config.assetRoot.replace(/\/*$/, '/') + 'script.js?v=3cefe844421a.98a515a8178f';
+    configuredSrc = config.assetRoot.replace(/\/*$/, '/') + 'script.js?v=b86f77d1660d.a38de030bd30';
   }
   var targetSrc = configuredSrc || defaultSrc;
   if (!targetSrc) {
@@ -82,4 +82,4 @@
   } else if (insertionPoint && typeof insertionPoint.appendChild === 'function') {
     insertionPoint.appendChild(scriptElement);
   }
-})(typeof globalThis !== 'undefined' ? globalThis : undefined, '../script.js?v=3cefe844421a.98a515a8178f');
+})(typeof globalThis !== 'undefined' ? globalThis : undefined, '../script.js?v=b86f77d1660d.a38de030bd30');
