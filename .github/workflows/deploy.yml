@@ -150,6 +150,7 @@ jobs:
             --include "portal-mechanics.js" \
             --include "scoreboard-utils.js" \
             --include "scripts/**" \
+            --include "api/**" \
             --include "assets/**" \
             --include "audio/**" \
             --include "textures/**" \

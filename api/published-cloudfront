@@ -1,0 +1,13 @@
+{
+  "status": "ok",
+  "generatedAt": "2024-07-01T00:00:00.000Z",
+  "assetRoot": "/",
+  "aliases": {
+    "index-latest.css": "/assets/index-latest.css?v=d6d417a0806f.1e816fb1c1e5-dirty",
+    "index-latest.js": "/assets/index-latest.js?v=39c5998969c6.1e816fb1c1e5-dirty"
+  },
+  "legacy": {
+    "index-1e47f298.css": "/assets/index-1e47f298.css?v=37c5d9c9532f.1e816fb1c1e5-dirty",
+    "index-0da0d266.js": "/assets/index-0da0d266.js?v=d04cb1b6ab6e.1e816fb1c1e5-dirty"
+  }
+}
