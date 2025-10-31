@@ -16,7 +16,7 @@
     return;
   }
   var scriptElement = documentRef.createElement('script');
-  scriptElement.src = './index-latest.js?v=375d706ee614.fbb0887537e5';
+  scriptElement.src = './index-latest.js?v=cf083b4e740b.98a515a8178f';
   scriptElement.async = false;
   scriptElement.defer = false;
   var insertionPoint = documentRef.currentScript && documentRef.currentScript.parentNode
