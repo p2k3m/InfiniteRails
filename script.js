@@ -2651,6 +2651,23 @@ async function probeManifestAsset(scope, asset) {
   if (!url) {
     return { ok: false, reason: 'missing-url' };
   }
+
+  let protocol = null;
+  try {
+    protocol = new URL(url).protocol;
+  } catch (error) {
+    if (url.startsWith('//')) {
+      try {
+        protocol = new URL(`http:${url}`).protocol;
+      } catch (_) {
+        protocol = null;
+      }
+    }
+  }
+
+  if (protocol === 'file:') {
+    return { ok: true, reason: 'file-scheme-skipped' };
+  }
   try {
     const response = await fetchWithTimeout(asset.url, {
       method: 'HEAD',
