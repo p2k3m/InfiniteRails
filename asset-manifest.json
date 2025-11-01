@@ -12,6 +12,7 @@
     "downlevel-polyfills.js?v=2151404cf1c4.8f12d087f673",
     "bootstrap-fallback.js?v=87161f0d5f84.8f12d087f673",
     "boot-recovery.js?v=1a8d1c794902.8f12d087f673",
+    "scripts/cdn-guard.js?v=8f12d087f673",
     "script.js?v=f7e0ff71fd4a.8f12d087f673",
     "assets/index-latest.js?v=3554a7b2d7bc.8f12d087f673",
     "assets/index-0da0d266.js?v=a68a8df2341b.8f12d087f673",
