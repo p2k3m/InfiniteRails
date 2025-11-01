@@ -2807,6 +2807,44 @@ async function fetchWithTimeout(resource, options = {}) {
   }
 }
 
+function shouldRetryManifestProbeWithGet(status) {
+  if (typeof status !== 'number') {
+    return false;
+  }
+  return (
+    status === 0 ||
+    status === 401 ||
+    status === 403 ||
+    status === 405 ||
+    status === 406 ||
+    status === 412 ||
+    status === 415
+  );
+}
+
+async function retryManifestProbeWithGet(scope, asset) {
+  try {
+    const response = await fetchWithTimeout(asset.url, {
+      method: 'GET',
+      cache: 'no-store',
+      credentials: 'include',
+      redirect: 'follow',
+    });
+    if (!response || typeof response.ok !== 'boolean') {
+      return { ok: false, reason: 'invalid-response' };
+    }
+    if (response.ok || response.status === 206) {
+      return { ok: true, reason: 'get-probe-succeeded' };
+    }
+    if (response.status === 304) {
+      return { ok: true, reason: 'get-probe-not-modified' };
+    }
+    return { ok: false, reason: `status-${response.status}` };
+  } catch (error) {
+    return { ok: false, reason: error?.name ?? 'network-error' };
+  }
+}
+
 async function probeManifestAsset(scope, asset) {
   const url = typeof asset?.url === 'string' && asset.url ? asset.url : null;
   if (!url) {
@@ -2839,10 +2877,18 @@ async function probeManifestAsset(scope, asset) {
       return { ok: false, reason: 'invalid-response' };
     }
     if (!response.ok) {
+      if (shouldRetryManifestProbeWithGet(response.status)) {
+        const fallbackResult = await retryManifestProbeWithGet(scope, asset);
+        return fallbackResult;
+      }
       return { ok: false, reason: `status-${response.status}` };
     }
     return { ok: true };
   } catch (error) {
+    const fallbackResult = await retryManifestProbeWithGet(scope, asset);
+    if (fallbackResult.ok || fallbackResult.reason) {
+      return fallbackResult;
+    }
     return { ok: false, reason: error?.name ?? 'network-error' };
   }
 }
