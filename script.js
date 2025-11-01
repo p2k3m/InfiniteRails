@@ -3198,11 +3198,16 @@ function applyManifestFailoverOverride(scope, context = {}) {
   }
   clearPersistedAssetRootOverrides(scope);
   try {
-    scope.console?.info?.('[InfiniteRails] Manifest probe detected CDN 403. Falling back to local assets.', {
+    const logMessage =
+      context?.status === 403
+        ? '[InfiniteRails] Manifest probe detected CDN 403. Falling back to local assets.'
+        : '[InfiniteRails] Manifest failover activated. Falling back to local assets.';
+    scope.console?.info?.(logMessage, {
       fallbackAssetRoot: fallbackRoot,
       previousAssetRoot: previousRoot,
       status: context?.status ?? null,
       url: context?.url ?? null,
+      code: context?.code ?? null,
     });
   } catch (error) {
     // ignore console failures during diagnostics failover
@@ -3210,11 +3215,101 @@ function applyManifestFailoverOverride(scope, context = {}) {
   return true;
 }
 
+function resolveUrlOriginForScope(scope, value) {
+  const candidate = ensureString(value).trim();
+  if (!candidate) {
+    return null;
+  }
+  const location = getBootstrapLocation(scope);
+  const locationHref = ensureString(location?.href) || null;
+  const protocol = ensureString(location?.protocol) || 'https:';
+  const defaultBase = locationHref || `${protocol}//localhost/`;
+  try {
+    return new URL(candidate, defaultBase).origin;
+  } catch (error) {
+    if (candidate.startsWith('//')) {
+      try {
+        return new URL(`${protocol}${candidate}`).origin;
+      } catch (fallbackError) {
+        return null;
+      }
+    }
+  }
+  return null;
+}
+
+function shouldBypassManifestProbes(scope, manifest) {
+  if (!scope || !manifest || typeof manifest !== 'object') {
+    return false;
+  }
+  const appConfig = scope.APP_CONFIG || (scope.APP_CONFIG = {});
+  const probeMode = ensureString(appConfig.assetProbeMode).trim().toLowerCase();
+  if (probeMode === 'remote-only') {
+    return false;
+  }
+  if (probeMode === 'local-only') {
+    return true;
+  }
+  const manifestBase = ensureString(manifest.resolvedAssetBaseUrl ?? manifest.assetBaseUrl);
+  if (!manifestBase) {
+    return false;
+  }
+  const manifestOrigin = resolveUrlOriginForScope(scope, manifestBase);
+  const location = getBootstrapLocation(scope);
+  const locationOrigin = ensureString(location?.origin) || resolveUrlOriginForScope(scope, ensureString(location?.href));
+  if (!manifestOrigin || !locationOrigin) {
+    return false;
+  }
+  if (manifestOrigin === locationOrigin) {
+    return false;
+  }
+  const environment = ensureString(appConfig.environment).trim().toLowerCase();
+  if (environment && environment !== 'production') {
+    return true;
+  }
+  const hostname = ensureString(location?.hostname).trim().toLowerCase();
+  if (!environment && hostname && isLocalNetworkHostname(hostname)) {
+    return true;
+  }
+  return false;
+}
+
 async function startManifestIntegrityVerification({ source = 'manual', scope = manifestDiagnosticsScope } = {}) {
   if (!scope) {
     return { ok: false, reason: 'no-scope' };
   }
-  const manifest = ensureManifestHydrated(scope) ?? scope.__INFINITE_RAILS_ASSET_MANIFEST__ ?? scope.ASSET_MANIFEST ?? null;
+  let manifest =
+    ensureManifestHydrated(scope) ?? scope.__INFINITE_RAILS_ASSET_MANIFEST__ ?? scope.ASSET_MANIFEST ?? null;
+  const bypassManifestProbes = shouldBypassManifestProbes(scope, manifest);
+  if (bypassManifestProbes) {
+    const manifestBase = ensureString(manifest?.resolvedAssetBaseUrl ?? manifest?.assetBaseUrl ?? '');
+    const bypassContext = {
+      type: 'bypass',
+      code: 'non-production-manifest',
+      message: 'Remote manifest probing disabled outside production environments.',
+      url: manifestBase || null,
+    };
+    const overrideApplied = applyManifestFailoverOverride(scope, bypassContext);
+    if (overrideApplied) {
+      manifest =
+        ensureManifestHydrated(scope) ??
+        scope.__INFINITE_RAILS_ASSET_MANIFEST__ ??
+        scope.ASSET_MANIFEST ??
+        manifest;
+    }
+    try {
+      const locationOrigin = resolveUrlOriginForScope(scope, ensureString(scope?.location?.href));
+      const manifestOrigin = resolveUrlOriginForScope(scope, manifestBase);
+      const environment = ensureString(scope?.APP_CONFIG?.environment).trim().toLowerCase() || null;
+      scope.console?.info?.('[InfiniteRails] Skipping remote manifest probes outside production.', {
+        environment,
+        manifestOrigin,
+        pageOrigin: locationOrigin,
+      });
+    } catch (error) {
+      // ignore console failures when reporting probe bypass
+    }
+  }
   const records = Array.isArray(manifest?.assets) ? manifest.assets : [];
   if (records.length === 0) {
     renderManifestDiagnostics(scope, []);
