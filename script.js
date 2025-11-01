@@ -27,6 +27,13 @@ const DEFAULT_SCOREBOARD_MESSAGE =
   'Google Sign-In unavailable — configure APP_CONFIG.googleClientId to enable SSO.';
 
 const ASSET_VERSION = 1;
+const LOCAL_ASSET_ROOT_TOKENS = Object.freeze(new Set(['local', 'offline', 'self']));
+const PRIVATE_IPV4_PATTERNS = Object.freeze([
+  /^10(?:\.\d{1,3}){3}$/,
+  /^192\.168(?:\.\d{1,3}){2}$/,
+  /^172\.(?:1[6-9]|2[0-9]|3[0-1])(?:\.\d{1,3}){2}$/,
+  /^169\.254(?:\.\d{1,3}){2}$/,
+]);
 
 (function setupBootstrapTracing(globalScope) {
   const scope =
@@ -4036,14 +4043,6 @@ const ASSET_ROOT_STORAGE_KEYS = Object.freeze([
   'infiniteRails.assetRootOverride',
   'InfiniteRails.assetRootOverride',
   'InfiniteRails.assetRoot',
-]);
-
-const LOCAL_ASSET_ROOT_TOKENS = Object.freeze(new Set(['local', 'offline', 'self']));
-const PRIVATE_IPV4_PATTERNS = Object.freeze([
-  /^10(?:\.\d{1,3}){3}$/,
-  /^192\.168(?:\.\d{1,3}){2}$/,
-  /^172\.(?:1[6-9]|2[0-9]|3[0-1])(?:\.\d{1,3}){2}$/,
-  /^169\.254(?:\.\d{1,3}){2}$/,
 ]);
 
 function isLocalNetworkHostname(hostname) {
