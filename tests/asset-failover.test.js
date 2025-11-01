@@ -58,12 +58,12 @@ describe('asset CDN failover', () => {
     expect(firstResponse.ok).toBe(true);
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(requests[0]).toBe(cdnAssetUrl);
-    expect(requests[1]).toBe('https://example.com/asset-manifest.json?assetVersion=1');
+    expect(requests[1]).toBe('./asset-manifest.json?assetVersion=1');
 
     const failoverState = windowStub.__INFINITE_RAILS_TEST_HOOKS__?.getAssetFailoverState?.();
     expect(failoverState?.failoverActive).toBe(true);
-    expect(failoverState?.fallbackRoot).toBe('https://example.com/');
-    expect(windowStub.APP_CONFIG.assetRoot).toBe('https://example.com/');
+    expect(failoverState?.fallbackRoot).toBe('./');
+    expect(windowStub.APP_CONFIG.assetRoot).toBe('./');
 
     const removedKeys = sandbox.localStorage.removeItem.mock.calls.map((call) => call[0]);
     expect(removedKeys).toEqual(
@@ -86,7 +86,7 @@ describe('asset CDN failover', () => {
     const secondResponse = await wrappedFetch(cdnAssetUrl);
     expect(secondResponse.ok).toBe(true);
     expect(fetchMock).toHaveBeenCalledTimes(3);
-    expect(requests[2]).toBe('https://example.com/asset-manifest.json?assetVersion=1');
+    expect(requests[2]).toBe('./asset-manifest.json?assetVersion=1');
   });
 
   it('activates failover when manifest diagnostics encounter HTTP 403 responses', async () => {

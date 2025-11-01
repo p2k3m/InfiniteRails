@@ -4206,6 +4206,11 @@ function resolveLocalAssetFallback(scope) {
   const location = getBootstrapLocation(scope);
   const href = ensureString(location?.href);
   if (href) {
+    const hostname = ensureString(location?.hostname);
+    const shouldUseOriginFallback = !hostname || isLocalNetworkHostname(hostname);
+    if (!shouldUseOriginFallback) {
+      return DEFAULT_LOCAL_ASSET_ROOT;
+    }
     try {
       const baseUrl = new URL('.', href);
       return resolveDistinctLocalFallback(scope, baseUrl.toString(), appConfig.assetRoot);
