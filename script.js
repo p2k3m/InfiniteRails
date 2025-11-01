@@ -2735,6 +2735,17 @@ function ensureManifestHydrated(scope) {
   }
   scope.__INFINITE_RAILS_ASSET_MANIFEST__ = manifest;
   scope.ASSET_MANIFEST = manifest;
+  try {
+    const manifestRootCandidate =
+      (typeof manifest.resolvedAssetBaseUrl === 'string' && manifest.resolvedAssetBaseUrl) ||
+      (typeof manifest.assetBaseUrl === 'string' && manifest.assetBaseUrl) ||
+      null;
+    if (manifestRootCandidate) {
+      initialiseAssetFailover(scope, manifestRootCandidate);
+    }
+  } catch (error) {
+    // ignore failover initialisation issues so manifest hydration can still succeed
+  }
   return manifest;
 }
 
@@ -2900,10 +2911,27 @@ function hasDistinctAssetFailoverRoot(scope) {
   }
   const appConfig = scope.APP_CONFIG || (scope.APP_CONFIG = {});
   const activeRoot = normaliseAssetRootCandidate(appConfig.assetRoot, scope);
+  const fallbackLower = fallbackRoot.toLowerCase();
+  const primaryLower =
+    typeof state.primaryRootLower === 'string'
+      ? state.primaryRootLower
+      : typeof state.primaryRoot === 'string'
+        ? state.primaryRoot.toLowerCase()
+        : null;
   if (!activeRoot || !activeRoot.trim()) {
+    if (primaryLower && fallbackLower !== primaryLower) {
+      return true;
+    }
     return true;
   }
-  return fallbackRoot.toLowerCase() !== activeRoot.toLowerCase();
+  const activeLower = activeRoot.toLowerCase();
+  if (fallbackLower !== activeLower) {
+    return true;
+  }
+  if (primaryLower && fallbackLower !== primaryLower) {
+    return true;
+  }
+  return false;
 }
 
 function shouldRetryManifestProbeWithGet(scope, asset, status) {

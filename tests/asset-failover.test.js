@@ -192,6 +192,55 @@ describe('asset CDN failover', () => {
     expect(missingAssetWarning).toBeUndefined();
   });
 
+  it('avoids GET retries when manifest probes encounter CDN 403 responses', async () => {
+    const { sandbox, windowStub } = createBootstrapSandbox();
+
+    windowStub.__INFINITE_RAILS_MANIFEST_VERIFIED__ = true;
+    sandbox.__INFINITE_RAILS_MANIFEST_VERIFIED__ = true;
+
+    const manifestElement = windowStub.document.createElement('script');
+    manifestElement.setAttribute('id', 'assetManifest');
+    manifestElement.type = 'application/json';
+    manifestElement.textContent = JSON.stringify({
+      version: 1,
+      assetBaseUrl: 'https://d3gj6x3ityfh5o.cloudfront.net/',
+      assets: ['downlevel-polyfills.js'],
+    });
+    windowStub.document.body.appendChild(manifestElement);
+
+    const fetchMock = vi.fn((resource, init = {}) => {
+      const url = typeof resource === 'string' ? resource : resource?.url ?? '';
+      if (url.includes('d3gj6x3ityfh5o.cloudfront.net')) {
+        return Promise.resolve(createResponse({ ok: false, status: 403, statusText: 'Forbidden' }));
+      }
+      return Promise.resolve(createResponse({ ok: true, status: 200, statusText: 'OK' }));
+    });
+
+    sandbox.fetch = fetchMock;
+    sandbox.window.fetch = fetchMock;
+    windowStub.fetch = fetchMock;
+
+    evaluateBootstrapScript(sandbox);
+
+    const result = await sandbox.startManifestIntegrityVerification({
+      source: 'test',
+      scope: windowStub,
+    });
+
+    expect(result?.ok).toBe(true);
+
+    const cdnCalls = fetchMock.mock.calls.filter(([resource]) => {
+      const url = typeof resource === 'string' ? resource : resource?.url ?? '';
+      return url === 'https://d3gj6x3ityfh5o.cloudfront.net/downlevel-polyfills.js';
+    });
+    expect(cdnCalls).toHaveLength(1);
+    const [cdnResource, cdnInit = {}] = cdnCalls[0];
+    expect(typeof cdnResource === 'string' ? cdnResource : cdnResource?.url ?? '').toBe(
+      'https://d3gj6x3ityfh5o.cloudfront.net/downlevel-polyfills.js',
+    );
+    expect((cdnInit.method ?? 'GET').toUpperCase()).toBe('HEAD');
+  });
+
   it('ignores blocked CDN asset roots during bootstrap', () => {
     const { sandbox, windowStub } = createBootstrapSandbox({
       appConfig: { assetRoot: 'https://d3gj6x3ityfh5o.cloudfront.net/' },
