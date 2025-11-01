@@ -2577,6 +2577,167 @@ const manifestDiagnosticsScope = rendererModeScope ?? (typeof window !== 'undefi
 const MANIFEST_MISSING_LABEL = 'Manifest check missing assets';
 const MANIFEST_RELOAD_MESSAGE = 'Manifest integrity mismatch detected. Reloading to restore asset bundle.';
 
+function readInlineAssetManifest(scope) {
+  const documentRef = scope?.document ?? null;
+  if (!documentRef || typeof documentRef.getElementById !== 'function') {
+    return null;
+  }
+  const element = documentRef.getElementById('assetManifest');
+  if (!element) {
+    return null;
+  }
+  const payload = typeof element.textContent === 'string' ? element.textContent : element.innerText;
+  if (typeof payload !== 'string') {
+    return null;
+  }
+  const trimmed = payload.trim();
+  if (!trimmed) {
+    return null;
+  }
+  try {
+    return JSON.parse(trimmed);
+  } catch (error) {
+    scope?.console?.warn?.('Failed to parse inline asset manifest JSON.', error);
+    return null;
+  }
+}
+
+function isManifestHydrated(manifest) {
+  if (!manifest || typeof manifest !== 'object') {
+    return false;
+  }
+  if (!Array.isArray(manifest.assets) || manifest.assets.length === 0) {
+    return false;
+  }
+  return manifest.assets.every((asset) => asset && typeof asset.url === 'string' && asset.url.trim().length > 0);
+}
+
+function resolveManifestAbsoluteBase(scope, base) {
+  const locationRef = scope?.location ?? {};
+  const protocol = typeof locationRef.protocol === 'string' ? locationRef.protocol : 'https:';
+  const href = typeof locationRef.href === 'string' ? locationRef.href : `${protocol}//localhost/`;
+  const normalisedBase = typeof base === 'string' && base.trim().length ? base.trim() : './';
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(normalisedBase)) {
+    return ensureTrailingSlash(normalisedBase);
+  }
+  if (normalisedBase.startsWith('//')) {
+    return ensureTrailingSlash(`${protocol}${normalisedBase}`);
+  }
+  try {
+    return ensureTrailingSlash(new URL(normalisedBase, href).toString());
+  } catch (error) {
+    try {
+      return ensureTrailingSlash(new URL(normalisedBase, `${protocol}//localhost/`).toString());
+    } catch (fallbackError) {
+      try {
+        return ensureTrailingSlash(normalisedBase);
+      } catch (_) {
+        return ensureTrailingSlash('./');
+      }
+    }
+  }
+}
+
+function normaliseManifestAssetRecord(entry, absoluteBase) {
+  if (entry && typeof entry === 'object' && typeof entry.url === 'string') {
+    const trimmedUrl = entry.url.trim();
+    if (!trimmedUrl) {
+      return null;
+    }
+    let resolvedUrl = trimmedUrl;
+    if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(trimmedUrl) && !trimmedUrl.startsWith('//')) {
+      try {
+        resolvedUrl = new URL(trimmedUrl, absoluteBase).toString();
+      } catch (error) {
+        const fallbackBase = ensureTrailingSlash(absoluteBase);
+        resolvedUrl = `${fallbackBase}${trimmedUrl.replace(/^\/+/, '')}`;
+      }
+    }
+    return {
+      path: typeof entry.path === 'string' && entry.path.trim() ? entry.path.trim() : trimmedUrl,
+      url: resolvedUrl,
+      original: typeof entry.original === 'string' ? entry.original : trimmedUrl,
+      query: typeof entry.query === 'string' ? entry.query : null,
+    };
+  }
+  if (typeof entry !== 'string') {
+    return null;
+  }
+  const trimmed = entry.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const [pathAndQuery] = trimmed.split('#', 1);
+  const [rawPath, rawQuery = ''] = pathAndQuery.split('?', 2);
+  let resolvedUrl = trimmed;
+  try {
+    resolvedUrl = new URL(trimmed, absoluteBase).toString();
+  } catch (error) {
+    try {
+      const fallbackBase = ensureTrailingSlash(absoluteBase);
+      resolvedUrl = `${fallbackBase}${trimmed.replace(/^\/+/, '')}`;
+    } catch (_) {
+      resolvedUrl = trimmed;
+    }
+  }
+  return {
+    path: rawPath || trimmed,
+    url: resolvedUrl,
+    original: trimmed,
+    query: rawQuery || null,
+  };
+}
+
+function normaliseManifestPayload(scope, rawManifest) {
+  if (!rawManifest || typeof rawManifest !== 'object') {
+    return null;
+  }
+  const manifestBase = ensureTrailingSlash(
+    typeof rawManifest.assetBaseUrl === 'string' && rawManifest.assetBaseUrl.trim()
+      ? rawManifest.assetBaseUrl.trim()
+      : './',
+  );
+  const absoluteBase = resolveManifestAbsoluteBase(scope, manifestBase);
+  const rawAssets = Array.isArray(rawManifest.assets) ? rawManifest.assets : [];
+  const assets = rawAssets
+    .map((entry) => normaliseManifestAssetRecord(entry, absoluteBase))
+    .filter((record) => record && typeof record.url === 'string' && record.url.trim().length);
+  if (!assets.length) {
+    scope?.console?.warn?.('Inline manifest bootstrap could not resolve any assets.', {
+      assetBaseUrl: manifestBase,
+    });
+  }
+  return {
+    ...rawManifest,
+    assetBaseUrl: manifestBase,
+    resolvedAssetBaseUrl: absoluteBase,
+    assets,
+    hydratedAt: new Date().toISOString(),
+  };
+}
+
+function ensureManifestHydrated(scope) {
+  if (!scope) {
+    return null;
+  }
+  const existing = scope.__INFINITE_RAILS_ASSET_MANIFEST__ ?? scope.ASSET_MANIFEST ?? null;
+  if (isManifestHydrated(existing)) {
+    return existing;
+  }
+  const inlineManifest = readInlineAssetManifest(scope);
+  const candidate = inlineManifest || existing;
+  if (!candidate) {
+    return null;
+  }
+  const manifest = normaliseManifestPayload(scope, candidate);
+  if (!manifest) {
+    return null;
+  }
+  scope.__INFINITE_RAILS_ASSET_MANIFEST__ = manifest;
+  scope.ASSET_MANIFEST = manifest;
+  return manifest;
+}
+
 function getManifestDiagnosticsUi(scope) {
   const doc = scope?.document ?? null;
   if (!doc) {
@@ -2690,7 +2851,7 @@ async function startManifestIntegrityVerification({ source = 'manual', scope = m
   if (!scope) {
     return { ok: false, reason: 'no-scope' };
   }
-  const manifest = scope.__INFINITE_RAILS_ASSET_MANIFEST__ ?? scope.ASSET_MANIFEST ?? null;
+  const manifest = ensureManifestHydrated(scope) ?? scope.__INFINITE_RAILS_ASSET_MANIFEST__ ?? scope.ASSET_MANIFEST ?? null;
   const records = Array.isArray(manifest?.assets) ? manifest.assets : [];
   if (records.length === 0) {
     renderManifestDiagnostics(scope, []);

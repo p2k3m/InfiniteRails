@@ -27,4 +27,9 @@ describe('Manifest asset availability diagnostics', () => {
     const bootstrapPattern = /await startManifestIntegrityVerification\(\{\s*source:\s*'bootstrap'/;
     expect(bootstrapPattern.test(scriptSource)).toBe(true);
   });
+
+  it('embeds the asset manifest inline so bootstrap can hydrate without external scripts', () => {
+    expect(indexHtml.includes('id="assetManifest"')).toBe(true);
+    expect(indexHtml.includes('"assets/index-latest.js?v=3554a7b2d7bc.8f12d087f673"')).toBe(true);
+  });
 });
