@@ -261,6 +261,76 @@ describe('asset CDN failover', () => {
     expect(remoteCalls.length).toBe(0);
   });
 
+  it('bypasses remote manifest probes when the CDN asset root is temporarily blocked', async () => {
+    const { sandbox, windowStub, consoleStub } = createBootstrapSandbox({
+      appConfig: {
+        assetRoot: 'https://d3gj6x3ityfh5o.cloudfront.net/',
+      },
+    });
+
+    windowStub.location.href = 'https://play.infiniterails.dev/index.html';
+    windowStub.location.origin = 'https://play.infiniterails.dev';
+    windowStub.location.protocol = 'https:';
+    windowStub.location.host = 'play.infiniterails.dev';
+    windowStub.location.hostname = 'play.infiniterails.dev';
+
+    const manifestElement = windowStub.document.createElement('script');
+    manifestElement.setAttribute('id', 'assetManifest');
+    manifestElement.type = 'application/json';
+    manifestElement.textContent = JSON.stringify({
+      version: 1,
+      assetBaseUrl: 'https://d3gj6x3ityfh5o.cloudfront.net/',
+      assets: ['scripts/cdn-guard.js'],
+    });
+    windowStub.document.body.appendChild(manifestElement);
+
+    const blockPayload = [
+      {
+        root: 'https://d3gj6x3ityfh5o.cloudfront.net/',
+        expiresAt: Date.now() + 5 * 60 * 1000,
+        reason: 403,
+      },
+    ];
+    windowStub.localStorage.setItem(
+      'InfiniteRails.assetRootFailoverBlock',
+      JSON.stringify(blockPayload),
+    );
+
+    const fetchMock = vi.fn((resource) => {
+      const url = typeof resource === 'string' ? resource : resource?.url ?? '';
+      if (url.startsWith('https://d3gj6x3ityfh5o.cloudfront.net/')) {
+        throw new Error(`unexpected remote probe for ${url}`);
+      }
+      return Promise.resolve(createResponse({ ok: true, status: 200, statusText: 'OK' }));
+    });
+
+    sandbox.fetch = fetchMock;
+    sandbox.window.fetch = fetchMock;
+    windowStub.fetch = fetchMock;
+
+    evaluateBootstrapScript(sandbox);
+    await flushMicrotasks(5);
+
+    const verificationResult = await sandbox.startManifestIntegrityVerification({
+      source: 'test',
+      scope: windowStub,
+    });
+
+    expect(verificationResult?.ok).toBe(true);
+    const manifestAfterBypass = windowStub.__INFINITE_RAILS_ASSET_MANIFEST__;
+    expect(manifestAfterBypass?.resolvedAssetBaseUrl).toBe('./');
+    const remoteCalls = fetchMock.mock.calls.filter(([input]) => {
+      const url = typeof input === 'string' ? input : input?.url ?? '';
+      return url.startsWith('https://d3gj6x3ityfh5o.cloudfront.net/');
+    });
+    expect(remoteCalls.length).toBe(0);
+
+    const bypassLog = consoleStub.info.mock.calls.find(([message]) =>
+      message === '[InfiniteRails] Skipping remote manifest probes after CDN block.',
+    );
+    expect(bypassLog).toBeDefined();
+  });
+
   it('avoids GET retries when manifest probes encounter CDN 403 responses', async () => {
     const { sandbox, windowStub } = createBootstrapSandbox();
 
