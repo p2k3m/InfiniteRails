@@ -28,6 +28,8 @@ const DEFAULT_SCOREBOARD_MESSAGE =
 
 const ASSET_VERSION = 1;
 const LOCAL_ASSET_ROOT_TOKENS = Object.freeze(new Set(['local', 'offline', 'self']));
+const ASSET_FAILOVER_BLOCK_STORAGE_KEY = 'InfiniteRails.assetRootFailoverBlock';
+const ASSET_FAILOVER_BLOCK_DURATION_MS = 30 * 60 * 1000;
 const PRIVATE_IPV4_PATTERNS = Object.freeze([
   /^10(?:\.\d{1,3}){3}$/,
   /^192\.168(?:\.\d{1,3}){2}$/,
@@ -3301,9 +3303,6 @@ function shouldBypassManifestProbes(scope, manifest) {
   if (!manifestOrigin || !locationOrigin) {
     return result;
   }
-  if (manifestOrigin === locationOrigin) {
-    return result;
-  }
   const environment = ensureString(appConfig.environment).trim().toLowerCase();
   if (environment && environment !== 'production') {
     return {
@@ -3316,6 +3315,9 @@ function shouldBypassManifestProbes(scope, manifest) {
         environment,
       },
     };
+  }
+  if (manifestOrigin === locationOrigin) {
+    return result;
   }
   const hostname = ensureString(location?.hostname).trim().toLowerCase();
   if (!environment && hostname && isLocalNetworkHostname(hostname)) {
@@ -3339,9 +3341,37 @@ async function startManifestIntegrityVerification({ source = 'manual', scope = m
   }
   let manifest =
     ensureManifestHydrated(scope) ?? scope.__INFINITE_RAILS_ASSET_MANIFEST__ ?? scope.ASSET_MANIFEST ?? null;
-  const bypassEvaluation = shouldBypassManifestProbes(scope, manifest);
-  const bypassManifestProbes = bypassEvaluation?.bypass === true;
-  if (bypassManifestProbes) {
+  let bypassEvaluation = shouldBypassManifestProbes(scope, manifest);
+  if (!(bypassEvaluation?.bypass)) {
+    const appConfig = scope.APP_CONFIG || (scope.APP_CONFIG = {});
+    const manifestBaseCandidate = ensureString(
+      manifest?.resolvedAssetBaseUrl ?? manifest?.assetBaseUrl ?? appConfig.assetRoot ?? '',
+    );
+    const activeRootCandidate = ensureString(appConfig.assetRoot);
+    const locateBlockedRoot = (candidate) => {
+      const normalised = normaliseAssetRootCandidate(candidate, scope);
+      if (!normalised) {
+        return null;
+      }
+      const lower = normalised.toLowerCase();
+      return readAssetFailoverBlocks(scope).find((entry) => entry.lower === lower) ?? null;
+    };
+    const blockEntry = locateBlockedRoot(manifestBaseCandidate) ?? locateBlockedRoot(activeRootCandidate);
+    if (blockEntry) {
+      const manifestOrigin = resolveUrlOriginForScope(scope, manifestBaseCandidate || blockEntry.root);
+      bypassEvaluation = {
+        bypass: true,
+        reason: 'asset-root-blocked',
+        url: blockEntry.root,
+        details: {
+          manifestOrigin,
+          blockExpiresAt: blockEntry.expiresAt ?? null,
+          blockStatus: blockEntry.reason ?? null,
+        },
+      };
+    }
+  }
+  if (bypassEvaluation?.bypass) {
     const manifestBase = ensureString(
       manifest?.resolvedAssetBaseUrl ?? manifest?.assetBaseUrl ?? bypassEvaluation?.url ?? '',
     );
@@ -3399,6 +3429,12 @@ async function startManifestIntegrityVerification({ source = 'manual', scope = m
     } catch (error) {
       // ignore console failures when reporting probe bypass
     }
+    renderManifestDiagnostics(scope, []);
+    return {
+      ok: true,
+      reason: 'manifest-probe-bypassed',
+      bypass: bypassEvaluation?.reason ?? null,
+    };
   }
   const records = Array.isArray(manifest?.assets) ? manifest.assets : [];
   if (records.length === 0) {
@@ -3966,8 +4002,6 @@ function enforceAssetBaseConsistency(scope, resolvedRoot) {
 
 const PRODUCTION_ASSET_ROOT = ensureTrailingSlash('/');
 const DEFAULT_LOCAL_ASSET_ROOT = ensureTrailingSlash('./');
-const ASSET_FAILOVER_BLOCK_STORAGE_KEY = 'InfiniteRails.assetRootFailoverBlock';
-const ASSET_FAILOVER_BLOCK_DURATION_MS = 30 * 60 * 1000;
 
 const HOTBAR_SLOT_COUNT = 10;
 
