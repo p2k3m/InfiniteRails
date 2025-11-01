@@ -32,17 +32,19 @@ When every request to `d3gj6x3ityfh5o.cloudfront.net/*.js` (or other static asse
        "AWS": "arn:aws:iam::cloudfront:user/CloudFront Origin Access Identity E3ABCDEFG1234"
      },
      "Action": "s3:GetObject",
-     "Resource": [
-       "arn:aws:s3:::infinite-rails-prod-assets/index.html",
-       "arn:aws:s3:::infinite-rails-prod-assets/styles.css",
-       "arn:aws:s3:::infinite-rails-prod-assets/script.js",
-       "arn:aws:s3:::infinite-rails-prod-assets/assets/*",
-       "arn:aws:s3:::infinite-rails-prod-assets/textures/*",
-       "arn:aws:s3:::infinite-rails-prod-assets/audio/*",
-      "arn:aws:s3:::infinite-rails-prod-assets/vendor/*"
+    "Resource": [
+      "arn:aws:s3:::infinite-rails-prod-assets/*.html",
+      "arn:aws:s3:::infinite-rails-prod-assets/*.js",
+      "arn:aws:s3:::infinite-rails-prod-assets/*.css",
+      "arn:aws:s3:::infinite-rails-prod-assets/*.json",
+      "arn:aws:s3:::infinite-rails-prod-assets/assets/*",
+      "arn:aws:s3:::infinite-rails-prod-assets/textures/*",
+      "arn:aws:s3:::infinite-rails-prod-assets/audio/*",
+      "arn:aws:s3:::infinite-rails-prod-assets/vendor/*",
+      "arn:aws:s3:::infinite-rails-prod-assets/scripts/*"
     ]
-   }
-   ```
+  }
+  ```
    If you temporarily need world-readable access (for example, to debug a sandbox bucket without CloudFront), swap the principal for `"*"` or `{"AWS": "*"}` but keep the resource list identical so only the expected prefixes remain public:
 
    ```json
@@ -51,13 +53,19 @@ When every request to `d3gj6x3ityfh5o.cloudfront.net/*.js` (or other static asse
      "Effect": "Allow",
      "Principal": "*",
      "Action": "s3:GetObject",
-     "Resource": [
-       "arn:aws:s3:::infinite-rails-prod-assets/assets/*",
-       "arn:aws:s3:::infinite-rails-prod-assets/textures/*",
-       "arn:aws:s3:::infinite-rails-prod-assets/audio/*"
-     ]
-   }
-   ```
+    "Resource": [
+      "arn:aws:s3:::infinite-rails-prod-assets/*.html",
+      "arn:aws:s3:::infinite-rails-prod-assets/*.js",
+      "arn:aws:s3:::infinite-rails-prod-assets/*.css",
+      "arn:aws:s3:::infinite-rails-prod-assets/*.json",
+      "arn:aws:s3:::infinite-rails-prod-assets/assets/*",
+      "arn:aws:s3:::infinite-rails-prod-assets/textures/*",
+      "arn:aws:s3:::infinite-rails-prod-assets/audio/*",
+      "arn:aws:s3:::infinite-rails-prod-assets/vendor/*",
+      "arn:aws:s3:::infinite-rails-prod-assets/scripts/*"
+    ]
+  }
+  ```
    Remember to restore the OAI/OAC principal before leaving the bucket unattended in production.
 3. If the distribution uses an Origin Access Control, the principal should be the service principal `cloudfront.amazonaws.com` with the appropriate signing condition block. Update the policy accordingly and redeploy.
 
