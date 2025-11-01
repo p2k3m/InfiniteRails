@@ -191,6 +191,269 @@
         resetBootStatus();
         bootStatusApi.update('script', { status: 'active', message: 'Loading bootstrap script…' });
 
+        function setupLegacyEntrypointRecovery() {
+          if (!doc || typeof doc.addEventListener !== 'function') {
+            return;
+          }
+
+          var globalScope =
+            (typeof window !== 'undefined' && window) ||
+            (typeof globalThis !== 'undefined' && globalThis) ||
+            null;
+
+          var manifestCache = null;
+          var manifestResolved = false;
+          var experienceLabel = 'Infinite Rails';
+
+          if (globalScope && globalScope.APP_CONFIG && typeof globalScope.APP_CONFIG === 'object') {
+            var config = globalScope.APP_CONFIG;
+            var labelCandidates = [
+              config.portalName,
+              config.experienceName,
+              config.productName,
+              config.appName,
+              config.title,
+            ];
+            for (var i = 0; i < labelCandidates.length; i += 1) {
+              var candidate = labelCandidates[i];
+              if (typeof candidate === 'string') {
+                var trimmed = candidate.trim();
+                if (trimmed) {
+                  experienceLabel = trimmed;
+                  break;
+                }
+              }
+            }
+          }
+
+          function loadManifest() {
+            if (manifestResolved) {
+              return manifestCache;
+            }
+            manifestResolved = true;
+
+            var scopeManifest =
+              globalScope &&
+              globalScope.__INFINITE_RAILS_ASSET_MANIFEST__ &&
+              typeof globalScope.__INFINITE_RAILS_ASSET_MANIFEST__ === 'object'
+                ? globalScope.__INFINITE_RAILS_ASSET_MANIFEST__
+                : null;
+            if (scopeManifest && Array.isArray(scopeManifest.assets)) {
+              manifestCache = scopeManifest;
+              return manifestCache;
+            }
+
+            var inline = doc.getElementById && doc.getElementById('assetManifest');
+            if (inline && typeof inline.textContent === 'string') {
+              try {
+                var parsed = JSON.parse(inline.textContent);
+                if (parsed && typeof parsed === 'object') {
+                  manifestCache = parsed;
+                  return manifestCache;
+                }
+              } catch (error) {
+                /* ignore manifest parse failures */
+              }
+            }
+
+            manifestCache = null;
+            return manifestCache;
+          }
+
+          function findManifestAlias(manifest, key) {
+            if (!manifest || !Array.isArray(manifest.assets) || !key) {
+              return null;
+            }
+            for (var i = 0; i < manifest.assets.length; i += 1) {
+              var entry = manifest.assets[i];
+              if (typeof entry !== 'string' || !entry) {
+                continue;
+              }
+              if (entry === key || entry.indexOf(key + '?') === 0) {
+                return entry;
+              }
+            }
+            return null;
+          }
+
+          function resolveAliasUrl(sourceUrl, aliasPath) {
+            if (!aliasPath) {
+              return null;
+            }
+            if (!sourceUrl) {
+              return aliasPath;
+            }
+            try {
+              return new URL(aliasPath, sourceUrl).toString();
+            } catch (primaryError) {
+              try {
+                var baseMatch = sourceUrl.match(/^[^?#]*\//);
+                var basePath = baseMatch ? baseMatch[0] : '';
+                var normalisedAlias = aliasPath.replace(/^\.\/?/, '');
+                return basePath + normalisedAlias;
+              } catch (fallbackError) {
+                return aliasPath;
+              }
+            }
+          }
+
+          function cloneLinkAttributes(source, target) {
+            if (!source || !target) {
+              return;
+            }
+            if (source.rel) {
+              target.rel = source.rel;
+            }
+            if (source.media) {
+              target.media = source.media;
+            }
+            if (source.type) {
+              target.type = source.type;
+            }
+            if (source.crossOrigin) {
+              target.crossOrigin = source.crossOrigin;
+            }
+            if (source.referrerPolicy) {
+              target.referrerPolicy = source.referrerPolicy;
+            }
+            if (source.integrity) {
+              target.integrity = source.integrity;
+            }
+            if (source.as) {
+              target.as = source.as;
+            }
+            if (source.disabled) {
+              target.disabled = true;
+            }
+          }
+
+          function cloneScriptAttributes(source, target) {
+            if (!source || !target) {
+              return;
+            }
+            if (source.type) {
+              target.type = source.type;
+            }
+            if (source.noModule) {
+              target.noModule = true;
+            }
+            if (source.crossOrigin) {
+              target.crossOrigin = source.crossOrigin;
+            }
+            if (source.referrerPolicy) {
+              target.referrerPolicy = source.referrerPolicy;
+            }
+            if (source.integrity) {
+              target.integrity = source.integrity;
+            }
+            if (source.async) {
+              target.async = true;
+            }
+            if (source.defer) {
+              target.defer = true;
+            }
+          }
+
+          function logAliasAttempt(context) {
+            try {
+              if (globalScope && globalScope.console && typeof globalScope.console.warn === 'function') {
+                globalScope.console.warn(
+                  experienceLabel + ' static asset failed to load. Retrying via alias.',
+                  context,
+                );
+              }
+            } catch (error) {
+              /* ignore console failures */
+            }
+          }
+
+          function markAliasAttempt(element) {
+            if (!element) {
+              return;
+            }
+            if (!element.dataset) {
+              element.dataset = {};
+            }
+            element.dataset.aliasRecoveryApplied = 'true';
+          }
+
+          function attemptAliasReload(target, extension, sourceUrl) {
+            if (!target || !extension) {
+              return false;
+            }
+            if (target.dataset && target.dataset.aliasRecoveryApplied === 'true') {
+              return false;
+            }
+
+            var manifest = loadManifest();
+            var aliasKey = extension === 'css' ? 'assets/index-latest.css' : extension === 'js' ? 'assets/index-latest.js' : null;
+            if (!aliasKey) {
+              return false;
+            }
+            var aliasEntry = findManifestAlias(manifest, aliasKey) || aliasKey;
+            var resolvedAlias = resolveAliasUrl(sourceUrl, aliasEntry);
+            if (!resolvedAlias) {
+              return false;
+            }
+
+            var parent = target.parentNode || doc.head || doc.body || doc.documentElement;
+            if (!parent) {
+              return false;
+            }
+
+            var replacement = null;
+            if (target.tagName === 'LINK') {
+              replacement = doc.createElement('link');
+              cloneLinkAttributes(target, replacement);
+              replacement.href = resolvedAlias;
+            } else if (target.tagName === 'SCRIPT') {
+              replacement = doc.createElement('script');
+              cloneScriptAttributes(target, replacement);
+              replacement.src = resolvedAlias;
+            } else {
+              return false;
+            }
+
+            markAliasAttempt(replacement);
+            if (target.dataset && target.dataset.localSrc && !replacement.dataset.localSrc) {
+              replacement.dataset.localSrc = target.dataset.localSrc;
+            }
+
+            logAliasAttempt({ source: sourceUrl, alias: resolvedAlias, base: aliasEntry });
+
+            try {
+              parent.insertBefore(replacement, target.nextSibling || null);
+              if (typeof parent.removeChild === 'function') {
+                parent.removeChild(target);
+              }
+            } catch (error) {
+              return false;
+            }
+            return true;
+          }
+
+          function handleLegacyEntrypointFailure(event) {
+            var target = event && event.target;
+            if (!target || (target.tagName !== 'LINK' && target.tagName !== 'SCRIPT')) {
+              return;
+            }
+            var url = target.href || target.src || '';
+            if (typeof url !== 'string' || url.length === 0) {
+              return;
+            }
+            var match = url.match(/assets\/index-[0-9a-f]+\.(css|js)/i);
+            if (!match) {
+              return;
+            }
+            var extension = match[1].toLowerCase();
+            attemptAliasReload(target, extension, url);
+          }
+
+          doc.addEventListener('error', handleLegacyEntrypointFailure, true);
+        }
+
+        setupLegacyEntrypointRecovery();
+
         function restoreOverlayContent() {
           var title = doc.getElementById('globalOverlayTitle');
           if (title && originalTitle !== null) {
