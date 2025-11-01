@@ -2884,13 +2884,35 @@ function renderManifestDiagnostics(scope, missing = []) {
   }
 }
 
-function shouldRetryManifestProbeWithGet(status) {
+function hasDistinctAssetFailoverRoot(scope) {
+  if (!scope || typeof scope !== 'object') {
+    return false;
+  }
+  const state = getOrCreateAssetFailoverState(scope);
+  if (!state || (!state.fallbackRoot && !state.fallbackRootLower)) {
+    return false;
+  }
+  const fallbackRoot = normaliseAssetRootCandidate(state.fallbackRoot, scope) ?? resolveLocalAssetFallback(scope);
+  if (!fallbackRoot || !fallbackRoot.trim()) {
+    return false;
+  }
+  const appConfig = scope.APP_CONFIG || (scope.APP_CONFIG = {});
+  const activeRoot = normaliseAssetRootCandidate(appConfig.assetRoot, scope);
+  if (!activeRoot || !activeRoot.trim()) {
+    return true;
+  }
+  return fallbackRoot.toLowerCase() !== activeRoot.toLowerCase();
+}
+
+function shouldRetryManifestProbeWithGet(scope, asset, status) {
   if (typeof status !== 'number') {
     return false;
   }
+  if (status === 403) {
+    return !hasDistinctAssetFailoverRoot(scope);
+  }
   return (
     status === 0 ||
-    status === 403 ||
     status === 401 ||
     status === 405 ||
     status === 406 ||
@@ -2954,7 +2976,7 @@ async function probeManifestAsset(scope, asset) {
       return { ok: false, reason: 'invalid-response' };
     }
     if (!response.ok) {
-      if (shouldRetryManifestProbeWithGet(response.status)) {
+      if (shouldRetryManifestProbeWithGet(scope, asset, response.status)) {
         const fallbackResult = await retryManifestProbeWithGet(scope, asset);
         return fallbackResult;
       }
