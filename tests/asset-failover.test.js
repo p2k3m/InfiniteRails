@@ -241,6 +241,43 @@ describe('asset CDN failover', () => {
     expect((cdnInit.method ?? 'GET').toUpperCase()).toBe('HEAD');
   });
 
+  it('caches CDN 403 responses to avoid repeated HEAD manifest probes', async () => {
+    const { sandbox, windowStub } = createBootstrapSandbox({
+      appConfig: { assetRoot: 'https://d3gj6x3ityfh5o.cloudfront.net/' },
+    });
+
+    const fetchMock = vi.fn((resource, init = {}) => {
+      const url = typeof resource === 'string' ? resource : resource?.url ?? '';
+      const method = typeof init?.method === 'string' ? init.method.toUpperCase() : 'GET';
+      if (url.includes('d3gj6x3ityfh5o.cloudfront.net') && method === 'HEAD') {
+        return Promise.resolve(createResponse({ ok: false, status: 403, statusText: 'Forbidden' }));
+      }
+      return Promise.resolve(createResponse({ ok: true, status: 200, statusText: 'OK' }));
+    });
+
+    sandbox.fetch = fetchMock;
+    sandbox.window.fetch = fetchMock;
+    windowStub.fetch = fetchMock;
+
+    sandbox.__INFINITE_RAILS_MANIFEST_VERIFIED__ = true;
+    windowStub.__INFINITE_RAILS_MANIFEST_VERIFIED__ = true;
+
+    evaluateBootstrapScript(sandbox);
+
+    const asset = { url: 'https://d3gj6x3ityfh5o.cloudfront.net/scripts/cdn-guard.js' };
+
+    const firstProbe = await sandbox.probeManifestAsset(windowStub, asset);
+    expect(firstProbe.ok).toBe(true);
+
+    const callsAfterFirst = fetchMock.mock.calls.length;
+
+    const secondProbe = await sandbox.probeManifestAsset(windowStub, asset);
+    expect(secondProbe.ok).toBe(false);
+    expect(secondProbe.reason).toBe('status-403');
+    expect(secondProbe.cached).toBe(true);
+    expect(fetchMock.mock.calls.length).toBe(callsAfterFirst);
+  });
+
   it('ignores blocked CDN asset roots during bootstrap', () => {
     const { sandbox, windowStub } = createBootstrapSandbox({
       appConfig: { assetRoot: 'https://d3gj6x3ityfh5o.cloudfront.net/' },
