@@ -3239,39 +3239,91 @@ function resolveUrlOriginForScope(scope, value) {
 }
 
 function shouldBypassManifestProbes(scope, manifest) {
+  const result = { bypass: false, reason: null, url: null, details: null };
   if (!scope || !manifest || typeof manifest !== 'object') {
-    return false;
+    return result;
   }
   const appConfig = scope.APP_CONFIG || (scope.APP_CONFIG = {});
   const probeMode = ensureString(appConfig.assetProbeMode).trim().toLowerCase();
+  const manifestBase = ensureString(manifest.resolvedAssetBaseUrl ?? manifest.assetBaseUrl);
+  const manifestOrigin = manifestBase ? resolveUrlOriginForScope(scope, manifestBase) : null;
+
+  const activeRoot = ensureString(appConfig.assetRoot);
+  const blocks = readAssetFailoverBlocks(scope);
+  const locateBlock = (candidate) => {
+    const normalised = normaliseAssetRootCandidate(candidate, scope);
+    if (!normalised) {
+      return null;
+    }
+    const lower = normalised.toLowerCase();
+    return blocks.find((entry) => entry.lower === lower) ?? null;
+  };
+  const blockEntry = locateBlock(manifestBase) ?? locateBlock(activeRoot);
+  if (blockEntry) {
+    return {
+      bypass: true,
+      reason: 'asset-root-blocked',
+      url: blockEntry.root,
+      details: {
+        manifestOrigin,
+        blockExpiresAt: blockEntry.expiresAt ?? null,
+        blockStatus: blockEntry.reason ?? null,
+      },
+    };
+  }
+
   if (probeMode === 'remote-only') {
-    return false;
+    return result;
   }
   if (probeMode === 'local-only') {
-    return true;
+    return {
+      bypass: true,
+      reason: 'forced-local',
+      url: manifestBase || activeRoot || null,
+      details: {
+        manifestOrigin,
+        probeMode,
+      },
+    };
   }
-  const manifestBase = ensureString(manifest.resolvedAssetBaseUrl ?? manifest.assetBaseUrl);
   if (!manifestBase) {
-    return false;
+    return result;
   }
-  const manifestOrigin = resolveUrlOriginForScope(scope, manifestBase);
   const location = getBootstrapLocation(scope);
   const locationOrigin = ensureString(location?.origin) || resolveUrlOriginForScope(scope, ensureString(location?.href));
   if (!manifestOrigin || !locationOrigin) {
-    return false;
+    return result;
   }
   if (manifestOrigin === locationOrigin) {
-    return false;
+    return result;
   }
   const environment = ensureString(appConfig.environment).trim().toLowerCase();
   if (environment && environment !== 'production') {
-    return true;
+    return {
+      bypass: true,
+      reason: 'non-production-manifest',
+      url: manifestBase,
+      details: {
+        manifestOrigin,
+        pageOrigin: locationOrigin,
+        environment,
+      },
+    };
   }
   const hostname = ensureString(location?.hostname).trim().toLowerCase();
   if (!environment && hostname && isLocalNetworkHostname(hostname)) {
-    return true;
+    return {
+      bypass: true,
+      reason: 'non-production-manifest',
+      url: manifestBase,
+      details: {
+        manifestOrigin,
+        pageOrigin: locationOrigin,
+        environment: null,
+      },
+    };
   }
-  return false;
+  return result;
 }
 
 async function startManifestIntegrityVerification({ source = 'manual', scope = manifestDiagnosticsScope } = {}) {
@@ -3280,14 +3332,29 @@ async function startManifestIntegrityVerification({ source = 'manual', scope = m
   }
   let manifest =
     ensureManifestHydrated(scope) ?? scope.__INFINITE_RAILS_ASSET_MANIFEST__ ?? scope.ASSET_MANIFEST ?? null;
-  const bypassManifestProbes = shouldBypassManifestProbes(scope, manifest);
+  const bypassEvaluation = shouldBypassManifestProbes(scope, manifest);
+  const bypassManifestProbes = bypassEvaluation?.bypass === true;
   if (bypassManifestProbes) {
-    const manifestBase = ensureString(manifest?.resolvedAssetBaseUrl ?? manifest?.assetBaseUrl ?? '');
+    const manifestBase = ensureString(
+      manifest?.resolvedAssetBaseUrl ?? manifest?.assetBaseUrl ?? bypassEvaluation?.url ?? '',
+    );
+    const contextCode =
+      bypassEvaluation?.reason === 'asset-root-blocked'
+        ? 'asset-root-blocked'
+        : bypassEvaluation?.reason === 'forced-local'
+          ? 'asset-probe-local-only'
+          : 'non-production-manifest';
+    const contextMessage =
+      bypassEvaluation?.reason === 'asset-root-blocked'
+        ? 'Remote manifest probing disabled while CDN access is temporarily blocked.'
+        : bypassEvaluation?.reason === 'forced-local'
+          ? 'Remote manifest probing disabled by configuration.'
+          : 'Remote manifest probing disabled outside production environments.';
     const bypassContext = {
       type: 'bypass',
-      code: 'non-production-manifest',
-      message: 'Remote manifest probing disabled outside production environments.',
-      url: manifestBase || null,
+      code: contextCode,
+      message: contextMessage,
+      url: manifestBase || bypassEvaluation?.url || null,
     };
     const overrideApplied = applyManifestFailoverOverride(scope, bypassContext);
     if (overrideApplied) {
@@ -3300,12 +3367,28 @@ async function startManifestIntegrityVerification({ source = 'manual', scope = m
     try {
       const locationOrigin = resolveUrlOriginForScope(scope, ensureString(scope?.location?.href));
       const manifestOrigin = resolveUrlOriginForScope(scope, manifestBase);
-      const environment = ensureString(scope?.APP_CONFIG?.environment).trim().toLowerCase() || null;
-      scope.console?.info?.('[InfiniteRails] Skipping remote manifest probes outside production.', {
-        environment,
-        manifestOrigin,
-        pageOrigin: locationOrigin,
-      });
+      if (bypassEvaluation?.reason === 'asset-root-blocked') {
+        scope.console?.info?.('[InfiniteRails] Skipping remote manifest probes after CDN block.', {
+          blockedAssetRoot: bypassEvaluation?.url ?? (manifestBase || null),
+          manifestOrigin,
+          pageOrigin: locationOrigin,
+          blockExpiresAt: bypassEvaluation?.details?.blockExpiresAt ?? null,
+          blockStatus: bypassEvaluation?.details?.blockStatus ?? null,
+        });
+      } else if (bypassEvaluation?.reason === 'forced-local') {
+        scope.console?.info?.('[InfiniteRails] Skipping remote manifest probes due to local-only configuration.', {
+          manifestOrigin,
+          pageOrigin: locationOrigin,
+          probeMode: ensureString(scope?.APP_CONFIG?.assetProbeMode).trim().toLowerCase() || null,
+        });
+      } else {
+        const environment = ensureString(scope?.APP_CONFIG?.environment).trim().toLowerCase() || null;
+        scope.console?.info?.('[InfiniteRails] Skipping remote manifest probes outside production.', {
+          environment,
+          manifestOrigin,
+          pageOrigin: locationOrigin,
+        });
+      }
     } catch (error) {
       // ignore console failures when reporting probe bypass
     }
