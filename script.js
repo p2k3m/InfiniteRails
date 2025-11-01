@@ -2890,6 +2890,7 @@ function shouldRetryManifestProbeWithGet(status) {
   }
   return (
     status === 0 ||
+    status === 403 ||
     status === 401 ||
     status === 405 ||
     status === 406 ||
