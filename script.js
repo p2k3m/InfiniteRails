@@ -3688,6 +3688,29 @@ const ASSET_ROOT_STORAGE_KEYS = Object.freeze([
 ]);
 
 const LOCAL_ASSET_ROOT_TOKENS = Object.freeze(new Set(['local', 'offline', 'self']));
+const PRIVATE_IPV4_PATTERNS = Object.freeze([
+  /^10(?:\.\d{1,3}){3}$/,
+  /^192\.168(?:\.\d{1,3}){2}$/,
+  /^172\.(?:1[6-9]|2[0-9]|3[0-1])(?:\.\d{1,3}){2}$/,
+  /^169\.254(?:\.\d{1,3}){2}$/,
+]);
+
+function isLocalNetworkHostname(hostname) {
+  const value = ensureString(hostname).toLowerCase();
+  if (!value) {
+    return false;
+  }
+  if (value === 'localhost' || value.endsWith('.localhost')) {
+    return true;
+  }
+  if (value === '127.0.0.1' || value === '0.0.0.0' || value === '::1') {
+    return true;
+  }
+  if (value.endsWith('.local')) {
+    return true;
+  }
+  return PRIVATE_IPV4_PATTERNS.some((pattern) => pattern.test(value));
+}
 
 function getBootstrapLocation(scope) {
   if (!scope || typeof scope !== 'object') {
@@ -3841,26 +3864,11 @@ function inferLocalAssetRoot(scope) {
     return null;
   }
   const protocol = ensureString(location.protocol).toLowerCase();
-  const hostname = ensureString(location.hostname).toLowerCase();
   if (protocol === 'file:') {
     return ensureTrailingSlash('./');
   }
-  const isLoopbackHost =
-    hostname === 'localhost' ||
-    hostname.endsWith('.localhost') ||
-    hostname === '127.0.0.1' ||
-    hostname === '0.0.0.0' ||
-    hostname === '::1';
-  const PRIVATE_IPV4_PATTERNS = [
-    /^10(?:\.\d{1,3}){3}$/,
-    /^192\.168(?:\.\d{1,3}){2}$/,
-    /^172\.(?:1[6-9]|2[0-9]|3[0-1])(?:\.\d{1,3}){2}$/,
-    /^169\.254(?:\.\d{1,3}){2}$/,
-  ];
-  const isPrivateNetworkHost = PRIVATE_IPV4_PATTERNS.some((pattern) => pattern.test(hostname));
-  const isMdnsHost = hostname.endsWith('.local');
-  const shouldTreatAsLocal = isLoopbackHost || isPrivateNetworkHost || isMdnsHost;
-  if (!shouldTreatAsLocal) {
+  const hostname = ensureString(location.hostname);
+  if (!isLocalNetworkHostname(hostname)) {
     return null;
   }
   const origin = ensureString(location.origin);
@@ -3872,6 +3880,65 @@ function inferLocalAssetRoot(scope) {
     return ensureTrailingSlash(`${protocol}//${host}/`);
   }
   return ensureTrailingSlash('./');
+}
+
+function isLocalDevelopmentLocation(scope) {
+  const location = getBootstrapLocation(scope);
+  if (!location) {
+    return false;
+  }
+  const protocol = ensureString(location.protocol).toLowerCase();
+  if (protocol === 'file:') {
+    return true;
+  }
+  return isLocalNetworkHostname(location.hostname);
+}
+
+function parseAssetRootUrl(candidate, scope) {
+  if (typeof candidate !== 'string' || !candidate) {
+    return null;
+  }
+  try {
+    return new URL(candidate);
+  } catch (error) {
+    const location = getBootstrapLocation(scope);
+    const href = ensureString(location?.href);
+    if (href) {
+      try {
+        return new URL(candidate, href);
+      } catch (_) {
+        // ignore relative URL failures and continue
+      }
+    }
+    const origin = ensureString(location?.origin);
+    if (origin) {
+      try {
+        return new URL(candidate, `${origin}/`);
+      } catch (_) {
+        // ignore parsing failures and fall through to null
+      }
+    }
+  }
+  return null;
+}
+
+function shouldIgnoreRemoteAssetRoot(scope, candidate) {
+  if (!candidate) {
+    return false;
+  }
+  if (!isLocalDevelopmentLocation(scope)) {
+    return false;
+  }
+  const location = getBootstrapLocation(scope);
+  const origin = ensureString(location?.origin).trim();
+  if (!origin) {
+    return false;
+  }
+  const parsed = parseAssetRootUrl(candidate, scope);
+  if (!parsed) {
+    return false;
+  }
+  return parsed.origin !== origin;
 }
 
 function detectSameOriginAssetRoot(scope) {
@@ -4045,7 +4112,9 @@ function activateAssetFailover(scope, reason = {}) {
 function resolveBootstrapAssetRoot(scope) {
   const appConfig = scope.APP_CONFIG || (scope.APP_CONFIG = {});
   const preconfigured = normaliseAssetRootCandidate(appConfig.assetRoot, scope);
-  if (preconfigured) {
+  if (preconfigured && shouldIgnoreRemoteAssetRoot(scope, preconfigured)) {
+    delete appConfig.assetRoot;
+  } else if (preconfigured) {
     appConfig.assetRoot = preconfigured;
     if (typeof appConfig.assetBaseUrl !== 'string' || !appConfig.assetBaseUrl.trim()) {
       appConfig.assetBaseUrl = preconfigured;
@@ -4061,7 +4130,11 @@ function resolveBootstrapAssetRoot(scope) {
     persistAssetRootOverride(scope, queryOverride);
     return queryOverride;
   }
-  const storedOverride = readAssetRootFromStorage(scope);
+  let storedOverride = readAssetRootFromStorage(scope);
+  if (storedOverride && shouldIgnoreRemoteAssetRoot(scope, storedOverride)) {
+    clearPersistedAssetRootOverrides(scope);
+    storedOverride = null;
+  }
   if (storedOverride) {
     appConfig.assetRoot = storedOverride;
     if (typeof appConfig.assetBaseUrl !== 'string' || !appConfig.assetBaseUrl.trim()) {
