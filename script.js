@@ -2847,6 +2847,75 @@ async function probeManifestAsset(scope, asset) {
   }
 }
 
+function applyManifestFailoverOverride(scope, context = {}) {
+  if (!scope || typeof scope !== 'object') {
+    return false;
+  }
+  const fallbackRoot = normaliseAssetRootCandidate(resolveLocalAssetFallback(scope), scope);
+  if (!fallbackRoot) {
+    return false;
+  }
+  const appConfig = scope.APP_CONFIG || (scope.APP_CONFIG = {});
+  const previousRoot = normaliseAssetRootCandidate(appConfig.assetRoot, scope);
+  const state = getOrCreateAssetFailoverState(scope);
+  if (state) {
+    if (previousRoot) {
+      state.primaryRoot = previousRoot;
+      state.primaryRootLower = previousRoot.toLowerCase();
+    }
+    state.activeRoot = fallbackRoot;
+    state.activeRootLower = fallbackRoot.toLowerCase();
+    state.failoverActive = true;
+    state.triggeredAt = Date.now();
+    state.reason = {
+      type: context?.type ?? 'http',
+      status: typeof context?.status === 'number' ? context.status : null,
+      code: context?.code ?? null,
+      message: context?.message ?? null,
+      url: context?.url ?? null,
+    };
+  }
+  appConfig.assetRoot = fallbackRoot;
+  if (
+    typeof appConfig.assetBaseUrl !== 'string' ||
+    !appConfig.assetBaseUrl.trim() ||
+    (previousRoot && appConfig.assetBaseUrl === previousRoot)
+  ) {
+    appConfig.assetBaseUrl = fallbackRoot;
+  }
+  const manifest = scope.__INFINITE_RAILS_ASSET_MANIFEST__ ?? scope.ASSET_MANIFEST ?? null;
+  if (manifest && typeof manifest === 'object') {
+    manifest.assetBaseUrl = ensureTrailingSlash(fallbackRoot);
+    manifest.resolvedAssetBaseUrl = ensureTrailingSlash(fallbackRoot);
+    if (Array.isArray(manifest.assets)) {
+      manifest.assets = manifest.assets.map((entry) => {
+        const path = typeof entry?.path === 'string' ? entry.path.replace(/^\/+/, '') : '';
+        const rebuiltUrl = path ? `${ensureTrailingSlash(fallbackRoot)}${path}` : ensureTrailingSlash(fallbackRoot);
+        return {
+          ...entry,
+          path: path || entry?.path || '',
+          url: rebuiltUrl,
+          original: entry?.original ?? entry?.path ?? path,
+        };
+      });
+    }
+    scope.__INFINITE_RAILS_ASSET_MANIFEST__ = manifest;
+    scope.ASSET_MANIFEST = manifest;
+  }
+  clearPersistedAssetRootOverrides(scope);
+  try {
+    scope.console?.info?.('[InfiniteRails] Manifest probe detected CDN 403. Falling back to local assets.', {
+      fallbackAssetRoot: fallbackRoot,
+      previousAssetRoot: previousRoot,
+      status: context?.status ?? null,
+      url: context?.url ?? null,
+    });
+  } catch (error) {
+    // ignore console failures during diagnostics failover
+  }
+  return true;
+}
+
 async function startManifestIntegrityVerification({ source = 'manual', scope = manifestDiagnosticsScope } = {}) {
   if (!scope) {
     return { ok: false, reason: 'no-scope' };
@@ -2864,6 +2933,39 @@ async function startManifestIntegrityVerification({ source = 'manual', scope = m
       return { asset, outcome };
     }),
   );
+
+  let failoverTriggered = false;
+  for (const entry of results) {
+    if (!entry?.outcome || entry.outcome.ok) {
+      continue;
+    }
+    const reason = typeof entry.outcome.reason === 'string' ? entry.outcome.reason : '';
+    const statusMatch = reason.match(/^status-(\d{3})$/i);
+    if (!statusMatch) {
+      continue;
+    }
+    const statusCode = Number(statusMatch[1]);
+    if (statusCode !== 403) {
+      continue;
+    }
+    const context = {
+      type: 'http',
+      status: statusCode,
+      url: entry.asset?.url ?? null,
+      message: 'Manifest bootstrap detected HTTP 403 while probing asset availability.',
+    };
+    let activated = false;
+    try {
+      activated = activateAssetFailover(scope, context);
+    } catch (error) {
+      activated = false;
+    }
+    const overrideActivated = applyManifestFailoverOverride(scope, context) || activated;
+    activated = overrideActivated;
+    if (activated && !failoverTriggered) {
+      failoverTriggered = true;
+    }
+  }
   const missing = results
     .filter((entry) => !entry.outcome.ok)
     .map((entry) => ({ path: entry.asset.path ?? entry.asset.url, reason: entry.outcome.reason }));
