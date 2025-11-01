@@ -2892,7 +2892,9 @@ function hasDistinctAssetFailoverRoot(scope) {
   if (!state || (!state.fallbackRoot && !state.fallbackRootLower)) {
     return false;
   }
-  const fallbackRoot = normaliseAssetRootCandidate(state.fallbackRoot, scope) ?? resolveLocalAssetFallback(scope);
+  const fallbackRootCandidate =
+    normaliseAssetRootCandidate(state.fallbackRoot, scope) ?? resolveLocalAssetFallback(scope);
+  const fallbackRoot = resolveDistinctLocalFallback(scope, fallbackRootCandidate, state.primaryRoot);
   if (!fallbackRoot || !fallbackRoot.trim()) {
     return false;
   }
@@ -2996,12 +2998,13 @@ function applyManifestFailoverOverride(scope, context = {}) {
   if (!scope || typeof scope !== 'object') {
     return false;
   }
-  const fallbackRoot = normaliseAssetRootCandidate(resolveLocalAssetFallback(scope), scope);
+  const previousRoot = normaliseAssetRootCandidate(scope.APP_CONFIG?.assetRoot, scope);
+  const fallbackCandidate = resolveLocalAssetFallback(scope);
+  const fallbackRoot = resolveDistinctLocalFallback(scope, fallbackCandidate, previousRoot);
   if (!fallbackRoot) {
     return false;
   }
   const appConfig = scope.APP_CONFIG || (scope.APP_CONFIG = {});
-  const previousRoot = normaliseAssetRootCandidate(appConfig.assetRoot, scope);
   const state = getOrCreateAssetFailoverState(scope);
   if (state) {
     if (previousRoot) {
@@ -4177,6 +4180,23 @@ function detectSameOriginAssetRoot(scope) {
   return null;
 }
 
+function resolveDistinctLocalFallback(scope, fallbackCandidate, primaryCandidate) {
+  const fallbackRoot = normaliseAssetRootCandidate(fallbackCandidate, scope);
+  if (!fallbackRoot) {
+    return fallbackRoot;
+  }
+  const primaryRoot = normaliseAssetRootCandidate(primaryCandidate, scope);
+  if (
+    primaryRoot &&
+    primaryRoot.trim() &&
+    fallbackRoot.toLowerCase() === primaryRoot.toLowerCase() &&
+    fallbackRoot.toLowerCase() !== ensureTrailingSlash('./').toLowerCase()
+  ) {
+    return ensureTrailingSlash('./');
+  }
+  return fallbackRoot;
+}
+
 function resolveLocalAssetFallback(scope) {
   const appConfig = scope.APP_CONFIG || (scope.APP_CONFIG = {});
   const configured = normaliseAssetRootCandidate(appConfig.localAssetRoot, scope);
@@ -4188,7 +4208,7 @@ function resolveLocalAssetFallback(scope) {
   if (href) {
     try {
       const baseUrl = new URL('.', href);
-      return ensureTrailingSlash(baseUrl.toString());
+      return resolveDistinctLocalFallback(scope, baseUrl.toString(), appConfig.assetRoot);
     } catch (error) {
       // ignore URL resolution failures and fall back to relative paths
     }
@@ -4233,7 +4253,9 @@ function initialiseAssetFailover(scope, resolvedRoot) {
   const normalisedPrimary = normaliseAssetRootCandidate(resolvedRoot, scope);
   state.primaryRoot = normalisedPrimary;
   state.primaryRootLower = typeof normalisedPrimary === 'string' ? normalisedPrimary.toLowerCase() : null;
-  const fallbackRoot = normaliseAssetRootCandidate(state.fallbackRoot, scope) ?? resolveLocalAssetFallback(scope);
+  const fallbackRootCandidate =
+    normaliseAssetRootCandidate(state.fallbackRoot, scope) ?? resolveLocalAssetFallback(scope);
+  const fallbackRoot = resolveDistinctLocalFallback(scope, fallbackRootCandidate, normalisedPrimary);
   state.fallbackRoot = fallbackRoot;
   state.fallbackRootLower = typeof fallbackRoot === 'string' ? fallbackRoot.toLowerCase() : null;
   const initialActive = normalisedPrimary || fallbackRoot;
@@ -4255,7 +4277,9 @@ function activateAssetFailover(scope, reason = {}) {
   if (!state || state.failoverActive) {
     return false;
   }
-  const fallbackRoot = normaliseAssetRootCandidate(state.fallbackRoot, scope) ?? resolveLocalAssetFallback(scope);
+  const fallbackRootCandidate =
+    normaliseAssetRootCandidate(state.fallbackRoot, scope) ?? resolveLocalAssetFallback(scope);
+  const fallbackRoot = resolveDistinctLocalFallback(scope, fallbackRootCandidate, state.primaryRoot);
   if (!fallbackRoot || !fallbackRoot.trim()) {
     return false;
   }
