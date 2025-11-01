@@ -61,7 +61,7 @@ function ensureManifestDigests() {
         return;
       }
 
-      const digest = computeAssetDigest(fullPath);
+      const digest = computeAssetDigest(fullPath, { assetPath: entry.path });
       const expectedVersion = formatAssetVersion(digest, buildSha);
       versionMap.set(entry.path, expectedVersion);
       if (entry.version === expectedVersion) {

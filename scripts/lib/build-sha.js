@@ -61,9 +61,6 @@ function resolveBuildSha({ allowDirty = true } = {}) {
   if (headSha) {
     const state = describeWorkingTreeState();
     if (state === 'clean' || allowDirty) {
-      if (state === 'dirty' && allowDirty) {
-        return `${headSha}-dirty`;
-      }
       return headSha;
     }
   }
