@@ -2780,14 +2780,91 @@ function renderManifestDiagnostics(scope, missing = []) {
   });
 }
 
-async function fetchWithTimeout(resource, options = {}) {
-  const scope = manifestDiagnosticsScope;
-  const controller = typeof scope?.AbortController === 'function' ? new scope.AbortController() : null;
-  const timeout = Number(options.timeout ?? 5000);
-  const init = { ...options };
-  if (controller) {
-    init.signal = controller.signal;
-  }
+  async function fetchWithTimeout(resource, options = {}) {
+    const scope = manifestDiagnosticsScope;
+    const controller = typeof scope?.AbortController === 'function' ? new scope.AbortController() : null;
+    const timeout = Number(options.timeout ?? 5000);
+    const init = { ...options };
+
+    const manifestProbeTag = 'manifest-probe';
+    const existingTags = Array.isArray(init.tags)
+      ? init.tags.filter((tag) => typeof tag === 'string')
+      : typeof init.tags === 'string'
+        ? [init.tags]
+        : [];
+    if (!existingTags.includes(manifestProbeTag)) {
+      existingTags.push(manifestProbeTag);
+    }
+    init.tags = existingTags;
+
+    const headerName = 'X-Infinite-Rails-Manifest-Probe';
+    const headerValue = 'true';
+    const HeadersCtor = scope?.Headers || (typeof Headers !== 'undefined' ? Headers : null);
+    if (HeadersCtor) {
+      try {
+        const headersInstance = new HeadersCtor(init.headers ?? undefined);
+        headersInstance.set(headerName, headerValue);
+        init.headers = headersInstance;
+      } catch (error) {
+        const normalised = (() => {
+          if (Array.isArray(init.headers)) {
+            const entries = init.headers
+              .map((entry) => {
+                if (!entry) {
+                  return null;
+                }
+                if (Array.isArray(entry) && entry.length >= 2) {
+                  return [entry[0], entry[1]];
+                }
+                if (typeof entry === 'object') {
+                  const key = Object.keys(entry)[0];
+                  return key ? [key, entry[key]] : null;
+                }
+                return null;
+              })
+              .filter(Boolean);
+            return Object.fromEntries(entries);
+          }
+          if (init.headers && typeof init.headers === 'object') {
+            return { ...init.headers };
+          }
+          return {};
+        })();
+        normalised[headerName] = headerValue;
+        init.headers = normalised;
+      }
+    } else {
+      const normalised = (() => {
+        if (Array.isArray(init.headers)) {
+          const entries = init.headers
+            .map((entry) => {
+              if (!entry) {
+                return null;
+              }
+              if (Array.isArray(entry) && entry.length >= 2) {
+                return [entry[0], entry[1]];
+              }
+              if (typeof entry === 'object') {
+                const key = Object.keys(entry)[0];
+                return key ? [key, entry[key]] : null;
+              }
+              return null;
+            })
+            .filter(Boolean);
+          return Object.fromEntries(entries);
+        }
+        if (init.headers && typeof init.headers === 'object') {
+          return { ...init.headers };
+        }
+        return {};
+      })();
+      normalised[headerName] = headerValue;
+      init.headers = normalised;
+    }
+
+    if (controller) {
+      init.signal = controller.signal;
+    }
   let timeoutHandle = null;
   if (controller && Number.isFinite(timeout) && timeout > 0 && typeof scope?.setTimeout === 'function') {
     timeoutHandle = scope.setTimeout(() => {
@@ -7898,6 +7975,20 @@ function queueBootstrapFallbackNotice(key, message) {
     }
     const requestUrl = detail.requestUrl;
     if (!requestUrl) {
+      return;
+    }
+    const manifestProbeHeaderName = 'X-Infinite-Rails-Manifest-Probe';
+    const manifestProbeTagged = Array.isArray(detail.init?.tags)
+      ? detail.init.tags.some((tag) => typeof tag === 'string' && tag.toLowerCase() === 'manifest-probe')
+      : false;
+    const manifestProbeHeaderValue =
+      getHeaderValue(detail.init?.headers, manifestProbeHeaderName) ||
+      getHeaderValue(detail.resource?.headers, manifestProbeHeaderName);
+    if (
+      manifestProbeTagged ||
+      (typeof manifestProbeHeaderValue === 'string' && manifestProbeHeaderValue.toLowerCase() === 'true')
+    ) {
+      clearAssetRetry(requestUrl);
       return;
     }
     const requestFactory = createRetryRequestFactory(detail.resource, detail.init);
