@@ -74,6 +74,15 @@ describe('asset CDN failover', () => {
       ]),
     );
 
+    const failoverBlockCall = sandbox.localStorage.setItem.mock.calls.find(
+      ([key]) => key === 'InfiniteRails.assetRootFailoverBlock',
+    );
+    expect(failoverBlockCall).toBeDefined();
+    const recordedBlocks = JSON.parse(failoverBlockCall[1]);
+    expect(Array.isArray(recordedBlocks)).toBe(true);
+    expect(recordedBlocks[0].root).toBe('https://d3gj6x3ityfh5o.cloudfront.net/');
+    expect(recordedBlocks[0].reason).toBe(403);
+
     const secondResponse = await wrappedFetch(cdnAssetUrl);
     expect(secondResponse.ok).toBe(true);
     expect(fetchMock).toHaveBeenCalledTimes(3);
@@ -181,5 +190,44 @@ describe('asset CDN failover', () => {
       (call) => call[0] === 'Manifest diagnostics detected missing assets.',
     );
     expect(missingAssetWarning).toBeUndefined();
+  });
+
+  it('ignores blocked CDN asset roots during bootstrap', () => {
+    const { sandbox, windowStub } = createBootstrapSandbox({
+      appConfig: { assetRoot: 'https://d3gj6x3ityfh5o.cloudfront.net/' },
+    });
+
+    const blockRecords = [
+      {
+        root: 'https://d3gj6x3ityfh5o.cloudfront.net/',
+        expiresAt: Date.now() + 30 * 60 * 1000,
+        reason: 403,
+      },
+    ];
+
+    sandbox.localStorage.setItem(
+      'InfiniteRails.assetRootOverride',
+      'https://d3gj6x3ityfh5o.cloudfront.net/',
+    );
+    sandbox.localStorage.setItem(
+      'InfiniteRails.assetRootFailoverBlock',
+      JSON.stringify(blockRecords),
+    );
+
+    evaluateBootstrapScript(sandbox);
+
+    expect(windowStub.APP_CONFIG.assetRoot).toBe('/');
+
+    const storedBlock = sandbox.localStorage.getItem('InfiniteRails.assetRootFailoverBlock');
+    expect(storedBlock).toBeTruthy();
+    const parsedBlock = JSON.parse(storedBlock);
+    expect(parsedBlock).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          root: 'https://d3gj6x3ityfh5o.cloudfront.net/',
+          reason: 403,
+        }),
+      ]),
+    );
   });
 });
