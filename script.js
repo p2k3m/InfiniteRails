@@ -2891,7 +2891,6 @@ function shouldRetryManifestProbeWithGet(status) {
   return (
     status === 0 ||
     status === 401 ||
-    status === 403 ||
     status === 405 ||
     status === 406 ||
     status === 412 ||
@@ -3050,19 +3049,16 @@ async function startManifestIntegrityVerification({ source = 'manual', scope = m
     scope.console?.warn?.('Manifest check missing — no assets defined.');
     return { ok: false, reason: 'manifest-empty' };
   }
-  const results = await Promise.all(
-    records.map(async (asset) => {
-      const outcome = await probeManifestAsset(scope, asset);
-      return { asset, outcome };
-    }),
-  );
-
+  const results = [];
   let failoverTriggered = false;
-  for (const entry of results) {
-    if (!entry?.outcome || entry.outcome.ok) {
+  for (const asset of records) {
+    const outcome = await probeManifestAsset(scope, asset);
+    const entry = { asset, outcome };
+    results.push(entry);
+    if (!outcome || outcome.ok || failoverTriggered) {
       continue;
     }
-    const reason = typeof entry.outcome.reason === 'string' ? entry.outcome.reason : '';
+    const reason = typeof outcome.reason === 'string' ? outcome.reason : '';
     const statusMatch = reason.match(/^status-(\d{3})$/i);
     if (!statusMatch) {
       continue;
@@ -3074,7 +3070,7 @@ async function startManifestIntegrityVerification({ source = 'manual', scope = m
     const context = {
       type: 'http',
       status: statusCode,
-      url: entry.asset?.url ?? null,
+      url: asset?.url ?? null,
       message: 'Manifest bootstrap detected HTTP 403 while probing asset availability.',
     };
     let activated = false;
@@ -3084,9 +3080,9 @@ async function startManifestIntegrityVerification({ source = 'manual', scope = m
       activated = false;
     }
     const overrideActivated = applyManifestFailoverOverride(scope, context) || activated;
-    activated = overrideActivated;
-    if (activated && !failoverTriggered) {
+    if (overrideActivated) {
       failoverTriggered = true;
+      break;
     }
   }
   const missing = results
