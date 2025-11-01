@@ -139,8 +139,24 @@ function parseManifestAsset(asset, index) {
  * @param {string} fullPath
  * @returns {string}
  */
-function computeAssetDigest(fullPath) {
-  const contents = fs.readFileSync(fullPath);
+function normaliseAssetContents(buffer, assetPath) {
+  if (!buffer || !buffer.length) {
+    return buffer;
+  }
+
+  const normalisedPath = typeof assetPath === 'string' ? assetPath.replace(/\\/g, '/') : '';
+  if (normalisedPath !== 'index.html') {
+    return buffer;
+  }
+
+  const source = buffer.toString('utf8');
+  const stableSource = source.replace(/index\.html\?v=[^'"\s&?#)]+/g, 'index.html?v=');
+  return Buffer.from(stableSource, 'utf8');
+}
+
+function computeAssetDigest(fullPath, { assetPath } = {}) {
+  const originalContents = fs.readFileSync(fullPath);
+  const contents = normaliseAssetContents(originalContents, assetPath);
   return crypto.createHash(HASH_ALGORITHM).update(contents).digest('hex').slice(0, HASH_LENGTH);
 }
 
@@ -167,7 +183,7 @@ function listVersionedAssetIssues(entries) {
       continue;
     }
 
-    const expected = computeAssetDigest(fullPath);
+    const expected = computeAssetDigest(fullPath, { assetPath: entry.path });
     if (!entry.versionValues || entry.versionValues.length === 0) {
       issues.push({
         asset: entry.path,

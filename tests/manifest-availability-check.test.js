@@ -5,6 +5,7 @@ import path from 'node:path';
 const repoRoot = path.resolve(__dirname, '..');
 const scriptSource = fs.readFileSync(path.join(repoRoot, 'script.js'), 'utf8');
 const indexHtml = fs.readFileSync(path.join(repoRoot, 'index.html'), 'utf8');
+const assetManifest = JSON.parse(fs.readFileSync(path.join(repoRoot, 'asset-manifest.json'), 'utf8'));
 
 describe('Manifest asset availability diagnostics', () => {
   it('performs HEAD requests when probing manifest assets', () => {
@@ -30,6 +31,8 @@ describe('Manifest asset availability diagnostics', () => {
 
   it('embeds the asset manifest inline so bootstrap can hydrate without external scripts', () => {
     expect(indexHtml.includes('id="assetManifest"')).toBe(true);
-    expect(indexHtml.includes('"assets/index-latest.js?v=3554a7b2d7bc.8f12d087f673"')).toBe(true);
+    const indexLatestEntry = assetManifest.assets.find((asset) => asset.startsWith('assets/index-latest.js?v='));
+    expect(indexLatestEntry).toBeTypeOf('string');
+    expect(indexHtml.includes(`"${indexLatestEntry}"`)).toBe(true);
   });
 });
