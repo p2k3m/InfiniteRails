@@ -21,6 +21,10 @@ describe('asset CDN failover', () => {
       appConfig: { assetRoot: 'https://d3gj6x3ityfh5o.cloudfront.net/' },
     });
 
+    sandbox.localStorage.setItem('infiniteRails.assetRootOverride', 'https://d3gj6x3ityfh5o.cloudfront.net/');
+    sandbox.localStorage.setItem('InfiniteRails.assetRootOverride', 'https://d3gj6x3ityfh5o.cloudfront.net/');
+    sandbox.localStorage.setItem('InfiniteRails.assetRoot', 'https://d3gj6x3ityfh5o.cloudfront.net/');
+
     const requests = [];
     const fetchResponses = [
       createResponse({ ok: false, status: 403, statusText: 'Forbidden' }),
@@ -56,6 +60,15 @@ describe('asset CDN failover', () => {
     expect(failoverState?.failoverActive).toBe(true);
     expect(failoverState?.fallbackRoot).toBe('https://example.com/');
     expect(windowStub.APP_CONFIG.assetRoot).toBe('https://example.com/');
+
+    const removedKeys = sandbox.localStorage.removeItem.mock.calls.map((call) => call[0]);
+    expect(removedKeys).toEqual(
+      expect.arrayContaining([
+        'infiniteRails.assetRootOverride',
+        'InfiniteRails.assetRootOverride',
+        'InfiniteRails.assetRoot',
+      ]),
+    );
 
     const secondResponse = await wrappedFetch(cdnAssetUrl);
     expect(secondResponse.ok).toBe(true);

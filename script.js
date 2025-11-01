@@ -3426,6 +3426,20 @@ function persistAssetRootOverride(scope, assetRoot) {
   }
 }
 
+function clearPersistedAssetRootOverrides(scope) {
+  const storage = getBootstrapStorage(scope);
+  if (!storage || typeof storage.removeItem !== 'function') {
+    return;
+  }
+  for (const key of ASSET_ROOT_STORAGE_KEYS) {
+    try {
+      storage.removeItem(key);
+    } catch (error) {
+      // Ignore best-effort failures so the remaining keys can still be cleared.
+    }
+  }
+}
+
 function inferLocalAssetRoot(scope) {
   const location = getBootstrapLocation(scope);
   if (!location) {
@@ -3623,6 +3637,7 @@ function activateAssetFailover(scope, reason = {}) {
   ) {
     appConfig.assetBaseUrl = fallbackRoot;
   }
+  clearPersistedAssetRootOverrides(scope);
   if (scope.console && typeof scope.console.info === 'function') {
     scope.console.info('[InfiniteRails] Asset CDN unavailable. Falling back to local bundle.', {
       fallbackAssetRoot: fallbackRoot,
