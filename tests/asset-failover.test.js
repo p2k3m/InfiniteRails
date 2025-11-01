@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { createBootstrapSandbox, evaluateBootstrapScript } from './helpers/bootstrap-test-utils.js';
+import {
+  createBootstrapSandbox,
+  evaluateBootstrapScript,
+  flushMicrotasks,
+} from './helpers/bootstrap-test-utils.js';
 
 function createResponse({ ok, status, statusText = 'STATUS' }) {
   return {
@@ -122,5 +126,60 @@ describe('asset CDN failover', () => {
         'InfiniteRails.assetRoot',
       ]),
     );
+  });
+
+  it('does not report missing assets after CDN 403 failover', async () => {
+    const { sandbox, windowStub, consoleStub } = createBootstrapSandbox({
+      appConfig: { assetRoot: 'https://d3gj6x3ityfh5o.cloudfront.net/' },
+    });
+
+    windowStub.location.href = 'http://localhost:3000/index.html';
+    windowStub.location.origin = 'http://localhost:3000';
+    windowStub.location.protocol = 'http:';
+    windowStub.location.host = 'localhost:3000';
+    windowStub.location.hostname = 'localhost';
+
+    const manifestElement = windowStub.document.createElement('script');
+    manifestElement.setAttribute('id', 'assetManifest');
+    manifestElement.type = 'application/json';
+    manifestElement.textContent = JSON.stringify({
+      version: 1,
+      assetBaseUrl: 'https://d3gj6x3ityfh5o.cloudfront.net/',
+      assets: ['scripts/cdn-guard.js'],
+    });
+    windowStub.document.body.appendChild(manifestElement);
+
+    const fetchMock = vi.fn((resource, init = {}) => {
+      const url = typeof resource === 'string' ? resource : resource?.url ?? '';
+      const method = typeof init?.method === 'string' ? init.method.toUpperCase() : 'GET';
+      if (url.startsWith('http://localhost:3000')) {
+        return Promise.resolve(createResponse({ ok: true, status: 200, statusText: 'OK' }));
+      }
+      if (method === 'HEAD' || method === 'GET') {
+        return Promise.resolve(
+          createResponse({ ok: false, status: 403, statusText: 'Forbidden' }),
+        );
+      }
+      return Promise.resolve(createResponse({ ok: true, status: 200, statusText: 'OK' }));
+    });
+
+    sandbox.fetch = fetchMock;
+    sandbox.window.fetch = fetchMock;
+    windowStub.fetch = fetchMock;
+
+    evaluateBootstrapScript(sandbox);
+    await flushMicrotasks(5);
+
+    const verificationResult = await sandbox.startManifestIntegrityVerification({
+      source: 'test',
+      scope: windowStub,
+    });
+    expect(verificationResult?.ok).toBe(true);
+    expect(windowStub.APP_CONFIG.assetRoot).toBe('http://localhost:3000/');
+
+    const missingAssetWarning = consoleStub.warn.mock.calls.find(
+      (call) => call[0] === 'Manifest diagnostics detected missing assets.',
+    );
+    expect(missingAssetWarning).toBeUndefined();
   });
 });
