@@ -2974,6 +2974,80 @@ async function retryManifestProbeWithGet(scope, asset) {
   }
 }
 
+const MANIFEST_PROBE_CACHE_TTL_MS = 5 * 60 * 1000;
+
+function normaliseManifestProbeCacheKey(scope, url) {
+  if (typeof url !== 'string' || !url.trim()) {
+    return null;
+  }
+  const locationRef = scope?.location ?? null;
+  const baseHref =
+    (typeof locationRef?.href === 'string' && locationRef.href.trim()) ||
+    'https://infiniterails.invalid/';
+  try {
+    const resolved = new URL(url, baseHref);
+    if (!/^https?:$/i.test(resolved.protocol)) {
+      return null;
+    }
+    return resolved.origin.toLowerCase();
+  } catch (error) {
+    return null;
+  }
+}
+
+function getOrCreateManifestProbeCache(scope) {
+  if (!scope || typeof scope !== 'object') {
+    return null;
+  }
+  const existing = scope.__INFINITE_RAILS_MANIFEST_PROBE_CACHE__;
+  if (existing && typeof existing === 'object') {
+    return existing;
+  }
+  const cache = {};
+  scope.__INFINITE_RAILS_MANIFEST_PROBE_CACHE__ = cache;
+  return cache;
+}
+
+function readCachedManifestProbe(scope, asset) {
+  const cache = getOrCreateManifestProbeCache(scope);
+  if (!cache) {
+    return null;
+  }
+  const key = normaliseManifestProbeCacheKey(scope, asset?.url ?? asset);
+  if (!key) {
+    return null;
+  }
+  const record = cache[key];
+  if (!record) {
+    return null;
+  }
+  if (record.expiresAt && record.expiresAt < Date.now()) {
+    delete cache[key];
+    return null;
+  }
+  return record;
+}
+
+function recordManifestProbeFailure(scope, asset, status, method = 'HEAD', options = {}) {
+  const cache = getOrCreateManifestProbeCache(scope);
+  if (!cache) {
+    return false;
+  }
+  const key = normaliseManifestProbeCacheKey(scope, asset?.url ?? asset);
+  if (!key) {
+    return false;
+  }
+  cache[key] = {
+    status: typeof status === 'number' ? status : null,
+    method: typeof method === 'string' ? method.toUpperCase() : 'HEAD',
+    recordedAt: Date.now(),
+    expiresAt: Date.now() + MANIFEST_PROBE_CACHE_TTL_MS,
+    ok: options.ok === true,
+    reason: typeof options.reason === 'string' ? options.reason : null,
+  };
+  return true;
+}
+
 async function probeManifestAsset(scope, asset) {
   const url = typeof asset?.url === 'string' && asset.url ? asset.url : null;
   if (!url) {
@@ -2996,6 +3070,20 @@ async function probeManifestAsset(scope, asset) {
   if (protocol === 'file:') {
     return { ok: true, reason: 'file-scheme-skipped' };
   }
+  const cachedFailure = readCachedManifestProbe(scope, asset);
+  if (cachedFailure) {
+    if (cachedFailure.ok) {
+      const cachedReason = cachedFailure.reason || 'head-probe-cached';
+      return { ok: true, reason: cachedReason, cached: true };
+    }
+    if (
+      typeof cachedFailure.status === 'number' &&
+      !shouldRetryManifestProbeWithGet(scope, asset, cachedFailure.status)
+    ) {
+      return { ok: false, reason: `status-${cachedFailure.status}`, cached: true };
+    }
+  }
+
   try {
     const response = await fetchWithTimeout(asset.url, {
       method: 'HEAD',
@@ -3006,8 +3094,18 @@ async function probeManifestAsset(scope, asset) {
       return { ok: false, reason: 'invalid-response' };
     }
     if (!response.ok) {
-      if (shouldRetryManifestProbeWithGet(scope, asset, response.status)) {
+      const retryable = shouldRetryManifestProbeWithGet(scope, asset, response.status);
+      if (!retryable) {
+        recordManifestProbeFailure(scope, asset, response.status, 'HEAD');
+      }
+      if (retryable) {
         const fallbackResult = await retryManifestProbeWithGet(scope, asset);
+        if (fallbackResult?.ok) {
+          recordManifestProbeFailure(scope, asset, response.status, 'HEAD', {
+            ok: true,
+            reason: 'head-probe-fallback',
+          });
+        }
         return fallbackResult;
       }
       return { ok: false, reason: `status-${response.status}` };
@@ -3015,6 +3113,19 @@ async function probeManifestAsset(scope, asset) {
     return { ok: true };
   } catch (error) {
     const fallbackResult = await retryManifestProbeWithGet(scope, asset);
+    if (fallbackResult?.ok) {
+      recordManifestProbeFailure(scope, asset, null, 'GET', {
+        ok: true,
+        reason: 'head-probe-fallback',
+      });
+      return fallbackResult;
+    }
+    if (!fallbackResult.ok && /^status-(\d{3})$/i.test(String(fallbackResult.reason ?? ''))) {
+      const [, statusValue] = String(fallbackResult.reason).match(/^status-(\d{3})$/i) ?? [];
+      if (statusValue) {
+        recordManifestProbeFailure(scope, asset, Number(statusValue), 'GET');
+      }
+    }
     if (fallbackResult.ok || fallbackResult.reason) {
       return fallbackResult;
     }
@@ -8229,6 +8340,26 @@ function queueBootstrapFallbackNotice(key, message) {
     if (detail.response && typeof detail.response.status === 'number') {
       const status = Number(detail.response.status);
       if (status === 403) {
+        const manifestProbeTag = 'manifest-probe';
+        const initTags = detail.init?.tags;
+        const hasManifestProbeTag = Array.isArray(initTags)
+          ? initTags.some((tag) => typeof tag === 'string' && tag.toLowerCase() === manifestProbeTag)
+          : typeof initTags === 'string'
+            ? initTags.toLowerCase() === manifestProbeTag
+            : false;
+        const manifestProbeHeader =
+          getHeaderValue(detail.init?.headers, 'X-Infinite-Rails-Manifest-Probe') ??
+          getHeaderValue(detail.resource?.headers, 'X-Infinite-Rails-Manifest-Probe');
+        if (
+          hasManifestProbeTag ||
+          (typeof manifestProbeHeader === 'string' && manifestProbeHeader.toLowerCase() === 'true')
+        ) {
+          try {
+            recordManifestProbeFailure(scope, detail.requestUrl, status, detail.init?.method ?? 'GET');
+          } catch (error) {
+            // ignore probe cache persistence failures
+          }
+        }
         return activateAssetFailover(scope, {
           type: 'http',
           status,
