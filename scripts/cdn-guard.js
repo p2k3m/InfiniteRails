@@ -18,6 +18,9 @@
     'InfiniteRails.assetRootOverride',
     'InfiniteRails.assetRoot',
   ];
+  const FAILOVER_STORAGE_KEY = 'InfiniteRails.assetRootFailoverBlock';
+
+  const now = () => Date.now();
 
   const normaliseString = (value) => (typeof value === 'string' ? value : '');
 
@@ -61,6 +64,91 @@
       return null;
     }
   };
+
+  const parseFailoverBlocks = () => {
+    const storage = scope.localStorage || null;
+    if (!storage || typeof storage.getItem !== 'function') {
+      return [];
+    }
+    let rawValue;
+    try {
+      rawValue = storage.getItem(FAILOVER_STORAGE_KEY);
+    } catch (error) {
+      return [];
+    }
+    if (!rawValue) {
+      return [];
+    }
+    try {
+      const parsed = JSON.parse(rawValue);
+      if (!Array.isArray(parsed)) {
+        return [];
+      }
+      const timestamp = now();
+      return parsed
+        .filter((entry) => entry && typeof entry === 'object')
+        .map((entry) => ({
+          root: normaliseString(entry.root),
+          expiresAt: Number(entry.expiresAt),
+        }))
+        .filter((entry) => entry.root && Number.isFinite(entry.expiresAt) && entry.expiresAt > timestamp);
+    } catch (error) {
+      return [];
+    }
+  };
+
+  const isCdnRootBlocked = () => parseFailoverBlocks().some((entry) => CDN_HOST_PATTERN.test(entry.root));
+
+  const shouldForceLocalAssets = () => {
+    const appConfig = scope.APP_CONFIG || {};
+    const probeMode = normaliseString(appConfig.assetProbeMode).toLowerCase();
+    if (probeMode === 'local-only') {
+      return true;
+    }
+    const configuredRoot = normaliseString(appConfig.assetRoot);
+    if (configuredRoot && !CDN_HOST_PATTERN.test(configuredRoot)) {
+      return true;
+    }
+    const query = normaliseString(scope.location?.search);
+    if (query.includes('localAssets=1') || /[?&]useLocalAssets(?:=1)?/i.test(query)) {
+      return true;
+    }
+    return isCdnRootBlocked();
+  };
+
+  const rewritePendingScriptsToLocal = () => {
+    const documentRef = scope.document || null;
+    if (!documentRef || typeof documentRef.querySelectorAll !== 'function') {
+      return;
+    }
+    const current = documentRef.currentScript || null;
+    const scripts = documentRef.querySelectorAll('script[src]') || [];
+    scripts.forEach((script) => {
+      if (!script || script === current) {
+        return;
+      }
+      const absoluteSrc = normaliseString(script.src);
+      if (!CDN_HOST_PATTERN.test(absoluteSrc)) {
+        return;
+      }
+      const localSrc = resolveOriginalSrc(script);
+      if (!localSrc) {
+        return;
+      }
+      script.dataset = script.dataset || {};
+      script.dataset.cdnRecoveryApplied = 'true';
+      if (!script.dataset.localSrc) {
+        script.dataset.localSrc = localSrc;
+      }
+      script.src = localSrc;
+    });
+  };
+
+  if (shouldForceLocalAssets()) {
+    clearStoredOverrides();
+    ensureAppConfig();
+    rewritePendingScriptsToLocal();
+  }
 
   const resolveOriginalSrc = (element) => {
     if (!element || typeof element.getAttribute !== 'function') {
