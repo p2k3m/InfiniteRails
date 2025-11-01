@@ -75,4 +75,52 @@ describe('asset CDN failover', () => {
     expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(requests[2]).toBe('https://example.com/asset-manifest.json?assetVersion=1');
   });
+
+  it('activates failover when manifest diagnostics encounter HTTP 403 responses', async () => {
+    const { sandbox, windowStub } = createBootstrapSandbox({
+      appConfig: { assetRoot: 'https://d3gj6x3ityfh5o.cloudfront.net/' },
+    });
+
+    const manifestElement = windowStub.document.createElement('script');
+    manifestElement.setAttribute('id', 'assetManifest');
+    manifestElement.type = 'application/json';
+    manifestElement.textContent = JSON.stringify({
+      version: 1,
+      assetBaseUrl: 'https://d3gj6x3ityfh5o.cloudfront.net/',
+      assets: ['scripts/cdn-guard.js'],
+    });
+    windowStub.document.body.appendChild(manifestElement);
+
+    evaluateBootstrapScript(sandbox);
+
+    const manifestBefore = windowStub.__INFINITE_RAILS_ASSET_MANIFEST__;
+    expect(manifestBefore?.resolvedAssetBaseUrl).toBe('https://d3gj6x3ityfh5o.cloudfront.net/');
+
+    windowStub.location.href = 'http://localhost:3000/index.html';
+    windowStub.location.origin = 'http://localhost:3000';
+    windowStub.location.protocol = 'http:';
+    windowStub.location.host = 'localhost:3000';
+    windowStub.location.hostname = 'localhost';
+
+    sandbox.applyManifestFailoverOverride(windowStub, {
+      type: 'http',
+      status: 403,
+      url: 'https://d3gj6x3ityfh5o.cloudfront.net/scripts/cdn-guard.js',
+    });
+
+    expect(windowStub.APP_CONFIG.assetRoot).toBe('http://localhost:3000/');
+
+    const manifestAfter = windowStub.__INFINITE_RAILS_ASSET_MANIFEST__;
+    expect(manifestAfter?.resolvedAssetBaseUrl).toBe('http://localhost:3000/');
+    expect(manifestAfter?.assets?.[0]?.url).toBe('http://localhost:3000/scripts/cdn-guard.js');
+
+    const removedKeys = sandbox.localStorage.removeItem.mock.calls.map((call) => call[0]);
+    expect(removedKeys).toEqual(
+      expect.arrayContaining([
+        'infiniteRails.assetRootOverride',
+        'InfiniteRails.assetRootOverride',
+        'InfiniteRails.assetRoot',
+      ]),
+    );
+  });
 });
