@@ -3047,6 +3047,13 @@ function applyManifestFailoverOverride(scope, context = {}) {
     scope.__INFINITE_RAILS_ASSET_MANIFEST__ = manifest;
     scope.ASSET_MANIFEST = manifest;
   }
+  if (previousRoot && context?.status === 403) {
+    try {
+      registerAssetFailoverBlock(scope, previousRoot, { status: context.status });
+    } catch (error) {
+      // ignore persistence failures when recording CDN failover blocks
+    }
+  }
   clearPersistedAssetRootOverrides(scope);
   try {
     scope.console?.info?.('[InfiniteRails] Manifest probe detected CDN 403. Falling back to local assets.', {
@@ -3632,6 +3639,8 @@ function enforceAssetBaseConsistency(scope, resolvedRoot) {
 
 const PRODUCTION_ASSET_ROOT = ensureTrailingSlash('/');
 const DEFAULT_LOCAL_ASSET_ROOT = ensureTrailingSlash('./');
+const ASSET_FAILOVER_BLOCK_STORAGE_KEY = 'InfiniteRails.assetRootFailoverBlock';
+const ASSET_FAILOVER_BLOCK_DURATION_MS = 30 * 60 * 1000;
 
 const HOTBAR_SLOT_COUNT = 10;
 
@@ -3944,9 +3953,158 @@ function parseAssetRootUrl(candidate, scope) {
   return null;
 }
 
+function getAssetFailoverStorage(scope) {
+  if (!scope || typeof scope !== 'object') {
+    return null;
+  }
+  const storage = scope.localStorage || (scope.window && scope.window.localStorage) || null;
+  if (!storage) {
+    return null;
+  }
+  if (
+    typeof storage.getItem !== 'function' ||
+    typeof storage.setItem !== 'function' ||
+    typeof storage.removeItem !== 'function'
+  ) {
+    return null;
+  }
+  return storage;
+}
+
+function serialiseFailoverEntries(entries) {
+  return JSON.stringify(entries.map(({ root, expiresAt, reason }) => ({ root, expiresAt, reason })));
+}
+
+function readAssetFailoverBlocks(scope) {
+  const storage = getAssetFailoverStorage(scope);
+  if (!storage) {
+    return [];
+  }
+  let rawValue;
+  try {
+    rawValue = storage.getItem(ASSET_FAILOVER_BLOCK_STORAGE_KEY);
+  } catch (error) {
+    return [];
+  }
+  if (!rawValue) {
+    return [];
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(rawValue);
+  } catch (error) {
+    try {
+      storage.removeItem(ASSET_FAILOVER_BLOCK_STORAGE_KEY);
+    } catch (_) {
+      // ignore storage removal failures
+    }
+    return [];
+  }
+  if (!Array.isArray(parsed)) {
+    try {
+      storage.removeItem(ASSET_FAILOVER_BLOCK_STORAGE_KEY);
+    } catch (_) {
+      // ignore storage removal failures
+    }
+    return [];
+  }
+  const now = Date.now();
+  const entries = [];
+  let mutated = false;
+  for (const record of parsed) {
+    if (!record || typeof record !== 'object') {
+      mutated = true;
+      continue;
+    }
+    const root = typeof record.root === 'string' ? record.root.trim() : '';
+    const expiresAt = Number(record.expiresAt);
+    if (!root || !Number.isFinite(expiresAt) || expiresAt <= now) {
+      mutated = true;
+      continue;
+    }
+    entries.push({
+      root,
+      lower: root.toLowerCase(),
+      expiresAt,
+      reason: typeof record.reason === 'number' ? record.reason : null,
+    });
+  }
+  if (entries.length === 0) {
+    try {
+      storage.removeItem(ASSET_FAILOVER_BLOCK_STORAGE_KEY);
+    } catch (_) {
+      // ignore storage removal failures
+    }
+    return [];
+  }
+  if (mutated) {
+    try {
+      storage.setItem(ASSET_FAILOVER_BLOCK_STORAGE_KEY, serialiseFailoverEntries(entries));
+    } catch (_) {
+      // ignore storage write failures
+    }
+  }
+  return entries;
+}
+
+function writeAssetFailoverBlocks(scope, entries) {
+  const storage = getAssetFailoverStorage(scope);
+  if (!storage) {
+    return;
+  }
+  if (!Array.isArray(entries) || entries.length === 0) {
+    try {
+      storage.removeItem(ASSET_FAILOVER_BLOCK_STORAGE_KEY);
+    } catch (_) {
+      // ignore storage removal failures
+    }
+    return;
+  }
+  try {
+    storage.setItem(ASSET_FAILOVER_BLOCK_STORAGE_KEY, serialiseFailoverEntries(entries));
+  } catch (error) {
+    // ignore storage write failures
+  }
+}
+
+function registerAssetFailoverBlock(scope, candidate, context = {}) {
+  const storage = getAssetFailoverStorage(scope);
+  if (!storage) {
+    return;
+  }
+  const normalised = normaliseAssetRootCandidate(candidate, scope);
+  if (!normalised) {
+    return;
+  }
+  const lower = normalised.toLowerCase();
+  const ttl = Number(context?.ttlMs);
+  const duration = Number.isFinite(ttl) && ttl > 0 ? ttl : ASSET_FAILOVER_BLOCK_DURATION_MS;
+  const expiresAt = Date.now() + duration;
+  const existing = readAssetFailoverBlocks(scope).filter((entry) => entry.lower !== lower);
+  existing.push({
+    root: normalised,
+    lower,
+    expiresAt,
+    reason: typeof context?.status === 'number' ? context.status : null,
+  });
+  writeAssetFailoverBlocks(scope, existing);
+}
+
+function isAssetRootTemporarilyBlocked(scope, candidate) {
+  const normalised = normaliseAssetRootCandidate(candidate, scope);
+  if (!normalised) {
+    return false;
+  }
+  const lower = normalised.toLowerCase();
+  return readAssetFailoverBlocks(scope).some((entry) => entry.lower === lower);
+}
+
 function shouldIgnoreRemoteAssetRoot(scope, candidate) {
   if (!candidate) {
     return false;
+  }
+  if (isAssetRootTemporarilyBlocked(scope, candidate)) {
+    return true;
   }
   if (!isLocalDevelopmentLocation(scope)) {
     return false;
@@ -4113,6 +4271,13 @@ function activateAssetFailover(scope, reason = {}) {
     message: reason?.message ?? null,
     url: reason?.url ?? null,
   };
+  if (state.primaryRoot && reason?.status === 403) {
+    try {
+      registerAssetFailoverBlock(scope, state.primaryRoot, { status: reason.status });
+    } catch (error) {
+      // ignore storage failures when recording CDN failover blocks
+    }
+  }
   appConfig.assetRoot = fallbackRoot;
   if (
     typeof appConfig.assetBaseUrl !== 'string' ||
@@ -8514,6 +8679,8 @@ function queueBootstrapFallbackNotice(key, message) {
       reason: state.reason,
     };
   };
+  hooks.getBlockedAssetRoots = () =>
+    readAssetFailoverBlocks(scope).map(({ root, expiresAt, reason }) => ({ root, expiresAt, reason }));
   hooks.getAssetRetryQueueState = () => {
     if (!assetRetryQueue) {
       return { size: 0, entries: [] };
