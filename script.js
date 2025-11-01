@@ -3087,7 +3087,19 @@ async function startManifestIntegrityVerification({ source = 'manual', scope = m
     }
   }
   const missing = results
-    .filter((entry) => !entry.outcome.ok)
+    .filter((entry) => {
+      if (entry.outcome?.ok) {
+        return false;
+      }
+      if (
+        failoverTriggered &&
+        typeof entry.outcome?.reason === 'string' &&
+        /^status-403$/i.test(entry.outcome.reason)
+      ) {
+        return false;
+      }
+      return true;
+    })
     .map((entry) => ({ path: entry.asset.path ?? entry.asset.url, reason: entry.outcome.reason }));
   renderManifestDiagnostics(scope, missing);
 
