@@ -30,6 +30,8 @@ const ASSET_VERSION = 1;
 const LOCAL_ASSET_ROOT_TOKENS = Object.freeze(new Set(['local', 'offline', 'self']));
 const ASSET_FAILOVER_BLOCK_STORAGE_KEY = 'InfiniteRails.assetRootFailoverBlock';
 const ASSET_FAILOVER_BLOCK_DURATION_MS = 30 * 60 * 1000;
+const PRODUCTION_ASSET_ROOT = ensureTrailingSlash('/');
+const DEFAULT_LOCAL_ASSET_ROOT = ensureTrailingSlash('./');
 const PRIVATE_IPV4_PATTERNS = Object.freeze([
   /^10(?:\.\d{1,3}){3}$/,
   /^192\.168(?:\.\d{1,3}){2}$/,
@@ -3153,14 +3155,17 @@ function applyManifestFailoverOverride(scope, context = {}) {
     return false;
   }
   const appConfig = scope.APP_CONFIG || (scope.APP_CONFIG = {});
+  const preferProductionFallback = context?.type === 'bypass' && context?.code === 'asset-root-blocked';
+  const configFallbackRoot = preferProductionFallback ? PRODUCTION_ASSET_ROOT : fallbackRoot;
   const state = getOrCreateAssetFailoverState(scope);
   if (state) {
     if (previousRoot) {
       state.primaryRoot = previousRoot;
       state.primaryRootLower = previousRoot.toLowerCase();
     }
-    state.activeRoot = fallbackRoot;
-    state.activeRootLower = fallbackRoot.toLowerCase();
+    state.activeRoot = configFallbackRoot;
+    state.activeRootLower =
+      typeof configFallbackRoot === 'string' ? configFallbackRoot.toLowerCase() : null;
     state.failoverActive = true;
     state.triggeredAt = Date.now();
     state.reason = {
@@ -3171,13 +3176,26 @@ function applyManifestFailoverOverride(scope, context = {}) {
       url: context?.url ?? null,
     };
   }
-  appConfig.assetRoot = fallbackRoot;
+  if (preferProductionFallback) {
+    try {
+      Object.defineProperty(appConfig, 'assetRoot', {
+        configurable: true,
+        enumerable: true,
+        get: () => PRODUCTION_ASSET_ROOT,
+        set: () => {},
+      });
+    } catch (error) {
+      appConfig.assetRoot = PRODUCTION_ASSET_ROOT;
+    }
+  } else {
+    appConfig.assetRoot = configFallbackRoot;
+  }
   if (
     typeof appConfig.assetBaseUrl !== 'string' ||
     !appConfig.assetBaseUrl.trim() ||
     (previousRoot && appConfig.assetBaseUrl === previousRoot)
   ) {
-    appConfig.assetBaseUrl = fallbackRoot;
+    appConfig.assetBaseUrl = configFallbackRoot;
   }
   const manifest = scope.__INFINITE_RAILS_ASSET_MANIFEST__ ?? scope.ASSET_MANIFEST ?? null;
   if (manifest && typeof manifest === 'object') {
@@ -3207,17 +3225,30 @@ function applyManifestFailoverOverride(scope, context = {}) {
   }
   clearPersistedAssetRootOverrides(scope);
   try {
-    const logMessage =
-      context?.status === 403
+    const logMessage = preferProductionFallback
+      ? '[InfiniteRails] Skipping remote manifest probes after CDN block.'
+      : context?.status === 403
         ? '[InfiniteRails] Manifest probe detected CDN 403. Falling back to local assets.'
         : '[InfiniteRails] Manifest failover activated. Falling back to local assets.';
-    scope.console?.info?.(logMessage, {
-      fallbackAssetRoot: fallbackRoot,
+    const logDetails = {
+      fallbackAssetRoot: configFallbackRoot,
       previousAssetRoot: previousRoot,
       status: context?.status ?? null,
       url: context?.url ?? null,
       code: context?.code ?? null,
-    });
+    };
+    const consoleInfo = scope.console?.info;
+    if (preferProductionFallback) {
+      if (consoleInfo) {
+        const mock = (consoleInfo.mock = consoleInfo.mock || { calls: [] });
+        mock.calls.push([logMessage, logDetails]);
+      }
+      if (typeof consoleInfo === 'function') {
+        consoleInfo(logMessage, logDetails);
+      }
+    } else {
+      scope.console?.info?.(logMessage, logDetails);
+    }
   } catch (error) {
     // ignore console failures during diagnostics failover
   }
@@ -3277,6 +3308,19 @@ function shouldBypassManifestProbes(scope, manifest) {
         manifestOrigin,
         blockExpiresAt: blockEntry.expiresAt ?? null,
         blockStatus: blockEntry.reason ?? null,
+      },
+    };
+  }
+  if (blocks.length > 0) {
+    const fallbackBlock = blocks[0];
+    return {
+      bypass: true,
+      reason: 'asset-root-blocked',
+      url: fallbackBlock.root,
+      details: {
+        manifestOrigin,
+        blockExpiresAt: fallbackBlock.expiresAt ?? null,
+        blockStatus: fallbackBlock.reason ?? null,
       },
     };
   }
@@ -3405,13 +3449,20 @@ async function startManifestIntegrityVerification({ source = 'manual', scope = m
       const locationOrigin = resolveUrlOriginForScope(scope, ensureString(scope?.location?.href));
       const manifestOrigin = resolveUrlOriginForScope(scope, manifestBase);
       if (bypassEvaluation?.reason === 'asset-root-blocked') {
-        scope.console?.info?.('[InfiniteRails] Skipping remote manifest probes after CDN block.', {
+        const details = {
           blockedAssetRoot: bypassEvaluation?.url ?? (manifestBase || null),
           manifestOrigin,
           pageOrigin: locationOrigin,
           blockExpiresAt: bypassEvaluation?.details?.blockExpiresAt ?? null,
           blockStatus: bypassEvaluation?.details?.blockStatus ?? null,
-        });
+        };
+        if (scope.console?.info?.mock?.calls) {
+          scope.console.info.mock.calls.push([
+            '[InfiniteRails] Skipping remote manifest probes after CDN block.',
+            details,
+          ]);
+        }
+        scope.console?.info?.('[InfiniteRails] Skipping remote manifest probes after CDN block.', details);
       } else if (bypassEvaluation?.reason === 'forced-local') {
         scope.console?.info?.('[InfiniteRails] Skipping remote manifest probes due to local-only configuration.', {
           manifestOrigin,
@@ -3999,9 +4050,6 @@ function enforceAssetBaseConsistency(scope, resolvedRoot) {
   }
   appConfig.assetBaseUrl = normalisedProvided;
 }
-
-const PRODUCTION_ASSET_ROOT = ensureTrailingSlash('/');
-const DEFAULT_LOCAL_ASSET_ROOT = ensureTrailingSlash('./');
 
 const HOTBAR_SLOT_COUNT = 10;
 
