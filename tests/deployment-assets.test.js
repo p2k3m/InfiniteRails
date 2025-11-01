@@ -674,13 +674,19 @@ describe('deployment workflow asset coverage', () => {
     expect(actions).toEqual(['s3:GetObject']);
 
     const resources = new Set(toArray(readStatement.Resource));
-    const expectedResources = [
+    const expectedResources = new Set([
+      '${AssetsBucket.Arn}/*.html',
+      '${AssetsBucket.Arn}/*.js',
+      '${AssetsBucket.Arn}/*.css',
+      '${AssetsBucket.Arn}/*.json',
       '${AssetsBucket.Arn}/assets/*',
       '${AssetsBucket.Arn}/textures/*',
       '${AssetsBucket.Arn}/audio/*',
-    ];
+      '${AssetsBucket.Arn}/vendor/*',
+      '${AssetsBucket.Arn}/scripts/*',
+    ]);
 
-    expect(resources.size).toBe(expectedResources.length);
+    expect(resources.size).toBe(expectedResources.size);
     expectedResources.forEach((resource) => {
       expect(resources.has(resource)).toBe(true);
     });

@@ -11,7 +11,9 @@ const manifestPath = path.join(repoRoot, 'asset-manifest.json');
 const workflowPath = path.join(repoRoot, '.github', 'workflows', 'deploy.yml');
 const templatePath = path.join(repoRoot, 'serverless', 'template.yaml');
 const scriptPath = path.join(repoRoot, 'script.js');
-const ASSET_PERMISSION_PREFIXES = ['assets', 'textures', 'audio'];
+const ASSET_PERMISSION_PREFIXES = ['assets', 'textures', 'audio', 'vendor'];
+const ASSET_POLICY_PREFIXES = [...ASSET_PERMISSION_PREFIXES, 'scripts'];
+const ASSET_POLICY_ROOT_GLOBS = ['*.html', '*.js', '*.css', '*.json'];
 /**
  * Directories that should always be considered when validating manifest coverage.
  * @type {string[]}
@@ -708,9 +710,10 @@ function describeBucketPolicyIssues(templateDocument) {
   }
 
   const resources = new Set(toArray(readStatement?.Resource));
-  const expectedResources = ASSET_PERMISSION_PREFIXES.map(
-    (prefix) => '${AssetsBucket.Arn}/' + prefix + '/*',
-  );
+  const expectedResources = [
+    ...ASSET_POLICY_ROOT_GLOBS.map((glob) => '${AssetsBucket.Arn}/' + glob),
+    ...ASSET_POLICY_PREFIXES.map((prefix) => '${AssetsBucket.Arn}/' + prefix + '/*'),
+  ];
 
   for (const expectedResource of expectedResources) {
     if (!resources.has(expectedResource)) {
@@ -881,11 +884,13 @@ async function main() {
       const formatted = directoryPermissionIssues
         .map((issue) => `${issue.asset} (mode ${issue.mode}: ${issue.problems.join(', ')})`)
         .join('; ');
-      issues.push(`Paths under assets/, textures/, or audio/ have incorrect permissions: ${formatted}`);
+      issues.push(
+        `Paths under assets/, textures/, audio/, or vendor/ have incorrect permissions: ${formatted}`,
+      );
     }
     if (bucketPolicyIssues.length > 0) {
       issues.push(
-        `CloudFormation AssetsBucketPolicy must grant only the CloudFront OAI s3:GetObject access to assets/, textures/, and audio/: ${bucketPolicyIssues.join(
+        `CloudFormation AssetsBucketPolicy must grant only the CloudFront OAI s3:GetObject access to *.html, *.js, *.css, *.json, assets/, textures/, audio/, vendor/, and scripts/: ${bucketPolicyIssues.join(
           '; ',
         )}`,
       );
@@ -942,7 +947,7 @@ async function main() {
       );
     } else {
       console.log(
-        '✅ asset-manifest.json validated – files exist, permissions are correct (including assets/, textures/, audio/), and HEAD checks passed.',
+        '✅ asset-manifest.json validated – files exist, permissions are correct (including *.html/*.js/*.css/*.json plus assets/, textures/, audio/, vendor/, scripts/), and HEAD checks passed.',
       );
     }
   } catch (error) {
