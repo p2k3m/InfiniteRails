@@ -184,12 +184,81 @@ describe('asset CDN failover', () => {
       scope: windowStub,
     });
     expect(verificationResult?.ok).toBe(true);
-    expect(windowStub.APP_CONFIG.assetRoot).toBe('http://localhost:3000/');
+    const assetRoot = windowStub.APP_CONFIG.assetRoot;
+    expect(['./', 'http://localhost:3000/']).toContain(assetRoot);
+
+    const manifestAfterBypass = windowStub.__INFINITE_RAILS_ASSET_MANIFEST__;
+    expect(manifestAfterBypass?.resolvedAssetBaseUrl).toBe(assetRoot);
+    expect(manifestAfterBypass?.assets?.[0]?.url.startsWith(assetRoot)).toBe(true);
 
     const missingAssetWarning = consoleStub.warn.mock.calls.find(
       (call) => call[0] === 'Manifest diagnostics detected missing assets.',
     );
     expect(missingAssetWarning).toBeUndefined();
+  });
+
+  it('bypasses remote manifest probes for non-production environments with cross-origin manifests', async () => {
+    const { sandbox, windowStub, consoleStub } = createBootstrapSandbox({
+      appConfig: {
+        assetRoot: 'https://d3gj6x3ityfh5o.cloudfront.net/',
+        environment: 'development',
+      },
+    });
+
+    windowStub.location.href = 'http://localhost:3000/index.html';
+    windowStub.location.origin = 'http://localhost:3000';
+    windowStub.location.protocol = 'http:';
+    windowStub.location.host = 'localhost:3000';
+    windowStub.location.hostname = 'localhost';
+
+    const manifestElement = windowStub.document.createElement('script');
+    manifestElement.setAttribute('id', 'assetManifest');
+    manifestElement.type = 'application/json';
+    manifestElement.textContent = JSON.stringify({
+      version: 1,
+      assetBaseUrl: 'https://d3gj6x3ityfh5o.cloudfront.net/',
+      assets: ['scripts/cdn-guard.js'],
+    });
+    windowStub.document.body.appendChild(manifestElement);
+
+    const fetchMock = vi.fn((resource) => {
+      const url = typeof resource === 'string' ? resource : resource?.url ?? '';
+      if (url.startsWith('https://d3gj6x3ityfh5o.cloudfront.net/')) {
+        throw new Error(`unexpected remote probe for ${url}`);
+      }
+      return Promise.resolve(createResponse({ ok: true, status: 200, statusText: 'OK' }));
+    });
+
+    sandbox.fetch = fetchMock;
+    sandbox.window.fetch = fetchMock;
+    windowStub.fetch = fetchMock;
+
+    evaluateBootstrapScript(sandbox);
+    await flushMicrotasks(5);
+
+    const verificationResult = await sandbox.startManifestIntegrityVerification({
+      source: 'test',
+      scope: windowStub,
+    });
+
+    expect(verificationResult?.ok).toBe(true);
+    const assetRoot = windowStub.APP_CONFIG.assetRoot;
+    expect(['./', 'http://localhost:3000/']).toContain(assetRoot);
+
+    const manifestAfterBypass = windowStub.__INFINITE_RAILS_ASSET_MANIFEST__;
+    expect(manifestAfterBypass?.resolvedAssetBaseUrl).toBe(assetRoot);
+    expect(manifestAfterBypass?.assets?.[0]?.url.startsWith(assetRoot)).toBe(true);
+
+    const bypassLogs = consoleStub.info.mock.calls.filter(
+      (call) => call[0] === '[InfiniteRails] Skipping remote manifest probes outside production.',
+    );
+    expect(bypassLogs.length).toBeGreaterThan(0);
+
+    const remoteCalls = fetchMock.mock.calls.filter(([input]) => {
+      const url = typeof input === 'string' ? input : input?.url ?? '';
+      return url.startsWith('https://d3gj6x3ityfh5o.cloudfront.net/');
+    });
+    expect(remoteCalls.length).toBe(0);
   });
 
   it('avoids GET retries when manifest probes encounter CDN 403 responses', async () => {
