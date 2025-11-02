@@ -2950,7 +2950,7 @@ function shouldRetryManifestProbeWithGet(scope, asset, status) {
     return false;
   }
   if (status === 403) {
-    return !hasDistinctAssetFailoverRoot(scope);
+    return true;
   }
   return (
     status === 0 ||
@@ -3019,6 +3019,44 @@ function getOrCreateManifestProbeCache(scope) {
   return cache;
 }
 
+function getOrCreateManifestProbeState(scope) {
+  if (!scope || typeof scope !== 'object') {
+    return null;
+  }
+  const existing = scope.__INFINITE_RAILS_MANIFEST_PROBE_STATE__;
+  if (existing && typeof existing === 'object') {
+    return existing;
+  }
+  const state = { disableHead: false, updatedAt: 0, reason: null };
+  scope.__INFINITE_RAILS_MANIFEST_PROBE_STATE__ = state;
+  return state;
+}
+
+function isHeadManifestProbeDisabled(scope) {
+  const state = getOrCreateManifestProbeState(scope);
+  return Boolean(state?.disableHead);
+}
+
+function disableHeadManifestProbe(scope, context = {}) {
+  const state = getOrCreateManifestProbeState(scope);
+  if (!state) {
+    return false;
+  }
+  state.disableHead = true;
+  state.updatedAt = Date.now();
+  state.reason = {
+    status: typeof context.status === 'number' ? context.status : null,
+    code: context.code ?? null,
+    message: context.message ?? null,
+    url: context.url ?? null,
+  };
+  return true;
+}
+
+function shouldDisableHeadProbeForStatus(status) {
+  return status === 403 || status === 405 || status === 412 || status === 501;
+}
+
 function readCachedManifestProbe(scope, asset) {
   const cache = getOrCreateManifestProbeCache(scope);
   if (!cache) {
@@ -3048,13 +3086,18 @@ function recordManifestProbeFailure(scope, asset, status, method = 'HEAD', optio
   if (!key) {
     return false;
   }
+  const numericStatus = typeof status === 'number' ? status : null;
+  const methodUpper = typeof method === 'string' ? method.toUpperCase() : 'HEAD';
+  const coercedOk = options.ok === true || (numericStatus === 403 && methodUpper === 'HEAD');
+  const explicitReason = typeof options.reason === 'string' ? options.reason : null;
+  const derivedReason = !explicitReason && numericStatus === 403 && methodUpper === 'HEAD' ? 'head-probe-ignored' : null;
   cache[key] = {
-    status: typeof status === 'number' ? status : null,
-    method: typeof method === 'string' ? method.toUpperCase() : 'HEAD',
+    status: numericStatus,
+    method: methodUpper,
     recordedAt: Date.now(),
     expiresAt: Date.now() + MANIFEST_PROBE_CACHE_TTL_MS,
-    ok: options.ok === true,
-    reason: typeof options.reason === 'string' ? options.reason : null,
+    ok: coercedOk,
+    reason: explicitReason ?? derivedReason,
   };
   return true;
 }
@@ -3095,6 +3138,22 @@ async function probeManifestAsset(scope, asset) {
     }
   }
 
+  if (isHeadManifestProbeDisabled(scope)) {
+    const cachedSuccess = readCachedManifestProbe(scope, asset);
+    if (cachedSuccess?.ok) {
+      const cachedReason = cachedSuccess.reason || 'head-probe-cached';
+      return { ok: true, reason: cachedReason, cached: true };
+    }
+    const fallbackResult = await retryManifestProbeWithGet(scope, asset);
+    if (fallbackResult?.ok) {
+      recordManifestProbeFailure(scope, asset, null, 'GET', {
+        ok: true,
+        reason: 'head-probe-disabled',
+      });
+    }
+    return fallbackResult;
+  }
+
   try {
     const response = await fetchWithTimeout(asset.url, {
       method: 'HEAD',
@@ -3105,6 +3164,18 @@ async function probeManifestAsset(scope, asset) {
       return { ok: false, reason: 'invalid-response' };
     }
     if (!response.ok) {
+      if (shouldDisableHeadProbeForStatus(response.status)) {
+        disableHeadManifestProbe(scope, {
+          status: response.status,
+          url: asset.url,
+          code: 'head-probe-rejected',
+        });
+        recordManifestProbeFailure(scope, asset, response.status, 'HEAD', {
+          ok: true,
+          reason: 'head-probe-ignored',
+        });
+        return { ok: true, reason: 'head-probe-ignored' };
+      }
       const retryable = shouldRetryManifestProbeWithGet(scope, asset, response.status);
       if (!retryable) {
         recordManifestProbeFailure(scope, asset, response.status, 'HEAD');
@@ -3123,6 +3194,14 @@ async function probeManifestAsset(scope, asset) {
     }
     return { ok: true };
   } catch (error) {
+    const recordedStatus = Number(error?.status ?? error?.code ?? NaN);
+    if (Number.isFinite(recordedStatus) && shouldDisableHeadProbeForStatus(recordedStatus)) {
+      disableHeadManifestProbe(scope, {
+        status: recordedStatus,
+        url: asset?.url ?? null,
+        code: 'head-probe-exception',
+      });
+    }
     const fallbackResult = await retryManifestProbeWithGet(scope, asset);
     if (fallbackResult?.ok) {
       recordManifestProbeFailure(scope, asset, null, 'GET', {
