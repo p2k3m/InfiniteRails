@@ -319,6 +319,7 @@ describe('asset CDN failover', () => {
     expect(verificationResult?.ok).toBe(true);
     const manifestAfterBypass = windowStub.__INFINITE_RAILS_ASSET_MANIFEST__;
     expect(manifestAfterBypass?.resolvedAssetBaseUrl).toBe('./');
+    expect(windowStub.APP_CONFIG.assetRoot).toBe('./');
     const remoteCalls = fetchMock.mock.calls.filter(([input]) => {
       const url = typeof input === 'string' ? input : input?.url ?? '';
       return url.startsWith('https://d3gj6x3ityfh5o.cloudfront.net/');

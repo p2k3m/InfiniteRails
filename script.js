@@ -3156,7 +3156,25 @@ function applyManifestFailoverOverride(scope, context = {}) {
   }
   const appConfig = scope.APP_CONFIG || (scope.APP_CONFIG = {});
   const preferProductionFallback = context?.type === 'bypass' && context?.code === 'asset-root-blocked';
-  const configFallbackRoot = preferProductionFallback ? PRODUCTION_ASSET_ROOT : fallbackRoot;
+  let configFallbackRoot = preferProductionFallback ? PRODUCTION_ASSET_ROOT : fallbackRoot;
+  if (preferProductionFallback) {
+    const productionNormalised = normaliseAssetRootCandidate(PRODUCTION_ASSET_ROOT, scope);
+    const fallbackNormalised = normaliseAssetRootCandidate(fallbackRoot, scope);
+    const prefersLocalFallback =
+      !productionNormalised ||
+      !fallbackNormalised ||
+      productionNormalised.toLowerCase() !== fallbackNormalised.toLowerCase();
+    if (prefersLocalFallback) {
+      configFallbackRoot = fallbackRoot;
+    }
+  }
+  if (
+    shouldIgnoreRemoteAssetRoot(scope, configFallbackRoot) &&
+    fallbackRoot &&
+    fallbackRoot.trim()
+  ) {
+    configFallbackRoot = fallbackRoot;
+  }
   const state = getOrCreateAssetFailoverState(scope);
   if (state) {
     if (previousRoot) {
@@ -3176,7 +3194,7 @@ function applyManifestFailoverOverride(scope, context = {}) {
       url: context?.url ?? null,
     };
   }
-  if (preferProductionFallback) {
+  if (preferProductionFallback && configFallbackRoot === PRODUCTION_ASSET_ROOT) {
     try {
       Object.defineProperty(appConfig, 'assetRoot', {
         configurable: true,
@@ -3187,9 +3205,8 @@ function applyManifestFailoverOverride(scope, context = {}) {
     } catch (error) {
       appConfig.assetRoot = PRODUCTION_ASSET_ROOT;
     }
-  } else {
-    appConfig.assetRoot = configFallbackRoot;
   }
+  appConfig.assetRoot = configFallbackRoot;
   if (
     typeof appConfig.assetBaseUrl !== 'string' ||
     !appConfig.assetBaseUrl.trim() ||
