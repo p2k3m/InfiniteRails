@@ -3563,7 +3563,7 @@ async function startManifestIntegrityVerification({ source = 'manual', scope = m
   return { ok: true, reason: 'ok' };
 }
 
-(async () => {
+async function runBootstrapManifestVerification() {
   const scope = manifestDiagnosticsScope;
   if (!scope || scope.__INFINITE_RAILS_MANIFEST_VERIFIED__) {
     return;
@@ -3574,7 +3574,20 @@ async function startManifestIntegrityVerification({ source = 'manual', scope = m
   } catch (error) {
     scope.console?.error?.('Manifest verification failed during bootstrap.', error);
   }
-})();
+}
+
+const scheduleBootstrapManifestVerification = () => {
+  runBootstrapManifestVerification().catch((error) => {
+    const scope = manifestDiagnosticsScope;
+    scope?.console?.error?.('Manifest verification failed during bootstrap.', error);
+  });
+};
+
+if (typeof queueMicrotask === 'function') {
+  queueMicrotask(scheduleBootstrapManifestVerification);
+} else {
+  Promise.resolve().then(scheduleBootstrapManifestVerification);
+}
 
 
 (function setupPerformanceMetricsSampler(globalScope) {
