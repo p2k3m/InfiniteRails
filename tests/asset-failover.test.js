@@ -21,7 +21,7 @@ function createResponse({ ok, status, statusText = 'STATUS' }) {
 
 describe('asset CDN failover', () => {
   it('falls back to the local asset bundle when CDN responses return 403', async () => {
-    const { sandbox, windowStub } = createBootstrapSandbox({
+    const { sandbox, windowStub, timers } = createBootstrapSandbox({
       appConfig: { assetRoot: 'https://d3gj6x3ityfh5o.cloudfront.net/' },
     });
 
@@ -32,6 +32,8 @@ describe('asset CDN failover', () => {
     const requests = [];
     const fetchResponses = [
       createResponse({ ok: false, status: 403, statusText: 'Forbidden' }),
+      createResponse({ ok: true, status: 200, statusText: 'OK' }),
+      createResponse({ ok: true, status: 200, statusText: 'OK' }),
       createResponse({ ok: true, status: 200, statusText: 'OK' }),
       createResponse({ ok: true, status: 200, statusText: 'OK' }),
     ];
@@ -60,10 +62,22 @@ describe('asset CDN failover', () => {
     expect(requests[0]).toBe(cdnAssetUrl);
     expect(requests[1]).toBe('./asset-manifest.json?assetVersion=1');
 
-    const failoverState = windowStub.__INFINITE_RAILS_TEST_HOOKS__?.getAssetFailoverState?.();
-    expect(failoverState?.failoverActive).toBe(true);
-    expect(failoverState?.fallbackRoot).toBe('./');
+    const failoverStateBefore = windowStub.__INFINITE_RAILS_TEST_HOOKS__?.getAssetFailoverState?.();
+    expect(failoverStateBefore?.failoverActive).toBe(true);
+    expect(failoverStateBefore?.fallbackRoot).toBe('./');
     expect(windowStub.APP_CONFIG.assetRoot).toBe('./');
+
+    expect(sandbox.setTimeout).toHaveBeenCalledTimes(1);
+    const [, scheduledDelay] = sandbox.setTimeout.mock.calls[0];
+    expect(scheduledDelay).toBe(5 * 60 * 1000);
+    const timerId = sandbox.setTimeout.mock.results[0].value;
+    const recoveryHandler = timers.get(timerId);
+    await recoveryHandler();
+
+    const failoverState = windowStub.__INFINITE_RAILS_TEST_HOOKS__?.getAssetFailoverState?.();
+    expect(failoverState?.failoverActive).toBe(false);
+    expect(failoverState?.fallbackRoot).toBe('./');
+    expect(windowStub.APP_CONFIG.assetRoot).toBe('https://d3gj6x3ityfh5o.cloudfront.net/');
 
     const removedKeys = sandbox.localStorage.removeItem.mock.calls.map((call) => call[0]);
     expect(removedKeys).toEqual(
@@ -71,6 +85,7 @@ describe('asset CDN failover', () => {
         'infiniteRails.assetRootOverride',
         'InfiniteRails.assetRootOverride',
         'InfiniteRails.assetRoot',
+        'InfiniteRails.assetRootFailoverBlock',
       ]),
     );
 
@@ -85,8 +100,8 @@ describe('asset CDN failover', () => {
 
     const secondResponse = await wrappedFetch(cdnAssetUrl);
     expect(secondResponse.ok).toBe(true);
-    expect(fetchMock).toHaveBeenCalledTimes(3);
-    expect(requests[2]).toBe('./asset-manifest.json?assetVersion=1');
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(requests[2]).toBe(cdnAssetUrl);
   });
 
   it('activates failover when manifest diagnostics encounter HTTP 403 responses', async () => {

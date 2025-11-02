@@ -30,6 +30,8 @@ const ASSET_VERSION = 1;
 const LOCAL_ASSET_ROOT_TOKENS = Object.freeze(new Set(['local', 'offline', 'self']));
 const ASSET_FAILOVER_BLOCK_STORAGE_KEY = 'InfiniteRails.assetRootFailoverBlock';
 const ASSET_FAILOVER_BLOCK_DURATION_MS = 30 * 60 * 1000;
+const ASSET_FAILOVER_RECOVERY_DELAY_MS = 5 * 60 * 1000;
+const ASSET_FAILOVER_MAX_RECOVERY_ATTEMPTS = 3;
 const PRODUCTION_ASSET_ROOT = ensureTrailingSlash('/');
 const DEFAULT_LOCAL_ASSET_ROOT = ensureTrailingSlash('./');
 const PRIVATE_IPV4_PATTERNS = Object.freeze([
@@ -3295,20 +3297,7 @@ function applyManifestFailoverOverride(scope, context = {}) {
   }
   const manifest = scope.__INFINITE_RAILS_ASSET_MANIFEST__ ?? scope.ASSET_MANIFEST ?? null;
   if (manifest && typeof manifest === 'object') {
-    manifest.assetBaseUrl = ensureTrailingSlash(fallbackRoot);
-    manifest.resolvedAssetBaseUrl = ensureTrailingSlash(fallbackRoot);
-    if (Array.isArray(manifest.assets)) {
-      manifest.assets = manifest.assets.map((entry) => {
-        const path = typeof entry?.path === 'string' ? entry.path.replace(/^\/+/, '') : '';
-        const rebuiltUrl = path ? `${ensureTrailingSlash(fallbackRoot)}${path}` : ensureTrailingSlash(fallbackRoot);
-        return {
-          ...entry,
-          path: path || entry?.path || '',
-          url: rebuiltUrl,
-          original: entry?.original ?? entry?.path ?? path,
-        };
-      });
-    }
+    rewriteManifestAssetsForRoot(manifest, fallbackRoot);
     scope.__INFINITE_RAILS_ASSET_MANIFEST__ = manifest;
     scope.ASSET_MANIFEST = manifest;
   }
@@ -4600,6 +4589,179 @@ function registerAssetFailoverBlock(scope, candidate, context = {}) {
   writeAssetFailoverBlocks(scope, existing);
 }
 
+function clearAssetFailoverBlock(scope, candidate) {
+  const normalised = normaliseAssetRootCandidate(candidate, scope);
+  if (!normalised) {
+    return;
+  }
+  const lower = normalised.toLowerCase();
+  const remaining = readAssetFailoverBlocks(scope).filter((entry) => entry.lower !== lower);
+  writeAssetFailoverBlocks(scope, remaining);
+}
+
+function rewriteManifestAssetsForRoot(manifest, baseRoot) {
+  if (!manifest || typeof manifest !== 'object') {
+    return manifest;
+  }
+  const resolvedBase = ensureTrailingSlash(baseRoot);
+  manifest.assetBaseUrl = resolvedBase;
+  manifest.resolvedAssetBaseUrl = resolvedBase;
+  if (Array.isArray(manifest.assets)) {
+    manifest.assets = manifest.assets.map((entry) => {
+      if (!entry || typeof entry !== 'object') {
+        return entry;
+      }
+      const originalValue = ensureString(entry.original).trim();
+      const pathValue = ensureString(entry.path).trim();
+      const candidatePath = (pathValue || originalValue).replace(/^\/+/, '');
+      const rebuiltUrl = candidatePath ? `${resolvedBase}${candidatePath}` : resolvedBase;
+      return {
+        ...entry,
+        path: candidatePath || entry.path || '',
+        original: originalValue || entry.original || entry.path || candidatePath,
+        url: rebuiltUrl,
+      };
+    });
+  }
+  return manifest;
+}
+
+function clearScheduledAssetFailoverRecovery(scope) {
+  const state = getOrCreateAssetFailoverState(scope);
+  if (!state) {
+    return;
+  }
+  const timerId = state.recoveryTimerId;
+  const clearRef =
+    typeof scope?.clearTimeout === 'function'
+      ? scope.clearTimeout.bind(scope)
+      : typeof clearTimeout === 'function'
+        ? clearTimeout
+        : null;
+  if (timerId && clearRef) {
+    try {
+      clearRef(timerId);
+    } catch (error) {
+      // ignore timer clearing failures
+    }
+  }
+  state.recoveryTimerId = null;
+  state.recoveryScheduledAt = null;
+  state.recoveryDelayMs = null;
+}
+
+function scheduleAssetFailoverRecovery(scope, reason = {}) {
+  const state = getOrCreateAssetFailoverState(scope);
+  if (!state || !state.primaryRoot) {
+    return;
+  }
+  const scheduler =
+    typeof scope?.setTimeout === 'function'
+      ? scope.setTimeout.bind(scope)
+      : typeof setTimeout === 'function'
+        ? setTimeout
+        : null;
+  if (!scheduler) {
+    return;
+  }
+  const delayCandidate = Number(reason?.delayMs);
+  const scheduledDelay = Math.max(
+    1000,
+    Math.min(
+      Number.isFinite(delayCandidate) && delayCandidate > 0 ? delayCandidate : ASSET_FAILOVER_RECOVERY_DELAY_MS,
+      ASSET_FAILOVER_BLOCK_DURATION_MS,
+    ),
+  );
+  clearScheduledAssetFailoverRecovery(scope);
+  state.recoveryDelayMs = scheduledDelay;
+  state.recoveryScheduledAt = Date.now() + scheduledDelay;
+  const timerId = scheduler(() => {
+    state.recoveryTimerId = null;
+    state.recoveryScheduledAt = null;
+    const attemptNumber = (state.recoveryAttempts ?? 0) + 1;
+    state.recoveryAttempts = attemptNumber;
+    const attemptPromise = Promise.resolve(
+      attemptAssetRootRecovery(scope, state.primaryRoot, reason),
+    )
+      .then((restored) => {
+        if (restored) {
+          state.recoveryAttempts = 0;
+          return;
+        }
+        if (attemptNumber < ASSET_FAILOVER_MAX_RECOVERY_ATTEMPTS) {
+          scheduleAssetFailoverRecovery(scope, { ...reason, retry: true });
+        }
+      })
+      .catch(() => {
+        if (attemptNumber < ASSET_FAILOVER_MAX_RECOVERY_ATTEMPTS) {
+          scheduleAssetFailoverRecovery(scope, { ...reason, retry: true });
+        }
+      });
+    return attemptPromise;
+  }, scheduledDelay);
+  state.recoveryTimerId = timerId;
+}
+
+async function attemptAssetRootRecovery(scope, candidate, context = {}) {
+  const primaryRoot = normaliseAssetRootCandidate(candidate, scope);
+  if (!primaryRoot) {
+    return false;
+  }
+  const manifestUrl = applyAssetVersionTag(`${primaryRoot}asset-manifest.json`);
+  let response;
+  try {
+    response = await fetchWithTimeout(manifestUrl, {
+      method: 'HEAD',
+      cache: 'no-store',
+      credentials: 'include',
+      redirect: 'follow',
+    });
+  } catch (error) {
+    return false;
+  }
+  if (!response || (!response.ok && response.status !== 200 && response.status !== 204 && response.status !== 304)) {
+    return false;
+  }
+  try {
+    clearAssetFailoverBlock(scope, primaryRoot);
+  } catch (error) {
+    // ignore persistence failures while clearing blocks
+  }
+  const state = initialiseAssetFailover(scope, primaryRoot) || getOrCreateAssetFailoverState(scope);
+  if (state) {
+    state.failoverActive = false;
+    state.triggeredAt = null;
+    state.reason = null;
+    state.activeRoot = primaryRoot;
+    state.activeRootLower = primaryRoot.toLowerCase();
+    state.primaryRoot = primaryRoot;
+    state.primaryRootLower = primaryRoot.toLowerCase();
+    state.recoveryAttempts = 0;
+    clearScheduledAssetFailoverRecovery(scope);
+  }
+  const appConfig = scope.APP_CONFIG || (scope.APP_CONFIG = {});
+  appConfig.assetRoot = primaryRoot;
+  if (typeof appConfig.assetBaseUrl !== 'string' || !appConfig.assetBaseUrl.trim()) {
+    appConfig.assetBaseUrl = primaryRoot;
+  }
+  const manifest = scope.__INFINITE_RAILS_ASSET_MANIFEST__ ?? scope.ASSET_MANIFEST ?? null;
+  if (manifest && typeof manifest === 'object') {
+    rewriteManifestAssetsForRoot(manifest, primaryRoot);
+    scope.__INFINITE_RAILS_ASSET_MANIFEST__ = manifest;
+    scope.ASSET_MANIFEST = manifest;
+  }
+  try {
+    scope.console?.info?.('[InfiniteRails] CDN recovered — restoring remote asset bundle.', {
+      assetRoot: primaryRoot,
+      manifestUrl,
+      reason: context,
+    });
+  } catch (error) {
+    // ignore console failures
+  }
+  return true;
+}
+
 function isAssetRootTemporarilyBlocked(scope, candidate) {
   const normalised = normaliseAssetRootCandidate(candidate, scope);
   if (!normalised) {
@@ -4739,6 +4901,14 @@ function getOrCreateAssetFailoverState(scope) {
       existing.fallbackRoot = resolvedFallback;
       existing.fallbackRootLower = typeof resolvedFallback === 'string' ? resolvedFallback.toLowerCase() : null;
     }
+    if (!Object.prototype.hasOwnProperty.call(existing, 'recoveryTimerId')) {
+      existing.recoveryTimerId = null;
+      existing.recoveryScheduledAt = null;
+      existing.recoveryDelayMs = null;
+    }
+    if (!Object.prototype.hasOwnProperty.call(existing, 'recoveryAttempts')) {
+      existing.recoveryAttempts = 0;
+    }
     return existing;
   }
   const fallbackRoot = resolveLocalAssetFallback(scope);
@@ -4752,6 +4922,10 @@ function getOrCreateAssetFailoverState(scope) {
     failoverActive: false,
     triggeredAt: null,
     reason: null,
+    recoveryTimerId: null,
+    recoveryScheduledAt: null,
+    recoveryDelayMs: null,
+    recoveryAttempts: 0,
   };
   scope.__INFINITE_RAILS_ASSET_FAILOVER__ = state;
   return state;
@@ -4763,20 +4937,58 @@ function initialiseAssetFailover(scope, resolvedRoot) {
     return null;
   }
   const normalisedPrimary = normaliseAssetRootCandidate(resolvedRoot, scope);
-  state.primaryRoot = normalisedPrimary;
-  state.primaryRootLower = typeof normalisedPrimary === 'string' ? normalisedPrimary.toLowerCase() : null;
   const fallbackRootCandidate =
     normaliseAssetRootCandidate(state.fallbackRoot, scope) ?? resolveLocalAssetFallback(scope);
   const fallbackRoot = resolveDistinctLocalFallback(scope, fallbackRootCandidate, normalisedPrimary);
+  const fallbackLower = typeof fallbackRoot === 'string' ? fallbackRoot.toLowerCase() : null;
+  const primaryLower = typeof normalisedPrimary === 'string' ? normalisedPrimary.toLowerCase() : null;
+
+  const shouldUpdatePrimary =
+    normalisedPrimary &&
+    (!state.primaryRootLower || !state.failoverActive || primaryLower !== fallbackLower);
+  if (shouldUpdatePrimary) {
+    state.primaryRoot = normalisedPrimary;
+    state.primaryRootLower = primaryLower;
+  } else if (!state.primaryRoot && normalisedPrimary) {
+    state.primaryRoot = normalisedPrimary;
+    state.primaryRootLower = primaryLower;
+  }
+
   state.fallbackRoot = fallbackRoot;
-  state.fallbackRootLower = typeof fallbackRoot === 'string' ? fallbackRoot.toLowerCase() : null;
-  const initialActive = normalisedPrimary || fallbackRoot;
+  state.fallbackRootLower = fallbackLower;
+
+  let initialActive;
+  if (state.failoverActive && fallbackRoot) {
+    initialActive = fallbackRoot;
+  } else {
+    initialActive = normalisedPrimary || fallbackRoot;
+  }
   state.activeRoot = initialActive;
   state.activeRootLower = typeof initialActive === 'string' ? initialActive.toLowerCase() : null;
-  if (state.failoverActive && initialActive === normalisedPrimary) {
+
+  if (
+    state.failoverActive &&
+    normalisedPrimary &&
+    primaryLower &&
+    primaryLower !== fallbackLower
+  ) {
     state.failoverActive = false;
     state.triggeredAt = null;
     state.reason = null;
+    state.recoveryAttempts = 0;
+    clearScheduledAssetFailoverRecovery(scope);
+  } else if (state.failoverActive && state.reason?.status === 403 && !state.recoveryTimerId) {
+    scheduleAssetFailoverRecovery(scope, {
+      status: state.reason.status,
+      url: state.reason?.url ?? normalisedPrimary ?? fallbackRoot,
+    });
+  } else if (
+    !state.failoverActive &&
+    normalisedPrimary &&
+    isAssetRootTemporarilyBlocked(scope, normalisedPrimary) &&
+    !state.recoveryTimerId
+  ) {
+    scheduleAssetFailoverRecovery(scope, { status: 403, source: 'bootstrap-block', url: normalisedPrimary });
   }
   return state;
 }
@@ -4813,6 +5025,11 @@ function activateAssetFailover(scope, reason = {}) {
     } catch (error) {
       // ignore storage failures when recording CDN failover blocks
     }
+    scheduleAssetFailoverRecovery(scope, {
+      status: reason.status,
+      url: reason?.url ?? state.primaryRoot,
+      source: reason?.code ?? 'cdn-403',
+    });
   }
   appConfig.assetRoot = fallbackRoot;
   if (
@@ -8331,6 +8548,15 @@ function queueBootstrapFallbackNotice(key, message) {
   };
 
   const maybeRewriteAssetRequest = (resource, init) => {
+    const manifestProbeTag = 'manifest-probe';
+    const hasManifestProbeTag = Array.isArray(init?.tags)
+      ? init.tags.some((tag) => typeof tag === 'string' && tag.toLowerCase() === manifestProbeTag)
+      : typeof init?.tags === 'string'
+        ? init.tags.toLowerCase() === manifestProbeTag
+        : false;
+    if (hasManifestProbeTag && !init?.__failoverRetry) {
+      return { resource, init };
+    }
     const rewritten = rewriteAssetUrlIfNecessary(toAbsoluteUrl(resource));
     if (!rewritten) {
       return { resource, init };
@@ -9108,7 +9334,11 @@ function queueBootstrapFallbackNotice(key, message) {
         maybeScheduleAssetRetry(detail);
       }
       if (retryDueToFailover) {
-        return performFetch(resource, init, { failoverAttempted: true });
+        const retryInit =
+          init && typeof init === 'object'
+            ? { ...init, __failoverRetry: true }
+            : { __failoverRetry: true };
+        return performFetch(resource, retryInit, { failoverAttempted: true });
       }
       throw error;
     }
@@ -9157,7 +9387,11 @@ function queueBootstrapFallbackNotice(key, message) {
             maybeScheduleAssetRetry(detail);
           }
           if (retryDueToFailover) {
-            return performFetch(resource, init, { failoverAttempted: true });
+            const retryInit =
+              init && typeof init === 'object'
+                ? { ...init, __failoverRetry: true }
+                : { __failoverRetry: true };
+            return performFetch(resource, retryInit, { failoverAttempted: true });
           }
         } else {
           recordSuccess(category);
@@ -9183,7 +9417,11 @@ function queueBootstrapFallbackNotice(key, message) {
           maybeScheduleAssetRetry(detail);
         }
         if (retryDueToFailover) {
-          return performFetch(resource, init, { failoverAttempted: true });
+          const retryInit =
+            init && typeof init === 'object'
+              ? { ...init, __failoverRetry: true }
+              : { __failoverRetry: true };
+          return performFetch(resource, retryInit, { failoverAttempted: true });
         }
         throw error;
       });
@@ -9233,7 +9471,17 @@ function queueBootstrapFallbackNotice(key, message) {
       failoverActive: state.failoverActive,
       triggeredAt: state.triggeredAt,
       reason: state.reason,
+      recoveryScheduledAt: state.recoveryScheduledAt ?? null,
+      recoveryDelayMs: state.recoveryDelayMs ?? null,
+      recoveryAttempts: state.recoveryAttempts ?? 0,
     };
+  };
+  hooks.triggerAssetRootRecoveryCheck = () => {
+    const state = getAssetFailoverState();
+    if (!state?.primaryRoot) {
+      return Promise.resolve(false);
+    }
+    return Promise.resolve(attemptAssetRootRecovery(scope, state.primaryRoot, { source: 'test-hook' }));
   };
   hooks.getBlockedAssetRoots = () =>
     readAssetFailoverBlocks(scope).map(({ root, expiresAt, reason }) => ({ root, expiresAt, reason }));
