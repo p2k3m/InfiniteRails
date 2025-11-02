@@ -19,6 +19,7 @@
     'InfiniteRails.assetRoot',
   ];
   const FAILOVER_STORAGE_KEY = 'InfiniteRails.assetRootFailoverBlock';
+  const FAILOVER_BLOCK_DURATION_MS = 30 * 60 * 1000;
 
   const now = () => Date.now();
 
@@ -64,8 +65,7 @@
       return null;
     }
   };
-
-  const parseFailoverBlocks = () => {
+  const parseFailoverEntries = () => {
     const storage = scope.localStorage || null;
     if (!storage || typeof storage.getItem !== 'function') {
       return [];
@@ -79,22 +79,111 @@
     if (!rawValue) {
       return [];
     }
+    let parsed;
     try {
-      const parsed = JSON.parse(rawValue);
-      if (!Array.isArray(parsed)) {
-        return [];
-      }
-      const timestamp = now();
-      return parsed
-        .filter((entry) => entry && typeof entry === 'object')
-        .map((entry) => ({
-          root: normaliseString(entry.root),
-          expiresAt: Number(entry.expiresAt),
-        }))
-        .filter((entry) => entry.root && Number.isFinite(entry.expiresAt) && entry.expiresAt > timestamp);
+      parsed = JSON.parse(rawValue);
     } catch (error) {
+      try {
+        storage.removeItem(FAILOVER_STORAGE_KEY);
+      } catch (_) {
+        /* ignore removal errors */
+      }
       return [];
     }
+    if (!Array.isArray(parsed)) {
+      try {
+        storage.removeItem(FAILOVER_STORAGE_KEY);
+      } catch (_) {
+        /* ignore removal errors */
+      }
+      return [];
+    }
+    const nowTs = now();
+    const entries = [];
+    let mutated = false;
+    for (let i = 0; i < parsed.length; i += 1) {
+      const entry = parsed[i];
+      if (!entry || typeof entry !== 'object') {
+        mutated = true;
+        continue;
+      }
+      const root = normaliseString(entry.root);
+      const expiresAt = Number(entry.expiresAt);
+      if (!root || !Number.isFinite(expiresAt) || expiresAt <= nowTs) {
+        mutated = true;
+        continue;
+      }
+      entries.push({
+        root,
+        lower: root.toLowerCase(),
+        expiresAt,
+        reason: typeof entry.reason === 'number' ? entry.reason : null,
+      });
+    }
+    if (mutated) {
+      try {
+        storage.setItem(
+          FAILOVER_STORAGE_KEY,
+          JSON.stringify(entries.map(({ root, expiresAt, reason }) => ({ root, expiresAt, reason }))),
+        );
+      } catch (_) {
+        /* ignore persistence failures */
+      }
+    }
+    return entries;
+  };
+
+  const writeFailoverEntries = (entries) => {
+    const storage = scope.localStorage || null;
+    if (!storage || typeof storage.setItem !== 'function') {
+      return;
+    }
+    if (!Array.isArray(entries) || entries.length === 0) {
+      try {
+        storage.removeItem(FAILOVER_STORAGE_KEY);
+      } catch (_) {
+        /* ignore */
+      }
+      return;
+    }
+    try {
+      storage.setItem(
+        FAILOVER_STORAGE_KEY,
+        JSON.stringify(entries.map(({ root, expiresAt, reason }) => ({ root, expiresAt, reason }))),
+      );
+    } catch (_) {
+      /* ignore */
+    }
+  };
+
+  const registerFailoverBlock = (absoluteUrl) => {
+    if (!absoluteUrl) {
+      return;
+    }
+    let candidate = '';
+    try {
+      const parsed = new URL(absoluteUrl, scope.location?.href || undefined);
+      if (!CDN_HOST_PATTERN.test(parsed.host || parsed.hostname || '')) {
+        return;
+      }
+      candidate = `${parsed.origin}/`;
+    } catch (error) {
+      return;
+    }
+    const normalised = normaliseString(candidate);
+    if (!normalised) {
+      return;
+    }
+    const lower = normalised.toLowerCase();
+    const nowTs = now();
+    const expiresAt = nowTs + FAILOVER_BLOCK_DURATION_MS;
+    const existing = parseFailoverEntries().filter((entry) => entry.lower !== lower);
+    existing.push({ root: normalised, lower, expiresAt, reason: null });
+    writeFailoverEntries(existing);
+  };
+
+  const parseFailoverBlocks = () => {
+    return parseFailoverEntries().map(({ root, expiresAt }) => ({ root, expiresAt }));
   };
 
   const isCdnRootBlocked = () => parseFailoverBlocks().some((entry) => CDN_HOST_PATTERN.test(entry.root));
@@ -228,6 +317,8 @@
       replacement.dataset.localSrc = target.dataset.localSrc;
     }
     replacement.src = localSrc;
+
+    registerFailoverBlock(absoluteSrc);
 
     const logContext = { original: absoluteSrc, fallback: localSrc };
     try {
