@@ -408,12 +408,13 @@ describe('asset CDN failover', () => {
 
     const firstProbe = await sandbox.probeManifestAsset(windowStub, asset);
     expect(firstProbe.ok).toBe(true);
-
+    const probeCache = windowStub.__INFINITE_RAILS_MANIFEST_PROBE_CACHE__;
+    expect(probeCache).toBeTruthy();
     const callsAfterFirst = fetchMock.mock.calls.length;
 
     const secondProbe = await sandbox.probeManifestAsset(windowStub, asset);
-    expect(secondProbe.ok).toBe(false);
-    expect(secondProbe.reason).toBe('status-403');
+    expect(secondProbe.ok).toBe(true);
+    expect(secondProbe.reason).toBe('head-probe-ignored');
     expect(secondProbe.cached).toBe(true);
     expect(fetchMock.mock.calls.length).toBe(callsAfterFirst);
   });
