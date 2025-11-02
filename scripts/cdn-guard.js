@@ -156,30 +156,33 @@
     }
   };
 
-  const registerFailoverBlock = (absoluteUrl) => {
+  const registerFailoverBlock = (absoluteUrl, context = {}) => {
     if (!absoluteUrl) {
-      return;
+      return null;
     }
     let candidate = '';
     try {
       const parsed = new URL(absoluteUrl, scope.location?.href || undefined);
       if (!CDN_HOST_PATTERN.test(parsed.host || parsed.hostname || '')) {
-        return;
+        return null;
       }
       candidate = `${parsed.origin}/`;
     } catch (error) {
-      return;
+      return null;
     }
     const normalised = normaliseString(candidate);
     if (!normalised) {
-      return;
+      return null;
     }
     const lower = normalised.toLowerCase();
     const nowTs = now();
     const expiresAt = nowTs + FAILOVER_BLOCK_DURATION_MS;
+    const reason = typeof context.status === 'number' ? context.status : null;
     const existing = parseFailoverEntries().filter((entry) => entry.lower !== lower);
-    existing.push({ root: normalised, lower, expiresAt, reason: null });
+    const entry = { root: normalised, lower, expiresAt, reason };
+    existing.push(entry);
     writeFailoverEntries(existing);
+    return entry;
   };
 
   const parseFailoverBlocks = () => {
@@ -318,13 +321,25 @@
     }
     replacement.src = localSrc;
 
-    registerFailoverBlock(absoluteSrc);
+    const blockEntry = registerFailoverBlock(absoluteSrc, { status: 403 });
 
     const logContext = { original: absoluteSrc, fallback: localSrc };
+    if (blockEntry) {
+      logContext.blockExpiresAt = blockEntry.expiresAt;
+      if (typeof blockEntry.reason === 'number') {
+        logContext.blockStatus = blockEntry.reason;
+      }
+    }
     try {
       scope.console?.warn?.('[InfiniteRails] CDN asset blocked — retrying with local bundle.', logContext);
     } catch (error) {
       /* ignore console failures */
+    }
+
+    try {
+      rewritePendingScriptsToLocal();
+    } catch (error) {
+      /* ignore rewrite failures triggered during recovery */
     }
 
     parent.insertBefore(replacement, target.nextSibling || null);
