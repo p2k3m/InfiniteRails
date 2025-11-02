@@ -20,10 +20,68 @@
   ];
   const FAILOVER_STORAGE_KEY = 'InfiniteRails.assetRootFailoverBlock';
   const FAILOVER_BLOCK_DURATION_MS = 30 * 60 * 1000;
+  const PRIVATE_IPV4_PATTERNS = [
+    /^10(?:\.\d{1,3}){3}$/,
+    /^192\.168(?:\.\d{1,3}){2}$/,
+    /^172\.(?:1[6-9]|2[0-9]|3[0-1])(?:\.\d{1,3}){2}$/,
+    /^169\.254(?:\.\d{1,3}){2}$/,
+  ];
 
   const now = () => Date.now();
 
   const normaliseString = (value) => (typeof value === 'string' ? value : '');
+
+  const toLowerCase = (value) => normaliseString(value).trim().toLowerCase();
+
+  const isLocalHostname = (hostname) => {
+    const value = toLowerCase(hostname);
+    if (!value) {
+      return false;
+    }
+    if (value === 'localhost' || value === '127.0.0.1' || value === '0.0.0.0' || value === '::1') {
+      return true;
+    }
+    if (value.endsWith('.localhost') || value.endsWith('.local')) {
+      return true;
+    }
+    return PRIVATE_IPV4_PATTERNS.some((pattern) => pattern.test(value));
+  };
+
+  const hasPendingCdnScripts = () => {
+    const documentRef = scope.document || null;
+    if (!documentRef || typeof documentRef.querySelectorAll !== 'function') {
+      return false;
+    }
+    const scripts = documentRef.querySelectorAll('script[data-local-src]');
+    if (!scripts || typeof scripts.forEach !== 'function') {
+      return false;
+    }
+    let detected = false;
+    scripts.forEach((script) => {
+      if (detected || !script) {
+        return;
+      }
+      const attributeValue = typeof script.getAttribute === 'function' ? script.getAttribute('src') : '';
+      const explicitSrc = normaliseString(attributeValue);
+      const absoluteSrc = normaliseString(script.src);
+      const candidate = explicitSrc || absoluteSrc;
+      if (!candidate) {
+        return;
+      }
+      try {
+        const parsed = new URL(candidate, scope.location?.href || undefined);
+        const host = parsed.host || parsed.hostname || '';
+        if (host && CDN_HOST_PATTERN.test(host)) {
+          detected = true;
+        }
+      } catch (error) {
+        if (CDN_HOST_PATTERN.test(candidate)) {
+          detected = true;
+        }
+      }
+    });
+    return detected;
+  };
 
   const clearStoredOverrides = () => {
     const storage = scope.localStorage || null;
@@ -205,7 +263,35 @@
     if (query.includes('localAssets=1') || /[?&]useLocalAssets(?:=1)?/i.test(query)) {
       return true;
     }
-    return isCdnRootBlocked();
+    if (isCdnRootBlocked()) {
+      return true;
+    }
+
+    const locationRef = scope.location || {};
+    const hostname = toLowerCase(locationRef.hostname);
+    const protocol = toLowerCase(locationRef.protocol);
+    if (protocol === 'file:') {
+      return true;
+    }
+
+    const pendingCdnScripts = hasPendingCdnScripts();
+    if (!pendingCdnScripts) {
+      return false;
+    }
+
+    if (!hostname) {
+      return true;
+    }
+
+    if (isLocalHostname(hostname)) {
+      return true;
+    }
+
+    if (!CDN_HOST_PATTERN.test(hostname)) {
+      return true;
+    }
+
+    return false;
   };
 
   const rewritePendingScriptsToLocal = () => {
