@@ -9208,6 +9208,19 @@ function queueBootstrapFallbackNotice(key, message) {
   const resolvedAssetRoot = resolveBootstrapAssetRoot(globalScope);
   enforceAssetBaseConsistency(globalScope, resolvedAssetRoot);
   initialiseAssetFailover(globalScope, resolvedAssetRoot);
+
+  try {
+    const manifest = ensureManifestHydrated(globalScope);
+    const manifestRootCandidate = ensureString(
+      manifest?.resolvedAssetBaseUrl ?? manifest?.assetBaseUrl ?? '',
+    );
+    if (manifestRootCandidate) {
+      enforceAssetBaseConsistency(globalScope, manifestRootCandidate);
+      initialiseAssetFailover(globalScope, manifestRootCandidate);
+    }
+  } catch (error) {
+    // ignore manifest hydration errors during bootstrap so core boot can continue
+  }
 })(typeof window !== 'undefined' ? window : typeof globalThis !== 'undefined' ? globalThis : undefined);
 
 (function exposeBootstrapInternals(globalScope) {
