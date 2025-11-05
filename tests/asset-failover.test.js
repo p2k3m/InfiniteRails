@@ -48,6 +48,8 @@ describe('asset CDN failover', () => {
     sandbox.window.fetch = fetchMock;
     windowStub.fetch = fetchMock;
 
+    const initialSetCallCount = sandbox.localStorage.setItem.mock.calls.length;
+
     evaluateBootstrapScript(sandbox);
 
     const wrappedFetch = windowStub.fetch;
@@ -61,6 +63,10 @@ describe('asset CDN failover', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(requests[0]).toBe(cdnAssetUrl);
     expect(requests[1]).toBe('./asset-manifest.json?assetVersion=1');
+
+    const newSetCalls = sandbox.localStorage.setItem.mock.calls.slice(initialSetCallCount);
+    const persistedOverride = newSetCalls.filter(([key]) => key === 'infiniteRails.assetRootOverride');
+    expect(persistedOverride.some(([, value]) => value === './')).toBe(true);
 
     const failoverStateBefore = windowStub.__INFINITE_RAILS_TEST_HOOKS__?.getAssetFailoverState?.();
     expect(failoverStateBefore?.failoverActive).toBe(true);
@@ -130,11 +136,17 @@ describe('asset CDN failover', () => {
     windowStub.location.host = 'localhost:3000';
     windowStub.location.hostname = 'localhost';
 
+    const initialSetCallCount = sandbox.localStorage.setItem.mock.calls.length;
+
     sandbox.applyManifestFailoverOverride(windowStub, {
       type: 'http',
       status: 403,
       url: 'https://d3gj6x3ityfh5o.cloudfront.net/scripts/cdn-guard.js',
     });
+
+    const newSetCalls = sandbox.localStorage.setItem.mock.calls.slice(initialSetCallCount);
+    const persistedOverride = newSetCalls.filter(([key]) => key === 'infiniteRails.assetRootOverride');
+    expect(persistedOverride.some(([, value]) => value === 'http://localhost:3000/')).toBe(true);
 
     expect(windowStub.APP_CONFIG.assetRoot).toBe('http://localhost:3000/');
 
