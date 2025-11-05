@@ -403,8 +403,7 @@ describe('asset CDN failover', () => {
 
     const fetchMock = vi.fn((resource, init = {}) => {
       const url = typeof resource === 'string' ? resource : resource?.url ?? '';
-      const method = typeof init?.method === 'string' ? init.method.toUpperCase() : 'GET';
-      if (url.includes('d3gj6x3ityfh5o.cloudfront.net') && method === 'HEAD') {
+      if (url.includes('d3gj6x3ityfh5o.cloudfront.net')) {
         return Promise.resolve(createResponse({ ok: false, status: 403, statusText: 'Forbidden' }));
       }
       return Promise.resolve(createResponse({ ok: true, status: 200, statusText: 'OK' }));
@@ -432,6 +431,50 @@ describe('asset CDN failover', () => {
     expect(secondProbe.reason).toBe('head-probe-ignored');
     expect(secondProbe.cached).toBe(true);
     expect(fetchMock.mock.calls.length).toBe(callsAfterFirst);
+  });
+
+  it('dispatches a failover event when manifest probes trigger the CDN fallback', async () => {
+    const { sandbox, windowStub } = createBootstrapSandbox({
+      appConfig: { assetRoot: 'https://d3gj6x3ityfh5o.cloudfront.net/' },
+    });
+
+    const manifestElement = windowStub.document.createElement('script');
+    manifestElement.setAttribute('id', 'assetManifest');
+    manifestElement.type = 'application/json';
+    manifestElement.textContent = JSON.stringify({
+      version: 1,
+      assetBaseUrl: 'https://d3gj6x3ityfh5o.cloudfront.net/',
+      assets: ['downlevel-polyfills.js'],
+    });
+    windowStub.document.body.appendChild(manifestElement);
+
+    const fetchMock = vi.fn((resource, init = {}) => {
+      const url = typeof resource === 'string' ? resource : resource?.url ?? '';
+      if (url.includes('d3gj6x3ityfh5o.cloudfront.net')) {
+        return Promise.resolve(createResponse({ ok: false, status: 403, statusText: 'Forbidden' }));
+      }
+      return Promise.resolve(createResponse({ ok: true, status: 200, statusText: 'OK' }));
+    });
+
+    sandbox.fetch = fetchMock;
+    sandbox.window.fetch = fetchMock;
+    windowStub.fetch = fetchMock;
+
+    evaluateBootstrapScript(sandbox);
+
+    const result = await sandbox.startManifestIntegrityVerification({
+      source: 'test',
+      scope: windowStub,
+    });
+
+    expect(result?.ok).toBe(true);
+    expect(windowStub.APP_CONFIG.assetRoot).toBe('./');
+    expect(windowStub.APP_CONFIG.assetBaseUrl).toBe('./');
+    const failoverDetail =
+      windowStub.__INFINITE_RAILS_LAST_FAILOVER_EVENT__ ?? sandbox.__INFINITE_RAILS_LAST_FAILOVER_EVENT__;
+    expect(failoverDetail).toEqual(
+      expect.objectContaining({ fallbackAssetRoot: './', previousAssetRoot: expect.any(String), status: 403 }),
+    );
   });
 
   it('ignores blocked CDN asset roots during bootstrap', () => {

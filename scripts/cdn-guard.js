@@ -328,6 +328,26 @@
     rewritePendingScriptsToLocal();
   }
 
+  const handleManifestFailoverActivated = (event) => {
+    try {
+      const detail = event?.detail ?? {};
+      const status = typeof detail?.status === 'number' ? detail.status : 403;
+      const failoverSource = detail?.url || detail?.previousAssetRoot || null;
+      if (failoverSource) {
+        registerFailoverBlock(failoverSource, { status });
+      }
+      clearStoredOverrides();
+      ensureAppConfig();
+      rewritePendingScriptsToLocal();
+    } catch (error) {
+      try {
+        scope.console?.debug?.('CDN guard failover handler error suppressed.', error);
+      } catch (_) {
+        /* ignore console failures */
+      }
+    }
+  };
+
   const resolveOriginalSrc = (element) => {
     if (!element || typeof element.getAttribute !== 'function') {
       return null;
@@ -439,4 +459,5 @@
   };
 
   scope.addEventListener?.('error', recoverFromScriptFailure, true);
+  scope.addEventListener?.('infinite-rails:asset-failover-activated', handleManifestFailoverActivated);
 })(typeof window !== 'undefined' ? window : this);
