@@ -3337,6 +3337,13 @@ function applyManifestFailoverOverride(scope, context = {}) {
   } catch (error) {
     // ignore console failures during diagnostics failover
   }
+  emitAssetFailoverEvent(scope, {
+    fallbackAssetRoot: configFallbackRoot,
+    previousAssetRoot: previousRoot,
+    status: context?.status ?? null,
+    code: context?.code ?? null,
+    url: context?.url ?? null,
+  });
   return true;
 }
 
@@ -4931,6 +4938,56 @@ function getOrCreateAssetFailoverState(scope) {
   return state;
 }
 
+function emitAssetFailoverEvent(scope, detail = {}) {
+  if (!scope || typeof scope !== 'object') {
+    return null;
+  }
+  const payload = {
+    fallbackAssetRoot:
+      typeof detail?.fallbackAssetRoot === 'string' && detail.fallbackAssetRoot
+        ? detail.fallbackAssetRoot
+        : null,
+    previousAssetRoot:
+      typeof detail?.previousAssetRoot === 'string' && detail.previousAssetRoot
+        ? detail.previousAssetRoot
+        : null,
+    status: typeof detail?.status === 'number' ? detail.status : null,
+    code: detail?.code ?? null,
+    url: detail?.url ?? null,
+  };
+  try {
+    scope.__INFINITE_RAILS_LAST_FAILOVER_EVENT__ = payload;
+  } catch (error) {
+    // ignore assignment failures for diagnostics state
+  }
+  try {
+    const windowRef = scope.window && typeof scope.window === 'object' ? scope.window : null;
+    if (windowRef && windowRef !== scope) {
+      windowRef.__INFINITE_RAILS_LAST_FAILOVER_EVENT__ = payload;
+    }
+  } catch (error) {
+    // ignore assignment failures when mirroring diagnostics state to window
+  }
+  const target =
+    typeof scope.dispatchEvent === 'function'
+      ? scope
+      : typeof scope.window?.dispatchEvent === 'function'
+        ? scope.window
+        : null;
+  const EventCtor = scope.CustomEvent || (typeof CustomEvent !== 'undefined' ? CustomEvent : null);
+  try {
+    if (EventCtor && target) {
+      const event = new EventCtor('infinite-rails:asset-failover-activated', { detail: payload });
+      target.dispatchEvent(event);
+    } else if (target) {
+      target.dispatchEvent({ type: 'infinite-rails:asset-failover-activated', detail: payload });
+    }
+  } catch (error) {
+    // ignore dispatch failures to avoid interrupting failover
+  }
+  return payload;
+}
+
 function initialiseAssetFailover(scope, resolvedRoot) {
   const state = getOrCreateAssetFailoverState(scope);
   if (!state) {
@@ -5046,6 +5103,13 @@ function activateAssetFailover(scope, reason = {}) {
       trigger: state.reason,
     });
   }
+  emitAssetFailoverEvent(scope, {
+    fallbackAssetRoot: fallbackRoot,
+    previousAssetRoot: state.primaryRoot,
+    status: reason?.status ?? null,
+    code: reason?.code ?? null,
+    url: reason?.url ?? null,
+  });
   return true;
 }
 
