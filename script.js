@@ -3309,6 +3309,13 @@ function applyManifestFailoverOverride(scope, context = {}) {
     }
   }
   clearPersistedAssetRootOverrides(scope);
+  if (context?.status === 403 && shouldPersistLocalAssetOverride(scope, configFallbackRoot)) {
+    try {
+      persistAssetRootOverride(scope, configFallbackRoot);
+    } catch (error) {
+      // Ignore persistence failures when recording CDN overrides.
+    }
+  }
   try {
     const logMessage = preferProductionFallback
       ? '[InfiniteRails] Skipping remote manifest probes after CDN block.'
@@ -4897,6 +4904,33 @@ function resolveLocalAssetFallback(scope) {
   return DEFAULT_LOCAL_ASSET_ROOT;
 }
 
+function shouldPersistLocalAssetOverride(scope, candidate) {
+  if (!scope || typeof scope !== 'object') {
+    return false;
+  }
+  const normalised = normaliseAssetRootCandidate(candidate, scope);
+  if (!normalised) {
+    return false;
+  }
+  if (normalised === ensureTrailingSlash('./')) {
+    return true;
+  }
+  const location = getBootstrapLocation(scope);
+  const locationOrigin = ensureString(location?.origin).trim();
+  if (!locationOrigin) {
+    return false;
+  }
+  const parsed = parseAssetRootUrl(normalised, scope);
+  if (!parsed) {
+    return false;
+  }
+  try {
+    return ensureTrailingSlash(parsed.origin) === ensureTrailingSlash(locationOrigin);
+  } catch (error) {
+    return false;
+  }
+}
+
 function getOrCreateAssetFailoverState(scope) {
   if (!scope || typeof scope !== 'object') {
     return null;
@@ -5097,6 +5131,13 @@ function activateAssetFailover(scope, reason = {}) {
     appConfig.assetBaseUrl = fallbackRoot;
   }
   clearPersistedAssetRootOverrides(scope);
+  if (reason?.status === 403 && shouldPersistLocalAssetOverride(scope, fallbackRoot)) {
+    try {
+      persistAssetRootOverride(scope, fallbackRoot);
+    } catch (error) {
+      // Ignore persistence failures when attempting to cache local overrides.
+    }
+  }
   if (scope.console && typeof scope.console.info === 'function') {
     scope.console.info('[InfiniteRails] Asset CDN unavailable. Falling back to local bundle.', {
       fallbackAssetRoot: fallbackRoot,
